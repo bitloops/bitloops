@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "bitloops",
+    "bitloops-embeddings-protocol",
+    "bitloops-embeddings",
+]
+resolver = "2"

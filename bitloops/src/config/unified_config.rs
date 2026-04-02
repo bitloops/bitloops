@@ -66,6 +66,10 @@ pub struct UnifiedSettings {
     pub knowledge: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_clones: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embeddings: Option<Value>,
 
     // UX / tooling
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -233,13 +237,13 @@ pub fn settings_from_json(value: Value) -> Result<UnifiedSettings> {
 // ---------------------------------------------------------------------------
 
 use super::resolve::{
-    resolve_provider_config_from_value_with, resolve_store_backend_config_with,
-    resolve_store_embedding_config_with, resolve_store_semantic_config_with,
-    resolve_watch_runtime_config_with,
+    resolve_embeddings_from_unified_with, resolve_provider_config_from_value_with,
+    resolve_semantic_clones_from_unified_with, resolve_store_backend_config_with,
+    resolve_store_semantic_config_with, resolve_watch_runtime_config_with,
 };
 use super::types::{
-    DashboardFileConfig, ProviderConfig, StoreBackendConfig, StoreEmbeddingConfig,
-    StoreSemanticConfig, WatchRuntimeConfig,
+    DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingsConfig, ProviderConfig,
+    SemanticClonesConfig, StoreBackendConfig, StoreSemanticConfig, WatchRuntimeConfig,
 };
 
 /// Resolve store backend configuration (relational, events, blob) from merged
@@ -302,20 +306,33 @@ pub fn resolve_semantic_from_unified<F: Fn(&str) -> Option<String>>(
     resolve_store_semantic_config_with(file_cfg, env_lookup)
 }
 
-/// Resolve embedding configuration from merged [`UnifiedSettings`],
-/// with environment variables taking precedence where documented.
-pub fn resolve_embedding_from_unified<F: Fn(&str) -> Option<String>>(
+pub fn resolve_semantic_clones_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> SemanticClonesConfig {
+    resolve_semantic_clones_from_unified_with(settings, env_lookup)
+}
+
+pub fn resolve_embeddings_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
     config_root: &Path,
     env_lookup: F,
-) -> StoreEmbeddingConfig {
-    // Embedding fields live at root level inside the stores Value.
-    let stores_value = settings
-        .stores
-        .clone()
-        .unwrap_or(Value::Object(Default::default()));
-    let file_cfg = super::types::StoreFileConfig::from_json_value(&stores_value);
-    resolve_store_embedding_config_with(file_cfg, config_root, env_lookup)
+) -> EmbeddingsConfig {
+    resolve_embeddings_from_unified_with(settings, config_root, env_lookup)
+}
+
+pub fn resolve_embedding_capability_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    config_root: &Path,
+    env_lookup: F,
+) -> EmbeddingCapabilityConfig {
+    let semantic_clones = resolve_semantic_clones_from_unified_with(settings, &env_lookup);
+    let embeddings = resolve_embeddings_from_unified_with(settings, config_root, env_lookup);
+
+    EmbeddingCapabilityConfig {
+        semantic_clones,
+        embeddings,
+    }
 }
 
 /// Resolve watch runtime configuration from merged [`UnifiedSettings`] (JSON only,

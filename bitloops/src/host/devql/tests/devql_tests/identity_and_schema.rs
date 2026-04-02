@@ -142,9 +142,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("modifiers JSONB NOT NULL DEFAULT '[]'::jsonb"));
     assert!(sql.contains("docstring TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
-    assert!(sql.contains("revision_kind TEXT NOT NULL DEFAULT 'commit'"));
-    assert!(sql.contains("revision_id TEXT NOT NULL DEFAULT ''"));
-    assert!(sql.contains("temp_checkpoint_id BIGINT"));
+    assert!(sql.contains("content_id TEXT NOT NULL"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots"));
@@ -155,7 +153,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
-    assert!(sql.contains("PRIMARY KEY (repo_id, branch, symbol_id)"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, path, symbol_id)"));
     assert!(!sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
@@ -165,7 +163,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
     assert!(sql.contains("CONSTRAINT artefact_edges_current_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_current_line_range_chk"));
-    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx"));
 }
 
 #[test]

@@ -26,6 +26,8 @@ use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/enrichment.rs"]
+mod enrichment;
 #[path = "daemon/graphql_client.rs"]
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
@@ -53,12 +55,15 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub use self::enrichment::EnrichmentControlResult;
+pub use self::enrichment::EnrichmentCoordinator;
+pub use self::enrichment::EnrichmentJobTarget;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::types::{
     DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
-    DaemonServiceMetadata, DaemonStatusReport, InternalDaemonProcessArgs,
-    InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
-    SupervisorServiceMetadata,
+    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
+    EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
+    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
 };
 
 use self::process::*;
@@ -163,6 +168,26 @@ pub fn uninstall_supervisor_service() -> Result<()> {
 
 pub async fn status() -> Result<DaemonStatusReport> {
     lifecycle::status().await
+}
+
+pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
+    enrichment::snapshot()
+}
+
+pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
+    enrichment::pause_enrichments(reason)
+}
+
+pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
+    enrichment::resume_enrichments()
+}
+
+pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
+    enrichment::retry_failed_enrichments()
+}
+
+pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
+    EnrichmentCoordinator::shared()
 }
 
 pub async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeState> {

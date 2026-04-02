@@ -34,6 +34,7 @@ set "ASSET_PATH=%TMP_DIR%\%ASSET_NAME%"
 set "CHECKSUMS_PATH=%TMP_DIR%\%CHECKSUMS_NAME%"
 set "EXTRACT_DIR=%TMP_DIR%\extract"
 set "TARGET_PATH=%INSTALL_DIR%\bitloops.exe"
+set "EMBEDDINGS_TARGET_PATH=%INSTALL_DIR%\bitloops-embeddings.exe"
 
 if /I "%INSTALL_MODE%"=="latest" (
   set "ASSET_URL=https://github.com/%REPO%/releases/latest/download/%ASSET_NAME%"
@@ -77,19 +78,14 @@ if errorlevel 1 (
   goto :fail
 )
 
-set "BIN_PATH=%EXTRACT_DIR%\bitloops.exe"
-if not exist "%BIN_PATH%" (
-  for /r "%EXTRACT_DIR%" %%f in (bitloops.exe) do (
-    set "BIN_PATH=%%f"
-    goto :found_binary
-  )
-)
-
-:found_binary
-if not exist "%BIN_PATH%" (
+call :find_binary "%EXTRACT_DIR%" "bitloops.exe" BIN_PATH
+if errorlevel 1 (
   echo Error: extracted archive did not contain bitloops.exe >&2
   goto :fail
 )
+
+call :find_binary "%EXTRACT_DIR%" "bitloops-embeddings.exe" EMBEDDINGS_BIN_PATH
+if errorlevel 1 set "EMBEDDINGS_BIN_PATH="
 
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
 if errorlevel 1 (
@@ -103,9 +99,22 @@ if errorlevel 1 (
   goto :fail
 )
 
+if defined EMBEDDINGS_BIN_PATH (
+  copy /Y "%EMBEDDINGS_BIN_PATH%" "%EMBEDDINGS_TARGET_PATH%" >nul
+  if errorlevel 1 (
+    echo Error: failed to copy binary to %EMBEDDINGS_TARGET_PATH% >&2
+    goto :fail
+  )
+)
+
 call :ensure_user_path "%INSTALL_DIR%"
 
 echo Installed bitloops (%DISPLAY_VERSION%) to %TARGET_PATH%
+if defined EMBEDDINGS_BIN_PATH (
+  echo Installed bitloops-embeddings (%DISPLAY_VERSION%) to %EMBEDDINGS_TARGET_PATH%
+) else (
+  echo Note: this release archive did not contain bitloops-embeddings; installing bitloops only.
+)
 if "%PATH_ADDED%"=="1" (
   echo Added %INSTALL_DIR% to user PATH. Restart your terminal for PATH changes to apply.
 )
@@ -201,6 +210,23 @@ if errorlevel 1 (
   exit /b 1
 )
 exit /b 0
+
+:find_binary
+set "%~3="
+set "SEARCH_DIR=%~1"
+set "FILE_NAME=%~2"
+
+if exist "%SEARCH_DIR%\%FILE_NAME%" (
+  set "%~3=%SEARCH_DIR%\%FILE_NAME%"
+  exit /b 0
+)
+
+for /r "%SEARCH_DIR%" %%f in (%FILE_NAME%) do (
+  set "%~3=%%f"
+  exit /b 0
+)
+
+exit /b 1
 
 :read_expected_checksum
 set "CHECKSUM_FILE=%~1"

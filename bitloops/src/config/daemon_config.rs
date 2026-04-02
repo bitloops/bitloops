@@ -50,6 +50,10 @@ struct DaemonTomlFile {
     #[serde(default)]
     semantic: Option<Value>,
     #[serde(default)]
+    semantic_clones: Option<Value>,
+    #[serde(default)]
+    embeddings: Option<Value>,
+    #[serde(default)]
     dashboard: Option<Value>,
 }
 
@@ -125,6 +129,8 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
             stores: file.stores,
             knowledge: file.knowledge,
             semantic: file.semantic,
+            semantic_clones: file.semantic_clones,
+            embeddings: file.embeddings,
             dashboard: file.dashboard,
             watch: None,
         },
@@ -378,4 +384,64 @@ fn ensure_local_store_artifacts(loaded: &LoadedDaemonSettings) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn load_daemon_settings_rejects_unknown_top_level_fields() {
+        let config = NamedTempFile::new().expect("create temp config");
+        fs::write(
+            config.path(),
+            r#"
+cli_version = "0.0.3"
+
+[runtime]
+local_dev = true
+
+[telemetry]
+enabled = false
+
+[logging]
+level = "debug"
+"#,
+        )
+        .expect("write temp config");
+
+        let err = load_daemon_settings(Some(config.path())).expect_err("unknown top-level key");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("unknown field `cli_version`"),
+            "expected unknown field error, got: {message}"
+        );
+    }
+
+    #[test]
+    fn load_daemon_settings_accepts_runtime_cli_version_field() {
+        let config = NamedTempFile::new().expect("create temp config");
+        fs::write(
+            config.path(),
+            r#"
+[runtime]
+local_dev = true
+cli_version = "0.0.12"
+
+[telemetry]
+enabled = true
+
+[logging]
+level = "info"
+"#,
+        )
+        .expect("write temp config");
+
+        let loaded = load_daemon_settings(Some(config.path())).expect("load daemon settings");
+        assert!(loaded.cli.local_dev, "runtime.local_dev should be parsed");
+        assert_eq!(loaded.cli.telemetry, Some(true));
+        assert_eq!(loaded.cli.log_level, "info");
+    }
 }

@@ -330,9 +330,9 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
         self.test_harness
     }
 
-    fn clone_rebuild_relational(&self) -> Result<&RelationalStorage> {
+    fn clone_edges_rebuild_relational(&self) -> Result<&RelationalStorage> {
         let Some(relational) = self.devql_relational else {
-            anyhow::bail!("clone rebuild relational store is not attached to this ingest");
+            anyhow::bail!("clone-edge rebuild relational store is not attached to this ingest");
         };
         Ok(relational)
     }

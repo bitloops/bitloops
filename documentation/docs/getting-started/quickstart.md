@@ -92,7 +92,25 @@ bitloops devql ingest
 bitloops devql query "files changed last 7 days"
 ```
 
-## 7. Check Status
+## 7. Sync Current State
+
+`bitloops devql init` must have run at least once for schema bootstrap; this bootstrap step will be automated for all DevQL commands soon.
+
+When you want to reconcile `artefacts_current`/`artefact_edges_current` with the current workspace:
+
+```bash
+bitloops devql sync
+```
+
+When you want to validate that current-state rows match a full-project reconciliation without writing changes:
+
+```bash
+bitloops devql sync --validate
+```
+
+Use `--validate` as a diagnostic check when debugging drift between source files and current-state query results.
+
+## 8. Check Status
 
 ```bash
 bitloops status

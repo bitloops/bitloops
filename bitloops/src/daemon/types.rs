@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
+pub(super) const ENRICHMENT_STATE_FILE_NAME: &str = "enrichment.json";
 pub(super) const INTERNAL_DAEMON_COMMAND_NAME: &str = "__daemon-process";
 pub(super) const INTERNAL_SUPERVISOR_COMMAND_NAME: &str = "__daemon-supervisor";
 pub(super) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops.daemon";
@@ -228,13 +229,81 @@ pub struct DaemonHealthSummary {
     pub blob_backend: Option<String>,
     pub blob_connected: Option<bool>,
 }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrichmentQueueMode {
+    Running,
+    Paused,
+}
 
+impl fmt::Display for EnrichmentQueueMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Running => write!(f, "running"),
+            Self::Paused => write!(f, "paused"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentQueueState {
+    pub version: u8,
+    pub mode: EnrichmentQueueMode,
+    pub pending_jobs: u64,
+    pub pending_semantic_jobs: u64,
+    pub pending_embedding_jobs: u64,
+    pub pending_clone_edges_rebuild_jobs: u64,
+    pub running_jobs: u64,
+    pub running_semantic_jobs: u64,
+    pub running_embedding_jobs: u64,
+    pub running_clone_edges_rebuild_jobs: u64,
+    pub failed_jobs: u64,
+    pub failed_semantic_jobs: u64,
+    pub failed_embedding_jobs: u64,
+    pub failed_clone_edges_rebuild_jobs: u64,
+    pub retried_failed_jobs: u64,
+    pub last_action: Option<String>,
+    pub last_updated_unix: u64,
+    pub paused_reason: Option<String>,
+}
+
+impl Default for EnrichmentQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            mode: EnrichmentQueueMode::Running,
+            pending_jobs: 0,
+            pending_semantic_jobs: 0,
+            pending_embedding_jobs: 0,
+            pending_clone_edges_rebuild_jobs: 0,
+            running_jobs: 0,
+            running_semantic_jobs: 0,
+            running_embedding_jobs: 0,
+            running_clone_edges_rebuild_jobs: 0,
+            failed_jobs: 0,
+            failed_semantic_jobs: 0,
+            failed_embedding_jobs: 0,
+            failed_clone_edges_rebuild_jobs: 0,
+            retried_failed_jobs: 0,
+            last_action: Some("initialized".to_string()),
+            last_updated_unix: 0,
+            paused_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrichmentQueueStatus {
+    pub state: EnrichmentQueueState,
+    pub persisted: bool,
+}
 #[derive(Debug, Clone)]
 pub struct DaemonStatusReport {
     pub runtime: Option<DaemonRuntimeState>,
     pub service: Option<DaemonServiceMetadata>,
     pub service_running: bool,
     pub health: Option<DaemonHealthSummary>,
+    pub enrichment: Option<EnrichmentQueueStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

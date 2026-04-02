@@ -1,6 +1,6 @@
 # Bitloops CLI — Architecture & Structure Review
 
-> **Status:** Historical planning document archived after the CLI-1426 restructure. Use `docs/layered-extension-architecture*.md` for the current architecture set.
+> **Status:** Historical planning document archived after the CLI-1426 restructure. Use `documentation/contributors/architecture/` for the current architecture set.
 
 > **Purpose**: Analyze the current folder structure and architecture against the target **Layered Extension Architecture** (as defined in CLI-1426 and referenced Confluence documents), identify gaps, and propose a restructured layout aligned with the vision.
 

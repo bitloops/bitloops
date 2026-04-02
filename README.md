@@ -188,6 +188,8 @@ DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependen
 
 [Read more here](./DevQL-Getting_Started.md)
 
+To try OpenAI-backed semantic summaries together with the standalone local embeddings runtime, see [Semantic + Embeddings Quickstart](./docs/semantic-embeddings-quickstart.md).
+
 ## External Knowledge
 
 Bitloops can ingest repository-scoped external knowledge by URL:

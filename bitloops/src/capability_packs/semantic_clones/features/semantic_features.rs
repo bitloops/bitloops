@@ -14,12 +14,13 @@ mod semantic;
 use self::common::{build_body_tokens, normalize_name, normalize_repo_path};
 pub(crate) use self::common::{build_dependency_context_signal, render_dependency_context};
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
+pub use self::semantic::SymbolSemanticsRow;
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
     SemanticSummaryProviderConfig, build_semantic_summary_provider,
     resolve_semantic_summary_endpoint,
 };
-use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
+use self::semantic::{build_semantics_row, normalize_summary_text};
 
 const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v3";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
@@ -67,7 +68,7 @@ pub struct PreStageDependencyRow {
     pub target_ref: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SemanticFeatureInput {
     pub artefact_id: String,
     pub symbol_id: Option<String>,
@@ -269,7 +270,7 @@ pub fn build_semantic_feature_rows(
 
 pub fn build_semantic_feature_input_hash(
     input: &SemanticFeatureInput,
-    summary_provider: &dyn SemanticSummaryProvider,
+    _summary_provider: &dyn SemanticSummaryProvider,
 ) -> String {
     let mut normalized_modifiers = input
         .modifiers
@@ -283,7 +284,6 @@ pub fn build_semantic_feature_input_hash(
     sha256_hex(
         &json!({
             "fingerprint_version": SEMANTIC_FEATURES_FINGERPRINT_VERSION,
-            "summary_provider": summary_provider.cache_key(),
             "artefact_id": &input.artefact_id,
             "symbol_id": &input.symbol_id,
             "repo_id": &input.repo_id,
@@ -311,7 +311,7 @@ pub fn build_semantic_feature_input_hash(
 }
 
 // Incremental indexing rule: recompute enrichment when the persisted fingerprint no longer matches
-// the current symbol inputs, pipeline versions, or summary provider configuration.
+// the current deterministic symbol inputs or pipeline versions.
 pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_input_hash_changes_when_summary_provider_changes() {
+    fn semantic_features_input_hash_stays_stable_when_summary_provider_changes() {
         let input = SemanticFeatureInput {
             artefact_id: "artefact-1".to_string(),
             symbol_id: Some("symbol-1".to_string()),
@@ -468,7 +468,7 @@ mod tests {
             content_hash: Some("hash-1".to_string()),
         };
 
-        assert_ne!(
+        assert_eq!(
             build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=a" }),
             build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=b" })
         );

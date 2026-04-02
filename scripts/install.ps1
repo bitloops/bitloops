@@ -47,6 +47,25 @@ $assetName = "bitloops-$target.zip"
 $checksumsName = "checksums-sha256.txt"
 $releaseApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 
+function Find-ExtractedBinary {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExtractDir,
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+
+  $direct = Join-Path $ExtractDir $Name
+  if (Test-Path $direct) {
+    return $direct
+  }
+
+  $found = Get-ChildItem -Path $ExtractDir -Filter $Name -Recurse | Select-Object -First 1
+  if ($found) {
+    return $found.FullName
+  }
+
+  return $null
+}
+
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("bitloops-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
 
@@ -86,22 +105,29 @@ try {
   $extractDir = Join-Path $tempDir "extract"
   Expand-Archive -Path $assetPath -DestinationPath $extractDir -Force
 
-  $binaryPath = Join-Path $extractDir "bitloops.exe"
-  if (-not (Test-Path $binaryPath)) {
-    $found = Get-ChildItem -Path $extractDir -Filter "bitloops.exe" -Recurse | Select-Object -First 1
-    if (-not $found) {
-      throw "Extracted archive did not contain bitloops.exe"
-    }
-    $binaryPath = $found.FullName
+  $binaryPath = Find-ExtractedBinary -ExtractDir $extractDir -Name "bitloops.exe"
+  if (-not $binaryPath) {
+    throw "Extracted archive did not contain bitloops.exe"
   }
+  $embeddingsBinaryPath = Find-ExtractedBinary -ExtractDir $extractDir -Name "bitloops-embeddings.exe"
 
   New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
   $targetPath = Join-Path $InstallDir "bitloops.exe"
   Copy-Item -Path $binaryPath -Destination $targetPath -Force
+  if ($embeddingsBinaryPath) {
+    $embeddingsTargetPath = Join-Path $InstallDir "bitloops-embeddings.exe"
+    Copy-Item -Path $embeddingsBinaryPath -Destination $embeddingsTargetPath -Force
+  }
 
   $pathChanged = Add-ToUserPath -PathToAdd $InstallDir
 
   Write-Host "Installed bitloops $tag to $targetPath"
+  if ($embeddingsBinaryPath) {
+    Write-Host "Installed bitloops-embeddings $tag to $embeddingsTargetPath"
+  }
+  else {
+    Write-Host "Note: this release archive did not contain bitloops-embeddings; installing bitloops only."
+  }
   if ($pathChanged) {
     Write-Host "Added $InstallDir to user PATH. Restart your terminal for PATH changes to apply."
   }

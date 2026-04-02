@@ -2,12 +2,12 @@ use anyhow::Result;
 
 use crate::host::capability_host::CapabilityRegistrar;
 
-use super::ingesters::build_symbol_clone_rebuild_ingester;
+use super::ingesters::build_symbol_clone_edges_rebuild_ingester;
 use super::query_examples::SEMANTIC_CLONES_QUERY_EXAMPLES;
 use super::schema_module::SEMANTIC_CLONES_SCHEMA_MODULE;
 
 pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
-    registrar.register_ingester(build_symbol_clone_rebuild_ingester())?;
+    registrar.register_ingester(build_symbol_clone_edges_rebuild_ingester())?;
     registrar.register_schema_module(SEMANTIC_CLONES_SCHEMA_MODULE)?;
     registrar.register_query_examples(SEMANTIC_CLONES_QUERY_EXAMPLES)?;
     Ok(())
@@ -17,7 +17,7 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
 mod tests {
     use super::*;
     use crate::capability_packs::semantic_clones::types::{
-        SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+        SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
     };
     use crate::host::capability_host::{IngesterRegistration, QueryExample, SchemaModule};
 
@@ -61,7 +61,7 @@ mod tests {
             registrar.ingesters,
             vec![(
                 SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_REBUILD_INGESTER_ID
+                SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID
             )]
         );
         assert_eq!(

@@ -127,13 +127,6 @@ impl ArtefactTemporalScope {
         }
     }
 
-    pub(crate) fn save_revision(&self) -> Option<&str> {
-        match self {
-            Self::SaveRevision { revision_id } => Some(revision_id.as_str()),
-            Self::Current | Self::HistoricalCommit { .. } | Self::SaveCurrent => None,
-        }
-    }
-
     pub(crate) fn use_historical_tables(&self) -> bool {
         matches!(self, Self::HistoricalCommit { .. })
     }
@@ -406,10 +399,6 @@ mod tests {
             semantic_model: None,
             semantic_api_key: None,
             semantic_base_url: None,
-            embedding_provider: None,
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
         }
     }
 

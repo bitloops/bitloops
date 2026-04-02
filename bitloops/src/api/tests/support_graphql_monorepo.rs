@@ -70,9 +70,15 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
         )
         .expect("insert file_state row");
         conn.execute(
-            "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
-             VALUES (?1, ?2, ?3, ?4, '2026-03-26T10:00:00Z')",
-            rusqlite::params![repo_id.as_str(), path, commit_sha.as_str(), blob_sha],
+            "INSERT INTO current_file_state (
+                repo_id, path, language,
+                head_content_id, index_content_id, worktree_content_id,
+                effective_content_id, effective_source,
+                parser_version, extractor_version,
+                exists_in_head, exists_in_index, exists_in_worktree,
+                last_synced_at
+            ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T10:00:00Z')",
+            rusqlite::params![repo_id.as_str(), path, blob_sha],
         )
         .expect("insert current_file_state row");
     }
@@ -209,23 +215,19 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
         .expect("insert artefact row");
         conn.execute(
             "INSERT INTO artefacts_current (
-                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
-                temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
-                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
             ) VALUES (
-                ?1, 'main', ?2, ?3, ?4, 'commit', ?4,
-                NULL, ?5, ?6, 'typescript', ?7, ?8,
-                ?9, ?10, ?11, ?12, ?13,
-                0, ?14, NULL, ?15, ?16, ?17, '2026-03-26T10:00:00Z'
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                0, ?13, NULL, ?14, ?15, '2026-03-26T10:00:00Z'
             )",
             rusqlite::params![
                 repo_id.as_str(),
+                path,
+                blob_sha,
                 symbol_id,
                 artefact_id,
-                commit_sha.as_str(),
-                blob_sha,
-                path,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
@@ -244,7 +246,6 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
                 } else {
                     Some("Monorepo docstring")
                 },
-                format!("hash-{artefact_id}"),
             ],
         )
         .expect("insert artefact current row");
@@ -280,20 +281,17 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
     ] {
         conn.execute(
             "INSERT INTO artefact_edges_current (
-                edge_id, repo_id, branch, commit_sha, revision_kind, revision_id,
-                temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id,
+                repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
                 to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
                 start_line, end_line, metadata, updated_at
             ) VALUES (
-                ?1, ?2, 'main', ?3, 'commit', ?3,
-                NULL, 'blob-api-caller', 'packages/api/src/caller.ts', ?4, ?5,
-                ?6, ?7, ?8, 'calls', 'typescript',
-                ?9, ?9, '{\"resolution\":\"local\"}', '2026-03-26T10:00:00Z'
+                ?2, ?1, 'packages/api/src/caller.ts', 'blob-api-caller', ?3, ?4,
+                ?5, ?6, ?7, 'calls', 'typescript',
+                ?8, ?8, '{\"resolution\":\"local\"}', '2026-03-26T10:00:00Z'
             )",
             rusqlite::params![
                 edge_id,
                 repo_id.as_str(),
-                commit_sha.as_str(),
                 from_symbol_id,
                 from_artefact_id,
                 to_symbol_id,

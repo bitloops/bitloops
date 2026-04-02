@@ -7,11 +7,13 @@ use crate::host::capability_host::registrar::{
     BoxFuture, IngestRequest, IngestResult, IngesterHandler, IngesterRegistration,
 };
 
-use super::super::types::{SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID};
+use super::super::types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+};
 
-pub struct SymbolCloneRebuildIngester;
+pub struct SymbolCloneEdgesRebuildIngester;
 
-impl IngesterHandler for SymbolCloneRebuildIngester {
+impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
     fn ingest<'a>(
         &'a self,
         _request: IngestRequest,
@@ -19,8 +21,9 @@ impl IngesterHandler for SymbolCloneRebuildIngester {
     ) -> BoxFuture<'a, Result<IngestResult>> {
         Box::pin(async move {
             let relational = ctx
-                .clone_rebuild_relational()
-                .context("clone rebuild relational for semantic clone rebuild")?;
+                .clone_edges_rebuild_relational()
+                .context("clone-edge rebuild relational for semantic clone-edge rebuild")?;
+
             let repo_id = ctx.repo().repo_id.clone();
             let build =
                 crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
@@ -43,10 +46,10 @@ impl IngesterHandler for SymbolCloneRebuildIngester {
     }
 }
 
-pub fn build_symbol_clone_rebuild_ingester() -> IngesterRegistration {
+pub fn build_symbol_clone_edges_rebuild_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
         SEMANTIC_CLONES_CAPABILITY_ID,
-        SEMANTIC_CLONES_REBUILD_INGESTER_ID,
-        Arc::new(SymbolCloneRebuildIngester),
+        SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+        Arc::new(SymbolCloneEdgesRebuildIngester),
     )
 }

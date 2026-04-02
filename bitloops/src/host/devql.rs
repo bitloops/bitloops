@@ -12,12 +12,14 @@ use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
-    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
-    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+    clear_repo_symbol_embedding_rows, load_pre_stage_artefacts_for_blob,
+    load_pre_stage_dependencies_for_blob, upsert_semantic_feature_rows,
+    upsert_symbol_embedding_rows,
 };
 use crate::config::{
-    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
+    BITLOOPS_CONFIG_RELATIVE_PATH, EventsBackendConfig, RelationalBackendConfig,
+    StoreBackendConfig, resolve_embedding_capability_config_for_repo, resolve_store_backend_config,
     resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
@@ -45,8 +47,12 @@ mod commands_projection;
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
 mod commands_refresh;
+#[path = "devql/commands_sync.rs"]
+mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+#[path = "devql/sync/mod.rs"]
+pub(crate) mod sync;
 mod types;
 
 pub(crate) use self::commands_ingest::execute_ingest_with_observer;
@@ -67,14 +73,20 @@ pub use self::commands_refresh::{
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
+pub use self::commands_sync::{
+    SyncSummary, SyncValidationFileDrift, SyncValidationSummary, run_sync, run_sync_with_summary,
+};
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
+pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 
 #[cfg(test)]
-pub(crate) use self::commands_ingest::promote_temporary_current_rows_for_head_commit;
+pub(crate) use self::commands_sync::execute_sync;
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation;
 #[cfg(test)]
 pub(crate) use self::connection_status::{
     EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,
@@ -513,11 +525,16 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
 }
 
 fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
     embeddings::EmbeddingProviderConfig {
-        embedding_provider: cfg.embedding_provider.clone(),
-        embedding_model: cfg.embedding_model.clone(),
-        embedding_api_key: cfg.embedding_api_key.clone(),
-        embedding_cache_dir: cfg.embedding_cache_dir.clone(),
+        daemon_config_path: crate::config::default_daemon_config_path()
+            .unwrap_or_else(|_| cfg.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
+        embedding_profile: capability.semantic_clones.embedding_profile,
+        runtime_command: capability.embeddings.runtime.command,
+        runtime_args: capability.embeddings.runtime.args,
+        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
+        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
+        warnings: capability.embeddings.warnings,
     }
 }
 
@@ -717,6 +734,13 @@ fn symbol_id_for_artefact(item: &LanguageArtefact) -> String {
 }
 
 #[cfg(test)]
+#[path = "devql/tests/compat_current_state.rs"]
+mod compat_current_state;
+
+#[cfg(test)]
+pub(crate) use self::compat_current_state::*;
+
+#[cfg(test)]
 #[path = "devql/tests/devql_tests.rs"]
 mod tests;
 
@@ -747,3 +771,7 @@ mod cucumber_bdd;
 #[cfg(test)]
 #[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;
+
+#[cfg(test)]
+#[path = "devql/tests/sync_tests.rs"]
+mod sync_tests;

@@ -10,7 +10,7 @@ use std::path::{Component, Path};
 
 pub(super) fn build_file_context_lookup_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     path: &str,
     temporal_scope: Option<&ResolvedTemporalScope>,
 ) -> String {
@@ -32,42 +32,30 @@ pub(super) fn build_file_context_lookup_sql(
         );
     }
 
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-        return format!(
-            "SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language \
-               FROM artefacts_current a \
-              WHERE a.repo_id = '{repo_id}' \
-                AND a.branch = '{branch}' \
-                AND a.canonical_kind = 'file' \
-                AND a.revision_kind = 'temporary' \
-                AND a.revision_id = '{revision_id}' \
-                AND a.path = '{path}' \
-              ORDER BY a.updated_at DESC, a.start_line, a.artefact_id \
-              LIMIT 1",
-            repo_id = esc_pg(repo_id),
-            branch = esc_pg(branch),
-            revision_id = esc_pg(revision_id),
-            path = esc_pg(path),
-        );
+    if temporal_scope
+        .and_then(ResolvedTemporalScope::save_revision)
+        .is_some()
+    {
+        // Save revision scoping relied on columns (revision_kind, revision_id) that no
+        // longer exist on artefacts_current. Fall through to the default current lookup.
     }
 
     format!(
         "SELECT path, blob_sha, language FROM ( \
-            SELECT c.path AS path, c.blob_sha AS blob_sha, \
+            SELECT c.path AS path, c.effective_content_id AS blob_sha, \
                    (SELECT a.language FROM artefacts_current a \
-                    WHERE a.repo_id = c.repo_id AND a.branch = '{branch}' AND a.path = c.path \
+                    WHERE a.repo_id = c.repo_id AND a.path = c.path \
                     ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language, \
                    0 AS precedence \
               FROM current_file_state c \
              WHERE c.repo_id = '{repo_id}' AND c.path = '{path}' \
             UNION ALL \
-            SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language, 1 AS precedence \
+            SELECT a.path AS path, a.content_id AS blob_sha, a.language AS language, 1 AS precedence \
               FROM artefacts_current a \
-             WHERE a.repo_id = '{repo_id}' AND a.branch = '{branch}' AND a.path = '{path}' \
+             WHERE a.repo_id = '{repo_id}' AND a.path = '{path}' \
         ) \
         ORDER BY precedence \
         LIMIT 1",
-        branch = esc_pg(branch),
         repo_id = esc_pg(repo_id),
         path = esc_pg(path),
     )
@@ -75,7 +63,7 @@ pub(super) fn build_file_context_lookup_sql(
 
 pub(super) fn build_file_context_list_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     glob: &str,
     temporal_scope: Option<&ResolvedTemporalScope>,
 ) -> String {
@@ -101,42 +89,29 @@ pub(super) fn build_file_context_list_sql(
         );
     }
 
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-        return format!(
-            "SELECT a.path AS path, a.blob_sha AS blob_sha, MIN(a.language) AS language \
-               FROM artefacts_current a \
-              WHERE a.repo_id = '{repo_id}' \
-                AND a.branch = '{branch}' \
-                AND a.canonical_kind = 'file' \
-                AND a.revision_kind = 'temporary' \
-                AND a.revision_id = '{revision_id}' \
-                AND {like_a} \
-           GROUP BY a.path, a.blob_sha \
-           ORDER BY a.path",
-            repo_id = esc_pg(repo_id),
-            branch = esc_pg(branch),
-            revision_id = esc_pg(revision_id),
-            like_a = like_a,
-        );
+    if temporal_scope
+        .and_then(ResolvedTemporalScope::save_revision)
+        .is_some()
+    {
+        // Fall through to default current lookup — revision columns removed from current tables.
     }
 
     format!(
         "SELECT path, blob_sha, MIN(language) AS language \
            FROM ( \
-                SELECT c.path AS path, c.blob_sha AS blob_sha, \
+                SELECT c.path AS path, c.effective_content_id AS blob_sha, \
                        (SELECT a.language FROM artefacts_current a \
-                        WHERE a.repo_id = c.repo_id AND a.branch = '{branch}' AND a.path = c.path \
+                        WHERE a.repo_id = c.repo_id AND a.path = c.path \
                         ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language \
                   FROM current_file_state c \
                  WHERE c.repo_id = '{repo_id}' AND {like_c} \
                 UNION ALL \
-                SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language \
+                SELECT a.path AS path, a.content_id AS blob_sha, a.language AS language \
                   FROM artefacts_current a \
-                 WHERE a.repo_id = '{repo_id}' AND a.branch = '{branch}' AND {like_a} \
+                 WHERE a.repo_id = '{repo_id}' AND {like_a} \
            ) files \
        GROUP BY path, blob_sha \
        ORDER BY path",
-        branch = esc_pg(branch),
         repo_id = esc_pg(repo_id),
         like_c = like_c,
         like_a = like_a,
@@ -212,7 +187,7 @@ pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> St
            FROM filtered{pagination_clause} \
        ORDER BY {order} \
           LIMIT {limit}",
-        columns = filtered_artefact_columns_sql(),
+        columns = filtered_artefact_columns_sql(spec.temporal_scope.use_historical_tables(),),
         order = order,
         limit = pagination.limit,
     )
@@ -224,7 +199,7 @@ fn filtered_artefact_reverse_order_sql() -> &'static str {
 
 pub(super) fn build_artefacts_by_ids_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     artefact_ids: &[String],
     project_path: Option<&str>,
     temporal_scope: Option<&ResolvedTemporalScope>,
@@ -236,7 +211,7 @@ pub(super) fn build_artefacts_by_ids_sql(
         format!("a.artefact_id IN ({})", quoted_string_list(artefact_ids)),
     ];
     if !use_historical_tables {
-        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
+        // branch column removed from artefacts_current in sync redesign
     }
     if let Some(project_path) = project_path {
         clauses.push(repo_path_prefix_clause("a.path", project_path));
@@ -255,7 +230,7 @@ pub(super) fn build_artefacts_by_ids_sql(
 
 pub(super) fn build_child_artefacts_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     parent_artefact_id: &str,
     project_path: Option<&str>,
     temporal_scope: Option<&ResolvedTemporalScope>,
@@ -267,7 +242,7 @@ pub(super) fn build_child_artefacts_sql(
         format!("a.parent_artefact_id = '{}'", esc_pg(parent_artefact_id)),
     ];
     if !use_historical_tables {
-        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
+        // branch column removed from artefacts_current in sync redesign
     }
     if let Some(project_path) = project_path {
         clauses.push(repo_path_prefix_clause("a.path", project_path));
@@ -286,7 +261,7 @@ pub(super) fn build_child_artefacts_sql(
 
 pub(super) fn build_current_dependency_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     scope: DependencyScope<'_>,
     project_path: Option<&str>,
     filter: DepsFilterInput,
@@ -296,9 +271,11 @@ pub(super) fn build_current_dependency_sql(
         temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
     let mut clauses = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
     if !use_historical_tables {
-        clauses.push(format!("e.branch = '{}'", esc_pg(branch)));
+        // branch column removed from artefact_edges_current in sync redesign
     }
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
+    if use_historical_tables
+        && let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision)
+    {
         clauses.push("e.revision_kind = 'temporary'".to_string());
         clauses.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
     }
@@ -338,7 +315,9 @@ pub(super) fn build_current_dependency_sql(
         }
     }
 
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
+    if use_historical_tables
+        && let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision)
+    {
         match filter.direction {
             DepsDirection::Out => clauses.push(current_revision_clause("src", revision_id)),
             DepsDirection::In => clauses.push(current_revision_clause("tgt", revision_id)),
@@ -417,23 +396,15 @@ pub(super) fn build_current_dependency_sql(
         } else {
             "artefacts_current"
         },
-        src_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND src.branch = e.branch".to_string()
-        },
-        tgt_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND tgt.branch = e.branch".to_string()
-        },
+        src_branch_join = String::new(),
+        tgt_branch_join = String::new(),
         clauses = clauses.join(" AND ")
     )
 }
 
 pub(super) fn build_current_dependency_batch_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     artefact_ids: &[String],
     direction: DepsDirection,
     filter: DepsFilterInput,
@@ -444,7 +415,7 @@ pub(super) fn build_current_dependency_batch_sql(
         temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
     let mut clauses = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
     if !use_historical_tables {
-        clauses.push(format!("e.branch = '{}'", esc_pg(branch)));
+        // branch column removed from artefact_edges_current in sync redesign
     }
 
     if let Some(kind) = filter.kind {
@@ -504,16 +475,8 @@ pub(super) fn build_current_dependency_batch_sql(
         } else {
             "artefacts_current"
         },
-        src_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND src.branch = e.branch".to_string()
-        },
-        tgt_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND tgt.branch = e.branch".to_string()
-        },
+        src_branch_join = String::new(),
+        tgt_branch_join = String::new(),
         clauses = clauses.join(" AND ")
     )
 }
@@ -633,12 +596,20 @@ fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> Stri
     } else {
         format!("{alias}.updated_at AS created_at")
     };
+    let (blob_sha_expr, content_hash_expr) = if use_historical_tables {
+        (format!("{alias}.blob_sha"), format!("{alias}.content_hash"))
+    } else {
+        (
+            format!("{alias}.content_id AS blob_sha"),
+            "NULL AS content_hash".to_string(),
+        )
+    };
     format!(
         "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
          {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
          {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
          {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
-         {alias}.docstring, {alias}.blob_sha, {alias}.content_hash, {created_at_column}",
+         {alias}.docstring, {blob_sha_expr}, {content_hash_expr}, {created_at_column}",
     )
 }
 
@@ -688,7 +659,7 @@ mod tests {
         assert!(sql.contains("WITH filtered AS"));
         assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
         assert!(sql.contains("cfs.path = a.path"));
-        assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+        assert!(sql.contains("cfs.blob_sha = a.content_id"));
         assert!(sql.contains("cfs.agent = 'codex'"));
         assert!(sql.contains("SELECT COUNT(*) AS total_count FROM filtered"));
         assert!(!sql.contains("blob_sha IN"));

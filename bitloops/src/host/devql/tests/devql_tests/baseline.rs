@@ -5,8 +5,8 @@ fn cfg_for_repo(repo_root: &Path) -> DevqlConfig {
     DevqlConfig::from_env(repo_root.to_path_buf(), repo).expect("build devql cfg from repo")
 }
 
-fn count_rows(conn: &rusqlite::Connection, sql: &str, repo_id: &str, branch: &str) -> i64 {
-    conn.query_row(sql, rusqlite::params![repo_id, branch], |row| row.get(0))
+fn count_rows(conn: &rusqlite::Connection, sql: &str, repo_id: &str) -> i64 {
+    conn.query_row(sql, rusqlite::params![repo_id], |row| row.get(0))
         .expect("count rows")
 }
 
@@ -76,23 +76,21 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
         .expect("run baseline ingestion");
 
     let head_sha = run_git(repo.path(), &["rev-parse", "HEAD"]).expect("resolve HEAD");
-    let branch = active_branch_name(repo.path());
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
 
-    let file_state_count: i64 = conn
+    let current_file_state_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2",
-            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count file_state rows");
-    assert_eq!(file_state_count, 2);
+        .expect("count current_file_state rows");
+    assert_eq!(current_file_state_count, 2);
 
     let current_count = count_rows(
         &conn,
-        "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND branch = ?2",
+        "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
         cfg.repo.repo_id.as_str(),
-        branch.as_str(),
     );
     assert!(
         current_count >= 2,
@@ -124,7 +122,6 @@ async fn baseline_ingestion_is_idempotent_when_head_is_unchanged() {
     let sqlite_path = repo.path().join("relational.db");
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
     let cfg = cfg_for_repo(repo.path());
-    let branch = active_branch_name(repo.path());
 
     run_baseline_ingestion(&cfg, &relational)
         .await
@@ -133,15 +130,13 @@ async fn baseline_ingestion_is_idempotent_when_head_is_unchanged() {
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     let artefacts_current_first = count_rows(
         &conn,
-        "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND branch = ?2",
+        "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
         cfg.repo.repo_id.as_str(),
-        branch.as_str(),
     );
     let edges_current_first = count_rows(
         &conn,
-        "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND branch = ?2",
+        "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1",
         cfg.repo.repo_id.as_str(),
-        branch.as_str(),
     );
     let historical_first: i64 = conn
         .query_row(
@@ -159,15 +154,13 @@ async fn baseline_ingestion_is_idempotent_when_head_is_unchanged() {
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite after rerun");
     let artefacts_current_second = count_rows(
         &conn,
-        "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND branch = ?2",
+        "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
         cfg.repo.repo_id.as_str(),
-        branch.as_str(),
     );
     let edges_current_second = count_rows(
         &conn,
-        "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND branch = ?2",
+        "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1",
         cfg.repo.repo_id.as_str(),
-        branch.as_str(),
     );
     let historical_second: i64 = conn
         .query_row(

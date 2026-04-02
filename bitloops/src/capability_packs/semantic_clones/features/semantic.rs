@@ -192,7 +192,7 @@ impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 // Stores all semantic summary candidates plus the synthesized summary used downstream.
 pub struct SymbolSemanticsRow {
     pub artefact_id: String,

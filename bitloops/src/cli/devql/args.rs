@@ -12,6 +12,8 @@ pub enum DevqlCommand {
     Init(DevqlInitArgs),
     /// Ingest checkpoint/events and relational artefacts for configured backends.
     Ingest(DevqlIngestArgs),
+    /// Synchronize current workspace artefacts into DevQL state.
+    Sync(DevqlSyncArgs),
     /// Backfill or repair DevQL relational projections.
     Projection(DevqlProjectionArgs),
     /// Execute a DevQL query.
@@ -36,6 +38,25 @@ pub struct DevqlIngestArgs {
     /// Limit checkpoints processed (newest-first).
     #[arg(long, default_value_t = 500)]
     pub max_checkpoints: usize,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct DevqlSyncArgs {
+    /// Run a full workspace reconciliation.
+    #[arg(long, conflicts_with_all = ["paths", "repair", "validate"])]
+    pub full: bool,
+
+    /// Reconcile only the specified workspace paths.
+    #[arg(long, value_delimiter = ',', conflicts_with_all = ["full", "repair", "validate"])]
+    pub paths: Option<Vec<String>>,
+
+    /// Rebuild sync state from the current workspace and repair stored state.
+    #[arg(long, conflicts_with_all = ["full", "paths", "validate"])]
+    pub repair: bool,
+
+    /// Validate current-state tables against a full read-only workspace reconciliation.
+    #[arg(long, conflicts_with_all = ["full", "paths", "repair"])]
+    pub validate: bool,
 }
 
 #[derive(Args, Debug, Clone)]

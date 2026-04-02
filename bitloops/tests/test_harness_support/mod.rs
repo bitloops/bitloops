@@ -161,17 +161,16 @@ FROM (
     languages
 }
 
-pub fn load_symbol_fqn(conn: &Connection, commit_sha: &str, pattern: &str) -> String {
+pub fn load_symbol_fqn(conn: &Connection, _commit_sha: &str, pattern: &str) -> String {
     conn.query_row(
         r#"
 SELECT symbol_fqn
 FROM artefacts_current
-WHERE commit_sha = ?1
-  AND symbol_fqn LIKE ?2
+WHERE symbol_fqn LIKE ?1
 ORDER BY symbol_fqn ASC
 LIMIT 1
 "#,
-        params![commit_sha, pattern],
+        params![pattern],
         |row| row.get(0),
     )
     .unwrap_or_else(|_| panic!("expected symbol_fqn matching pattern {pattern}"))

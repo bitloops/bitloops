@@ -26,9 +26,6 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
     let duckdb_path = settings["stores"]["events"]["duckdb_path"]
         .as_str()
         .expect("events duckdb path");
-    let embedding_provider = settings["stores"]["embedding_provider"]
-        .as_str()
-        .expect("embedding provider");
     let semantic_provider = settings["semantic"]["provider"]
         .as_str()
         .expect("semantic provider");
@@ -37,8 +34,6 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
         repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
         format!(
             r#"[stores]
-embedding_provider = {embedding_provider:?}
-
 [stores.relational]
 sqlite_path = {sqlite_path:?}
 
@@ -76,8 +71,7 @@ fn seed_devql_cli_repo() -> TempDir {
                 },
                 "events": {
                     "duckdb_path": ".bitloops/stores/events.duckdb"
-                },
-                "embedding_provider": "disabled"
+                }
             },
             "semantic": {
                 "provider": "disabled"
@@ -123,6 +117,245 @@ fn devql_cli_parses_ingest_defaults() {
 
     assert!(ingest.init);
     assert_eq!(ingest.max_checkpoints, 500);
+}
+
+#[test]
+fn devql_cli_parses_sync_modes() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "sync",
+        "--paths",
+        "src/lib.rs,src/main.rs",
+    ])
+    .expect("devql sync with paths should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+
+    assert!(!sync.full);
+    assert_eq!(
+        sync.paths,
+        Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()])
+    );
+    assert!(!sync.repair);
+    assert!(!sync.validate);
+
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
+        .expect("devql sync repair should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(!sync.full);
+    assert_eq!(sync.paths, None);
+    assert!(sync.repair);
+    assert!(!sync.validate);
+
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
+        .expect("devql sync full should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(sync.full);
+    assert_eq!(sync.paths, None);
+    assert!(!sync.repair);
+    assert!(!sync.validate);
+
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
+        .expect("devql sync validate should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(!sync.full);
+    assert_eq!(sync.paths, None);
+    assert!(!sync.repair);
+    assert!(sync.validate);
+}
+
+#[test]
+fn devql_cli_rejects_conflicting_sync_modes() {
+    let cases = vec![
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--full",
+            "--paths",
+            "src/lib.rs",
+        ],
+        vec!["bitloops", "devql", "sync", "--full", "--repair"],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--paths",
+            "src/lib.rs",
+            "--repair",
+        ],
+        vec!["bitloops", "devql", "sync", "--validate", "--repair"],
+        vec!["bitloops", "devql", "sync", "--validate", "--full"],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--validate",
+            "--paths",
+            "src/lib.rs",
+        ],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--full",
+            "--paths",
+            "src/lib.rs",
+            "--repair",
+        ],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--validate",
+            "--full",
+            "--paths",
+            "src/lib.rs",
+            "--repair",
+        ],
+    ];
+
+    for argv in cases {
+        assert!(
+            Cli::try_parse_from(argv.iter().copied()).is_err(),
+            "expected conflicting sync modes to be rejected for argv: {argv:?}"
+        );
+    }
+}
+
+#[test]
+fn format_sync_completion_summary_includes_diagnostics_when_present() {
+    let summary = SyncSummary {
+        success: true,
+        mode: "repair".to_string(),
+        parser_version: "parser@1".to_string(),
+        extractor_version: "extractor@1".to_string(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        head_tree_sha: Some("def456".to_string()),
+        paths_unchanged: 4,
+        paths_added: 1,
+        paths_changed: 2,
+        paths_removed: 3,
+        cache_hits: 5,
+        cache_misses: 2,
+        parse_errors: 1,
+        validation: None,
+    };
+
+    assert_eq!(
+        format_sync_completion_summary(&summary),
+        "sync complete: 1 added, 2 changed, 3 removed, 4 unchanged, 5 cache hits (mode=repair, 2 cache misses, 1 parse errors)"
+    );
+}
+
+#[test]
+fn format_sync_completion_summary_keeps_basic_happy_path_line() {
+    let summary = SyncSummary {
+        success: true,
+        mode: "full".to_string(),
+        parser_version: "parser@1".to_string(),
+        extractor_version: "extractor@1".to_string(),
+        active_branch: None,
+        head_commit_sha: None,
+        head_tree_sha: None,
+        paths_unchanged: 4,
+        paths_added: 1,
+        paths_changed: 2,
+        paths_removed: 3,
+        cache_hits: 5,
+        cache_misses: 0,
+        parse_errors: 0,
+        validation: None,
+    };
+
+    assert_eq!(
+        format_sync_completion_summary(&summary),
+        "sync complete: 1 added, 2 changed, 3 removed, 4 unchanged, 5 cache hits"
+    );
+}
+
+#[test]
+fn format_sync_completion_summary_for_validate_reports_path_drift() {
+    let summary = SyncSummary {
+        success: false,
+        mode: "validate".to_string(),
+        parser_version: "parser@1".to_string(),
+        extractor_version: "extractor@1".to_string(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        head_tree_sha: Some("def456".to_string()),
+        paths_unchanged: 0,
+        paths_added: 0,
+        paths_changed: 0,
+        paths_removed: 0,
+        cache_hits: 0,
+        cache_misses: 0,
+        parse_errors: 0,
+        validation: Some(crate::host::devql::SyncValidationSummary {
+            valid: false,
+            expected_artefacts: 10,
+            actual_artefacts: 8,
+            expected_edges: 6,
+            actual_edges: 6,
+            missing_artefacts: 2,
+            stale_artefacts: 0,
+            mismatched_artefacts: 0,
+            missing_edges: 0,
+            stale_edges: 0,
+            mismatched_edges: 1,
+            files_with_drift: vec![crate::host::devql::SyncValidationFileDrift {
+                path: "src/lib.rs".to_string(),
+                missing_artefacts: 2,
+                stale_artefacts: 0,
+                mismatched_artefacts: 0,
+                missing_edges: 0,
+                stale_edges: 0,
+                mismatched_edges: 1,
+            }],
+        }),
+    };
+
+    let rendered = format_sync_completion_summary(&summary);
+    assert!(
+        rendered.contains("sync validation: drift detected"),
+        "expected validation header, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("artefacts: expected=10 actual=8 missing=2 stale=0 mismatched=0"),
+        "expected artefacts counters, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("edges: expected=6 actual=6 missing=0 stale=0 mismatched=1"),
+        "expected edges counters, got: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "src/lib.rs: artefacts missing=2 stale=0 mismatched=0; edges missing=0 stale=0 mismatched=1"
+        ),
+        "expected file drift entry, got: {rendered}"
+    );
 }
 
 #[test]
@@ -368,39 +601,46 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
 
-    with_graphql_executor_hook(
-        {
-            let captured = Rc::clone(&captured);
-            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
-                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
-                Ok(json!({
-                    "ingest": {
-                        "success": true,
-                        "initRequested": false,
-                        "checkpointsProcessed": 2,
-                        "eventsInserted": 3,
-                        "artefactsUpserted": 5,
-                        "checkpointsWithoutCommit": 0,
-                        "temporaryRowsPromoted": 0,
-                        "semanticFeatureRowsUpserted": 0,
-                        "semanticFeatureRowsSkipped": 0,
-                        "symbolEmbeddingRowsUpserted": 0,
-                        "symbolEmbeddingRowsSkipped": 0,
-                        "symbolCloneEdgesUpserted": 0,
-                        "symbolCloneSourcesScored": 0
-                    }
-                }))
-            }
-        },
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        |_repo_root: &std::path::Path| Ok(()),
         || {
-            test_runtime()
-                .block_on(run(DevqlArgs {
-                    command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                        init: false,
-                        max_checkpoints: 42,
-                    })),
-                }))
-                .expect("devql ingest should succeed");
+            with_graphql_executor_hook(
+                {
+                    let captured = Rc::clone(&captured);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "ingest": {
+                                "success": true,
+                                "initRequested": false,
+                                "checkpointsProcessed": 2,
+                                "eventsInserted": 3,
+                                "artefactsUpserted": 5,
+                                "checkpointsWithoutCommit": 0,
+                                "temporaryRowsPromoted": 0,
+                                "semanticFeatureRowsUpserted": 0,
+                                "semanticFeatureRowsSkipped": 0,
+                                "symbolEmbeddingRowsUpserted": 0,
+                                "symbolEmbeddingRowsSkipped": 0,
+                                "symbolCloneEdgesUpserted": 0,
+                                "symbolCloneSourcesScored": 0
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                init: false,
+                                max_checkpoints: 42,
+                            })),
+                        }))
+                        .expect("devql ingest should succeed");
+                },
+            );
         },
     );
 
@@ -421,22 +661,143 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
 }
 
 #[test]
-fn devql_run_ingest_requires_running_daemon() {
+fn devql_run_ingest_bootstraps_daemon_when_needed() {
     let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+    let query_count = Rc::new(RefCell::new(0usize));
+    let ingested = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        {
+            let bootstrap_count = Rc::clone(&bootstrap_count);
+            move |_repo_root: &std::path::Path| {
+                *bootstrap_count.borrow_mut() += 1;
+                Ok(())
+            }
+        },
+        || {
+            with_graphql_executor_hook(
+                {
+                    let query_count = Rc::clone(&query_count);
+                    let ingested = Rc::clone(&ingested);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *query_count.borrow_mut() += 1;
+                        *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "ingest": {
+                                "success": true,
+                                "initRequested": true,
+                                "checkpointsProcessed": 0,
+                                "eventsInserted": 0,
+                                "artefactsUpserted": 0,
+                                "checkpointsWithoutCommit": 0,
+                                "temporaryRowsPromoted": 0,
+                                "semanticFeatureRowsUpserted": 0,
+                                "semanticFeatureRowsSkipped": 0,
+                                "symbolEmbeddingRowsUpserted": 0,
+                                "symbolEmbeddingRowsSkipped": 0,
+                                "symbolCloneEdgesUpserted": 0,
+                                "symbolCloneSourcesScored": 0
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                init: true,
+                                max_checkpoints: 500,
+                            })),
+                        }))
+                        .expect("devql ingest should succeed");
+                },
+            );
+        },
+    );
+
+    assert_eq!(*bootstrap_count.borrow(), 1);
+    assert_eq!(*query_count.borrow(), 1);
+    let (query, variables) = ingested
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("ingest"));
+    assert_eq!(
+        variables,
+        json!({
+            "input": {
+                "init": true,
+                "maxCheckpoints": 500
+            }
+        })
+    );
+}
+
+#[test]
+fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
+    let repo = seed_devql_cli_repo();
+    fs::write(
+        repo.path()
+            .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"[stores]
+[stores.relational]
+sqlite_path = ".bitloops/stores/devql.sqlite"
+
+[stores.events]
+duckdb_path = ".bitloops/stores/events.duckdb"
+
+[semantic]
+provider = "disabled"
+
+[semantic_clones]
+summary_mode = "off"
+embedding_mode = "off"
+"#,
+    )
+    .expect("write deterministic-only config");
+    let graphql_calls = Rc::new(RefCell::new(0usize));
+    {
+        let _guard = enter_process_state(Some(repo.path()), &[]);
+
+        with_graphql_executor_hook(
+            {
+                let graphql_calls = Rc::clone(&graphql_calls);
+                move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
+                    *graphql_calls.borrow_mut() += 1;
+                    panic!("graphql should not be used when enrichment is disabled");
+                }
+            },
+            || {
+                test_runtime()
+                    .block_on(run(DevqlArgs {
+                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                            init: true,
+                            max_checkpoints: 25,
+                        })),
+                    }))
+                    .expect("local deterministic ingest should succeed");
+            },
+        );
+    }
+
+    assert_eq!(*graphql_calls.borrow(), 0);
+    assert!(
+        sqlite_path_for_repo(repo.path()).exists(),
+        "local ingest should initialize the relational database",
+    );
     with_isolated_daemon_state(repo.path(), || {
-        let err = test_runtime()
+        test_runtime()
             .block_on(run(DevqlArgs {
                 command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
                     init: true,
                     max_checkpoints: 500,
                 })),
             }))
-            .expect_err("devql ingest should require a running daemon");
-
-        assert!(
-            err.to_string().contains("Bitloops daemon is not running"),
-            "expected daemon-required error, got: {err:#}"
-        );
+            .expect("deterministic-only ingest should stay local without a daemon");
     });
 }
 
