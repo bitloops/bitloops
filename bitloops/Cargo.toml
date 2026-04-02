@@ -7,6 +7,8 @@ edition = "2024"
 default = ["duckdb-bundled"]
 # Compile libduckdb from C++ (slow; offline or targets without official prebuilts, e.g. linux-musl cross builds).
 duckdb-bundled = ["duckdb/bundled"]
+# Opt-in integration-style tests that require local Postgres tooling (initdb/pg_ctl).
+postgres-tests = []
 
 [lib]
 path = "src/lib.rs"
