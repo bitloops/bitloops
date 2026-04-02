@@ -294,13 +294,11 @@ type HealthStatus {
 }
 
 input IngestInput {
-	init: Boolean! = true
 	maxCheckpoints: Int! = 500
 }
 
 type IngestResult {
 	success: Boolean!
-	initRequested: Boolean!
 	checkpointsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!

@@ -727,6 +727,8 @@ fn determine_retention_class(desired: &sync::types::DesiredFileState) -> &'stati
 }
 
 fn is_missing_sync_schema_error(err: &anyhow::Error) -> bool {
+    // Temporary safeguard while daemon-start schema bootstrap rolls out across workflows.
+    // Keep this fallback so sync can still emit a direct remediation hint on legacy setups.
     let message = format!("{err:#}").to_ascii_lowercase();
     let missing_table_error = message.contains("no such table")
         || (message.contains("relation") && message.contains("does not exist"))

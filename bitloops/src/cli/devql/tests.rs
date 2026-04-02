@@ -115,7 +115,6 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
-    assert!(ingest.init);
     assert_eq!(ingest.max_checkpoints, 500);
 }
 
@@ -614,7 +613,6 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                         Ok(json!({
                             "ingest": {
                                 "success": true,
-                                "initRequested": false,
                                 "checkpointsProcessed": 2,
                                 "eventsInserted": 3,
                                 "artefactsUpserted": 5,
@@ -634,7 +632,6 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                     test_runtime()
                         .block_on(run(DevqlArgs {
                             command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                                init: false,
                                 max_checkpoints: 42,
                             })),
                         }))
@@ -653,7 +650,6 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
         variables,
         json!({
             "input": {
-                "init": false,
                 "maxCheckpoints": 42
             }
         })
@@ -689,7 +685,6 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
                         Ok(json!({
                             "ingest": {
                                 "success": true,
-                                "initRequested": true,
                                 "checkpointsProcessed": 0,
                                 "eventsInserted": 0,
                                 "artefactsUpserted": 0,
@@ -709,7 +704,6 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
                     test_runtime()
                         .block_on(run(DevqlArgs {
                             command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                                init: true,
                                 max_checkpoints: 500,
                             })),
                         }))
@@ -730,7 +724,6 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
         variables,
         json!({
             "input": {
-                "init": true,
                 "maxCheckpoints": 500
             }
         })
@@ -738,7 +731,7 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
 }
 
 #[test]
-fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
+fn devql_run_ingest_uses_graphql_when_enrichment_is_disabled() {
     let repo = seed_devql_cli_repo();
     fs::write(
         repo.path()
@@ -759,46 +752,59 @@ embedding_mode = "off"
 "#,
     )
     .expect("write deterministic-only config");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
     let graphql_calls = Rc::new(RefCell::new(0usize));
-    {
-        let _guard = enter_process_state(Some(repo.path()), &[]);
+    let bootstrap_calls = Rc::new(RefCell::new(0usize));
 
-        with_graphql_executor_hook(
-            {
-                let graphql_calls = Rc::clone(&graphql_calls);
-                move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
-                    *graphql_calls.borrow_mut() += 1;
-                    panic!("graphql should not be used when enrichment is disabled");
-                }
-            },
-            || {
-                test_runtime()
-                    .block_on(run(DevqlArgs {
-                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                            init: true,
-                            max_checkpoints: 25,
-                        })),
-                    }))
-                    .expect("local deterministic ingest should succeed");
-            },
-        );
-    }
-
-    assert_eq!(*graphql_calls.borrow(), 0);
-    assert!(
-        sqlite_path_for_repo(repo.path()).exists(),
-        "local ingest should initialize the relational database",
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        {
+            let bootstrap_calls = Rc::clone(&bootstrap_calls);
+            move |_repo_root: &std::path::Path| {
+                *bootstrap_calls.borrow_mut() += 1;
+                Ok(())
+            }
+        },
+        || {
+            with_graphql_executor_hook(
+                {
+                    let graphql_calls = Rc::clone(&graphql_calls);
+                    move |_repo_root: &std::path::Path,
+                          _query: &str,
+                          _variables: &serde_json::Value| {
+                        *graphql_calls.borrow_mut() += 1;
+                        Ok(json!({
+                            "ingest": {
+                                "success": true,
+                                "checkpointsProcessed": 0,
+                                "eventsInserted": 0,
+                                "artefactsUpserted": 0,
+                                "checkpointsWithoutCommit": 0,
+                                "temporaryRowsPromoted": 0,
+                                "semanticFeatureRowsUpserted": 0,
+                                "semanticFeatureRowsSkipped": 0,
+                                "symbolEmbeddingRowsUpserted": 0,
+                                "symbolEmbeddingRowsSkipped": 0,
+                                "symbolCloneEdgesUpserted": 0,
+                                "symbolCloneSourcesScored": 0
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                max_checkpoints: 25,
+                            })),
+                        }))
+                        .expect("deterministic-only ingest should execute via GraphQL");
+                },
+            );
+        },
     );
-    with_isolated_daemon_state(repo.path(), || {
-        test_runtime()
-            .block_on(run(DevqlArgs {
-                command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                    init: true,
-                    max_checkpoints: 500,
-                })),
-            }))
-            .expect("deterministic-only ingest should stay local without a daemon");
-    });
+
+    assert_eq!(*bootstrap_calls.borrow(), 1);
+    assert_eq!(*graphql_calls.borrow(), 1);
 }
 
 #[test]

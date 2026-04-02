@@ -261,18 +261,17 @@ fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebr
 }
 
 #[test]
-fn devql_ingest_accepts_explicit_false_for_init() {
-    let parsed = crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
-        .expect("devql ingest should parse with explicit boolean value");
-
-    let Some(crate::cli::Commands::Devql(args)) = parsed.command else {
-        panic!("expected devql command");
-    };
-    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
-        panic!("expected devql ingest command");
+fn devql_ingest_rejects_removed_init_flag() {
+    let err = match crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
+    {
+        Ok(_) => panic!("devql ingest should reject removed --init flag"),
+        Err(err) => err,
     };
 
-    assert!(!ingest.init);
+    assert!(
+        err.to_string().contains("--init"),
+        "expected clap error to mention --init, got: {err}"
+    );
 }
 
 #[test]
