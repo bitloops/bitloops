@@ -7,7 +7,7 @@ title: FAQ
 
 ### Do I still run `bitloops init` inside every repo?
 
-Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and runs the initial baseline sync through the daemon.
+Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and prepares local repo policy for capture. Use DevQL commands separately for ingestion and sync.
 
 ### Where does Bitloops keep its data now?
 

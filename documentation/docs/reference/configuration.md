@@ -5,7 +5,7 @@ title: Configuration
 
 # Configuration Reference
 
-Bitloops uses two separate TOML configuration surfaces:
+Bitloops uses two TOML configuration surfaces:
 
 - A global daemon config in the platform config directory.
 - A project policy discovered by walking upwards to the nearest `.bitloops.local.toml` or `.bitloops.toml`.
@@ -31,6 +31,7 @@ The daemon config owns:
 
 - Store backends and custom store paths
 - Provider credentials
+- Semantic and embeddings runtime settings
 - Dashboard defaults
 - Daemon runtime defaults such as `local_dev`, logging, and telemetry
 
@@ -46,11 +47,6 @@ enabled = true
 
 [logging]
 level = "info"
-
-[stores]
-embedding_provider = "local"
-embedding_model = "jinaai/jina-embeddings-v2-base-code"
-embedding_cache_dir = "/Users/alex/Library/Caches/bitloops/embeddings/models"
 
 [stores.relational]
 sqlite_path = "/Users/alex/.local/share/bitloops/stores/relational/relational.db"
@@ -75,12 +71,41 @@ model = "qwen2.5-coder"
 api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1"
 
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "semantic_aware_once"
+embedding_profile = "local-code"
+
+[embeddings.runtime]
+command = "bitloops-embeddings"
+startup_timeout_secs = 10
+request_timeout_secs = 60
+
+[embeddings.profiles.local-code]
+kind = "local_fastembed"
+model = "jinaai/jina-embeddings-v2-base-code"
+cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
+
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
 
 [dashboard.local_dashboard]
 tls = true
 ```
+
+### Accepted Top-Level Daemon Sections
+
+The current daemon parser accepts these top-level surfaces:
+
+- `runtime`
+- `telemetry`
+- `logging`
+- `stores`
+- `knowledge`
+- `semantic`
+- `semantic_clones`
+- `embeddings`
+- `dashboard`
 
 ### Telemetry Consent
 
@@ -111,7 +136,9 @@ If you want to remove these platform directories again, use `bitloops uninstall`
 
 ## Project Policy
 
-`bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, installing hooks, and running the initial baseline sync through the daemon.
+`bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.
+
+Use DevQL commands separately for schema initialisation, ingestion, and current-state sync.
 
 The thin CLI and hook layer resolve project policy by walking upwards from the current working directory towards the enclosing `.git` root.
 
@@ -124,6 +151,16 @@ Resolution rules:
 - If Bitloops reaches the enclosing `.git` root without finding either file, project-scoped commands tell you to run `bitloops init`.
 
 Project policy controls what the slim CLI and hooks send to the daemon. It does not configure store backends or daemon runtime paths.
+
+### Accepted Top-Level Repo-Policy Sections
+
+The current repo-policy surface is:
+
+- `capture`
+- `watch`
+- `scope`
+- `agents`
+- `imports`
 
 Example shared policy:
 
@@ -216,8 +253,9 @@ Arrays replace lower-precedence arrays. They are not deep-merged.
 
 Use the global daemon config for:
 
-- SQLite, DuckDB, ClickHouse, PostgreSQL, blob, and embedding cache paths
+- SQLite, DuckDB, ClickHouse, PostgreSQL, and blob paths
 - Provider credentials and service defaults
+- Semantic summary settings, semantic clone settings, and embeddings runtime profiles
 - Dashboard bundle overrides and TLS hints
 
 Use project policy for:

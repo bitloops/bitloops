@@ -60,7 +60,9 @@ bitloops init --install-default-daemon
 
 Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service before continuing.
 
-This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync.
+This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
+
+`bitloops init` no longer performs baseline or schema sync. Use `bitloops devql ingest` and `bitloops devql sync` when you want to populate or reconcile DevQL state.
 
 Use `--agent <name>` when a team wants to pin the supported agent set during bootstrap.
 

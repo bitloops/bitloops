@@ -5,7 +5,7 @@ title: Environment Variables
 
 # Environment Variables
 
-Bitloops prefers daemon config and repo policy over environment variables, but a small number of variables are still supported for runtime control and temporary overrides.
+Bitloops prefers daemon config and repo policy over environment variables. The list below is the current documented, user-facing runtime surface. Test-only and build-time variables are intentionally omitted.
 
 ## General
 
