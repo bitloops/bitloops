@@ -148,18 +148,12 @@ async fn run_with_io_async(
 
     if should_run_initial_sync(args.sync, out, input)? {
         let scope = discover_slim_cli_repo_scope(Some(project_root.as_path()))?;
-        let (task, merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
+        let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
             &scope, false, None, false, false, "init",
         )
         .await?;
-        writeln!(
-            out,
-            "{}",
-            crate::cli::devql::format_sync_queue_submission(&task, merged)
-        )?;
         if let Some(summary) =
-            crate::cli::devql::graphql::watch_sync_task_via_graphql(&scope, task.task_id.as_str())
-                .await?
+            crate::cli::devql::graphql::watch_sync_task_via_graphql(&scope, task.clone()).await?
         {
             writeln!(
                 out,

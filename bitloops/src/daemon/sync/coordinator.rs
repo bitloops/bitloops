@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use anyhow::Result;
 use tokio::sync::Notify;
@@ -26,6 +27,7 @@ use super::state::{PersistedSyncQueueState, sync_state_lock_path, sync_state_pat
 use super::state_lock::acquire_state_file_lock;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct SyncEnqueueResult {
@@ -46,6 +48,13 @@ pub struct SyncCoordinator {
 struct CoordinatorObserver {
     coordinator: Arc<SyncCoordinator>,
     task_id: String,
+    progress_state: Mutex<ProgressPersistState>,
+}
+
+#[derive(Debug, Default)]
+struct ProgressPersistState {
+    last_persisted: Option<SyncProgressUpdate>,
+    last_persisted_at: Option<Instant>,
 }
 
 struct WorkerStartedGuard {
@@ -62,6 +71,28 @@ impl Drop for WorkerStartedGuard {
 
 impl SyncObserver for CoordinatorObserver {
     fn on_progress(&self, update: SyncProgressUpdate) {
+        match self.progress_state.lock() {
+            Ok(mut state) => {
+                let now = Instant::now();
+                if !should_persist_progress(
+                    state.last_persisted.as_ref(),
+                    &update,
+                    state.last_persisted_at,
+                    now,
+                ) {
+                    return;
+                }
+                state.last_persisted = Some(update.clone());
+                state.last_persisted_at = Some(now);
+            }
+            Err(_) => {
+                log::warn!(
+                    "failed to acquire sync progress throttle state for task `{}`",
+                    self.task_id
+                );
+            }
+        }
+
         if let Err(err) = self.coordinator.update_task_progress(&self.task_id, update) {
             log::warn!(
                 "failed to persist sync progress for task `{}`: {err:#}",
@@ -249,6 +280,7 @@ impl SyncCoordinator {
         let observer = CoordinatorObserver {
             coordinator: Arc::clone(&Self::shared()),
             task_id: task.task_id.clone(),
+            progress_state: Mutex::new(ProgressPersistState::default()),
         };
 
         match crate::host::devql::run_sync_with_summary_and_observer(
@@ -412,6 +444,28 @@ impl SyncCoordinator {
             hub.publish_sync_task(task);
         }
     }
+}
+
+fn should_persist_progress(
+    previous: Option<&SyncProgressUpdate>,
+    update: &SyncProgressUpdate,
+    last_persisted_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+
+    if previous.phase != update.phase {
+        return true;
+    }
+
+    let interval_elapsed = last_persisted_at
+        .is_none_or(|timestamp| now.duration_since(timestamp) >= PROGRESS_PERSIST_INTERVAL);
+    let completed_all_paths =
+        update.paths_total > 0 && update.paths_completed >= update.paths_total;
+
+    completed_all_paths || (interval_elapsed && previous != update)
 }
 
 #[cfg(test)]
@@ -608,5 +662,57 @@ mod tests {
             &[unchanged, changed_after.clone(), added.clone()],
         );
         assert_eq!(changed, vec![changed_after, added]);
+    }
+
+    #[test]
+    fn progress_persistence_throttles_same_phase_updates() {
+        let now = Instant::now();
+        let previous = SyncProgressUpdate {
+            phase: SyncProgressPhase::ExtractingPaths,
+            current_path: Some("src/a.rs".to_string()),
+            paths_total: 10,
+            paths_completed: 1,
+            paths_remaining: 9,
+            ..SyncProgressUpdate::default()
+        };
+        let next = SyncProgressUpdate {
+            current_path: Some("src/b.rs".to_string()),
+            paths_completed: 2,
+            paths_remaining: 8,
+            ..previous.clone()
+        };
+
+        assert!(!should_persist_progress(
+            Some(&previous),
+            &next,
+            Some(now),
+            now + Duration::from_millis(500),
+        ));
+        assert!(should_persist_progress(
+            Some(&previous),
+            &next,
+            Some(now),
+            now + PROGRESS_PERSIST_INTERVAL,
+        ));
+    }
+
+    #[test]
+    fn progress_persistence_always_keeps_phase_changes() {
+        let now = Instant::now();
+        let previous = SyncProgressUpdate {
+            phase: SyncProgressPhase::ExtractingPaths,
+            ..SyncProgressUpdate::default()
+        };
+        let next = SyncProgressUpdate {
+            phase: SyncProgressPhase::MaterialisingPaths,
+            ..SyncProgressUpdate::default()
+        };
+
+        assert!(should_persist_progress(
+            Some(&previous),
+            &next,
+            Some(now),
+            now + Duration::from_millis(10),
+        ));
     }
 }

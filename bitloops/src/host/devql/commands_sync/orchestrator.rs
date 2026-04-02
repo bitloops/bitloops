@@ -186,7 +186,18 @@ async fn execute_sync_inner(
         }
     }
     let paths_total = classified.len();
-    let mut paths_completed = counters.paths_unchanged;
+    let unchanged_total = counters.paths_unchanged;
+    let transform_paths_total = counters.paths_added + counters.paths_changed;
+    let mut removed_completed = 0usize;
+    let mut extracted_completed = 0usize;
+    let mut materialized_completed = 0usize;
+    let mut paths_completed = estimate_sync_progress_paths_completed(
+        unchanged_total,
+        removed_completed,
+        transform_paths_total,
+        extracted_completed,
+        materialized_completed,
+    );
     emit_progress(
         observer,
         SyncProgressPhase::ClassifyingPaths,
@@ -212,7 +223,14 @@ async fn execute_sync_inner(
         sync::materializer::remove_path(cfg, relational, &path.path)
             .await
             .with_context(|| format!("removing stale path `{}` during DevQL sync", path.path))?;
-        paths_completed += 1;
+        removed_completed += 1;
+        paths_completed = estimate_sync_progress_paths_completed(
+            unchanged_total,
+            removed_completed,
+            transform_paths_total,
+            extracted_completed,
+            materialized_completed,
+        );
         emit_progress(
             observer,
             SyncProgressPhase::RemovingPaths,
@@ -292,7 +310,15 @@ async fn execute_sync_inner(
                 .with_context(|| format!("extracting `{}` into sync cache format", desired.path))?
                 else {
                     counters.parse_errors += 1;
-                    paths_completed += 1;
+                    extracted_completed += 1;
+                    materialized_completed += 1;
+                    paths_completed = estimate_sync_progress_paths_completed(
+                        unchanged_total,
+                        removed_completed,
+                        transform_paths_total,
+                        extracted_completed,
+                        materialized_completed,
+                    );
                     emit_progress(
                         observer,
                         SyncProgressPhase::ExtractingPaths,
@@ -315,6 +341,22 @@ async fn execute_sync_inner(
             }
         };
 
+        extracted_completed += 1;
+        paths_completed = estimate_sync_progress_paths_completed(
+            unchanged_total,
+            removed_completed,
+            transform_paths_total,
+            extracted_completed,
+            materialized_completed,
+        );
+        emit_progress(
+            observer,
+            SyncProgressPhase::ExtractingPaths,
+            Some(path.path.clone()),
+            &counters,
+            paths_total,
+            paths_completed,
+        );
         staged_materializations.push((desired, extraction));
     }
 
@@ -338,7 +380,14 @@ async fn execute_sync_inner(
         )
         .await
         .with_context(|| format!("materializing `{}` during DevQL sync", desired.path))?;
-        paths_completed += 1;
+        materialized_completed += 1;
+        paths_completed = estimate_sync_progress_paths_completed(
+            unchanged_total,
+            removed_completed,
+            transform_paths_total,
+            extracted_completed,
+            materialized_completed,
+        );
         emit_progress(
             observer,
             SyncProgressPhase::MaterialisingPaths,
@@ -396,4 +445,43 @@ async fn execute_sync_inner(
         paths_total,
     );
     Ok(summary)
+}
+
+fn estimate_sync_progress_paths_completed(
+    unchanged_total: usize,
+    removed_completed: usize,
+    transform_paths_total: usize,
+    extracted_completed: usize,
+    materialized_completed: usize,
+) -> usize {
+    let transform_units_total = transform_paths_total.saturating_mul(2);
+    let transform_units_completed = extracted_completed
+        .saturating_add(materialized_completed)
+        .min(transform_units_total);
+    let transform_credit = transform_units_completed
+        .saturating_add(1)
+        .checked_div(2)
+        .unwrap_or(0)
+        .min(transform_paths_total);
+
+    unchanged_total
+        .saturating_add(removed_completed)
+        .saturating_add(transform_credit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_sync_progress_paths_completed;
+
+    #[test]
+    fn extraction_phase_contributes_partial_progress() {
+        assert_eq!(estimate_sync_progress_paths_completed(0, 0, 4, 1, 0), 1);
+        assert_eq!(estimate_sync_progress_paths_completed(0, 0, 4, 2, 0), 1);
+        assert_eq!(estimate_sync_progress_paths_completed(0, 0, 4, 3, 0), 2);
+    }
+
+    #[test]
+    fn completed_transform_work_reaches_total_paths() {
+        assert_eq!(estimate_sync_progress_paths_completed(5, 2, 4, 4, 4), 11);
+    }
 }

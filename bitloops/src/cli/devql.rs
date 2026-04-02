@@ -80,12 +80,14 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
                 "manual_cli",
             )
             .await?;
-            println!("{}", format_sync_queue_submission(&task, merged));
-            if args.status
-                && let Some(summary) =
-                    graphql::watch_sync_task_via_graphql(&scope, task.task_id.as_str()).await?
-            {
-                println!("{}", format_sync_completion_summary(&summary));
+            if args.status {
+                if let Some(summary) =
+                    graphql::watch_sync_task_via_graphql(&scope, task.clone()).await?
+                {
+                    println!("{}", format_sync_completion_summary(&summary));
+                }
+            } else {
+                println!("{}", format_sync_queue_submission(&task, merged));
             }
             Ok(())
         }
