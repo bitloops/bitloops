@@ -84,7 +84,6 @@ request_timeout_secs = 60
 [embeddings.profiles.local-code]
 kind = "local_fastembed"
 model = "jinaai/jina-embeddings-v2-base-code"
-cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
 
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"

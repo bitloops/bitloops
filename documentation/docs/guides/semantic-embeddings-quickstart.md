@@ -53,18 +53,10 @@ model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 
 [semantic_clones]
-summary_mode = "auto"
-embedding_mode = "semantic_aware_once"
 embedding_profile = "local"
-
-[embeddings.runtime]
-command = "bitloops-embeddings"
-startup_timeout_secs = 10
-request_timeout_secs = 60
 
 [embeddings.profiles.local]
 kind = "local_fastembed"
-model = "jinaai/jina-embeddings-v2-base-code"
 ```
 
 Notes:
