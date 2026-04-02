@@ -5,15 +5,15 @@ title: Configuring DevQL
 
 # Configuring DevQL
 
-DevQL is now a thin client over the local Bitloops daemon.
+DevQL is a thin client over the local Bitloops daemon. Run the repo-scoped commands below from inside a Git repository or Bitloops project.
 
-## Initialise The Stores
+## Schema Bootstrap
 
 ```bash
 bitloops devql init
 ```
 
-This initialises the configured relational and event stores from the global daemon config.
+The daemon bootstraps the DevQL schema automatically on startup. `bitloops devql init` remains available when you want to explicitly ensure the configured relational and event schemas exist.
 
 ## Ingest Data
 
@@ -21,13 +21,16 @@ This initialises the configured relational and event stores from the global daem
 bitloops devql ingest
 ```
 
-The CLI resolves repo policy locally, then sends ingestion requests to the daemon.
+The CLI resolves repo policy locally, then sends ingestion requests to the daemon. Ingestion no longer owns schema bootstrap.
 
 ## Query Data
 
 ```bash
-bitloops devql query "files changed last 7 days"
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
+bitloops devql query '{ health { relational { backend connected } events { backend connected } } }'
 ```
+
+Queries are DSL only when the input contains `->`. Otherwise the CLI treats the input as raw GraphQL.
 
 ## Semantic And Embedding Settings
 
@@ -40,9 +43,20 @@ model = "qwen2.5-coder"
 api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1"
 
-[stores]
-embedding_provider = "local"
-embedding_model = "jinaai/jina-embeddings-v2-base-code"
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "semantic_aware_once"
+embedding_profile = "local-code"
+
+[embeddings.runtime]
+command = "bitloops-embeddings"
+startup_timeout_secs = 10
+request_timeout_secs = 60
+
+[embeddings.profiles.local-code]
+kind = "local_fastembed"
+model = "jinaai/jina-embeddings-v2-base-code"
+cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
 ```
 
 ## Watch Behaviour
@@ -59,8 +73,9 @@ watch_poll_fallback_ms = 2500
 
 ```bash
 bitloops status
+bitloops devql packs --with-health
 bitloops checkpoints status --detailed
 bitloops --connection-status
 ```
 
-Use `bitloops status` for daemon health and `bitloops checkpoints status --detailed` for policy root and fingerprint debugging.
+Use `bitloops status` for daemon health, `bitloops devql packs --with-health` for capability-pack and embeddings health, and `bitloops checkpoints status --detailed` for policy root and fingerprint debugging.

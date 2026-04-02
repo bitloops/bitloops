@@ -6,9 +6,9 @@ use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
-    SyncMode, SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document,
-    format_query_output, parse_devql_query, run_capability_packs_report,
-    run_checkpoint_file_snapshot_backfill, run_sync_with_summary, use_raw_graphql_mode,
+    SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
+    parse_devql_query, run_capability_packs_report, run_checkpoint_file_snapshot_backfill,
+    use_raw_graphql_mode,
 };
 
 mod args;
@@ -71,18 +71,14 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             graphql::run_ingest_via_graphql(&scope, args.max_checkpoints).await
         }
         DevqlCommand::Sync(args) => {
-            let mode = if args.validate {
-                SyncMode::Validate
-            } else if args.repair {
-                SyncMode::Repair
-            } else if let Some(paths) = args.paths {
-                SyncMode::Paths(paths)
-            } else if args.full {
-                SyncMode::Full
-            } else {
-                SyncMode::Auto
-            };
-            let summary = run_sync_with_summary(&cfg, mode).await?;
+            let summary = graphql::run_sync_via_graphql(
+                &scope,
+                args.full,
+                args.paths,
+                args.repair,
+                args.validate,
+            )
+            .await?;
             println!("{}", format_sync_completion_summary(&summary));
             Ok(())
         }

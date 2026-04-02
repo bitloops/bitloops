@@ -72,10 +72,10 @@ All of this intelligence is queryable through **[DevQL](/concepts/devql)** — a
 
 ```bash
 # What depends on this function?
-bitloops devql query "artefacts(symbol_fqn:'auth::validate') → deps(direction:'in')"
+bitloops devql query "artefacts(symbol_fqn:'auth::validate')->deps(direction:'in')"
 
 # What was this function like at the last release?
-bitloops devql query "asOf(ref:'v1.0') → artefacts(symbol_fqn:'auth::validate')"
+bitloops devql query "asOf(ref:'v1.0')->artefacts(symbol_fqn:'auth::validate')"
 ```
 
 Agents call DevQL autonomously. They get precise, high-signal context in milliseconds — no scanning your entire repo, no wasting tokens on files they don't need.

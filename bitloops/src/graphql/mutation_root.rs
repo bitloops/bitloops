@@ -34,6 +34,22 @@ pub struct RefreshKnowledgeInput {
     pub knowledge_ref: String,
 }
 
+#[derive(Debug, Clone, InputObject)]
+pub struct SyncInput {
+    /// Run a full workspace reconciliation.
+    #[graphql(default = false)]
+    pub full: bool,
+    /// Reconcile only the specified workspace paths (comma-delimited values accepted).
+    #[graphql(default)]
+    pub paths: Option<Vec<String>>,
+    /// Rebuild sync state from the current workspace, ignoring stored manifest trust.
+    #[graphql(default = false)]
+    pub repair: bool,
+    /// Validate current-state tables against a full read-only workspace reconciliation.
+    #[graphql(default = false)]
+    pub validate: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct InitSchemaResult {
     pub success: bool,
@@ -92,6 +108,99 @@ impl From<crate::host::devql::IngestionCounters> for IngestResult {
             symbol_embedding_rows_skipped: to_graphql_count(value.symbol_embedding_rows_skipped),
             symbol_clone_edges_upserted: to_graphql_count(value.symbol_clone_edges_upserted),
             symbol_clone_sources_scored: to_graphql_count(value.symbol_clone_sources_scored),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct SyncResult {
+    pub success: bool,
+    pub mode: String,
+    pub parser_version: String,
+    pub extractor_version: String,
+    pub active_branch: Option<String>,
+    pub head_commit_sha: Option<String>,
+    pub head_tree_sha: Option<String>,
+    pub paths_unchanged: i32,
+    pub paths_added: i32,
+    pub paths_changed: i32,
+    pub paths_removed: i32,
+    pub cache_hits: i32,
+    pub cache_misses: i32,
+    pub parse_errors: i32,
+    pub validation: Option<SyncValidationResult>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct SyncValidationResult {
+    pub valid: bool,
+    pub expected_artefacts: i32,
+    pub actual_artefacts: i32,
+    pub expected_edges: i32,
+    pub actual_edges: i32,
+    pub missing_artefacts: i32,
+    pub stale_artefacts: i32,
+    pub mismatched_artefacts: i32,
+    pub missing_edges: i32,
+    pub stale_edges: i32,
+    pub mismatched_edges: i32,
+    pub files_with_drift: Vec<SyncValidationFileDriftResult>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct SyncValidationFileDriftResult {
+    pub path: String,
+    pub missing_artefacts: i32,
+    pub stale_artefacts: i32,
+    pub mismatched_artefacts: i32,
+    pub missing_edges: i32,
+    pub stale_edges: i32,
+    pub mismatched_edges: i32,
+}
+
+impl From<crate::host::devql::SyncSummary> for SyncResult {
+    fn from(value: crate::host::devql::SyncSummary) -> Self {
+        Self {
+            success: value.success,
+            mode: value.mode,
+            parser_version: value.parser_version,
+            extractor_version: value.extractor_version,
+            active_branch: value.active_branch,
+            head_commit_sha: value.head_commit_sha,
+            head_tree_sha: value.head_tree_sha,
+            paths_unchanged: to_graphql_count(value.paths_unchanged),
+            paths_added: to_graphql_count(value.paths_added),
+            paths_changed: to_graphql_count(value.paths_changed),
+            paths_removed: to_graphql_count(value.paths_removed),
+            cache_hits: to_graphql_count(value.cache_hits),
+            cache_misses: to_graphql_count(value.cache_misses),
+            parse_errors: to_graphql_count(value.parse_errors),
+            validation: value.validation.map(|validation| SyncValidationResult {
+                valid: validation.valid,
+                expected_artefacts: to_graphql_count(validation.expected_artefacts),
+                actual_artefacts: to_graphql_count(validation.actual_artefacts),
+                expected_edges: to_graphql_count(validation.expected_edges),
+                actual_edges: to_graphql_count(validation.actual_edges),
+                missing_artefacts: to_graphql_count(validation.missing_artefacts),
+                stale_artefacts: to_graphql_count(validation.stale_artefacts),
+                mismatched_artefacts: to_graphql_count(validation.mismatched_artefacts),
+                missing_edges: to_graphql_count(validation.missing_edges),
+                stale_edges: to_graphql_count(validation.stale_edges),
+                mismatched_edges: to_graphql_count(validation.mismatched_edges),
+                files_with_drift: validation
+                    .files_with_drift
+                    .into_iter()
+                    .map(|file| SyncValidationFileDriftResult {
+                        path: file.path,
+                        missing_artefacts: to_graphql_count(file.missing_artefacts),
+                        stale_artefacts: to_graphql_count(file.stale_artefacts),
+                        mismatched_artefacts: to_graphql_count(file.mismatched_artefacts),
+                        missing_edges: to_graphql_count(file.missing_edges),
+                        stale_edges: to_graphql_count(file.stale_edges),
+                        mismatched_edges: to_graphql_count(file.mismatched_edges),
+                    })
+                    .collect(),
+            }),
         }
     }
 }
@@ -255,6 +364,33 @@ impl MutationRoot {
         )
         .await
         .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
+        Ok(summary.into())
+    }
+
+    async fn sync(&self, ctx: &Context<'_>, input: SyncInput) -> Result<SyncResult> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_repo_write_scope()
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "sync", err))?;
+        let cfg = context
+            .devql_config()
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "sync", err))?;
+
+        let mode = if input.validate {
+            crate::host::devql::SyncMode::Validate
+        } else if input.repair {
+            crate::host::devql::SyncMode::Repair
+        } else if let Some(paths) = input.paths {
+            crate::host::devql::SyncMode::Paths(paths)
+        } else if input.full {
+            crate::host::devql::SyncMode::Full
+        } else {
+            crate::host::devql::SyncMode::Auto
+        };
+
+        let summary = crate::host::devql::run_sync_with_summary(&cfg, mode)
+            .await
+            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
         Ok(summary.into())
     }
 
