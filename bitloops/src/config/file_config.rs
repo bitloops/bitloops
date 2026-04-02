@@ -72,13 +72,6 @@ impl StoreFileConfig {
                 .or_else(|| read_any_string(root, &["semantic_api_key"])),
             semantic_base_url: read_any_string_opt(semantic, &["base_url", "semantic_base_url"])
                 .or_else(|| read_any_string(root, &["semantic_base_url"])),
-            embedding_provider: read_any_string(
-                root,
-                &["embedding_provider", ENV_EMBEDDING_PROVIDER],
-            ),
-            embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
-            embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
-            embedding_cache_dir: read_any_string(root, &["embedding_cache_dir"]),
             blob_local_path: read_any_string_opt(blobs, &["local_path"])
                 .or_else(|| read_any_string(root, &["blob_local_path"])),
             blob_s3_bucket: read_any_string_opt(blobs, &["s3_bucket"])

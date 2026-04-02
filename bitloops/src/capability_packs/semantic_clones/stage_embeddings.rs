@@ -129,6 +129,18 @@ pub(crate) async fn ensure_semantic_embeddings_schema(
     Ok(())
 }
 
+pub(crate) async fn clear_repo_symbol_embedding_rows(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let sql = format!(
+        "DELETE FROM symbol_embeddings WHERE repo_id = '{}'",
+        esc_pg(repo_id),
+    );
+    relational.exec(&sql).await
+}
+
 async fn load_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,

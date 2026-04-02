@@ -27,13 +27,7 @@ These override semantic settings resolved from daemon config:
 | `BITLOOPS_DEVQL_SEMANTIC_API_KEY` | Semantic API key override |
 | `BITLOOPS_DEVQL_SEMANTIC_BASE_URL` | Semantic base URL override |
 
-## DevQL Embedding Overrides
-
-| Variable | Meaning |
-| --- | --- |
-| `BITLOOPS_DEVQL_EMBEDDING_PROVIDER` | Embedding provider override |
-| `BITLOOPS_DEVQL_EMBEDDING_MODEL` | Embedding model override |
-| `BITLOOPS_DEVQL_EMBEDDING_API_KEY` | Embedding API key override |
+Embeddings no longer support environment-variable overrides. Configure embeddings through the daemon config under `[semantic_clones]`, `[embeddings.runtime]`, and `[embeddings.profiles.<name>]`.
 
 ## Watcher Overrides
 
@@ -62,3 +56,5 @@ token = "${GITHUB_TOKEN}"
 ```
 
 Use this for secrets and per-machine credentials. Repo policy files should not contain secrets.
+
+This interpolation also applies to semantic daemon config values such as `[semantic].api_key`.

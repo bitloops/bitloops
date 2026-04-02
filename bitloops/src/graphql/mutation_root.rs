@@ -256,6 +256,7 @@ impl MutationRoot {
             input.init,
             input.max_checkpoints as usize,
             Some(&observer),
+            Some(crate::daemon::shared_enrichment_coordinator()),
         )
         .await
         .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;

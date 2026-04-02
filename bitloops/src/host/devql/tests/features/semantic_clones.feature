@@ -156,16 +156,16 @@ Feature: Semantic Clones BDD scenarios
     And the Stage 1 docstring is empty
     And the Stage 1 summary provider returns no candidate
     When Stage 2 starts with invalid embedding provider configuration
-    Then Stage 2 fails with message containing "BITLOOPS_DEVQL_EMBEDDING_API_KEY is required"
+    Then Stage 2 fails with message containing "spawning embeddings runtime"
     And Stage 2 writes 0 embedding rows
 
-  @SemanticClones-ERR1-model
-  Scenario: ERR1 Missing embedding model fails clearly
+  @SemanticClones-ERR1-profile
+  Scenario: ERR1 Missing embedding profile fails clearly
     Given a Stage 1 semantic input for a "function" named "normalizeEmail"
     And the Stage 1 docstring is empty
     And the Stage 1 summary provider returns no candidate
-    When Stage 2 starts with embedding provider configuration "missing model"
-    Then Stage 2 fails with message containing "BITLOOPS_DEVQL_EMBEDDING_MODEL is required"
+    When Stage 2 starts with embedding provider configuration "missing embedding profile"
+    Then Stage 2 fails with message containing "embedding profile `missing-profile` is not defined"
     And Stage 2 writes 0 embedding rows
 
   # S6 already covers the pure same-file weak-neighbour case. The scenarios below add cross-file handler calibration.

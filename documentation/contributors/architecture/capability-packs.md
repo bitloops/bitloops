@@ -76,7 +76,7 @@ Pack-specific specialised access currently includes:
 
 - `knowledge_relational()`
 - `knowledge_documents()`
-- `clone_rebuild_relational()`
+- `clone_edges_rebuild_relational()`
 
 Two practical consequences follow from this:
 
@@ -96,7 +96,7 @@ The codebase now reflects that boundary more strongly than before:
 
 - `test_harness` receives its repository through `test_harness_store()` from the host
 - `test_harness` consumes language-aware behaviour through `languages()`
-- `semantic_clones` uses `clone_rebuild_relational()` rather than a capability-scoped raw relational escape hatch
+- `semantic_clones` uses `clone_edges_rebuild_relational()` rather than a capability-scoped raw relational escape hatch
 
 `CapabilityIngestContext::devql_relational_scoped(...)` still exists for legacy internal code paths, but it is no longer the preferred pattern and should not be used for new pack work.
 
@@ -164,7 +164,7 @@ That means:
 
 The rebuild path uses a dedicated host gateway:
 
-- `clone_rebuild_relational()`
+- `clone_edges_rebuild_relational()`
 
 That keeps the capability-specific write path explicit and avoids treating the shared DevQL relational store as a generally pack-visible dependency.
 

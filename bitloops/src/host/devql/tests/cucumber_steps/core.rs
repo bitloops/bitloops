@@ -29,6 +29,7 @@ use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
@@ -771,18 +772,17 @@ fn insert_pre_stage_artefact(
     if current {
         conn.execute(
             "INSERT INTO artefacts_current (
-                repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                repo_id, path, content_id, symbol_id, artefact_id, language,
                 canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
                 start_line, end_line, start_byte, end_byte, signature, modifiers, docstring,
-                content_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 row.repo_id.as_str(),
+                row.path.as_str(),
+                row.blob_sha.as_str(),
                 row.symbol_id.as_deref(),
                 row.artefact_id.as_str(),
-                "commit-1",
-                row.blob_sha.as_str(),
-                row.path.as_str(),
                 row.language.as_str(),
                 row.canonical_kind.as_str(),
                 row.language_kind.as_str(),
@@ -795,7 +795,7 @@ fn insert_pre_stage_artefact(
                 row.signature.as_deref(),
                 serde_json::to_string(&row.modifiers).context("serialize modifiers")?,
                 row.docstring.as_deref(),
-                row.content_hash.as_deref(),
+                "2026-04-02T00:00:00Z",
             ],
         )
         .context("insert current pre-stage artefact")?;
@@ -863,15 +863,15 @@ fn insert_real_clone_edges(
         .context("insert historical call edge")?;
         conn.execute(
             "INSERT INTO artefact_edges_current (
-                edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
-                to_symbol_ref, edge_kind, language, start_line, end_line, metadata
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+                to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+                end_line, metadata, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
-                edge_id.as_str(),
                 repo_id,
-                "commit-1",
-                blob_sha,
+                edge_id.as_str(),
                 path,
+                blob_sha,
                 symbol.symbol_id.as_str(),
                 symbol.artefact_id.as_str(),
                 target_ref.as_str(),
@@ -880,6 +880,7 @@ fn insert_real_clone_edges(
                 1i64,
                 1i64,
                 "{\"resolution\":\"real-pipeline-fixture\"}",
+                "2026-04-02T00:00:00Z",
             ],
         )
         .context("insert current call edge")?;
@@ -908,15 +909,15 @@ fn insert_real_clone_edges(
         .context("insert historical dependency edge")?;
         conn.execute(
             "INSERT INTO artefact_edges_current (
-                edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
-                to_symbol_ref, edge_kind, language, start_line, end_line, metadata
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+                to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+                end_line, metadata, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
-                edge_id.as_str(),
                 repo_id,
-                "commit-1",
-                blob_sha,
+                edge_id.as_str(),
                 path,
+                blob_sha,
                 symbol.symbol_id.as_str(),
                 symbol.artefact_id.as_str(),
                 target_ref.as_str(),
@@ -925,6 +926,7 @@ fn insert_real_clone_edges(
                 1i64,
                 1i64,
                 "{\"resolution\":\"real-pipeline-fixture\"}",
+                "2026-04-02T00:00:00Z",
             ],
         )
         .context("insert current dependency edge")?;
@@ -1275,7 +1277,7 @@ fn replace_incremental_snapshot(
         )
         .context("delete prior historical incremental edges")?;
         conn.execute(
-            "DELETE FROM artefacts_current WHERE repo_id = ?1 AND branch = 'main' AND symbol_id = ?2",
+            "DELETE FROM artefacts_current WHERE repo_id = ?1 AND symbol_id = ?2",
             rusqlite::params![repo_id, symbol.symbol_id.as_str()],
         )
         .context("delete prior current incremental artefact")?;
@@ -1313,23 +1315,22 @@ fn replace_incremental_snapshot(
 
         conn.execute(
             "INSERT INTO artefacts_current (
-                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
-                temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
-                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash
-            ) VALUES (?1, 'main', ?2, ?3, 'commit-1', 'commit', '', NULL, ?4, ?5, 'typescript', ?6, ?7, ?8, NULL, NULL, 1, 3, 0, 1, ?9, ?10, NULL, ?11)",
+                repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+                language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line,
+                end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, NULL, NULL, 1, 3, 0, 1, ?9, ?10, NULL, ?11)",
             rusqlite::params![
                 repo_id,
+                symbol.path.as_str(),
+                symbol.blob_sha.as_str(),
                 symbol.symbol_id.as_str(),
                 symbol.artefact_id.as_str(),
-                symbol.blob_sha.as_str(),
-                symbol.path.as_str(),
                 symbol.canonical_kind.as_str(),
                 language_kind,
                 symbol.symbol_fqn.as_str(),
                 symbol.signature.as_deref(),
                 modifiers.as_str(),
-                symbol.content_hash.as_str(),
+                "2026-04-02T00:00:00Z",
             ],
         )
         .context("insert incremental current artefact")?;
@@ -1354,19 +1355,21 @@ fn replace_incremental_snapshot(
             .context("insert incremental historical call edge")?;
             conn.execute(
                 "INSERT INTO artefact_edges_current (
-                    edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
-                    to_symbol_ref, edge_kind, language, start_line, end_line, metadata
-                ) VALUES (?1, ?2, 'commit-1', ?3, ?4, ?5, ?6, ?7, ?8, 'typescript', 1, 1, ?9)",
+                    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+                    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+                    end_line, metadata, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8, 'typescript', 1, 1, ?9, ?10)",
                 rusqlite::params![
-                    edge_id.as_str(),
                     repo_id,
-                    symbol.blob_sha.as_str(),
+                    edge_id.as_str(),
                     symbol.path.as_str(),
+                    symbol.blob_sha.as_str(),
                     symbol.symbol_id.as_str(),
                     symbol.artefact_id.as_str(),
                     target_ref.as_str(),
                     EDGE_KIND_CALLS,
                     "{\"resolution\":\"incremental-fixture\"}",
+                    "2026-04-02T00:00:00Z",
                 ],
             )
             .context("insert incremental current call edge")?;
@@ -1391,18 +1394,20 @@ fn replace_incremental_snapshot(
             .context("insert incremental historical dependency edge")?;
             conn.execute(
                 "INSERT INTO artefact_edges_current (
-                    edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
-                    to_symbol_ref, edge_kind, language, start_line, end_line, metadata
-                ) VALUES (?1, ?2, 'commit-1', ?3, ?4, ?5, ?6, ?7, 'references', 'typescript', 1, 1, ?8)",
+                    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+                    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+                    end_line, metadata, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, 'references', 'typescript', 1, 1, ?8, ?9)",
                 rusqlite::params![
-                    edge_id.as_str(),
                     repo_id,
-                    symbol.blob_sha.as_str(),
+                    edge_id.as_str(),
                     symbol.path.as_str(),
+                    symbol.blob_sha.as_str(),
                     symbol.symbol_id.as_str(),
                     symbol.artefact_id.as_str(),
                     target_ref.as_str(),
                     "{\"resolution\":\"incremental-fixture\"}",
+                    "2026-04-02T00:00:00Z",
                 ],
             )
             .context("insert incremental current dependency edge")?;
@@ -1421,7 +1426,7 @@ async fn load_semantic_feature_hashes(
             "SELECT a.symbol_fqn, ss.semantic_features_input_hash AS hash \
 FROM artefacts_current a \
 JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
-WHERE a.repo_id = '{}' AND a.branch = 'main'",
+WHERE a.repo_id = '{}'",
             esc_pg(repo_id),
         ))
         .await?;
@@ -1447,7 +1452,7 @@ async fn load_embedding_hashes(
             "SELECT a.symbol_fqn, e.embedding_input_hash AS hash \
 FROM artefacts_current a \
 JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
-WHERE a.repo_id = '{}' AND a.branch = 'main'",
+WHERE a.repo_id = '{}'",
             esc_pg(repo_id),
         ))
         .await?;
@@ -1476,8 +1481,8 @@ async fn load_clone_edge_hashes(
         .query_rows(&format!(
             "SELECT source.symbol_fqn AS source_symbol_fqn, target.symbol_fqn AS target_symbol_fqn, ce.clone_input_hash \
 FROM symbol_clone_edges ce \
-JOIN artefacts_current source ON source.repo_id = ce.repo_id AND source.branch = 'main' AND source.symbol_id = ce.source_symbol_id \
-JOIN artefacts_current target ON target.repo_id = ce.repo_id AND target.branch = 'main' AND target.symbol_id = ce.target_symbol_id \
+JOIN artefacts_current source ON source.repo_id = ce.repo_id AND source.symbol_id = ce.source_symbol_id \
+JOIN artefacts_current target ON target.repo_id = ce.repo_id AND target.symbol_id = ce.target_symbol_id \
 WHERE ce.repo_id = '{}'",
             esc_pg(repo_id),
         ))
@@ -2523,27 +2528,130 @@ fn then_clone_edge_hash_changes_across_snapshots(
 }
 
 fn invalid_embedding_provider_config(
+    world: &mut DevqlBddWorld,
     case_name: &str,
 ) -> crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
+    let daemon_config_path = world
+        .scenario_config_override_root()
+        .join("semantic-clones-embeddings.toml");
+    fs::write(&daemon_config_path, "").expect("write fake daemon config");
+
     match case_name {
-        "missing api key" => {
+        "missing runtime command" => {
             crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-                embedding_provider: Some("openai".to_string()),
-                embedding_model: Some("text-embedding-3-large".to_string()),
-                embedding_api_key: None,
-                embedding_cache_dir: None,
+                daemon_config_path,
+                embedding_profile: Some("local".to_string()),
+                runtime_command: "definitely-missing-embeddings-runtime".to_string(),
+                runtime_args: Vec::new(),
+                startup_timeout_secs: 1,
+                request_timeout_secs: 1,
+                warnings: Vec::new(),
             }
         }
-        "missing model" => {
+        "missing embedding profile" => {
+            let (runtime_command, runtime_args) =
+                failing_embeddings_runtime_command_and_args(world);
             crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-                embedding_provider: Some("openai".to_string()),
-                embedding_model: None,
-                embedding_api_key: Some("test-key".to_string()),
-                embedding_cache_dir: None,
+                daemon_config_path,
+                embedding_profile: Some("missing-profile".to_string()),
+                runtime_command,
+                runtime_args,
+                startup_timeout_secs: 1,
+                request_timeout_secs: 1,
+                warnings: Vec::new(),
             }
         }
         other => panic!("unknown invalid embedding provider configuration `{other}`"),
     }
+}
+
+#[cfg(unix)]
+fn failing_embeddings_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = world
+        .scenario_bin_dir()
+        .join("failing-embeddings-runtime.sh");
+    let script = r#"#!/bin/sh
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"embedding profile `missing-profile` is not defined"}\n' "$req_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+      exit 0
+      ;;
+    *)
+      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      ;;
+  esac
+done
+"#;
+    fs::write(&script_path, script).expect("write failing embeddings runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat failing embeddings runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions)
+        .expect("chmod failing embeddings runtime script");
+    ("sh".to_string(), vec![script_path.display().to_string()])
+}
+
+#[cfg(windows)]
+fn failing_embeddings_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<String>) {
+    let script_path = world
+        .scenario_bin_dir()
+        .join("failing-embeddings-runtime.ps1");
+    let script = r#"
+$stdin = [Console]::In
+while (($line = $stdin.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.type) {
+    "describe" {
+      $response = @{
+        type = "error"
+        request_id = $request.request_id
+        code = "runtime_error"
+        message = "embedding profile `missing-profile` is not defined"
+      }
+    }
+    "shutdown" {
+      $response = @{
+        type = "shutdown"
+        request_id = $request.request_id
+        protocol_version = 1
+        accepted = $true
+      }
+      $response | ConvertTo-Json -Compress
+      exit 0
+    }
+    default {
+      $response = @{
+        type = "error"
+        request_id = $request.request_id
+        code = "runtime_error"
+        message = "unexpected request"
+      }
+    }
+  }
+  $response | ConvertTo-Json -Compress
+}
+"#;
+    fs::write(&script_path, script).expect("write failing embeddings runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.display().to_string(),
+        ],
+    )
 }
 
 async fn run_stage2_with_invalid_embedding_provider_configuration(
@@ -2570,7 +2678,7 @@ async fn run_stage2_with_invalid_embedding_provider_configuration(
         .await
         .expect("ensure symbol embeddings schema before invalid stage2 config");
 
-    let config = invalid_embedding_provider_config(case_name);
+    let config = invalid_embedding_provider_config(world, case_name);
     world.semantic_clone_stage2_error = crate::capability_packs::semantic_clones::extension_descriptor::build_symbol_embedding_provider(
         &config,
         None,
@@ -2593,7 +2701,8 @@ fn when_stage2_starts_with_invalid_embedding_provider_configuration(
     _ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-        run_stage2_with_invalid_embedding_provider_configuration(world, "missing api key").await;
+        run_stage2_with_invalid_embedding_provider_configuration(world, "missing runtime command")
+            .await;
     })
 }
 

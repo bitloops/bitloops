@@ -229,7 +229,6 @@ cd /tmp/test-harness-claude-proof
 bitloops init --agent claude-code
 bitloops enable --project
 
-BITLOOPS_DEVQL_EMBEDDING_PROVIDER=none \
 BITLOOPS_DEVQL_SEMANTIC_PROVIDER=none \
 bitloops devql init
 ```
@@ -301,7 +300,6 @@ cd /tmp/test-harness-claude-proof
 
 export COMMIT_A="$(git rev-parse HEAD)"
 
-BITLOOPS_DEVQL_EMBEDDING_PROVIDER=none \
 BITLOOPS_DEVQL_SEMANTIC_PROVIDER=none \
 bitloops devql ingest
 
@@ -388,7 +386,6 @@ cd /tmp/test-harness-claude-proof
 
 export COMMIT_B="$(git rev-parse HEAD)"
 
-BITLOOPS_DEVQL_EMBEDDING_PROVIDER=none \
 BITLOOPS_DEVQL_SEMANTIC_PROVIDER=none \
 bitloops devql ingest
 

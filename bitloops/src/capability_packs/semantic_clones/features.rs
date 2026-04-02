@@ -1,6 +1,7 @@
 #[path = "features/semantic_features.rs"]
 mod core;
 
+pub use core::SymbolSemanticsRow;
 pub use core::{
     NoopSemanticSummaryProvider, PreStageArtefactRow, PreStageDependencyRow,
     SemanticFeatureIndexState, SemanticFeatureIngestionStats, SemanticFeatureInput,

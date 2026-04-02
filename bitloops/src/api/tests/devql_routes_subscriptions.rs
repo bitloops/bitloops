@@ -1055,10 +1055,7 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
     let repo = seed_dashboard_repo();
     let _guard = enter_process_state(
         Some(repo.path()),
-        &[
-            ("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", Some("disabled")),
-            ("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", Some("disabled")),
-        ],
+        &[("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", Some("disabled"))],
     );
     write_envelope_config(
         repo.path(),
@@ -1069,8 +1066,7 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
                 },
                 "events": {
                     "duckdb_path": ".bitloops/stores/subscriptions.duckdb"
-                },
-                "embedding_provider": "disabled"
+                }
             },
             "semantic": {
                 "provider": "disabled"

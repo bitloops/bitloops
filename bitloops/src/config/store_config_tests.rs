@@ -10,7 +10,6 @@ pub(crate) use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue};
 mod backend;
 mod blob;
 mod dashboard;
-mod embedding;
 mod events;
 mod knowledge_providers;
 mod providerless;

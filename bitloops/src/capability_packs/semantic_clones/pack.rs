@@ -45,7 +45,7 @@ mod tests {
         let pack = SemanticClonesPack::new()?;
         assert_eq!(pack.descriptor().id, "semantic_clones");
         assert_eq!(pack.migrations()[0].capability_id, "semantic_clones");
-        assert_eq!(pack.health_checks().len(), 1);
+        assert_eq!(pack.health_checks().len(), 4);
         Ok(())
     }
 }

@@ -169,6 +169,7 @@ fn derive_materialized_artefacts(
         resolve_artefact(
             cfg,
             desired,
+            &extraction.language,
             artefact.artifact_key.as_str(),
             &by_key,
             &mut resolved,
@@ -204,6 +205,7 @@ fn dedupe_materialized_artefacts_by_artefact_id(
 fn resolve_artefact(
     cfg: &crate::host::devql::DevqlConfig,
     desired: &DesiredFileState,
+    language: &str,
     artifact_key: &str,
     by_key: &HashMap<String, &CachedArtefact>,
     resolved: &mut HashMap<String, MaterializedArtefact>,
@@ -223,7 +225,7 @@ fn resolve_artefact(
     let parent = artefact
         .parent_artifact_key
         .as_deref()
-        .map(|parent_key| resolve_artefact(cfg, desired, parent_key, by_key, resolved))
+        .map(|parent_key| resolve_artefact(cfg, desired, language, parent_key, by_key, resolved))
         .transpose()?;
     let symbol_fqn =
         reconstruct_symbol_fqn(artefact, parent_cached, parent.as_ref(), &desired.path);
@@ -236,9 +238,10 @@ fn resolve_artefact(
     let symbol_id = if is_file_cached_artefact(artefact) {
         crate::host::devql::file_symbol_id(&desired.path)
     } else {
+        let language_kind = parse_cached_language_kind(language, &artefact.language_kind)?;
         let language_artefact = crate::host::language_adapter::LanguageArtefact {
             canonical_kind: artefact.canonical_kind.clone(),
-            language_kind: artefact.language_kind.clone(),
+            language_kind,
             name: artefact.name.clone(),
             symbol_fqn: symbol_fqn.clone(),
             parent_symbol_fqn: None,
@@ -278,6 +281,25 @@ fn resolve_artefact(
     };
     resolved.insert(artifact_key.to_string(), materialized.clone());
     Ok(materialized)
+}
+
+fn parse_cached_language_kind(
+    language: &str,
+    raw_kind: &str,
+) -> Result<crate::host::language_adapter::LanguageKind> {
+    use crate::host::language_adapter::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+
+    let parsed = match language {
+        "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
+        "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
+        "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
+        "typescript" | "javascript" => {
+            TsJsKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::ts_js)
+        }
+        _ => LanguageKind::try_from(raw_kind).ok(),
+    };
+
+    parsed.ok_or_else(|| anyhow!("unsupported cached language_kind `{raw_kind}` for `{language}`"))
 }
 
 fn derive_materialized_edges(
@@ -568,6 +590,7 @@ mod tests {
     use super::*;
     use crate::host::devql::sync::content_cache::CachedEdge;
     use crate::host::devql::sync::types::EffectiveSource;
+    use crate::host::language_adapter::{GoKind, LanguageKind, TsJsKind};
     use rusqlite::Connection;
     use serde_json::json;
     use tempfile::tempdir;
@@ -595,10 +618,6 @@ mod tests {
             semantic_model: None,
             semantic_api_key: None,
             semantic_base_url: None,
-            embedding_provider: None,
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
         }
     }
 
@@ -805,5 +824,18 @@ mod tests {
 
         assert_eq!(row_count, 1);
         assert!(!edge_id.is_empty());
+    }
+
+    #[test]
+    fn parse_cached_language_kind_uses_language_specific_resolution_for_ambiguous_kinds() {
+        assert_eq!(
+            parse_cached_language_kind("typescript", "function_declaration")
+                .expect("parse ts kind"),
+            LanguageKind::ts_js(TsJsKind::FunctionDeclaration)
+        );
+        assert_eq!(
+            parse_cached_language_kind("go", "function_declaration").expect("parse go kind"),
+            LanguageKind::go(GoKind::FunctionDeclaration)
+        );
     }
 }

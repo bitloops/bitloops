@@ -13,13 +13,21 @@ MAX_LINES="${RUST_FILE_MAX_LINES:-1000}"
 INCLUDE_TESTS="${INCLUDE_TESTS:-0}"
 GIT_TOPLEVEL="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
 
-declare -A LEGACY_MAX_LINES=()
+# Bash 3.2 compatibility: store legacy per-file budgets as "path:max" entries
+# instead of using associative arrays.
+declare -a LEGACY_MAX_LINE_BUDGETS=()
 
 if command -v rg >/dev/null 2>&1; then
-  mapfile -t rust_files < <(rg --files "$ROOT" -g '*.rs')
+  rust_files=()
+  while IFS= read -r file; do
+    rust_files+=("$file")
+  done < <(rg --files "$ROOT" -g '*.rs')
 else
   echo "warning: ripgrep (rg) not found; falling back to find"
-  mapfile -t rust_files < <(find "$ROOT" -type f -name '*.rs' | sort)
+  rust_files=()
+  while IFS= read -r file; do
+    rust_files+=("$file")
+  done < <(find "$ROOT" -type f -name '*.rs' | sort)
 fi
 if [[ "${#rust_files[@]}" -eq 0 ]]; then
   echo "No Rust files found under $ROOT"
@@ -44,9 +52,15 @@ is_gitignored_file() {
 
 resolve_legacy_max_for_file() {
   local file="$1"
+  local entry
   local key
   local short_key
-  for key in "${!LEGACY_MAX_LINES[@]}"; do
+  local max_lines
+  local legacy_budget_count="${#LEGACY_MAX_LINE_BUDGETS[@]}"
+  (( legacy_budget_count == 0 )) && return 1
+  for entry in "${LEGACY_MAX_LINE_BUDGETS[@]}"; do
+    key="${entry%%:*}"
+    max_lines="${entry#*:}"
     short_key="${key#bitloops/}"
     if [[ "$file" == "$key" \
       || "$file" == "./$key" \
@@ -56,7 +70,7 @@ resolve_legacy_max_for_file() {
       || "$file" == "../$short_key" \
       || "$file" == */"$key" \
       || "$file" == */"$short_key" ]]; then
-      echo "${LEGACY_MAX_LINES[$key]}"
+      echo "$max_lines"
       return 0
     fi
   done
@@ -117,7 +131,10 @@ fi
 if [[ "${#size_index[@]}" -gt 0 ]]; then
   echo "Top non-test Rust files by line count:"
   # Sort fully then take top N in bash — avoids sort|head SIGPIPE ("Broken pipe") under set -o pipefail.
-  mapfile -t _top_by_lines < <(printf '%s\n' "${size_index[@]}" | sort -nr)
+  _top_by_lines=()
+  while IFS= read -r row; do
+    _top_by_lines+=("$row")
+  done < <(printf '%s\n' "${size_index[@]}" | sort -nr)
   _n="${#_top_by_lines[@]}"
   ((_n > 15)) && _n=15
   for ((i = 0; i < _n; i++)); do
