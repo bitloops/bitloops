@@ -353,8 +353,7 @@ pub(super) fn seed_graphql_mutation_repo() -> TempDir {
                 },
                 "events": {
                     "duckdb_path": ".bitloops/stores/mutations.duckdb"
-                },
-                "embedding_provider": "disabled"
+                }
             },
             "semantic": {
                 "provider": "disabled"
@@ -391,8 +390,7 @@ pub(super) fn seed_graphql_knowledge_mutation_repo(jira_site_url: &str) -> TempD
                 },
                 "events": {
                     "duckdb_path": ".bitloops/stores/knowledge-mutations.duckdb"
-                },
-                "embedding_provider": "disabled"
+                }
             },
             "semantic": {
                 "provider": "disabled"

@@ -115,7 +115,6 @@ At this point Bitloops should have:
 Fast boundary-check run:
 
 ```bash
-BITLOOPS_DEVQL_EMBEDDING_PROVIDER=none \
 BITLOOPS_DEVQL_SEMANTIC_PROVIDER=none \
 bitloops devql ingest
 ```

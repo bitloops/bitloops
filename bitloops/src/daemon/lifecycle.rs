@@ -205,12 +205,14 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         Some(state) => query_health(state).await.ok(),
         None => None,
     };
+    let enrichment = enrichment_status().ok();
 
     Ok(DaemonStatusReport {
         runtime,
         service,
         service_running,
         health,
+        enrichment,
     })
 }
 

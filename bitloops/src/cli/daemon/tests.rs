@@ -1,15 +1,19 @@
 use super::*;
 use crate::cli::{Cli, Commands};
-use crate::daemon::{DaemonServiceMetadata, DaemonStatusReport, ServiceManagerKind};
+use crate::daemon::{
+    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
+    EnrichmentQueueStatus, ServiceManagerKind,
+};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
-use std::fs::{self, OpenOptions};
 use std::io::Cursor;
+use tempfile::TempDir;
+
+use std::fs::{self, OpenOptions};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tempfile::TempDir;
 
 #[derive(Clone, Default)]
 struct SharedBuffer {
@@ -416,6 +420,31 @@ fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
 }
 
 #[test]
+fn daemon_enrichments_cli_parses_controls() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "daemon",
+        "enrichments",
+        "pause",
+        "--reason",
+        "maintenance",
+    ])
+    .expect("daemon enrichments should parse");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Enrichments(enrichments)) = daemon.command else {
+        panic!("expected daemon enrichments command");
+    };
+    let Some(EnrichmentCommand::Pause(pause)) = enrichments.command else {
+        panic!("expected pause command");
+    };
+
+    assert_eq!(pause.reason.as_deref(), Some("maintenance"));
+}
+
+#[test]
 fn status_lines_show_global_supervisor_install_and_state() {
     let state_root = TempDir::new().expect("temp dir");
     let state_root_str = state_root.path().to_string_lossy().to_string();
@@ -449,6 +478,29 @@ fn status_lines_show_global_supervisor_install_and_state() {
         }),
         service_running: false,
         health: None,
+        enrichment: Some(EnrichmentQueueStatus {
+            state: EnrichmentQueueState {
+                version: 1,
+                mode: EnrichmentQueueMode::Paused,
+                pending_jobs: 2,
+                pending_semantic_jobs: 1,
+                pending_embedding_jobs: 1,
+                pending_clone_edges_rebuild_jobs: 0,
+                running_jobs: 1,
+                running_semantic_jobs: 1,
+                running_embedding_jobs: 0,
+                running_clone_edges_rebuild_jobs: 0,
+                failed_jobs: 3,
+                failed_semantic_jobs: 1,
+                failed_embedding_jobs: 1,
+                failed_clone_edges_rebuild_jobs: 1,
+                retried_failed_jobs: 4,
+                last_action: Some("paused".to_string()),
+                last_updated_unix: 0,
+                paused_reason: Some("maintenance".to_string()),
+            },
+            persisted: true,
+        }),
     };
     let log_path = daemon::daemon_log_file_path();
 
@@ -462,6 +514,23 @@ fn status_lines_show_global_supervisor_install_and_state() {
             "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
             "Supervisor state: stopped".to_string(),
             "Last URL: https://127.0.0.1:5173".to_string(),
+            "Enrichment mode: paused".to_string(),
+            "Enrichment pending jobs: 2".to_string(),
+            "Enrichment pending semantic jobs: 1".to_string(),
+            "Enrichment pending embedding jobs: 1".to_string(),
+            "Enrichment pending clone-edge rebuild jobs: 0".to_string(),
+            "Enrichment running jobs: 1".to_string(),
+            "Enrichment running semantic jobs: 1".to_string(),
+            "Enrichment running embedding jobs: 0".to_string(),
+            "Enrichment running clone-edge rebuild jobs: 0".to_string(),
+            "Enrichment failed jobs: 3".to_string(),
+            "Enrichment failed semantic jobs: 1".to_string(),
+            "Enrichment failed embedding jobs: 1".to_string(),
+            "Enrichment failed clone-edge rebuild jobs: 1".to_string(),
+            "Enrichment retried failed jobs: 4".to_string(),
+            "Enrichment last action: paused".to_string(),
+            "Enrichment pause reason: maintenance".to_string(),
+            "Enrichment persisted: yes".to_string(),
         ]
     );
 }
@@ -500,6 +569,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         service: None,
         service_running: false,
         health: None,
+        enrichment: None,
     };
 
     let lines = status_lines(&report);
@@ -526,6 +596,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         service: None,
         service_running: false,
         health: None,
+        enrichment: None,
     };
 
     assert_eq!(

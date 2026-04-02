@@ -48,11 +48,11 @@ pub trait CapabilityIngestContext: Send {
         None
     }
 
-    fn clone_rebuild_relational(&self) -> Result<&crate::host::devql::RelationalStorage> {
+    fn clone_edges_rebuild_relational(&self) -> Result<&crate::host::devql::RelationalStorage> {
         let capability_id = self.invoking_capability_id().unwrap_or("<unknown>");
         let ingester_id = self.invoking_ingester_id().unwrap_or("<unknown>");
         bail!(
-            "clone rebuild relational access is not available for capability `{capability_id}` ingester `{ingester_id}`"
+            "clone-edge rebuild relational access is not available for capability `{capability_id}` ingester `{ingester_id}`"
         );
     }
 

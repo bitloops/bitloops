@@ -12,12 +12,14 @@ use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
-    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
-    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+    clear_repo_symbol_embedding_rows, load_pre_stage_artefacts_for_blob,
+    load_pre_stage_dependencies_for_blob, upsert_semantic_feature_rows,
+    upsert_symbol_embedding_rows,
 };
 use crate::config::{
-    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
+    BITLOOPS_CONFIG_RELATIVE_PATH, EventsBackendConfig, RelationalBackendConfig,
+    StoreBackendConfig, resolve_embedding_capability_config_for_repo, resolve_store_backend_config,
     resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
@@ -523,11 +525,16 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
 }
 
 fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
     embeddings::EmbeddingProviderConfig {
-        embedding_provider: cfg.embedding_provider.clone(),
-        embedding_model: cfg.embedding_model.clone(),
-        embedding_api_key: cfg.embedding_api_key.clone(),
-        embedding_cache_dir: cfg.embedding_cache_dir.clone(),
+        daemon_config_path: crate::config::default_daemon_config_path()
+            .unwrap_or_else(|_| cfg.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
+        embedding_profile: capability.semantic_clones.embedding_profile,
+        runtime_command: capability.embeddings.runtime.command,
+        runtime_args: capability.embeddings.runtime.args,
+        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
+        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
+        warnings: capability.embeddings.warnings,
     }
 }
 

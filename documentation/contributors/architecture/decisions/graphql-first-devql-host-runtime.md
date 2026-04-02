@@ -83,7 +83,7 @@ Implemented in this repository:
 - `LanguageServicesGateway` exposed through capability contexts
 - `LanguageTestSupport` added to the language-adapter runtime
 - Rust, TypeScript/JavaScript, and Python test support exposed through adapter-side wrappers
-- `semantic_clones` moved to `clone_rebuild_relational()`
+- `semantic_clones` moved to `clone_edges_rebuild_relational()`
 - public GraphQL `extension(stage: ...)` removed
 - typed GraphQL `testsSummary` added for project and slim scopes
 

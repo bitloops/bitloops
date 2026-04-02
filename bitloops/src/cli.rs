@@ -8,6 +8,8 @@ pub mod dashboard;
 pub mod debug;
 pub mod devql;
 pub mod doctor;
+pub mod embeddings;
+pub mod embeddings_runtime;
 pub mod enable;
 pub mod explain;
 pub mod init;
@@ -93,6 +95,11 @@ pub enum Commands {
     Devql(devql::DevqlArgs),
     /// Test harness ingestion for DevQL production artefacts.
     Testlens(testlens::TestLensArgs),
+    /// Manage embedding profiles and caches.
+    Embeddings(embeddings::EmbeddingsArgs),
+    /// Hidden internal embeddings runtime entry point.
+    #[command(name = "__embeddings-runtime", hide = true)]
+    EmbeddingsRuntime(embeddings_runtime::EmbeddingsRuntimeArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
@@ -198,6 +205,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
         Commands::Testlens(args) => testlens::run(args).await,
+        Commands::Embeddings(args) => embeddings::run(args),
+        Commands::EmbeddingsRuntime(args) => embeddings_runtime::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
         Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,

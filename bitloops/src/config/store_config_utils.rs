@@ -164,6 +164,35 @@ where
     })
 }
 
+pub(super) fn resolve_optional_env_indirection<F>(
+    raw: Option<String>,
+    env_lookup: &F,
+) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    raw.and_then(|value| resolve_optional_env_indirection_str(&value, env_lookup))
+}
+
+fn resolve_optional_env_indirection_str<F>(raw: &str, env_lookup: &F) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(key) = trimmed
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        return read_non_empty_env(env_lookup, key);
+    }
+
+    Some(trimmed.to_string())
+}
+
 fn expand_tilde_path(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
     if trimmed == "~" {
