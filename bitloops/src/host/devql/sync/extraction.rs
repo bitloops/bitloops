@@ -95,7 +95,7 @@ fn map_extraction_to_cache_format(
                 .cloned()
                 .expect("artifact key should exist for extracted item"),
             canonical_kind: item.canonical_kind.clone(),
-            language_kind: item.language_kind.clone(),
+            language_kind: item.language_kind.to_string(),
             name: item.name.clone(),
             parent_artifact_key: item
                 .parent_symbol_fqn
@@ -238,12 +238,14 @@ fn file_end_line(content: &str) -> i32 {
 mod tests {
     use super::*;
     use crate::host::devql::EdgeKind;
-    use crate::host::language_adapter::{DependencyEdge, EdgeMetadata, LanguageArtefact};
+    use crate::host::language_adapter::{
+        DependencyEdge, EdgeMetadata, LanguageArtefact, LanguageKind, TsJsKind,
+    };
 
     fn class_artefact() -> LanguageArtefact {
         LanguageArtefact {
             canonical_kind: None,
-            language_kind: "class_declaration".to_string(),
+            language_kind: LanguageKind::ts_js(TsJsKind::ClassDeclaration),
             name: "Service".to_string(),
             symbol_fqn: "src/sample.ts::Service".to_string(),
             parent_symbol_fqn: None,
@@ -260,7 +262,7 @@ mod tests {
     fn method_artefact() -> LanguageArtefact {
         LanguageArtefact {
             canonical_kind: Some("method".to_string()),
-            language_kind: "method_definition".to_string(),
+            language_kind: LanguageKind::ts_js(TsJsKind::MethodDefinition),
             name: "run".to_string(),
             symbol_fqn: "src/sample.ts::Service::run".to_string(),
             parent_symbol_fqn: Some("src/sample.ts::Service".to_string()),
@@ -277,7 +279,7 @@ mod tests {
     fn helper_artefact() -> LanguageArtefact {
         LanguageArtefact {
             canonical_kind: Some("function".to_string()),
-            language_kind: "function_declaration".to_string(),
+            language_kind: LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
             name: "localHelper".to_string(),
             symbol_fqn: "src/sample.ts::localHelper".to_string(),
             parent_symbol_fqn: None,

@@ -406,6 +406,25 @@ pub(crate) async fn execute_ingest_with_observer(
     }
 }
 
+fn active_branch_name(repo_root: &Path) -> String {
+    crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo_root,
+        &["branch", "--show-current"],
+    )
+    .ok()
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| "main".to_string())
+}
+
+async fn promote_temporary_current_rows_for_head_commit(
+    _cfg: &DevqlConfig,
+    _relational: &RelationalStorage,
+) -> Result<usize> {
+    // Current-state ingestion now writes directly into the sync-shaped tables, so the legacy
+    // temporary-row promotion step is intentionally a no-op until a concrete replacement exists.
+    Ok(0)
+}
+
 fn emit_progress(
     observer: Option<&dyn IngestionObserver>,
     phase: IngestionProgressPhase,

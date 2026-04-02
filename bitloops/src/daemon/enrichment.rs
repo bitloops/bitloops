@@ -165,7 +165,7 @@ impl JobExecutionOutcome {
 #[serde(untagged)]
 enum PersistedEnrichmentJobInput {
     ArtefactId(String),
-    LegacyInput(semantic_features::SemanticFeatureInput),
+    LegacyInput(Box<semantic_features::SemanticFeatureInput>),
 }
 
 fn deserialize_job_artefact_ids<'de, D>(
@@ -179,7 +179,7 @@ where
         .into_iter()
         .map(|input| match input {
             PersistedEnrichmentJobInput::ArtefactId(artefact_id) => artefact_id,
-            PersistedEnrichmentJobInput::LegacyInput(input) => input.artefact_id,
+            PersistedEnrichmentJobInput::LegacyInput(input) => input.artefact_id.clone(),
         })
         .collect())
 }
