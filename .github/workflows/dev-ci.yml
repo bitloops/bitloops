@@ -91,7 +91,7 @@ jobs:
         run: |
           cargo install cargo-llvm-cov --locked
           if command -v mold >/dev/null 2>&1; then
-            mold -run bash scripts/coverage-baseline-check.sh check
+            mold -run bash scripts/test-coverage.sh baseline
           else
-            bash scripts/coverage-baseline-check.sh check
+            bash scripts/test-coverage.sh baseline
           fi
