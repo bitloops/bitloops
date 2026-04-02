@@ -256,6 +256,9 @@ async fn execute_sync_inner(
         {
             Some(cached) => {
                 counters.cache_hits += 1;
+                if cached.parse_status == sync::extraction::PARSE_STATUS_PARSE_ERROR {
+                    counters.parse_errors += 1;
+                }
                 if determine_retention_class(&desired) == "git_backed" {
                     sync::content_cache::promote_to_git_backed(
                         relational,
