@@ -83,6 +83,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops uninstall full in (\S+)$"),
+            step_fn(given_uninstall_full),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops uninstall hooks in (\S+)$"),
+            step_fn(given_uninstall_hooks),
+        )
+        .given(
+            None,
             regex(r"^I simulate a codex checkpoint in (\S+)$"),
             step_fn(given_simulate_codex_checkpoint),
         )
@@ -265,6 +275,21 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^git hooks exist for the (\S+) agent in (\S+)$"),
             step_fn(then_agent_hooks_exist),
+        )
+        .then(
+            None,
+            regex(r"^bitloops binary is not found$"),
+            step_fn(then_bitloops_binary_not_found),
+        )
+        .then(
+            None,
+            regex(r"^agent hooks are removed for the (\S+) agent in (\S+)$"),
+            step_fn(then_agent_hooks_removed),
+        )
+        .then(
+            None,
+            regex(r"^git hooks are removed in (\S+)$"),
+            step_fn(then_git_hooks_removed),
         )
         .then(
             None,

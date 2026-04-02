@@ -175,6 +175,32 @@ pub(super) fn given_disable(
     })
 }
 
+pub(super) fn given_uninstall_full(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run bitloops uninstall full",
+            helpers::run_bitloops_uninstall_full(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_uninstall_hooks(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run bitloops uninstall hooks",
+            helpers::run_bitloops_uninstall_hooks(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_simulate_codex_checkpoint(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

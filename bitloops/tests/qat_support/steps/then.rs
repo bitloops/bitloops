@@ -124,6 +124,45 @@ pub(super) fn then_agent_hooks_exist(
     })
 }
 
+pub(super) fn then_agent_hooks_removed(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "agent hooks are removed",
+            helpers::assert_agent_hooks_removed(world, &repo_name, &agent_name),
+        );
+    })
+}
+
+pub(super) fn then_bitloops_binary_not_found(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "bitloops binary is not found",
+            helpers::assert_bitloops_binary_removed(world),
+        );
+    })
+}
+
+pub(super) fn then_git_hooks_removed(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "git hooks are removed",
+            helpers::assert_git_hooks_removed(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn then_status_shows_disabled(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

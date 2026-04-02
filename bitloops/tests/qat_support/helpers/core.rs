@@ -1,5 +1,3 @@
-use crate::PathBuf;
-
 pub fn sanitize_name(input: &str) -> String {
     let mut slug = String::with_capacity(input.len());
     let mut last_was_dash = false;
@@ -390,6 +388,42 @@ fn run_enable_fallback_without_daemon(world: &QatWorld) -> Result<()> {
 pub fn run_bitloops_disable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     run_bitloops_success(world, &["disable"], "bitloops disable")
+}
+
+pub fn run_bitloops_uninstall_full(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_bitloops_success(
+        world,
+        &["uninstall", "--full", "-f"],
+        "bitloops uninstall --full",
+    )
+}
+
+pub fn assert_bitloops_binary_removed(world: &mut QatWorld) -> Result<()> {
+    let mut cmd = build_bitloops_command(world, &["--version"])?;
+    match cmd.output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Binary not found — this is the expected outcome after full uninstall
+            Ok(())
+        }
+        Err(e) => bail!("unexpected error running bitloops --version: {e}"),
+        Ok(output) => {
+            ensure!(
+                !output.status.success(),
+                "expected bitloops --version to fail after full uninstall, but it exited with code 0"
+            );
+            Ok(())
+        }
+    }
+}
+
+pub fn run_bitloops_uninstall_hooks(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_bitloops_success(
+        world,
+        &["uninstall", "--agent-hooks", "--git-hooks", "--only-current-project", "-f"],
+        "bitloops uninstall --agent-hooks --git-hooks",
+    )
 }
 
 pub fn simulate_codex_checkpoint(world: &mut QatWorld, repo_name: &str) -> Result<()> {
@@ -788,6 +822,36 @@ pub fn assert_agent_hooks_installed(
                 path.display()
             );
         }
+        "cursor" => {
+            let path = world.repo_dir().join(".cursor").join("hooks.json");
+            ensure!(path.exists(), "expected {}", path.display());
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            ensure!(
+                content.contains("bitloops"),
+                "missing bitloops hook in {}",
+                path.display()
+            );
+        }
+        "gemini" => {
+            let path = world.repo_dir().join(".gemini").join("settings.json");
+            ensure!(path.exists(), "expected {}", path.display());
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            ensure!(
+                content.contains("bitloops"),
+                "missing bitloops hook in {}",
+                path.display()
+            );
+        }
+        "copilot" => {
+            let path = world.repo_dir().join(".github").join("hooks").join("bitloops.json");
+            ensure!(path.exists(), "expected {}", path.display());
+        }
+        "open-code" => {
+            let path = world.repo_dir().join(".opencode").join("plugins").join("bitloops.ts");
+            ensure!(path.exists(), "expected {}", path.display());
+        }
         other => bail!("unsupported agent for hook assertion: {other}"),
     }
 
@@ -808,6 +872,61 @@ pub fn assert_agent_hooks_installed(
         "missing post-commit bitloops hook in {}",
         post_commit_path.display()
     );
+    Ok(())
+}
+
+pub fn assert_agent_hooks_removed(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
+    let hooks_path = match normalised_agent_name {
+        "claude-code" => world.repo_dir().join(".claude").join("settings.json"),
+        "codex" => world.repo_dir().join(".codex").join("hooks.json"),
+        "cursor" => world.repo_dir().join(".cursor").join("hooks.json"),
+        "gemini" => world.repo_dir().join(".gemini").join("settings.json"),
+        "copilot" => world
+            .repo_dir()
+            .join(".github")
+            .join("hooks")
+            .join("bitloops.json"),
+        "open-code" => world
+            .repo_dir()
+            .join(".opencode")
+            .join("plugins")
+            .join("bitloops.ts"),
+        other => bail!("unsupported agent for hook removal assertion: {other}"),
+    };
+    if hooks_path.exists() {
+        let content = fs::read_to_string(&hooks_path)
+            .with_context(|| format!("reading {}", hooks_path.display()))?;
+        ensure!(
+            !content.contains("bitloops"),
+            "agent hooks file still contains bitloops references after uninstall: {}",
+            hooks_path.display()
+        );
+    }
+    Ok(())
+}
+
+pub fn assert_git_hooks_removed(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let post_commit_path = world
+        .repo_dir()
+        .join(".git")
+        .join("hooks")
+        .join("post-commit");
+    if post_commit_path.exists() {
+        let content = fs::read_to_string(&post_commit_path)
+            .with_context(|| format!("reading {}", post_commit_path.display()))?;
+        ensure!(
+            !content.contains("bitloops hooks git post-commit"),
+            "git post-commit hook still contains bitloops after uninstall: {}",
+            post_commit_path.display()
+        );
+    }
     Ok(())
 }
 
