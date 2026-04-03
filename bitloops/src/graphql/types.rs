@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod project;
 pub mod repository;
 pub mod scalars;
+pub mod sync;
 pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
@@ -39,6 +40,7 @@ pub use knowledge::{
 pub use project::Project;
 pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
+pub use sync::{SyncProgressEvent, SyncTaskObject};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
 pub use test_harness::{

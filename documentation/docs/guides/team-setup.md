@@ -54,15 +54,19 @@ token = "${GITHUB_TOKEN}"
 From the repository root or a subproject directory:
 
 ```bash
-bitloops init
-bitloops init --install-default-daemon
+bitloops init --sync=true
+bitloops init --install-default-daemon --sync=true
 ```
 
 Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service before continuing.
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 
-`bitloops init` no longer performs baseline or schema sync. Use `bitloops devql ingest` and `bitloops devql sync` when you want to populate or reconcile DevQL state.
+`bitloops init` can also queue an initial DevQL current-state sync after hooks are installed. Use `--sync=true` to run it immediately, or `--sync=false` to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook setup whether you want to sync the codebase.
+
+In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
+
+`bitloops init` still does not run DevQL ingest. Use `bitloops devql ingest` when you want to populate checkpoint, commit, and event history.
 
 Use `--agent <name>` when a team wants to pin the supported agent set during bootstrap.
 

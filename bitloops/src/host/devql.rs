@@ -69,12 +69,13 @@ pub(crate) use self::commands_query::{
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{
-    PostCommitArtefactRefreshStats, run_post_checkout_branch_seed,
+    PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata, run_post_checkout_branch_seed,
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
 pub use self::commands_sync::{
-    SyncSummary, SyncValidationFileDrift, SyncValidationSummary, run_sync, run_sync_with_summary,
+    SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
+    SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
@@ -87,6 +88,9 @@ pub mod watch;
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync_validation;
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use self::commands_sync::execute_sync_with_stats;
 #[cfg(test)]
 pub(crate) use self::connection_status::{
     EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,
@@ -494,9 +498,39 @@ pub fn run_capability_packs_report(
 }
 
 async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorage) -> Result<()> {
+    init_relational_schema_with_mode(cfg, relational, RelationalSchemaInitMode::SafeBootstrap)
+        .await
+        .map(|_| ())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SyncExecutionSchemaOutcome {
+    pub remote_current_state_rebuilt: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RelationalSchemaInitMode {
+    SafeBootstrap,
+    SyncExecution,
+}
+
+async fn init_relational_schema_with_mode(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    mode: RelationalSchemaInitMode,
+) -> Result<SyncExecutionSchemaOutcome> {
     init_sqlite_schema(&relational.local.path).await?;
+    let mut outcome = SyncExecutionSchemaOutcome::default();
     if let Some(remote) = relational.remote.as_ref() {
-        init_postgres_schema(cfg, &remote.client).await?;
+        let init_outcome = match mode {
+            RelationalSchemaInitMode::SafeBootstrap => {
+                init_postgres_schema(cfg, &remote.client).await?
+            }
+            RelationalSchemaInitMode::SyncExecution => {
+                init_postgres_schema_for_sync_execution(cfg, &remote.client).await?
+            }
+        };
+        outcome.remote_current_state_rebuilt = init_outcome.rebuilt_current_state;
     }
 
     let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
@@ -514,7 +548,7 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
                 test_harness_context.capability_pack_id
             )
         })?;
-    Ok(())
+    Ok(outcome)
 }
 
 fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
@@ -544,6 +578,24 @@ async fn initialise_devql_schema_for_command(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<(RelationalStorage, InitSchemaSummary)> {
+    let (relational, summary, _outcome) = initialise_devql_schema_for_command_with_mode(
+        cfg,
+        command,
+        RelationalSchemaInitMode::SafeBootstrap,
+    )
+    .await?;
+    Ok((relational, summary))
+}
+
+async fn initialise_devql_schema_for_command_with_mode(
+    cfg: &DevqlConfig,
+    command: &str,
+    mode: RelationalSchemaInitMode,
+) -> Result<(
+    RelationalStorage,
+    InitSchemaSummary,
+    SyncExecutionSchemaOutcome,
+)> {
     let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
@@ -553,7 +605,7 @@ async fn initialise_devql_schema_for_command(
     } else {
         init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
     }
-    init_relational_schema(cfg, &relational).await?;
+    let outcome = init_relational_schema_with_mode(cfg, &relational, mode).await?;
     Ok((
         relational,
         InitSchemaSummary {
@@ -571,6 +623,7 @@ async fn initialise_devql_schema_for_command(
                 "duckdb".to_string()
             },
         },
+        outcome,
     ))
 }
 
@@ -592,7 +645,8 @@ pub async fn ensure_relational_and_events_schema(
     } else {
         init_duckdb_schema(repo_root, &backends.events).await?;
     }
-    init_relational_schema(&cfg, &relational).await?;
+    init_relational_schema_with_mode(&cfg, &relational, RelationalSchemaInitMode::SafeBootstrap)
+        .await?;
     Ok(())
 }
 
@@ -602,6 +656,33 @@ pub(crate) async fn execute_init_schema(
 ) -> Result<InitSchemaSummary> {
     let (_relational, summary) = initialise_devql_schema_for_command(cfg, command).await?;
     Ok(summary)
+}
+
+pub(crate) async fn prepare_sync_execution_schema(
+    cfg: &DevqlConfig,
+    command: &str,
+    mode: &SyncMode,
+) -> Result<SyncExecutionSchemaOutcome> {
+    if matches!(mode, SyncMode::Validate) {
+        return Ok(SyncExecutionSchemaOutcome::default());
+    }
+    let (_relational, _summary, outcome) = initialise_devql_schema_for_command_with_mode(
+        cfg,
+        command,
+        RelationalSchemaInitMode::SyncExecution,
+    )
+    .await?;
+    Ok(outcome)
+}
+
+pub(crate) fn effective_sync_mode_after_schema_preparation(
+    mode: SyncMode,
+    outcome: SyncExecutionSchemaOutcome,
+) -> SyncMode {
+    match mode {
+        SyncMode::Paths(_) if outcome.remote_current_state_rebuilt => SyncMode::Repair,
+        other => other,
+    }
 }
 
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {

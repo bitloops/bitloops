@@ -23,6 +23,18 @@ bitloops devql ingest
 
 The CLI resolves repo policy locally, then sends ingestion requests to the daemon. Ingestion no longer owns schema bootstrap.
 
+## Sync Current State
+
+```bash
+bitloops devql sync
+bitloops devql sync --status
+bitloops devql sync --validate --status
+```
+
+`bitloops devql sync` now queues a sync task and returns immediately by default. Use `--status` when you want the CLI to follow that queued task until it completes or fails.
+
+`--validate` queues a read-only validation task instead of mutating the current-state tables.
+
 ## Query Data
 
 ```bash
@@ -79,3 +91,5 @@ bitloops --connection-status
 ```
 
 Use `bitloops status` for daemon health, `bitloops devql packs --with-health` for capability-pack and embeddings health, and `bitloops checkpoints status --detailed` for policy root and fingerprint debugging.
+
+`bitloops status` also shows sync queue totals, and when run inside a repository it includes the active or most recent sync task for that repo.

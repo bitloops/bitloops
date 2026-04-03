@@ -39,6 +39,7 @@ pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     match value {
         Some(Value::Array(values)) => values
@@ -51,6 +52,7 @@ pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_json_value_or_default(value: Option<&Value>, default: Value) -> Value {
     match value {
         Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or(default),
@@ -59,6 +61,7 @@ pub(super) fn parse_json_value_or_default(value: Option<&Value>, default: Value)
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
     value.and_then(|value| {
         value
@@ -68,6 +71,7 @@ pub(super) fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_required_i32(value: Option<&Value>) -> i32 {
     parse_nullable_i32(value).unwrap_or_default()
 }

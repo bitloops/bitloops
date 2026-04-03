@@ -2,8 +2,10 @@ use super::*;
 use crate::cli::{Cli, Commands};
 use crate::daemon::{
     DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
-    EnrichmentQueueStatus, ServiceManagerKind,
+    EnrichmentQueueStatus, ServiceManagerKind, SyncQueueState, SyncQueueStatus, SyncTaskMode,
+    SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
+use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::io::Cursor;
@@ -501,6 +503,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
             },
             persisted: true,
         }),
+        sync: None,
     };
     let log_path = daemon::daemon_log_file_path();
 
@@ -570,6 +573,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         service_running: false,
         health: None,
         enrichment: None,
+        sync: None,
     };
 
     let lines = status_lines(&report);
@@ -597,6 +601,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         service_running: false,
         health: None,
         enrichment: None,
+        sync: None,
     };
 
     assert_eq!(
@@ -607,6 +612,81 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
             format!("Log file: {}", daemon::daemon_log_file_path().display()),
         ]
     );
+}
+
+#[test]
+fn status_lines_include_sync_queue_and_current_repo_task() {
+    let report = DaemonStatusReport {
+        runtime: None,
+        service: None,
+        service_running: false,
+        health: None,
+        enrichment: None,
+        sync: Some(SyncQueueStatus {
+            state: SyncQueueState {
+                version: 1,
+                pending_tasks: 2,
+                running_tasks: 1,
+                failed_tasks: 3,
+                completed_recent_tasks: 4,
+                last_action: Some("running".to_string()),
+                last_updated_unix: 0,
+            },
+            persisted: true,
+            current_repo_task: Some(SyncTaskRecord {
+                task_id: "sync-task-1".to_string(),
+                repo_id: "repo-1".to_string(),
+                repo_name: "demo".to_string(),
+                repo_provider: "local".to_string(),
+                repo_organisation: "local".to_string(),
+                repo_identity: "local/demo".to_string(),
+                config_root: std::path::PathBuf::from("/tmp/repo"),
+                repo_root: std::path::PathBuf::from("/tmp/repo"),
+                source: SyncTaskSource::ManualCli,
+                mode: SyncTaskMode::Full,
+                status: SyncTaskStatus::Running,
+                submitted_at_unix: 1,
+                started_at_unix: Some(2),
+                updated_at_unix: 3,
+                completed_at_unix: None,
+                queue_position: Some(1),
+                tasks_ahead: Some(0),
+                progress: SyncProgressUpdate {
+                    phase: SyncProgressPhase::ExtractingPaths,
+                    current_path: Some("src/lib.rs".to_string()),
+                    paths_total: 10,
+                    paths_completed: 4,
+                    paths_remaining: 6,
+                    paths_unchanged: 1,
+                    paths_added: 2,
+                    paths_changed: 6,
+                    paths_removed: 1,
+                    cache_hits: 3,
+                    cache_misses: 2,
+                    parse_errors: 0,
+                },
+                error: None,
+                summary: None,
+            }),
+        }),
+    };
+
+    let lines = status_lines(&report);
+    assert!(lines.contains(&"Sync pending tasks: 2".to_string()));
+    assert!(lines.contains(&"Sync running tasks: 1".to_string()));
+    assert!(lines.contains(&"Sync failed tasks: 3".to_string()));
+    assert!(lines.contains(&"Sync completed recent tasks: 4".to_string()));
+    assert!(lines.contains(&"Sync last action: running".to_string()));
+    assert!(lines.contains(
+        &"Current repo sync task: sync-task-1 (running, mode=full, source=manual_cli)".to_string()
+    ));
+    assert!(lines.contains(&"Current repo sync phase: extracting_paths".to_string()));
+    assert!(
+        lines
+            .contains(&"Current repo sync progress: 4/10 paths complete (6 remaining)".to_string())
+    );
+    assert!(lines.contains(&"Current repo sync path: src/lib.rs".to_string()));
+    assert!(lines.contains(&"Sync persisted: yes".to_string()));
 }
 
 #[test]

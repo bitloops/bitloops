@@ -28,6 +28,8 @@ Bootstraps the current project or subproject.
 
 ```bash
 bitloops init
+bitloops init --sync=true
+bitloops init --sync=false
 bitloops init --install-default-daemon
 ```
 
@@ -40,7 +42,12 @@ Notes:
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
 - `init` installs git hooks plus the selected agent hooks.
 - `init` replaces `[agents].supported` with the current selection on rerun.
-- `init` no longer runs the initial baseline sync. The `--skip-baseline` flag is accepted for compatibility only.
+- `init` can queue an initial DevQL current-state sync after hook setup.
+- `--sync=true` queues that sync and follows it to completion.
+- `--sync=false` skips the initial sync explicitly.
+- If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
+- In non-interactive mode, `init` requires `--sync=true` or `--sync=false`.
+- `init` still does not run DevQL ingest. The `--skip-baseline` flag is accepted for compatibility only.
 - Use `--agent <name>` to pin the supported agent set.
 - `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
@@ -173,7 +180,7 @@ bitloops daemon restart
 
 ### `bitloops status`
 
-Shows daemon status, URL, config path, log file path, PID, and supervisor information.
+Shows daemon status, URL, config path, log file path, PID, supervisor information, and sync queue summary.
 
 ```bash
 bitloops status
@@ -194,6 +201,8 @@ Supervisor state: running
 ```
 
 If Bitloops finds legacy repo-local data such as old store directories, `status` also prints a warning that those paths are ignored unless explicitly configured.
+
+When you run `status` inside a repository, it also reports the active or most recent sync task for that repo, including phase and progress when available.
 
 ### `bitloops daemon logs`
 
@@ -281,7 +290,8 @@ DevQL commands now talk to the local daemon over the existing HTTP and GraphQL s
 bitloops devql init
 bitloops devql ingest
 bitloops devql sync
-bitloops devql sync --validate
+bitloops devql sync --status
+bitloops devql sync --validate --status
 bitloops devql projection checkpoint-file-snapshots --dry-run
 ```
 
@@ -290,7 +300,10 @@ Highlights:
 - `devql init` explicitly ensures the configured relational and event schemas exist
 - daemon startup owns the normal schema bootstrap path
 - `devql ingest` performs ingestion only
-- `devql sync` reconciles current-workspace state into the current-state tables
+- `devql sync` queues a sync task and returns immediately by default
+- `devql sync --status` follows the queued task until it completes or fails
+- `devql sync --validate` queues a read-only validation task instead of mutating current-state tables
+- `bitloops status` and `bitloops daemon status` show global sync queue totals and the current repo sync task when you run them inside a repo
 
 ### Query and diagnostics
 

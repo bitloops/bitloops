@@ -129,11 +129,24 @@ async fn sync_changed_paths(
         return Ok(());
     }
 
-    crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
-        .await
-        .context("running DevQL sync for watcher capture paths")?;
+    #[cfg(test)]
+    {
+        crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
+            .await
+            .context("running DevQL sync inline for watcher capture paths in tests")?;
+        Ok(())
+    }
 
-    Ok(())
+    #[cfg(not(test))]
+    {
+        crate::daemon::enqueue_sync_for_config(
+            cfg,
+            crate::daemon::SyncTaskSource::Watcher,
+            crate::host::devql::SyncMode::Paths(paths),
+        )
+        .context("queueing DevQL sync for watcher capture paths")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +342,21 @@ mod tests {
 
         sqlite
             .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+                     VALUES (?1, ?2, ?3, ?4, 'main') \
+                     ON CONFLICT(repo_id) DO UPDATE SET \
+                       provider = excluded.provider, \
+                       organization = excluded.organization, \
+                       name = excluded.name, \
+                       default_branch = excluded.default_branch",
+                    rusqlite::params![
+                        cfg.repo.repo_id.as_str(),
+                        cfg.repo.provider.as_str(),
+                        cfg.repo.organization.as_str(),
+                        cfg.repo.name.as_str(),
+                    ],
+                )?;
                 conn.execute(
                     "INSERT INTO artefacts_current (
                         repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,

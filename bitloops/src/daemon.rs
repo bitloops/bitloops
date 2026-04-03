@@ -48,6 +48,8 @@ mod state_store;
 mod supervisor_api;
 #[path = "daemon/supervisor_client.rs"]
 mod supervisor_client;
+#[path = "daemon/sync.rs"]
+mod sync;
 #[path = "daemon/types.rs"]
 mod types;
 
@@ -59,11 +61,13 @@ pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
+pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
 pub use self::types::{
     DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
     DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
     EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
     ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
+    SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
 
 use self::process::*;
@@ -188,6 +192,34 @@ pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
 
 pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
     EnrichmentCoordinator::shared()
+}
+
+pub fn shared_sync_coordinator() -> Arc<SyncCoordinator> {
+    SyncCoordinator::shared()
+}
+
+pub(crate) fn activate_sync_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
+    SyncCoordinator::shared().activate_worker(Some(subscription_hub));
+}
+
+pub fn sync_status(repo_id: Option<&str>) -> Result<SyncQueueStatus> {
+    SyncCoordinator::shared().snapshot(repo_id)
+}
+
+pub fn sync_task(task_id: &str) -> Result<Option<SyncTaskRecord>> {
+    SyncCoordinator::shared().task(task_id)
+}
+
+pub fn sync_tasks(repo_id: Option<&str>, limit: Option<usize>) -> Result<Vec<SyncTaskRecord>> {
+    SyncCoordinator::shared().tasks(repo_id, limit)
+}
+
+pub fn enqueue_sync_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: SyncTaskSource,
+    mode: crate::host::devql::SyncMode,
+) -> Result<SyncEnqueueResult> {
+    SyncCoordinator::shared().enqueue(cfg, source, mode)
 }
 
 pub async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeState> {

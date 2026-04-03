@@ -48,6 +48,7 @@ pub(crate) struct DevqlGraphqlContext {
     config: Option<DevqlConfig>,
     config_error: Option<String>,
     default_repository: SelectedRepository,
+    allow_default_repository_selection_without_catalog: bool,
     repo_identity: RepoIdentity,
     blob_store: Option<Arc<dyn BlobStore>>,
     blob_backend: String,
@@ -73,6 +74,10 @@ impl fmt::Debug for DevqlGraphqlContext {
             .field("config_ready", &self.config.is_some())
             .field("config_error", &self.config_error)
             .field("default_repository", &self.default_repository)
+            .field(
+                "allow_default_repository_selection_without_catalog",
+                &self.allow_default_repository_selection_without_catalog,
+            )
             .field("repo_identity", &self.repo_identity)
             .field("blob_backend", &self.blob_backend)
             .field("blob_ready", &self.blob_store.is_some())

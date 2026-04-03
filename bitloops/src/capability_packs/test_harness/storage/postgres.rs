@@ -1,7 +1,7 @@
 mod commit_counts;
 mod helpers;
 mod stage_serving;
-#[cfg(test)]
+#[cfg(all(test, feature = "postgres-tests"))]
 mod tests;
 
 use std::collections::{HashMap, HashSet};
