@@ -35,6 +35,24 @@ fn validate_git_blob_oid(blob_sha: &str) -> Result<String, ApiError> {
     Ok(s.to_ascii_lowercase())
 }
 
+/// Classify `git cat-file -t` failures: only map clearly missing/invalid-object stderr to 404.
+fn cat_file_type_error(blob_sha: &str, stderr: &str) -> ApiError {
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("not a git repository") {
+        return ApiError::internal(format!("git cat-file -t failed: {}", stderr.trim()));
+    }
+    // Typical git messages when the oid is absent or not an object name (wording varies by version).
+    const MISSING_OBJECT_HINTS: &[&str] = &[
+        "could not get object info",
+        "not a valid object name",
+        "bad object",
+    ];
+    if MISSING_OBJECT_HINTS.iter().any(|hint| lower.contains(hint)) {
+        return ApiError::not_found(format!("git object not found: {blob_sha}"));
+    }
+    ApiError::internal(format!("git cat-file -t failed: {}", stderr.trim()))
+}
+
 fn git_cat_file_blob_bytes(repo_root: &Path, blob_sha: &str) -> Result<Vec<u8>, ApiError> {
     let mut type_cmd = new_git_command();
     type_cmd
@@ -50,15 +68,7 @@ fn git_cat_file_blob_bytes(repo_root: &Path, blob_sha: &str) -> Result<Vec<u8>, 
 
     if !type_out.status.success() {
         let stderr = String::from_utf8_lossy(&type_out.stderr);
-        if stderr.to_ascii_lowercase().contains("not a git repository") {
-            return Err(ApiError::internal(format!(
-                "git cat-file -t failed: {}",
-                stderr.trim()
-            )));
-        }
-        return Err(ApiError::not_found(format!(
-            "git object not found: {blob_sha}"
-        )));
+        return Err(cat_file_type_error(blob_sha, &stderr));
     }
 
     let kind = String::from_utf8_lossy(&type_out.stdout)
