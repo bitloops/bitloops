@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::{
     Json,
@@ -15,6 +15,7 @@ use super::super::{
 };
 use super::file_diffs::{api_file_diff_list_from_numstat, api_zeroed_file_diff_list};
 use super::params::normalize_checkpoint_id;
+use super::resolve_repo_root_from_repo_id;
 use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_session_content};
 
 #[utoipa::path(
@@ -49,32 +50,6 @@ fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageD
         cache_read_tokens: usage.cache_read_tokens,
         api_call_count: usage.api_call_count,
     })
-}
-
-async fn resolve_repo_root_from_repo_id(
-    state: &DashboardState,
-    repo_id: &str,
-) -> std::result::Result<PathBuf, ApiError> {
-    let repo_id = repo_id.trim();
-    if repo_id.is_empty() {
-        return Err(ApiError::bad_request("repo_id is required"));
-    }
-
-    let context = crate::graphql::DevqlGraphqlContext::for_global_request(
-        state.config_root.clone(),
-        state.repo_root.clone(),
-        state.repo_registry_path().map(std::path::Path::to_path_buf),
-        state.db.clone(),
-    );
-    let repository = context
-        .resolve_repository_selection(repo_id)
-        .await
-        .map_err(|_| ApiError::not_found(format!("repository not found: {repo_id}")))?;
-
-    repository
-        .repo_root()
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("repository checkout unknown for `{repo_id}`")))
 }
 
 async fn load_checkpoint_detail(
