@@ -6,6 +6,7 @@ use serde_json::json;
 use super::content_cache::{CachedArtefact, CachedEdge, CachedExtraction};
 
 pub(crate) const PARSE_STATUS_OK: &str = "ok";
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const PARSE_STATUS_PARSE_ERROR: &str = "parse_error";
 
 struct ExtractionInput<'a> {
@@ -62,6 +63,7 @@ pub(crate) fn extract_to_cache_format(
     )))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_error_to_cache_format(
     content_id: &str,
     language: &str,

@@ -137,7 +137,9 @@ If you want to remove these platform directories again, use `bitloops uninstall`
 
 `bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.
 
-Use DevQL commands separately for schema initialisation, ingestion, and current-state sync.
+Interactive `bitloops init` can also ask whether you want to queue an initial DevQL current-state sync after hook setup. Use `--sync=true` or `--sync=false` when you want to make that choice explicit; non-interactive runs require one of those flags.
+
+Use DevQL commands separately for ingestion and for any later explicit sync or validation runs. `bitloops init` does not perform DevQL ingest.
 
 The thin CLI and hook layer resolve project policy by walking upwards from the current working directory towards the enclosing `.git` root.
 

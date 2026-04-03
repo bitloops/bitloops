@@ -108,9 +108,8 @@ async fn bundle_request_does_not_follow_symlink_outside_bundle() {
     ));
 
     let (status, body) = request_text(app, "/leak.txt").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("safe index"));
-    assert!(!body.contains("secret"));
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, "Bundle asset not found.\n");
 }
 
 #[cfg(unix)]

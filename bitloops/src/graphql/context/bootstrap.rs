@@ -11,6 +11,7 @@ use crate::host::devql::{
 use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
 use anyhow::{Result, bail};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ impl DevqlGraphqlContext {
             None,
             None,
             false,
+            true,
             db,
         )
     }
@@ -43,6 +45,7 @@ impl DevqlGraphqlContext {
             repo_root,
             None,
             None,
+            false,
             false,
             db,
         )
@@ -65,6 +68,7 @@ impl DevqlGraphqlContext {
             branch_override,
             project_scope_override,
             request_scope_present,
+            false,
             db,
         )
     }
@@ -78,6 +82,7 @@ impl DevqlGraphqlContext {
         branch_override: Option<String>,
         project_scope_override: Option<String>,
         request_scope_present: bool,
+        allow_default_repository_selection_without_catalog: bool,
         db: DashboardDbPools,
     ) -> Self {
         let backend_config = resolve_store_backend_config_for_repo(&config_root).ok();
@@ -139,6 +144,7 @@ impl DevqlGraphqlContext {
             config,
             config_error,
             default_repository,
+            allow_default_repository_selection_without_catalog,
             repo_identity,
             blob_store,
             blob_backend,
@@ -214,9 +220,8 @@ impl DevqlGraphqlContext {
 
         let repositories = self.list_known_repositories().await?;
         if repositories.is_empty() {
-            if requested_name == self.default_repository.name()
-                || requested_name == self.default_repository.identity()
-                || requested_name == self.default_repository.repo_id()
+            if self.allow_default_repository_selection_without_catalog
+                && matches_default_repository_selector(&self.default_repository, requested_name)
             {
                 return Ok(self.default_repository.clone());
             }
@@ -254,7 +259,7 @@ impl DevqlGraphqlContext {
         let sql = "SELECT repo_id, provider, organization, name, default_branch FROM repositories ORDER BY name ASC, provider ASC, organization ASC";
         let rows = match self.query_devql_sqlite_rows(sql).await {
             Ok(rows) => rows,
-            Err(err) if is_missing_repositories_table_error(&err) => return Ok(Vec::new()),
+            Err(err) if is_missing_repositories_table_error(&err) => Vec::new(),
             Err(err) => return Err(err),
         };
         let registry = match self.repo_registry_path() {
@@ -262,7 +267,7 @@ impl DevqlGraphqlContext {
             None => Default::default(),
         };
 
-        let mut repositories = Vec::with_capacity(rows.len());
+        let mut repositories = BTreeMap::<String, SelectedRepository>::new();
         for row in rows {
             let repo_id = required_row_string(&row, "repo_id")?;
             let repo_root = registry
@@ -276,17 +281,37 @@ impl DevqlGraphqlContext {
             let provider = required_row_string(&row, "provider")?;
             let organization = required_row_string(&row, "organization")?;
             let name = required_row_string(&row, "name")?;
-            repositories.push(SelectedRepository::new(
-                repo_id,
-                provider.clone(),
-                organization.clone(),
-                name.clone(),
-                format!("{provider}://{organization}/{name}"),
-                optional_row_string(&row, "default_branch"),
-                repo_root,
-            ));
+            repositories.insert(
+                repo_id.clone(),
+                SelectedRepository::new(
+                    repo_id,
+                    provider.clone(),
+                    organization.clone(),
+                    name.clone(),
+                    format!("{provider}://{organization}/{name}"),
+                    optional_row_string(&row, "default_branch"),
+                    repo_root,
+                ),
+            );
         }
-        Ok(repositories)
+
+        for entry in registry.into_values() {
+            repositories
+                .entry(entry.repo_id.clone())
+                .or_insert_with(|| {
+                    SelectedRepository::new(
+                        entry.repo_id,
+                        entry.provider,
+                        entry.organisation,
+                        entry.name,
+                        entry.identity,
+                        entry.last_branch,
+                        Some(entry.repo_root),
+                    )
+                });
+        }
+
+        Ok(repositories.into_values().collect())
     }
 
     fn repository_from_selection(&self, selection: SelectedRepository) -> Repository {
@@ -374,4 +399,13 @@ fn fallback_repo_identity(repo_root: &Path) -> RepoIdentity {
         identity: identity.clone(),
         repo_id: deterministic_uuid(&identity),
     }
+}
+
+fn matches_default_repository_selector(
+    repository: &SelectedRepository,
+    requested_name: &str,
+) -> bool {
+    repository.repo_id() == requested_name
+        || repository.identity() == requested_name
+        || repository.name() == requested_name
 }

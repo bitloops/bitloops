@@ -18,7 +18,7 @@ pub(crate) fn run_devql_post_commit_refresh(
                 .await
                 .context("refreshing DevQL artefacts for post-commit files")?;
 
-        if stats.files_failed > 0 {
+        if stats.completed_with_failures() {
             eprintln!(
                 "[bitloops] Warning: DevQL post-commit artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
                 commit_sha,

@@ -519,6 +519,27 @@ async fn installed_bundle_non_html_assets_are_not_modified() {
 }
 
 #[tokio::test]
+async fn missing_bundle_asset_returns_not_found_instead_of_html() {
+    let repo = seed_dashboard_repo();
+    let bundle = TempDir::new().expect("bundle dir");
+    fs::write(
+        bundle.path().join("index.html"),
+        "<!doctype html><html><body>installed bundle</body></html>",
+    )
+    .expect("write index");
+
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::Bundle(bundle.path().to_path_buf()),
+        bundle.path().to_path_buf(),
+    ));
+
+    let (status, body) = request_text(app, "/assets/missing-chunk.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, "Bundle asset not found.\n");
+}
+
+#[tokio::test]
 async fn api_check_bundle_version_returns_expected_fields() {
     let repo = seed_dashboard_repo();
     let bundle_dir = TempDir::new().expect("bundle dir");

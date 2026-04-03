@@ -36,7 +36,7 @@ fn init_schema_for_backends(
         })?;
         let repository = PostgresTestHarnessRepository::connect(dsn)?;
         repository.initialise_schema()?;
-        println!("Postgres test-harness schema initialized");
+        log::info!("Postgres test-harness schema initialized");
         Ok(())
     } else {
         let sqlite_path = backends

@@ -139,7 +139,7 @@ pub fn init_test_domain_database(db_path: &Path) -> Result<()> {
     conn.execute_batch(schema::sqlite_test_domain_schema_sql())
         .context("failed to create test-harness test-domain schema")?;
 
-    println!(
+    log::info!(
         "test-harness test-domain schema initialized at {}",
         db_path.display()
     );

@@ -143,6 +143,7 @@ fn devql_cli_parses_sync_modes() {
     );
     assert!(!sync.repair);
     assert!(!sync.validate);
+    assert!(!sync.status);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
         .expect("devql sync repair should parse");
@@ -156,6 +157,7 @@ fn devql_cli_parses_sync_modes() {
     assert_eq!(sync.paths, None);
     assert!(sync.repair);
     assert!(!sync.validate);
+    assert!(!sync.status);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
         .expect("devql sync full should parse");
@@ -169,6 +171,7 @@ fn devql_cli_parses_sync_modes() {
     assert_eq!(sync.paths, None);
     assert!(!sync.repair);
     assert!(!sync.validate);
+    assert!(!sync.status);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
         .expect("devql sync validate should parse");
@@ -182,6 +185,20 @@ fn devql_cli_parses_sync_modes() {
     assert_eq!(sync.paths, None);
     assert!(!sync.repair);
     assert!(sync.validate);
+    assert!(!sync.status);
+}
+
+#[test]
+fn devql_cli_parses_sync_status_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--status"])
+        .expect("devql sync --status should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(sync.status);
 }
 
 #[test]
@@ -824,22 +841,37 @@ fn devql_run_sync_executes_graphql_mutation() {
                           variables: &serde_json::Value| {
                         *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                         Ok(json!({
-                            "sync": {
-                                "success": true,
-                                "mode": "full",
-                                "parserVersion": "parser@1",
-                                "extractorVersion": "extractor@1",
-                                "activeBranch": "main",
-                                "headCommitSha": "abc123",
-                                "headTreeSha": "def456",
-                                "pathsUnchanged": 4,
-                                "pathsAdded": 1,
-                                "pathsChanged": 2,
-                                "pathsRemoved": 0,
-                                "cacheHits": 3,
-                                "cacheMisses": 1,
-                                "parseErrors": 0,
-                                "validation": null
+                            "enqueueSync": {
+                                "merged": false,
+                                "task": {
+                                    "taskId": "sync-task-1",
+                                    "repoId": "repo-1",
+                                    "repoName": "demo",
+                                    "repoIdentity": "local/demo",
+                                    "source": "manual_cli",
+                                    "mode": "full",
+                                    "status": "queued",
+                                    "phase": "queued",
+                                    "submittedAtUnix": 1,
+                                    "startedAtUnix": null,
+                                    "updatedAtUnix": 1,
+                                    "completedAtUnix": null,
+                                    "queuePosition": 1,
+                                    "tasksAhead": 0,
+                                    "currentPath": null,
+                                    "pathsTotal": 0,
+                                    "pathsCompleted": 0,
+                                    "pathsRemaining": 0,
+                                    "pathsUnchanged": 0,
+                                    "pathsAdded": 0,
+                                    "pathsChanged": 0,
+                                    "pathsRemoved": 0,
+                                    "cacheHits": 0,
+                                    "cacheMisses": 0,
+                                    "parseErrors": 0,
+                                    "error": null,
+                                    "summary": null
+                                }
                             }
                         }))
                     }
@@ -852,6 +884,7 @@ fn devql_run_sync_executes_graphql_mutation() {
                                 paths: None,
                                 repair: false,
                                 validate: false,
+                                status: false,
                             })),
                         }))
                         .expect("devql sync should succeed");
@@ -864,7 +897,10 @@ fn devql_run_sync_executes_graphql_mutation() {
         .borrow_mut()
         .take()
         .expect("graphql mutation should be captured");
-    assert!(query.contains("sync"), "expected sync mutation in query");
+    assert!(
+        query.contains("enqueueSync"),
+        "expected enqueueSync mutation in query"
+    );
     assert_eq!(variables["input"]["full"], json!(true));
 }
 
@@ -885,22 +921,37 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
                           variables: &serde_json::Value| {
                         *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                         Ok(json!({
-                            "sync": {
-                                "success": true,
-                                "mode": "paths",
-                                "parserVersion": "parser@1",
-                                "extractorVersion": "extractor@1",
-                                "activeBranch": "main",
-                                "headCommitSha": "abc123",
-                                "headTreeSha": "def456",
-                                "pathsUnchanged": 0,
-                                "pathsAdded": 0,
-                                "pathsChanged": 1,
-                                "pathsRemoved": 0,
-                                "cacheHits": 0,
-                                "cacheMisses": 1,
-                                "parseErrors": 0,
-                                "validation": null
+                            "enqueueSync": {
+                                "merged": false,
+                                "task": {
+                                    "taskId": "sync-task-2",
+                                    "repoId": "repo-1",
+                                    "repoName": "demo",
+                                    "repoIdentity": "local/demo",
+                                    "source": "manual_cli",
+                                    "mode": "paths",
+                                    "status": "queued",
+                                    "phase": "queued",
+                                    "submittedAtUnix": 1,
+                                    "startedAtUnix": null,
+                                    "updatedAtUnix": 1,
+                                    "completedAtUnix": null,
+                                    "queuePosition": 1,
+                                    "tasksAhead": 0,
+                                    "currentPath": null,
+                                    "pathsTotal": 0,
+                                    "pathsCompleted": 0,
+                                    "pathsRemaining": 0,
+                                    "pathsUnchanged": 0,
+                                    "pathsAdded": 0,
+                                    "pathsChanged": 0,
+                                    "pathsRemoved": 0,
+                                    "cacheHits": 0,
+                                    "cacheMisses": 0,
+                                    "parseErrors": 0,
+                                    "error": null,
+                                    "summary": null
+                                }
                             }
                         }))
                     }
@@ -916,6 +967,7 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
                                 ]),
                                 repair: false,
                                 validate: false,
+                                status: false,
                             })),
                         }))
                         .expect("devql sync with paths should succeed");
@@ -952,22 +1004,37 @@ fn devql_run_sync_ensures_daemon_available() {
             with_graphql_executor_hook(
                 |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
                     Ok(json!({
-                        "sync": {
-                            "success": true,
-                            "mode": "full",
-                            "parserVersion": "p@1",
-                            "extractorVersion": "e@1",
-                            "activeBranch": null,
-                            "headCommitSha": null,
-                            "headTreeSha": null,
-                            "pathsUnchanged": 0,
-                            "pathsAdded": 0,
-                            "pathsChanged": 0,
-                            "pathsRemoved": 0,
-                            "cacheHits": 0,
-                            "cacheMisses": 0,
-                            "parseErrors": 0,
-                            "validation": null
+                        "enqueueSync": {
+                            "merged": false,
+                            "task": {
+                                "taskId": "sync-task-3",
+                                "repoId": "repo-1",
+                                "repoName": "demo",
+                                "repoIdentity": "local/demo",
+                                "source": "manual_cli",
+                                "mode": "auto",
+                                "status": "queued",
+                                "phase": "queued",
+                                "submittedAtUnix": 1,
+                                "startedAtUnix": null,
+                                "updatedAtUnix": 1,
+                                "completedAtUnix": null,
+                                "queuePosition": 1,
+                                "tasksAhead": 0,
+                                "currentPath": null,
+                                "pathsTotal": 0,
+                                "pathsCompleted": 0,
+                                "pathsRemaining": 0,
+                                "pathsUnchanged": 0,
+                                "pathsAdded": 0,
+                                "pathsChanged": 0,
+                                "pathsRemoved": 0,
+                                "cacheHits": 0,
+                                "cacheMisses": 0,
+                                "parseErrors": 0,
+                                "error": null,
+                                "summary": null
+                            }
                         }
                     }))
                 },
@@ -979,6 +1046,7 @@ fn devql_run_sync_ensures_daemon_available() {
                                 paths: None,
                                 repair: false,
                                 validate: false,
+                                status: false,
                             })),
                         }))
                         .expect("devql sync should succeed");
