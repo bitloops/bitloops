@@ -6,7 +6,7 @@ use super::handlers::{
 };
 use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
-    has_bundle_index, resolve_bundle_file,
+    has_bundle_index, resolve_bundle_file, request_path_looks_like_asset,
 };
 use crate::graphql::{
     global_graphql_handler, global_graphql_playground_handler, global_graphql_sdl_handler,
@@ -250,6 +250,7 @@ async fn serve_dashboard_request(
             "text/plain; charset=utf-8",
             b"method not allowed\n".to_vec(),
             false,
+            None,
         );
     }
 
@@ -270,6 +271,7 @@ async fn serve_dashboard_request(
             "text/html; charset=utf-8",
             DASHBOARD_FALLBACK_INSTALL_HTML.as_bytes().to_vec(),
             is_head,
+            Some("no-store"),
         ),
         ServeMode::Bundle(bundle_dir) => {
             serve_bundle_request(&bundle_dir, request_path, is_head).await
@@ -288,6 +290,7 @@ async fn serve_bundle_request(
             "text/plain; charset=utf-8",
             b"Bundle not found.\n".to_vec(),
             is_head,
+            None,
         );
     };
 
@@ -296,13 +299,34 @@ async fn serve_bundle_request(
     {
         let content_type = content_type_for_path(&file_path);
         let body = maybe_inject_update_prompt(content_type, bytes);
-        return response_with_bytes(StatusCode::OK, content_type, body, is_head);
+        let cache_control = if content_type.starts_with("text/html") {
+            Some("no-store")
+        } else {
+            None
+        };
+        return response_with_bytes(StatusCode::OK, content_type, body, is_head, cache_control);
+    }
+
+    if request_path_looks_like_asset(request_path) {
+        return response_with_bytes(
+            StatusCode::NOT_FOUND,
+            "text/plain; charset=utf-8",
+            b"Bundle asset not found.\n".to_vec(),
+            is_head,
+            None,
+        );
     }
 
     let index_path = bundle_dir.join("index.html");
     if let Some(bytes) = read_bundle_file_within_dir(&canonical_bundle_dir, &index_path).await {
         let body = maybe_inject_update_prompt("text/html; charset=utf-8", bytes);
-        return response_with_bytes(StatusCode::OK, "text/html; charset=utf-8", body, is_head);
+        return response_with_bytes(
+            StatusCode::OK,
+            "text/html; charset=utf-8",
+            body,
+            is_head,
+            Some("no-store"),
+        );
     }
 
     response_with_bytes(
@@ -310,6 +334,7 @@ async fn serve_bundle_request(
         "text/plain; charset=utf-8",
         b"Bundle not found.\n".to_vec(),
         is_head,
+        None,
     )
 }
 
@@ -357,6 +382,7 @@ fn response_with_bytes(
     content_type: &'static str,
     body: Vec<u8>,
     is_head: bool,
+    cache_control: Option<&'static str>,
 ) -> Response {
     let mut response = if is_head {
         Response::new(Body::empty())
@@ -367,5 +393,10 @@ fn response_with_bytes(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Some(cache_control) = cache_control {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
+    }
     response
 }
