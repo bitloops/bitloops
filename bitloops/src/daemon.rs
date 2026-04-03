@@ -93,16 +93,8 @@ pub fn current_binary_fingerprint() -> Result<String> {
     process::current_binary_fingerprint()
 }
 
-pub fn repo_runtime_state(repo_root: &Path) -> Result<Option<DaemonRuntimeState>> {
-    state_store::read_runtime_state(repo_root)
-}
-
-pub fn repo_service_metadata(repo_root: &Path) -> Result<Option<DaemonServiceMetadata>> {
-    state_store::read_service_metadata(repo_root)
-}
-
 pub fn require_current_repo_runtime(repo_root: &Path, operation: &str) -> Result<DaemonRuntimeState> {
-    let runtime = repo_runtime_state(repo_root)?.ok_or_else(|| {
+    let runtime = state_store::read_runtime_state(repo_root)?.ok_or_else(|| {
         anyhow::anyhow!(
             "Bitloops daemon is not running for this repository. Run `bitloops init` or `bitloops daemon restart` before {operation}."
         )

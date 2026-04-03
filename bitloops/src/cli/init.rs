@@ -134,13 +134,6 @@ async fn run_with_io_async(
         args.force,
         out,
     )?;
-    ensure_repo_daemon_current(&project_root).await?;
-    if crate::host::devql::watch::watcher_pid_file(&project_root).exists() {
-        crate::host::devql::watch::restart_watcher(&git_root, &project_root)
-            .context("restarting DevQL watcher after `bitloops init`")?;
-    }
-    telemetry_consent::bootstrap_project_via_daemon(project_root.as_path(), args.skip_baseline)
-        .await?;
     Ok(())
 }
 
@@ -165,55 +158,6 @@ async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()
         bundle_dir: None,
     };
     let _ = crate::daemon::start_service(&daemon_config, config, None).await?;
-    Ok(())
-}
-
-async fn ensure_repo_daemon_current(project_root: &Path) -> Result<()> {
-    #[cfg(test)]
-    if std::env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
-    {
-        return Ok(());
-    }
-
-    let daemon_config = crate::daemon::resolve_daemon_config(None)?;
-    let server_config = crate::api::DashboardServerConfig {
-        host: None,
-        port: crate::api::DEFAULT_DASHBOARD_PORT,
-        no_open: true,
-        force_http: false,
-        recheck_local_dashboard_net: false,
-        bundle_dir: None,
-    };
-
-    match crate::daemon::repo_runtime_state(project_root)? {
-        Some(runtime) => {
-            let current = crate::daemon::current_binary_fingerprint().unwrap_or_default();
-            let is_stale = !runtime.binary_fingerprint.is_empty()
-                && !current.is_empty()
-                && runtime.binary_fingerprint != current;
-            if !is_stale {
-                let _ = crate::daemon::wait_until_ready(std::time::Duration::from_secs(20)).await?;
-                return Ok(());
-            }
-            if matches!(runtime.mode, crate::daemon::DaemonMode::Foreground) {
-                bail!(
-                    "Bitloops daemon is running in foreground with an older CLI binary. Restart it manually and rerun `bitloops init`."
-                );
-            }
-            let _ = crate::daemon::restart(Some(&daemon_config)).await?;
-        }
-        None => {
-            if crate::daemon::repo_service_metadata(project_root)?.is_some() {
-                let _ = crate::daemon::start_service(&daemon_config, server_config, None).await?;
-            } else {
-                let _ = crate::daemon::start_detached(&daemon_config, server_config, None).await?;
-            }
-        }
-    }
-
-    let _ = crate::daemon::wait_until_ready(std::time::Duration::from_secs(20)).await?;
     Ok(())
 }
 

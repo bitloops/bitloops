@@ -21,6 +21,35 @@ fn setup_git_repo(dir: &TempDir) {
         .expect("git init");
 }
 
+fn write_current_daemon_runtime_state(config_root: &std::path::Path) {
+    let runtime_path = crate::daemon::runtime_state_path(config_root);
+    if let Some(parent) = runtime_path.parent() {
+        std::fs::create_dir_all(parent).expect("create runtime parent");
+    }
+    let config_path = config_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let runtime_state = crate::daemon::DaemonRuntimeState {
+        version: 1,
+        config_path,
+        config_root: config_root.to_path_buf(),
+        pid: std::process::id(),
+        mode: crate::daemon::DaemonMode::Detached,
+        service_name: None,
+        url: "http://127.0.0.1:5667".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 5667,
+        bundle_dir: config_root.join("bundle"),
+        relational_db_path: config_root.join("relational.db"),
+        events_db_path: config_root.join("events.duckdb"),
+        blob_store_path: config_root.join("blob"),
+        repo_registry_path: config_root.join("repo-registry.json"),
+        binary_fingerprint: crate::daemon::current_binary_fingerprint().unwrap_or_default(),
+        updated_at_unix: 0,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&runtime_state).expect("serialize runtime state");
+    bytes.push(b'\n');
+    std::fs::write(&runtime_path, bytes).expect("write runtime state");
+}
+
 fn app_dir_env(temp: &TempDir) -> [(&'static str, Option<String>); 4] {
     [
         (
@@ -547,6 +576,59 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
 
                     let rendered = String::from_utf8(out).expect("utf8 output");
                     assert!(!rendered.contains("Help us improve Bitloops"));
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn run_init_does_not_trigger_project_bootstrap_mutation() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_TTY", Some("0"))],
+        || {
+            ensure_daemon_config_exists().expect("create default daemon config");
+            write_current_daemon_runtime_state(repo.path());
+
+            with_global_graphql_executor_hook(
+                |_runtime_root, query, variables| {
+                    if query.contains("bootstrapProject") {
+                        anyhow::bail!("init should not invoke bootstrapProject");
+                    }
+                    assert!(query.contains("updateCliTelemetryConsent"));
+                    assert_eq!(variables["telemetry"], serde_json::json!(false));
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": false,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: Some(false),
+                                no_telemetry: false,
+                                skip_baseline: false,
+                            },
+                            &mut out,
+                            &mut input,
+                            None,
+                        ))
+                        .expect("run init");
                 },
             );
         },

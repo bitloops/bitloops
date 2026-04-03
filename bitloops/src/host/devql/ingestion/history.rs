@@ -11,7 +11,6 @@ const HISTORICAL_BRANCH_WATERMARK_PREFIX: &str = "historical_ingest.branch.";
 pub(super) struct CommitIngestLedgerEntry {
     pub(super) history_status: String,
     pub(super) checkpoint_status: String,
-    pub(super) checkpoint_id: Option<String>,
 }
 
 pub(super) fn historical_branch_watermark_key(branch: &str) -> String {
@@ -73,7 +72,7 @@ pub(super) async fn load_commit_ingest_ledger_entry(
     commit_sha: &str,
 ) -> Result<Option<CommitIngestLedgerEntry>> {
     let sql = format!(
-        "SELECT history_status, checkpoint_status, checkpoint_id \
+        "SELECT history_status, checkpoint_status \
          FROM commit_ingest_ledger \
          WHERE repo_id = '{}' AND commit_sha = '{}' \
          LIMIT 1",
@@ -92,10 +91,6 @@ pub(super) async fn load_commit_ingest_ledger_entry(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        checkpoint_id: row
-            .get("checkpoint_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
     }))
 }
 
@@ -226,7 +221,6 @@ async fn load_fully_ingested_commits(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            checkpoint_id: None,
         };
         if commit_is_fully_ingested(&entry) {
             out.insert(commit_sha.to_string());
