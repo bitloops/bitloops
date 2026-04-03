@@ -36,7 +36,7 @@ pub(super) fn build_relational_deps_query(
         None
     };
     let artefacts_table = if use_historical_tables {
-        "artefacts"
+        "artefacts_historical"
     } else {
         "artefacts_current"
     };
@@ -64,9 +64,21 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
                 .to_string()
         }
     };
-    let edge_to_target_join_scope = " AND at.repo_id = e.repo_id".to_string();
-    let edge_to_from_join_scope = " AND af.repo_id = e.repo_id".to_string();
-    let edge_to_source_alias_scope = " AND a.repo_id = e.repo_id".to_string();
+    let edge_to_target_join_scope = if use_historical_tables {
+        " AND at.repo_id = e.repo_id".to_string()
+    } else {
+        " AND at.repo_id = e.repo_id".to_string()
+    };
+    let edge_to_from_join_scope = if use_historical_tables {
+        " AND af.repo_id = e.repo_id AND af.blob_sha = e.blob_sha".to_string()
+    } else {
+        " AND af.repo_id = e.repo_id".to_string()
+    };
+    let edge_to_source_alias_scope = if use_historical_tables {
+        " AND a.repo_id = e.repo_id AND a.blob_sha = e.blob_sha".to_string()
+    } else {
+        " AND a.repo_id = e.repo_id".to_string()
+    };
 
     let sql = if parsed.deps.direction == DepsDirection::In {
         let target_filters = build_deps_source_filters(

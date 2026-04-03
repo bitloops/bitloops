@@ -409,7 +409,7 @@ fn build_semantic_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -
 COALESCE(canonical_kind, COALESCE(language_kind, 'symbol')) AS canonical_kind, \
 COALESCE(language_kind, COALESCE(canonical_kind, 'symbol')) AS language_kind, \
 COALESCE(symbol_fqn, path) AS symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
-FROM artefacts \
+FROM artefacts_historical \
 WHERE repo_id = '{repo_id}' AND blob_sha = '{blob_sha}' AND path = '{path}' \
 ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
         repo_id = esc_pg(repo_id),
@@ -423,7 +423,7 @@ fn build_semantic_get_dependencies_sql(repo_id: &str, blob_sha: &str, path: &str
         "SELECT e.from_artefact_id, LOWER(e.edge_kind) AS edge_kind, \
 COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_artefact_id, '') AS target_ref \
 FROM artefact_edges e \
-JOIN artefacts source ON source.repo_id = e.repo_id AND source.artefact_id = e.from_artefact_id \
+JOIN artefacts_historical source ON source.repo_id = e.repo_id AND source.artefact_id = e.from_artefact_id AND source.blob_sha = e.blob_sha \
 LEFT JOIN artefacts target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
 WHERE e.repo_id = '{repo_id}' AND e.blob_sha = '{blob_sha}' AND source.path = '{path}' \
 ORDER BY e.from_artefact_id, e.edge_kind, target_ref",

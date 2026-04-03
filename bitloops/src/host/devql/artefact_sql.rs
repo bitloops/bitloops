@@ -203,7 +203,7 @@ fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
 
 fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
     if use_historical_tables {
-        "artefacts"
+        "artefacts_historical"
     } else {
         "artefacts_current"
     }

@@ -40,6 +40,17 @@ pub(super) struct PersistedArtefactRecord {
 }
 
 #[derive(Debug, Clone)]
+pub(super) struct HistoricalArtefactSnapshotRecord {
+    pub(super) artefact_id: String,
+    pub(super) path: String,
+    pub(super) parent_artefact_id: Option<String>,
+    pub(super) start_line: i32,
+    pub(super) end_line: i32,
+    pub(super) start_byte: i32,
+    pub(super) end_byte: i32,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct PersistedEdgeRecord {
     pub(super) edge_id: String,
     pub(super) from_symbol_id: String,

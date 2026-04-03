@@ -385,6 +385,74 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
 }
 
 #[tokio::test]
+async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_breaking_commit_queries(
+) {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(repo.path().join("src/lib.rs"), "pub fn stable() -> i32 { 1 }\n")
+        .expect("write first revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add stable"]);
+    let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "// comment that changes the file blob only\npub fn stable() -> i32 { 1 }\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add comment"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history symbol content dedupe test")
+        .await
+        .expect("initialise local devql store for symbol content dedupe test");
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest for symbol content dedupe test");
+    assert!(summary.success, "ingest should succeed");
+    assert_eq!(summary.commits_processed, 3);
+
+    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let stable_row_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts
+             WHERE repo_id = ?1 AND path = 'src/lib.rs' AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count stable historical artefacts");
+    assert_eq!(
+        stable_row_count, 1,
+        "historical ingest should reuse the same symbol artefact row when the symbol content hash is unchanged"
+    );
+
+    let first_rows = execute_query_json_for_repo_root(
+        repo.path(),
+        &format!(r#"asOf(commit:"{first_sha}")->file("src/lib.rs")->artefacts(kind:"function")->limit(10)"#),
+    )
+    .await
+    .expect("query first commit artefacts");
+    let head_rows = execute_query_json_for_repo_root(
+        repo.path(),
+        &format!(r#"asOf(commit:"{head_sha}")->file("src/lib.rs")->artefacts(kind:"function")->limit(10)"#),
+    )
+    .await
+    .expect("query head commit artefacts");
+
+    let first_rows = first_rows.as_array().expect("first query should return rows");
+    let head_rows = head_rows.as_array().expect("head query should return rows");
+    assert_eq!(first_rows.len(), 1);
+    assert_eq!(head_rows.len(), 1);
+    assert_eq!(first_rows[0]["symbol_fqn"], Value::String("src/lib.rs::stable".to_string()));
+    assert_eq!(head_rows[0]["symbol_fqn"], Value::String("src/lib.rs::stable".to_string()));
+    assert_eq!(first_rows[0]["start_line"], Value::from(1));
+    assert_eq!(head_rows[0]["start_line"], Value::from(2));
+}
+
+#[tokio::test]
 async fn execute_ingest_hidden_max_commits_cap_limits_commit_replay_without_public_api_changes() {
     use rusqlite::OptionalExtension;
 

@@ -94,6 +94,21 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
     );
 
     relational.exec(&sql).await?;
+    relational
+        .exec(&build_upsert_historical_artefact_snapshot_sql(
+            repo_id,
+            blob_sha,
+            &HistoricalArtefactSnapshotRecord {
+                artefact_id: artefact_id.clone(),
+                path: path.to_string(),
+                parent_artefact_id: None,
+                start_line: 1,
+                end_line: line_count,
+                start_byte: 0,
+                end_byte: byte_count,
+            },
+        ))
+        .await?;
     Ok(FileArtefactRow {
         artefact_id,
         symbol_id,
@@ -126,6 +141,37 @@ pub(super) fn build_file_current_record(
         docstring,
         content_hash: blob_sha.to_string(),
     }
+}
+
+pub(super) fn build_upsert_historical_artefact_snapshot_sql(
+    repo_id: &str,
+    blob_sha: &str,
+    snapshot: &HistoricalArtefactSnapshotRecord,
+) -> String {
+    let parent_artefact_sql = sql_nullable_text(snapshot.parent_artefact_id.as_deref());
+    format!(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id, start_line, end_line, start_byte, end_byte
+         ) VALUES (
+            '{repo_id}', '{blob_sha}', '{path}', '{artefact_id}', {parent_artefact_id}, {start_line}, {end_line}, {start_byte}, {end_byte}
+         )
+         ON CONFLICT (repo_id, blob_sha, artefact_id) DO UPDATE SET
+            path = EXCLUDED.path,
+            parent_artefact_id = EXCLUDED.parent_artefact_id,
+            start_line = EXCLUDED.start_line,
+            end_line = EXCLUDED.end_line,
+            start_byte = EXCLUDED.start_byte,
+            end_byte = EXCLUDED.end_byte",
+        repo_id = esc_pg(repo_id),
+        blob_sha = esc_pg(blob_sha),
+        path = esc_pg(&snapshot.path),
+        artefact_id = esc_pg(&snapshot.artefact_id),
+        parent_artefact_id = parent_artefact_sql,
+        start_line = snapshot.start_line,
+        end_line = snapshot.end_line,
+        start_byte = snapshot.start_byte,
+        end_byte = snapshot.end_byte,
+    )
 }
 
 #[cfg(test)]

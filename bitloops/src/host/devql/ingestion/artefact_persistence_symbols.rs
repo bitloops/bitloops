@@ -30,7 +30,7 @@ pub(super) fn symbol_content_hash(item: &LanguageArtefact, content: &str) -> Str
 pub(super) fn build_symbol_records(
     cfg: &DevqlConfig,
     path: &str,
-    blob_sha: &str,
+    _blob_sha: &str,
     file_artefact: &FileArtefactRow,
     items: &[LanguageArtefact],
     content: &str,
@@ -48,8 +48,9 @@ pub(super) fn build_symbol_records(
             .and_then(|fqn| symbol_to_symbol_id.get(fqn))
             .map(String::as_str);
         let symbol_id = structural_symbol_id_for_artefact(item, semantic_parent_symbol_id);
-        let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
         let content_hash = symbol_content_hash(item, content);
+        let artefact_id =
+            historical_symbol_artefact_id(&cfg.repo.repo_id, &symbol_id, &content_hash);
         let parent_symbol_id = item
             .parent_symbol_fqn
             .as_ref()
