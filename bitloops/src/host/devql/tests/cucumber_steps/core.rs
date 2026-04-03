@@ -833,6 +833,7 @@ fn insert_pre_stage_artefact(
     current: bool,
 ) -> Result<()> {
     if current {
+        ensure_test_repository_catalog_row(conn, row.repo_id.as_str())?;
         conn.execute(
             "INSERT INTO artefacts_current (
                 repo_id, path, content_id, symbol_id, artefact_id, language,
@@ -903,6 +904,7 @@ fn insert_real_clone_edges(
     symbol: &RealCloneFixtureSymbol,
     path: &str,
 ) -> Result<()> {
+    ensure_test_repository_catalog_row(conn, repo_id)?;
     for (edge_offset, target_ref) in symbol.call_targets.iter().enumerate() {
         let edge_id = format!("edge-call-{}-{edge_offset}", symbol.symbol_id);
         conn.execute(
@@ -1335,6 +1337,7 @@ fn replace_incremental_snapshot(
     repo_id: &str,
     symbols: &[IncrementalFixtureSymbol],
 ) -> Result<()> {
+    ensure_test_repository_catalog_row(conn, repo_id)?;
     for symbol in symbols {
         conn.execute(
             "DELETE FROM artefact_edges_current WHERE repo_id = ?1 AND from_symbol_id = ?2",
@@ -3471,6 +3474,7 @@ fn seed_target_production_artefact(
     world: &DevqlBddWorld,
     artefact_name: &str,
 ) -> anyhow::Result<SeededArtefact> {
+    ensure_test_repository_catalog_row(conn, repo_id)?;
     for (path, source) in &world.production_sources {
         let artefacts = extract_rust_artefacts(source, path).context("extract rust artefacts")?;
         if artefacts
@@ -3550,6 +3554,26 @@ fn seed_target_production_artefact(
     }
 
     anyhow::bail!("target production artefact `{artefact_name}` not found in fixture sources")
+}
+
+fn ensure_test_repository_catalog_row(conn: &rusqlite::Connection, repo_id: &str) -> Result<()> {
+    let repo_name = repo_id
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("temp2");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+         VALUES (?1, 'github', 'bitloops', ?2, 'main') \
+         ON CONFLICT(repo_id) DO UPDATE SET \
+           provider = excluded.provider, \
+           organization = excluded.organization, \
+           name = excluded.name, \
+           default_branch = excluded.default_branch",
+        rusqlite::params![repo_id, repo_name],
+    )
+    .context("ensure test repository catalog row")?;
+    Ok(())
 }
 
 async fn execute_registered_stage_query(

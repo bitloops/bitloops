@@ -23,7 +23,7 @@ pub(super) fn insert_artefact_sql(
     let docstring_sql = nullable_text_sql(artefact.docstring.as_deref());
 
     format!(
-        "INSERT INTO artefacts_current (repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at) \\
+        "INSERT INTO artefacts_current (repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at) \
 VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
         crate::host::devql::esc_pg(repo_id),
         crate::host::devql::esc_pg(path),
@@ -63,7 +63,7 @@ pub(super) fn insert_edge_sql(
     let metadata_sql = crate::host::devql::sql_json_value(relational, &edge.metadata);
 
     format!(
-        "INSERT INTO artefact_edges_current (repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \\
+        "INSERT INTO artefact_edges_current (repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
 VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, {})",
         crate::host::devql::esc_pg(repo_id),
         crate::host::devql::esc_pg(&edge.edge_id),
@@ -94,8 +94,8 @@ pub(super) fn upsert_current_file_state_sql(
     let index_content_id_sql = nullable_text_sql(desired.index_content_id.as_deref());
     let worktree_content_id_sql = nullable_text_sql(desired.worktree_content_id.as_deref());
     format!(
-        "INSERT INTO current_file_state (repo_id, path, language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \\
-VALUES ('{}', '{}', '{}', {}, {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, {}) \\
+        "INSERT INTO current_file_state (repo_id, path, language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
+VALUES ('{}', '{}', '{}', {}, {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, {}) \
 ON CONFLICT (repo_id, path) DO UPDATE SET language = EXCLUDED.language, head_content_id = EXCLUDED.head_content_id, index_content_id = EXCLUDED.index_content_id, worktree_content_id = EXCLUDED.worktree_content_id, effective_content_id = EXCLUDED.effective_content_id, effective_source = EXCLUDED.effective_source, parser_version = EXCLUDED.parser_version, extractor_version = EXCLUDED.extractor_version, exists_in_head = EXCLUDED.exists_in_head, exists_in_index = EXCLUDED.exists_in_index, exists_in_worktree = EXCLUDED.exists_in_worktree, last_synced_at = EXCLUDED.last_synced_at",
         crate::host::devql::esc_pg(repo_id),
         crate::host::devql::esc_pg(&desired.path),

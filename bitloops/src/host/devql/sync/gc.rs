@@ -299,6 +299,22 @@ mod tests {
         repo_id: &str,
         content_id: &str,
     ) {
+        let repo_name = repo_id.replace('/', "-");
+        let repo_sql = format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+VALUES ('{}', 'test', 'test', '{}', 'main') \
+ON CONFLICT (repo_id) DO UPDATE SET \
+  provider = excluded.provider, \
+  organization = excluded.organization, \
+  name = excluded.name, \
+  default_branch = excluded.default_branch",
+            esc_pg(repo_id),
+            esc_pg(&repo_name),
+        );
+        relational
+            .exec(&repo_sql)
+            .await
+            .expect("insert repositories row");
         let sql = format!(
             "INSERT INTO current_file_state (repo_id, path, language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
 VALUES ('{}', 'src/a.rs', 'rust', NULL, NULL, NULL, '{}', '{}', 'parser-v1', 'extractor-v1', 0, 0, 0, '2026-03-01T00:00:00Z')",

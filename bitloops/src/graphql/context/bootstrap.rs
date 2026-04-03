@@ -27,6 +27,7 @@ impl DevqlGraphqlContext {
             None,
             None,
             false,
+            true,
             db,
         )
     }
@@ -44,6 +45,7 @@ impl DevqlGraphqlContext {
             repo_root,
             None,
             None,
+            false,
             false,
             db,
         )
@@ -66,6 +68,7 @@ impl DevqlGraphqlContext {
             branch_override,
             project_scope_override,
             request_scope_present,
+            false,
             db,
         )
     }
@@ -79,10 +82,10 @@ impl DevqlGraphqlContext {
         branch_override: Option<String>,
         project_scope_override: Option<String>,
         request_scope_present: bool,
+        allow_default_repository_selection_without_catalog: bool,
         db: DashboardDbPools,
     ) -> Self {
         let backend_config = resolve_store_backend_config_for_repo(&config_root).ok();
-        let default_repository_catalog_fallback = looks_like_checkout(repo_root.as_path());
         let repo_identity = resolve_repo_identity(&repo_root)
             .unwrap_or_else(|_| fallback_repo_identity(repo_root.as_path()));
         let default_repository = SelectedRepository::new(
@@ -141,7 +144,7 @@ impl DevqlGraphqlContext {
             config,
             config_error,
             default_repository,
-            default_repository_catalog_fallback,
+            allow_default_repository_selection_without_catalog,
             repo_identity,
             blob_store,
             blob_backend,
@@ -217,6 +220,11 @@ impl DevqlGraphqlContext {
 
         let repositories = self.list_known_repositories().await?;
         if repositories.is_empty() {
+            if self.allow_default_repository_selection_without_catalog
+                && matches_default_repository_selector(&self.default_repository, requested_name)
+            {
+                return Ok(self.default_repository.clone());
+            }
             bail!("unknown repository `{requested_name}`");
         }
 
@@ -303,12 +311,6 @@ impl DevqlGraphqlContext {
                 });
         }
 
-        if self.default_repository_catalog_fallback {
-            repositories
-                .entry(self.default_repository.repo_id().to_string())
-                .or_insert_with(|| self.default_repository.clone());
-        }
-
         Ok(repositories.into_values().collect())
     }
 
@@ -361,11 +363,6 @@ fn is_missing_repositories_table_error(err: &anyhow::Error) -> bool {
         || message.contains("relation \"repositories\" does not exist")
 }
 
-fn looks_like_checkout(path: &Path) -> bool {
-    let git_dir = path.join(".git");
-    git_dir.is_dir() || git_dir.is_file()
-}
-
 fn map_backend_health(backend: &str, health: BackendHealth) -> HealthBackendStatus {
     HealthBackendStatus::new(
         health.kind == BackendHealthKind::Ok,
@@ -402,4 +399,13 @@ fn fallback_repo_identity(repo_root: &Path) -> RepoIdentity {
         identity: identity.clone(),
         repo_id: deterministic_uuid(&identity),
     }
+}
+
+fn matches_default_repository_selector(
+    repository: &SelectedRepository,
+    requested_name: &str,
+) -> bool {
+    repository.repo_id() == requested_name
+        || repository.identity() == requested_name
+        || repository.name() == requested_name
 }

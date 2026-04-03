@@ -343,6 +343,21 @@ mod tests {
         sqlite
             .with_connection(|conn| {
                 conn.execute(
+                    "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+                     VALUES (?1, ?2, ?3, ?4, 'main') \
+                     ON CONFLICT(repo_id) DO UPDATE SET \
+                       provider = excluded.provider, \
+                       organization = excluded.organization, \
+                       name = excluded.name, \
+                       default_branch = excluded.default_branch",
+                    rusqlite::params![
+                        cfg.repo.repo_id.as_str(),
+                        cfg.repo.provider.as_str(),
+                        cfg.repo.organization.as_str(),
+                        cfg.repo.name.as_str(),
+                    ],
+                )?;
+                conn.execute(
                     "INSERT INTO artefacts_current (
                         repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
                         language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line,
