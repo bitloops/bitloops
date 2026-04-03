@@ -493,6 +493,23 @@ pub(super) fn setup_local_bundle_cdn_with_manifest(
     temp
 }
 
+pub(super) async fn request_bytes(app: axum::Router, uri: &str) -> (StatusCode, Vec<u8>) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    (status, body.to_vec())
+}
+
 pub(super) async fn request_text(app: axum::Router, uri: &str) -> (StatusCode, String) {
     let response = app
         .oneshot(

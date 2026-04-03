@@ -353,6 +353,106 @@ async fn api_checkpoint_validates_checkpoint_id() {
 }
 
 #[tokio::test]
+async fn api_git_blob_returns_file_bytes() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:app.rs"]);
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{blob_sha}");
+    let (status, body) = request_bytes(app, &uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, b"fn main() { println!(\"ok\"); }\n".as_slice());
+}
+
+#[tokio::test]
+async fn api_git_blob_rejects_invalid_oid_length() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let short_sha = "a".repeat(39);
+    let uri = format!("/api/blobs/{repo_id}/{short_sha}");
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(payload["error"]["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn api_git_blob_returns_not_found_for_unknown_object() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{}", "0".repeat(40));
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(payload["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn api_git_blob_rejects_non_blob_object() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{commit_sha}");
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(payload["error"]["code"], "bad_request");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a blob")
+    );
+}
+
+#[tokio::test]
+async fn api_git_blob_returns_payload_too_large_for_oversized_blob() {
+    use crate::api::handlers::git_blob::MAX_GIT_BLOB_BYTES;
+
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    let big_len = (MAX_GIT_BLOB_BYTES as usize).saturating_add(1);
+    let big = vec![b'x'; big_len];
+    fs::write(repo_root.join("huge.bin"), big).expect("write huge.bin");
+    git_ok(repo_root, &["add", "huge.bin"]);
+    git_ok(repo_root, &["commit", "-m", "huge"]);
+    seed_repository_catalog_row(repo_root, SEEDED_REPO_NAME, "main");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let blob_sha = git_ok(repo_root, &["rev-parse", "HEAD:huge.bin"]);
+    let app = build_dashboard_router(test_state(
+        repo_root.to_path_buf(),
+        ServeMode::HelloWorld,
+        repo_root.to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{blob_sha}");
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(payload["error"]["code"], "payload_too_large");
+}
+
+#[tokio::test]
 async fn api_openapi_json_lists_dashboard_paths() {
     let repo = seed_dashboard_repo();
     let app = build_dashboard_router(test_state(
@@ -373,6 +473,11 @@ async fn api_openapi_json_lists_dashboard_paths() {
     assert!(
         payload["paths"]
             .get("/api/checkpoints/{repo_id}/{checkpoint_id}")
+            .is_some()
+    );
+    assert!(
+        payload["paths"]
+            .get("/api/blobs/{repo_id}/{blob_sha}")
             .is_some()
     );
     assert!(payload["paths"].get("/api/check_bundle_version").is_some());

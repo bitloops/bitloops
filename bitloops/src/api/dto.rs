@@ -49,6 +49,14 @@ impl ApiError {
         }
     }
 
+    pub(super) fn payload_too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "payload_too_large",
+            message: message.into(),
+        }
+    }
+
     pub(super) fn with_code(
         status: StatusCode,
         code: &'static str,
@@ -287,6 +295,7 @@ pub(super) struct ApiAgentsQuery {
         super::handlers::dashboard::handle_api_users,
         super::handlers::dashboard::handle_api_agents,
         super::handlers::checkpoint::handle_api_checkpoint,
+        super::handlers::git_blob::handle_api_git_blob,
         super::handlers::health::handle_api_db_health,
         super::handlers::bundle::handle_api_check_bundle_version,
         super::handlers::bundle::handle_api_fetch_bundle,
