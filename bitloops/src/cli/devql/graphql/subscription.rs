@@ -361,3 +361,60 @@ impl ServerCertVerifier for SkipLoopbackServerVerification {
         self.0.signature_verification_algorithms.supported_schemes()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graphql_websocket_error_message_prefers_top_level_message() {
+        let envelope = serde_json::json!({
+            "message": "top-level message",
+            "payload": {
+                "message": "payload message"
+            }
+        });
+        assert_eq!(
+            graphql_websocket_error_message(&envelope).as_deref(),
+            Some("top-level message")
+        );
+    }
+
+    #[test]
+    fn graphql_websocket_error_message_falls_back_to_payload_fields() {
+        let payload_message = serde_json::json!({
+            "payload": {
+                "message": "payload message"
+            }
+        });
+        assert_eq!(
+            graphql_websocket_error_message(&payload_message).as_deref(),
+            Some("\"payload message\"")
+        );
+
+        let payload_errors = serde_json::json!({
+            "payload": {
+                "errors": [{"message": "boom"}]
+            }
+        });
+        assert_eq!(
+            graphql_websocket_error_message(&payload_errors).as_deref(),
+            Some(r#"[{"message":"boom"}]"#)
+        );
+
+        assert!(graphql_websocket_error_message(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn insecure_loopback_websocket_tls_config_is_cached() {
+        let first = insecure_loopback_websocket_tls_config().expect("first tls config");
+        let second = insecure_loopback_websocket_tls_config().expect("second tls config");
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn ensure_rustls_crypto_provider_is_idempotent() {
+        ensure_rustls_crypto_provider().expect("first install check");
+        ensure_rustls_crypto_provider().expect("second install check");
+    }
+}

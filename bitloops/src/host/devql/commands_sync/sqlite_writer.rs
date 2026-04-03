@@ -535,3 +535,61 @@ pub(crate) fn sync_prepare_worker_count() -> usize {
         .unwrap_or(2)
         .clamp(2, 8)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_prepare_worker_count_is_bounded() {
+        let count = sync_prepare_worker_count();
+        assert!((2..=8).contains(&count), "worker count should be clamped");
+    }
+
+    #[test]
+    fn open_sync_sqlite_connection_reports_missing_database_file() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("missing.sqlite");
+        let err = open_sync_sqlite_connection(&path).expect_err("missing sqlite file should error");
+        let message = format!("{err:#}");
+        assert!(message.contains("SQLite database file not found"));
+        assert!(message.contains("bitloops init"));
+    }
+
+    #[test]
+    fn sqlite_read_pool_checkout_exhausts_then_recovers_after_drop() {
+        let pool = SqliteReadConnectionPool {
+            connections: Arc::new(Mutex::new(vec![
+                Connection::open_in_memory().expect("open in-memory sqlite"),
+            ])),
+        };
+
+        let first = pool.checkout().expect("first checkout");
+        assert!(
+            pool.checkout().is_err(),
+            "pool should be exhausted while connection is checked out"
+        );
+        first
+            .connection()
+            .execute("CREATE TABLE demo(id INTEGER PRIMARY KEY)", [])
+            .expect("execute query on checked-out connection");
+        drop(first);
+
+        let second = pool
+            .checkout()
+            .expect("connection should be returned to pool on drop");
+        let value: i64 = second
+            .connection()
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .expect("execute query after connection recycle");
+        assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn sync_batch_default_is_empty_and_has_no_deadline() {
+        let batch = SyncBatch::default();
+        assert!(batch.is_empty());
+        assert!(!batch.should_flush());
+        assert!(batch.flush_deadline().is_none());
+    }
+}

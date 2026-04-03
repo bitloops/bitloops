@@ -1,11 +1,52 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedSyncTaskMetadata {
+    pub task_id: String,
+    pub merged: bool,
+    pub queue_position: Option<u64>,
+    pub tasks_ahead: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PostCommitArtefactRefreshStats {
     pub files_seen: usize,
     pub files_indexed: usize,
     pub files_deleted: usize,
     pub files_failed: usize,
+    pub queued_task: Option<QueuedSyncTaskMetadata>,
+}
+
+impl PostCommitArtefactRefreshStats {
+    pub(crate) fn completed_with_failures(&self) -> bool {
+        self.queued_task.is_none() && self.files_failed > 0
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn inline_from_summary(files_seen: usize, summary: &SyncSummary) -> Self {
+        Self {
+            files_seen,
+            files_indexed: summary.paths_added + summary.paths_changed,
+            files_deleted: summary.paths_removed,
+            files_failed: summary.parse_errors,
+            queued_task: None,
+        }
+    }
+
+    fn queued(files_seen: usize, queued: crate::daemon::SyncEnqueueResult) -> Self {
+        Self {
+            files_seen,
+            files_indexed: 0,
+            files_deleted: 0,
+            files_failed: 0,
+            queued_task: Some(QueuedSyncTaskMetadata {
+                task_id: queued.task.task_id,
+                merged: queued.merged,
+                queue_position: queued.task.queue_position,
+                tasks_ahead: queued.task.tasks_ahead,
+            }),
+        }
+    }
 }
 
 pub async fn run_post_commit_artefact_refresh(
@@ -70,12 +111,15 @@ async fn sync_changed_paths(
 
     #[cfg(test)]
     {
-        crate::host::devql::run_sync_with_summary(cfg, SyncMode::Paths(paths))
+        let summary = crate::host::devql::run_sync_with_summary(cfg, SyncMode::Paths(paths))
             .await
             .with_context(|| {
                 format!("running DevQL sync inline for {source_hook} refresh in tests")
             })?;
-        Ok(stats)
+        Ok(PostCommitArtefactRefreshStats::inline_from_summary(
+            stats.files_seen,
+            &summary,
+        ))
     }
 
     #[cfg(not(test))]
@@ -85,9 +129,12 @@ async fn sync_changed_paths(
             "post-merge" => crate::daemon::SyncTaskSource::PostMerge,
             _ => crate::daemon::SyncTaskSource::ManualCli,
         };
-        crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
+        let queued = crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
             .with_context(|| format!("queueing DevQL sync for {source_hook} refresh"))?;
-        Ok(stats)
+        Ok(PostCommitArtefactRefreshStats::queued(
+            stats.files_seen,
+            queued,
+        ))
     }
 }
 
@@ -153,4 +200,73 @@ pub async fn run_post_checkout_branch_seed(
 fn is_zero_git_oid(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty() && trimmed.chars().all(|ch| ch == '0')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::{SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus};
+
+    fn sample_queued_result() -> crate::daemon::SyncEnqueueResult {
+        crate::daemon::SyncEnqueueResult {
+            task: SyncTaskRecord {
+                task_id: "sync-task-123".to_string(),
+                repo_id: "repo-1".to_string(),
+                repo_name: "demo".to_string(),
+                repo_provider: "local".to_string(),
+                repo_organisation: "local".to_string(),
+                repo_identity: "local/demo".to_string(),
+                config_root: PathBuf::from("/tmp/repo"),
+                repo_root: PathBuf::from("/tmp/repo"),
+                source: SyncTaskSource::PostCommit,
+                mode: SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                status: SyncTaskStatus::Queued,
+                submitted_at_unix: 1,
+                started_at_unix: None,
+                updated_at_unix: 1,
+                completed_at_unix: None,
+                queue_position: Some(3),
+                tasks_ahead: Some(2),
+                progress: SyncProgressUpdate::default(),
+                error: None,
+                summary: None,
+            },
+            merged: true,
+        }
+    }
+
+    #[test]
+    fn queued_refresh_stats_include_task_metadata() {
+        let stats = PostCommitArtefactRefreshStats::queued(2, sample_queued_result());
+
+        assert_eq!(stats.files_seen, 2);
+        assert_eq!(stats.files_indexed, 0);
+        assert_eq!(stats.files_deleted, 0);
+        assert_eq!(stats.files_failed, 0);
+        assert_eq!(
+            stats.queued_task,
+            Some(QueuedSyncTaskMetadata {
+                task_id: "sync-task-123".to_string(),
+                merged: true,
+                queue_position: Some(3),
+                tasks_ahead: Some(2),
+            })
+        );
+        assert!(!stats.completed_with_failures());
+    }
+
+    #[test]
+    fn inline_refresh_stats_report_completed_failures() {
+        let stats = PostCommitArtefactRefreshStats {
+            files_seen: 2,
+            files_indexed: 1,
+            files_deleted: 0,
+            files_failed: 1,
+            queued_task: None,
+        };
+
+        assert!(stats.completed_with_failures());
+    }
 }

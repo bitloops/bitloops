@@ -139,3 +139,119 @@ impl From<SyncTaskRecord> for SyncProgressEvent {
 fn to_graphql_count(value: impl TryInto<i32>) -> i32 {
     value.try_into().unwrap_or(i32::MAX)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_sync_record() -> SyncTaskRecord {
+        SyncTaskRecord {
+            task_id: "sync-task-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_name: "bitloops".to_string(),
+            repo_provider: "local".to_string(),
+            repo_organisation: "local".to_string(),
+            repo_identity: "local/bitloops".to_string(),
+            config_root: std::path::PathBuf::from("/tmp/config"),
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            source: crate::daemon::SyncTaskSource::ManualCli,
+            mode: crate::daemon::SyncTaskMode::Validate,
+            status: crate::daemon::SyncTaskStatus::Running,
+            submitted_at_unix: 1,
+            started_at_unix: Some(2),
+            updated_at_unix: 3,
+            completed_at_unix: None,
+            queue_position: Some((i32::MAX as u64) + 1),
+            tasks_ahead: Some((i32::MAX as u64) + 2),
+            progress: crate::host::devql::SyncProgressUpdate {
+                phase: crate::host::devql::SyncProgressPhase::MaterialisingPaths,
+                current_path: Some("src/lib.rs".to_string()),
+                paths_total: (i32::MAX as usize) + 3,
+                paths_completed: (i32::MAX as usize) + 4,
+                paths_remaining: (i32::MAX as usize) + 5,
+                paths_unchanged: (i32::MAX as usize) + 6,
+                paths_added: (i32::MAX as usize) + 7,
+                paths_changed: (i32::MAX as usize) + 8,
+                paths_removed: (i32::MAX as usize) + 9,
+                cache_hits: (i32::MAX as usize) + 10,
+                cache_misses: (i32::MAX as usize) + 11,
+                parse_errors: (i32::MAX as usize) + 12,
+            },
+            error: Some("boom".to_string()),
+            summary: Some(crate::host::devql::SyncSummary {
+                success: false,
+                mode: "validate".to_string(),
+                parser_version: "parser@1".to_string(),
+                extractor_version: "extractor@1".to_string(),
+                active_branch: Some("main".to_string()),
+                head_commit_sha: Some("abc".to_string()),
+                head_tree_sha: Some("def".to_string()),
+                paths_unchanged: 1,
+                paths_added: 2,
+                paths_changed: 3,
+                paths_removed: 4,
+                cache_hits: 5,
+                cache_misses: 6,
+                parse_errors: 7,
+                validation: Some(crate::host::devql::SyncValidationSummary {
+                    valid: false,
+                    expected_artefacts: 10,
+                    actual_artefacts: 9,
+                    expected_edges: 8,
+                    actual_edges: 7,
+                    missing_artefacts: 1,
+                    stale_artefacts: 2,
+                    mismatched_artefacts: 3,
+                    missing_edges: 4,
+                    stale_edges: 5,
+                    mismatched_edges: 6,
+                    files_with_drift: vec![crate::host::devql::SyncValidationFileDrift {
+                        path: "src/lib.rs".to_string(),
+                        missing_artefacts: 1,
+                        stale_artefacts: 2,
+                        mismatched_artefacts: 3,
+                        missing_edges: 4,
+                        stale_edges: 5,
+                        mismatched_edges: 6,
+                    }],
+                }),
+            }),
+        }
+    }
+
+    #[test]
+    fn sync_task_object_from_record_maps_fields_and_clamps_counts() {
+        let object = SyncTaskObject::from(sample_sync_record());
+        assert_eq!(object.task_id, "sync-task-1");
+        assert_eq!(object.source, "manual_cli");
+        assert_eq!(object.mode, "validate");
+        assert_eq!(object.status, "running");
+        assert_eq!(object.phase, "materialising_paths");
+        assert_eq!(object.queue_position, Some(i32::MAX));
+        assert_eq!(object.tasks_ahead, Some(i32::MAX));
+        assert_eq!(object.paths_total, i32::MAX);
+        assert_eq!(object.cache_misses, i32::MAX);
+        assert_eq!(object.parse_errors, i32::MAX);
+        let summary = object.summary.expect("summary");
+        assert_eq!(summary.mode, "validate");
+        assert_eq!(summary.paths_added, 2);
+        assert!(summary.validation.is_some());
+    }
+
+    #[test]
+    fn sync_progress_event_reuses_sync_task_conversion() {
+        let event = SyncProgressEvent::from(sample_sync_record());
+        assert_eq!(event.task_id, "sync-task-1");
+        assert_eq!(event.phase, "materialising_paths");
+        assert_eq!(event.queue_position, Some(i32::MAX));
+        assert_eq!(event.paths_changed, i32::MAX);
+        assert_eq!(event.error.as_deref(), Some("boom"));
+        assert!(event.summary.is_some());
+    }
+
+    #[test]
+    fn to_graphql_count_clamps_large_inputs() {
+        assert_eq!(to_graphql_count(123u32), 123);
+        assert_eq!(to_graphql_count((i32::MAX as i64) + 1), i32::MAX);
+    }
+}
