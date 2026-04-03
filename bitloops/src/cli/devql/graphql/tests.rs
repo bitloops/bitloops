@@ -156,13 +156,15 @@ fn live_sync_progress_bar_line_handles_non_progress_states() {
 
 #[test]
 fn live_sync_progress_bar_line_elides_when_too_narrow() {
-    let mut task = sample_task("running");
-    task.paths_total = 100;
-    task.paths_completed = 20;
-    task.paths_remaining = 80;
+    with_env_vars(&[("NO_COLOR", Some("1"))], || {
+        let mut task = sample_task("running");
+        task.paths_total = 100;
+        task.paths_completed = 20;
+        task.paths_remaining = 80;
 
-    let rendered = format_live_sync_progress_bar_line(&task, 0, Some(8));
-    assert!(rendered.chars().count() <= 16);
+        let rendered = format_live_sync_progress_bar_line(&task, 0, Some(8));
+        assert!(rendered.chars().count() <= 16);
+    });
 }
 
 #[test]
