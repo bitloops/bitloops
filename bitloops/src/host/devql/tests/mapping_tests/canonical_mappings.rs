@@ -446,9 +446,7 @@ fn python_canonical_mapping_covers_supported_kind_table() {
             .map(|kind| is_supported_language_kind(PYTHON_SUPPORTED_LANGUAGE_KINDS, kind))
             .unwrap_or(false);
         let actual_canonical = language_kind
-            .and_then(|kind| {
-                resolve_canonical_kind(PYTHON_CANONICAL_MAPPINGS, kind, inside_parent)
-            })
+            .and_then(|kind| resolve_canonical_kind(PYTHON_CANONICAL_MAPPINGS, kind, inside_parent))
             .map(CanonicalKindProjection::as_str);
         assert_eq!(actual_supported, supported);
         assert_eq!(actual_canonical, canonical_kind);
@@ -548,8 +546,16 @@ fn go_canonical_mapping_covers_supported_kind_table() {
             Some("method"),
         ),
         (Some(LanguageKind::go(GoKind::TypeSpec)), true, Some("type")),
-        (Some(LanguageKind::go(GoKind::TypeAlias)), true, Some("type")),
-        (Some(LanguageKind::go(GoKind::StructType)), true, Some("type")),
+        (
+            Some(LanguageKind::go(GoKind::TypeAlias)),
+            true,
+            Some("type"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::StructType)),
+            true,
+            Some("type"),
+        ),
         (
             Some(LanguageKind::go(GoKind::InterfaceType)),
             true,
@@ -660,46 +666,22 @@ func (h *Handler) ServeHTTP() {}
 #[test]
 fn java_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        (
-            LanguageKind::java(JavaKind::Package),
-            true,
-            Some("module"),
-        ),
-        (
-            LanguageKind::java(JavaKind::Import),
-            true,
-            Some("import"),
-        ),
-        (
-            LanguageKind::java(JavaKind::Class),
-            true,
-            Some("type"),
-        ),
+        (LanguageKind::java(JavaKind::Package), true, Some("module")),
+        (LanguageKind::java(JavaKind::Import), true, Some("import")),
+        (LanguageKind::java(JavaKind::Class), true, Some("type")),
         (
             LanguageKind::java(JavaKind::Interface),
             true,
             Some("interface"),
         ),
-        (
-            LanguageKind::java(JavaKind::Enum),
-            true,
-            Some("enum"),
-        ),
+        (LanguageKind::java(JavaKind::Enum), true, Some("enum")),
         (
             LanguageKind::java(JavaKind::Constructor),
             true,
             Some("method"),
         ),
-        (
-            LanguageKind::java(JavaKind::Method),
-            true,
-            Some("method"),
-        ),
-        (
-            LanguageKind::java(JavaKind::Field),
-            true,
-            Some("variable"),
-        ),
+        (LanguageKind::java(JavaKind::Method), true, Some("method")),
+        (LanguageKind::java(JavaKind::Field), true, Some("variable")),
     ];
 
     for (language_kind, supported, canonical_kind) in expected {
@@ -742,10 +724,7 @@ class Greeter extends Base implements Runner {
     );
     assert_eq!(canonical_kind(package), Some("module"));
 
-    let import = artefact_by_language_kind(
-        &artefacts,
-        LanguageKind::java(JavaKind::Import),
-    );
+    let import = artefact_by_language_kind(&artefacts, LanguageKind::java(JavaKind::Import));
     assert_eq!(canonical_kind(import), Some("import"));
 
     let class = artefact_by_name_and_language_kind(

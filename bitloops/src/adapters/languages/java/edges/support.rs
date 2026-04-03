@@ -42,12 +42,8 @@ pub(super) fn smallest_enclosing_symbol(
 pub(super) fn java_type_name_from_node(node: Node<'_>, content: &str) -> Option<String> {
     match node.kind() {
         "type_identifier" | "identifier" | "scoped_identifier" | "scoped_type_identifier" => {
-            trimmed_node_text(node, content).map(|text| {
-                text.rsplit('.')
-                    .next()
-                    .unwrap_or(text.as_str())
-                    .to_string()
-            })
+            trimmed_node_text(node, content)
+                .map(|text| text.rsplit('.').next().unwrap_or(text.as_str()).to_string())
         }
         "generic_type" => node
             .child_by_field_name("type")

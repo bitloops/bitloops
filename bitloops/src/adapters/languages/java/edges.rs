@@ -9,10 +9,10 @@ use crate::host::language_adapter::{DependencyEdge, JavaKind, LanguageArtefact, 
 mod calls;
 #[path = "edges/imports.rs"]
 mod imports;
-#[path = "edges/relationships.rs"]
-mod relationships;
 #[path = "edges/references.rs"]
 mod references;
+#[path = "edges/relationships.rs"]
+mod relationships;
 #[path = "edges/support.rs"]
 mod support;
 #[cfg(test)]
@@ -24,13 +24,13 @@ use calls::{
     collect_java_object_creation_edge,
 };
 use imports::{collect_java_import_data, collect_java_import_edge};
-use relationships::{
-    collect_java_class_relationships, collect_java_enum_relationships,
-    collect_java_interface_relationships,
-};
 use references::{
     collect_java_constructor_type_references, collect_java_field_type_references,
     collect_java_method_type_references,
+};
+use relationships::{
+    collect_java_class_relationships, collect_java_enum_relationships,
+    collect_java_interface_relationships,
 };
 
 pub(super) struct JavaTraversalCtx<'a> {
@@ -71,8 +71,7 @@ pub(crate) fn extract_java_dependency_edges(
         .filter(|artefact| {
             matches!(
                 artefact.language_kind,
-                LanguageKind::Java(JavaKind::Method)
-                    | LanguageKind::Java(JavaKind::Constructor)
+                LanguageKind::Java(JavaKind::Method) | LanguageKind::Java(JavaKind::Constructor)
             )
         })
         .cloned()

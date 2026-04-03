@@ -390,7 +390,10 @@ fn extract_java_modifiers(node: Node<'_>, content: &str) -> Vec<String> {
     let name_start = node
         .child_by_field_name("name")
         .map(|child| child.start_byte())
-        .or_else(|| node.child_by_field_name("type").map(|child| child.start_byte()))
+        .or_else(|| {
+            node.child_by_field_name("type")
+                .map(|child| child.start_byte())
+        })
         .unwrap_or_else(|| node.end_byte());
     let prefix = content
         .get(node.start_byte()..name_start)
@@ -419,7 +422,10 @@ fn extract_java_modifiers(node: Node<'_>, content: &str) -> Vec<String> {
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if !matches!(child.kind(), "annotation" | "marker_annotation" | "modifiers") {
+        if !matches!(
+            child.kind(),
+            "annotation" | "marker_annotation" | "modifiers"
+        ) {
             continue;
         }
         if child.kind() == "modifiers" {
@@ -590,8 +596,7 @@ class Outer {
         assert!(artefacts.iter().any(|artefact| {
             artefact.language_kind == LanguageKind::java(JavaKind::Class)
                 && artefact.name == "Inner"
-                && artefact.parent_symbol_fqn.as_deref()
-                    == Some("src/com/acme/Outer.java::Outer")
+                && artefact.parent_symbol_fqn.as_deref() == Some("src/com/acme/Outer.java::Outer")
         }));
         assert!(artefacts.iter().any(|artefact| {
             artefact.language_kind == LanguageKind::java(JavaKind::Method)

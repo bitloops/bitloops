@@ -40,7 +40,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         Some("python")
     );
     assert_eq!(resolve_language_id_for_file_path("src/main.go"), Some("go"));
-    assert_eq!(resolve_language_id_for_file_path("src/Main.java"), Some("java"));
+    assert_eq!(
+        resolve_language_id_for_file_path("src/Main.java"),
+        Some("java")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -114,7 +117,9 @@ function helper() {
         .extract_dependency_edges(ts_content, "src/main.ts", &ts_artefacts)
         .expect("extract ts dependency edges via language adapter registry");
     assert!(
-        ts_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Calls),
+        ts_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
         "ts/js built-in registry pack should emit call edges"
     );
 
@@ -204,15 +209,21 @@ func Run() {
         .extract_dependency_edges(go_content, "service/run.go", &go_artefacts)
         .expect("extract go dependency edges via language adapter registry");
     assert!(
-        go_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Calls),
+        go_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
         "go built-in registry pack should emit call edges"
     );
     assert!(
-        go_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Imports),
+        go_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Imports),
         "go built-in registry pack should emit import edges"
     );
     assert!(
-        go_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Extends),
+        go_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Extends),
         "go built-in registry pack should emit embedding edges"
     );
 
@@ -247,7 +258,9 @@ class Greeter extends Base implements Runner {
         .extract_artefacts(java_content, "src/com/acme/Greeter.java")
         .expect("extract java artefacts via language adapter registry");
     assert!(
-        java_artefacts.iter().any(|artefact| artefact.name == "Greeter"),
+        java_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "Greeter"),
         "java built-in registry pack should surface type artefacts"
     );
     assert!(
@@ -255,22 +268,24 @@ class Greeter extends Base implements Runner {
         "java built-in registry pack should expose file docstrings"
     );
     let java_edges = java_pack
-        .extract_dependency_edges(
-            java_content,
-            "src/com/acme/Greeter.java",
-            &java_artefacts,
-        )
+        .extract_dependency_edges(java_content, "src/com/acme/Greeter.java", &java_artefacts)
         .expect("extract java dependency edges via language adapter registry");
     assert!(
-        java_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Calls),
+        java_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
         "java built-in registry pack should emit call edges"
     );
     assert!(
-        java_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Imports),
+        java_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Imports),
         "java built-in registry pack should emit import edges"
     );
     assert!(
-        java_edges.iter().any(|edge| edge.edge_kind == EdgeKind::Extends),
+        java_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Extends),
         "java built-in registry pack should emit extends edges"
     );
     assert!(

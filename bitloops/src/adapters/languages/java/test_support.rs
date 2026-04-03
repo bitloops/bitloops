@@ -53,7 +53,9 @@ impl LanguageTestSupport for JavaLanguageTestSupport {
         EnumerationResult {
             mode: EnumerationMode::Skipped,
             scenarios: Vec::new(),
-            notes: vec!["java test enumeration unavailable: no Maven or Gradle build detected".to_string()],
+            notes: vec![
+                "java test enumeration unavailable: no Maven or Gradle build detected".to_string(),
+            ],
         }
     }
 
@@ -232,11 +234,7 @@ fn java_method_is_test(node: Node<'_>, source: &[u8]) -> bool {
                 let annotation_name = name.rsplit('.').next().unwrap_or(name);
                 if matches!(
                     annotation_name,
-                    "Test"
-                        | "ParameterizedTest"
-                        | "RepeatedTest"
-                        | "TestFactory"
-                        | "TestTemplate"
+                    "Test" | "ParameterizedTest" | "RepeatedTest" | "TestFactory" | "TestTemplate"
                 ) {
                     return true;
                 }
@@ -308,7 +306,10 @@ fn parse_import_path(statement: &str) -> Option<String> {
     (!rest.is_empty()).then(|| rest.to_string())
 }
 
-fn resolve_java_import_to_repo_paths(test_relative_path: &str, import_specifier: &str) -> Vec<String> {
+fn resolve_java_import_to_repo_paths(
+    test_relative_path: &str,
+    import_specifier: &str,
+) -> Vec<String> {
     if import_specifier.is_empty() || import_specifier.ends_with(".*") {
         return Vec::new();
     }
@@ -350,7 +351,10 @@ fn enumerate_with_maven(ctx: &LanguageAdapterContext) -> EnumerationResult {
         }
     };
 
-    let scenarios = collect_junit_report_scenarios(&ctx.repo_root, &["target/surefire-reports", "target/failsafe-reports"]);
+    let scenarios = collect_junit_report_scenarios(
+        &ctx.repo_root,
+        &["target/surefire-reports", "target/failsafe-reports"],
+    );
     EnumerationResult {
         mode: if output.success {
             EnumerationMode::Full
@@ -404,7 +408,10 @@ fn enumerate_with_gradle(ctx: &LanguageAdapterContext) -> EnumerationResult {
     }
 }
 
-fn collect_junit_report_scenarios(repo_root: &Path, report_dirs: &[&str]) -> Vec<EnumeratedTestScenario> {
+fn collect_junit_report_scenarios(
+    repo_root: &Path,
+    report_dirs: &[&str],
+) -> Vec<EnumeratedTestScenario> {
     let testcase_pattern = Regex::new(r#"<testcase\b[^>]*classname="([^"]+)"[^>]*name="([^"]+)""#)
         .expect("java testcase regex should compile");
     let testcase_pattern_name_first =
@@ -467,7 +474,11 @@ fn push_enumerated_java_scenario(
     classname: &str,
     scenario_name: &str,
 ) {
-    let suite_name = classname.rsplit('.').next().unwrap_or(classname).to_string();
+    let suite_name = classname
+        .rsplit('.')
+        .next()
+        .unwrap_or(classname)
+        .to_string();
     let relative_path = format!("src/test/java/{}.java", classname.replace('.', "/"));
     let key = normalized_java_test_key(&relative_path, &suite_name, scenario_name);
     if !seen.insert(key) {
@@ -525,9 +536,15 @@ mod tests {
     #[test]
     fn java_test_support_recognizes_java_test_paths() {
         let support = JavaLanguageTestSupport;
-        assert!(support.supports_path(std::path::Path::new(""), "src/test/java/com/acme/GreeterTest.java"));
+        assert!(support.supports_path(
+            std::path::Path::new(""),
+            "src/test/java/com/acme/GreeterTest.java"
+        ));
         assert!(support.supports_path(std::path::Path::new(""), "app/GreeterIT.java"));
-        assert!(!support.supports_path(std::path::Path::new(""), "src/main/java/com/acme/Greeter.java"));
+        assert!(!support.supports_path(
+            std::path::Path::new(""),
+            "src/main/java/com/acme/Greeter.java"
+        ));
     }
 
     #[test]
@@ -563,9 +580,9 @@ class GreeterTest {
         assert_eq!(discovered.suites[0].scenarios[0].name, "greets");
         assert_eq!(
             discovered.suites[0].scenarios[0].reference_candidates,
-            vec![crate::host::language_adapter::ReferenceCandidate::SymbolName(
-                "helper".to_string()
-            )]
+            vec![
+                crate::host::language_adapter::ReferenceCandidate::SymbolName("helper".to_string())
+            ]
         );
     }
 

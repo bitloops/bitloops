@@ -1,8 +1,8 @@
-use super::support::{java_type_name_from_node, smallest_enclosing_callable};
 use super::JavaTraversalCtx;
+use super::support::{java_type_name_from_node, smallest_enclosing_callable};
+use crate::adapters::languages::java::extraction::trimmed_node_text;
 use crate::host::devql::{CallForm, EdgeKind, Resolution};
 use crate::host::language_adapter::{DependencyEdge, EdgeMetadata};
-use crate::adapters::languages::java::extraction::trimmed_node_text;
 use tree_sitter::Node;
 
 struct JavaCallEdgeSpec {
@@ -39,32 +39,38 @@ pub(super) fn collect_java_method_invocation_edge(
                     .get(&(parent.clone(), name.clone()))
                     .cloned()
             });
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
-                from_symbol_fqn: owner.symbol_fqn.clone(),
-                to_target_symbol_fqn: local_target.clone(),
-                to_symbol_ref: None,
-                line_no,
-                call_form: CallForm::Method,
-                resolution: if local_target.is_some() {
-                    Resolution::Local
-                } else {
-                    Resolution::Unresolved
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: local_target.clone(),
+                    to_symbol_ref: None,
+                    line_no,
+                    call_form: CallForm::Method,
+                    resolution: if local_target.is_some() {
+                        Resolution::Local
+                    } else {
+                        Resolution::Unresolved
+                    },
+                    unresolved_fallback: Some(format!("this::{name}")),
                 },
-                unresolved_fallback: Some(format!("this::{name}")),
-            });
+            );
             return;
         }
 
         if object_text == "super" {
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
-                from_symbol_fqn: owner.symbol_fqn.clone(),
-                to_target_symbol_fqn: None,
-                to_symbol_ref: Some(format!("super::{name}")),
-                line_no,
-                call_form: CallForm::Method,
-                resolution: Resolution::Unresolved,
-                unresolved_fallback: None,
-            });
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some(format!("super::{name}")),
+                    line_no,
+                    call_form: CallForm::Method,
+                    resolution: Resolution::Unresolved,
+                    unresolved_fallback: None,
+                },
+            );
             return;
         }
 
@@ -73,32 +79,40 @@ pub(super) fn collect_java_method_invocation_edge(
                 .method_targets_by_parent_and_name
                 .get(&(type_fqn.clone(), name.clone()))
                 .cloned();
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
-                from_symbol_fqn: owner.symbol_fqn.clone(),
-                to_target_symbol_fqn: local_target.clone(),
-                to_symbol_ref: local_target.is_none().then(|| format!("{type_fqn}::{name}")),
-                line_no,
-                call_form: CallForm::Associated,
-                resolution: if local_target.is_some() {
-                    Resolution::Local
-                } else {
-                    Resolution::Unresolved
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: local_target.clone(),
+                    to_symbol_ref: local_target
+                        .is_none()
+                        .then(|| format!("{type_fqn}::{name}")),
+                    line_no,
+                    call_form: CallForm::Associated,
+                    resolution: if local_target.is_some() {
+                        Resolution::Local
+                    } else {
+                        Resolution::Unresolved
+                    },
+                    unresolved_fallback: None,
                 },
-                unresolved_fallback: None,
-            });
+            );
             return;
         }
 
         if let Some(import_ref) = traversal.imported_type_refs.get(&object_text) {
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
-                from_symbol_fqn: owner.symbol_fqn.clone(),
-                to_target_symbol_fqn: None,
-                to_symbol_ref: Some(format!("{import_ref}::{name}")),
-                line_no,
-                call_form: CallForm::Associated,
-                resolution: Resolution::Import,
-                unresolved_fallback: None,
-            });
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some(format!("{import_ref}::{name}")),
+                    line_no,
+                    call_form: CallForm::Associated,
+                    resolution: Resolution::Import,
+                    unresolved_fallback: None,
+                },
+            );
             return;
         }
 
@@ -107,27 +121,33 @@ pub(super) fn collect_java_method_invocation_edge(
                 .field_targets_by_parent_and_name
                 .get(&(parent.clone(), object_text.clone()))
         }) {
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some(format!("{field_target}::{name}")),
+                    line_no,
+                    call_form: CallForm::Member,
+                    resolution: Resolution::Unresolved,
+                    unresolved_fallback: None,
+                },
+            );
+            return;
+        }
+
+        push_java_call_edge(
+            traversal,
+            JavaCallEdgeSpec {
                 from_symbol_fqn: owner.symbol_fqn.clone(),
                 to_target_symbol_fqn: None,
-                to_symbol_ref: Some(format!("{field_target}::{name}")),
+                to_symbol_ref: Some(format!("{object_text}::{name}")),
                 line_no,
                 call_form: CallForm::Member,
                 resolution: Resolution::Unresolved,
                 unresolved_fallback: None,
-            });
-            return;
-        }
-
-        push_java_call_edge(traversal, JavaCallEdgeSpec {
-            from_symbol_fqn: owner.symbol_fqn.clone(),
-            to_target_symbol_fqn: None,
-            to_symbol_ref: Some(format!("{object_text}::{name}")),
-            line_no,
-            call_form: CallForm::Member,
-            resolution: Resolution::Unresolved,
-            unresolved_fallback: None,
-        });
+            },
+        );
         return;
     }
 
@@ -136,40 +156,49 @@ pub(super) fn collect_java_method_invocation_edge(
             .method_targets_by_parent_and_name
             .get(&(parent.clone(), name.clone()))
     {
-        push_java_call_edge(traversal, JavaCallEdgeSpec {
-            from_symbol_fqn: owner.symbol_fqn.clone(),
-            to_target_symbol_fqn: Some(target_fqn.clone()),
-            to_symbol_ref: None,
-            line_no,
-            call_form: CallForm::Method,
-            resolution: Resolution::Local,
-            unresolved_fallback: None,
-        });
+        push_java_call_edge(
+            traversal,
+            JavaCallEdgeSpec {
+                from_symbol_fqn: owner.symbol_fqn.clone(),
+                to_target_symbol_fqn: Some(target_fqn.clone()),
+                to_symbol_ref: None,
+                line_no,
+                call_form: CallForm::Method,
+                resolution: Resolution::Local,
+                unresolved_fallback: None,
+            },
+        );
         return;
     }
 
     if let Some(import_ref) = traversal.imported_static_refs.get(&name) {
-        push_java_call_edge(traversal, JavaCallEdgeSpec {
-            from_symbol_fqn: owner.symbol_fqn.clone(),
-            to_target_symbol_fqn: None,
-            to_symbol_ref: Some(import_ref.clone()),
-            line_no,
-            call_form: CallForm::Associated,
-            resolution: Resolution::Import,
-            unresolved_fallback: None,
-        });
+        push_java_call_edge(
+            traversal,
+            JavaCallEdgeSpec {
+                from_symbol_fqn: owner.symbol_fqn.clone(),
+                to_target_symbol_fqn: None,
+                to_symbol_ref: Some(import_ref.clone()),
+                line_no,
+                call_form: CallForm::Associated,
+                resolution: Resolution::Import,
+                unresolved_fallback: None,
+            },
+        );
         return;
     }
 
-    push_java_call_edge(traversal, JavaCallEdgeSpec {
-        from_symbol_fqn: owner.symbol_fqn.clone(),
-        to_target_symbol_fqn: None,
-        to_symbol_ref: Some(format!("{}::{name}", traversal.path)),
-        line_no,
-        call_form: CallForm::Method,
-        resolution: Resolution::Unresolved,
-        unresolved_fallback: None,
-    });
+    push_java_call_edge(
+        traversal,
+        JavaCallEdgeSpec {
+            from_symbol_fqn: owner.symbol_fqn.clone(),
+            to_target_symbol_fqn: None,
+            to_symbol_ref: Some(format!("{}::{name}", traversal.path)),
+            line_no,
+            call_form: CallForm::Method,
+            resolution: Resolution::Unresolved,
+            unresolved_fallback: None,
+        },
+    );
 }
 
 pub(super) fn collect_java_object_creation_edge(
@@ -193,40 +222,49 @@ pub(super) fn collect_java_object_creation_edge(
             .get(type_fqn)
             .cloned()
             .unwrap_or_else(|| format!("{type_fqn}::<init>"));
-        push_java_call_edge(traversal, JavaCallEdgeSpec {
-            from_symbol_fqn: owner.symbol_fqn.clone(),
-            to_target_symbol_fqn: Some(target),
-            to_symbol_ref: None,
-            line_no,
-            call_form: CallForm::Associated,
-            resolution: Resolution::Local,
-            unresolved_fallback: None,
-        });
+        push_java_call_edge(
+            traversal,
+            JavaCallEdgeSpec {
+                from_symbol_fqn: owner.symbol_fqn.clone(),
+                to_target_symbol_fqn: Some(target),
+                to_symbol_ref: None,
+                line_no,
+                call_form: CallForm::Associated,
+                resolution: Resolution::Local,
+                unresolved_fallback: None,
+            },
+        );
         return;
     }
 
     if let Some(import_ref) = traversal.imported_type_refs.get(&type_name) {
-        push_java_call_edge(traversal, JavaCallEdgeSpec {
-            from_symbol_fqn: owner.symbol_fqn.clone(),
-            to_target_symbol_fqn: None,
-            to_symbol_ref: Some(format!("{import_ref}::<init>")),
-            line_no,
-            call_form: CallForm::Associated,
-            resolution: Resolution::Import,
-            unresolved_fallback: None,
-        });
+        push_java_call_edge(
+            traversal,
+            JavaCallEdgeSpec {
+                from_symbol_fqn: owner.symbol_fqn.clone(),
+                to_target_symbol_fqn: None,
+                to_symbol_ref: Some(format!("{import_ref}::<init>")),
+                line_no,
+                call_form: CallForm::Associated,
+                resolution: Resolution::Import,
+                unresolved_fallback: None,
+            },
+        );
         return;
     }
 
-    push_java_call_edge(traversal, JavaCallEdgeSpec {
-        from_symbol_fqn: owner.symbol_fqn.clone(),
-        to_target_symbol_fqn: None,
-        to_symbol_ref: Some(format!("{type_name}::<init>")),
-        line_no,
-        call_form: CallForm::Associated,
-        resolution: Resolution::Unresolved,
-        unresolved_fallback: None,
-    });
+    push_java_call_edge(
+        traversal,
+        JavaCallEdgeSpec {
+            from_symbol_fqn: owner.symbol_fqn.clone(),
+            to_target_symbol_fqn: None,
+            to_symbol_ref: Some(format!("{type_name}::<init>")),
+            line_no,
+            call_form: CallForm::Associated,
+            resolution: Resolution::Unresolved,
+            unresolved_fallback: None,
+        },
+    );
 }
 
 pub(super) fn collect_java_explicit_constructor_invocation(
@@ -251,26 +289,32 @@ pub(super) fn collect_java_explicit_constructor_invocation(
                 .get(parent)
                 .cloned()
                 .unwrap_or_else(|| format!("{parent}::<init>"));
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
-                from_symbol_fqn: owner.symbol_fqn.clone(),
-                to_target_symbol_fqn: Some(target),
-                to_symbol_ref: None,
-                line_no,
-                call_form: CallForm::Associated,
-                resolution: Resolution::Local,
-                unresolved_fallback: None,
-            });
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: Some(target),
+                    to_symbol_ref: None,
+                    line_no,
+                    call_form: CallForm::Associated,
+                    resolution: Resolution::Local,
+                    unresolved_fallback: None,
+                },
+            );
         }
         "super" => {
-            push_java_call_edge(traversal, JavaCallEdgeSpec {
-                from_symbol_fqn: owner.symbol_fqn.clone(),
-                to_target_symbol_fqn: None,
-                to_symbol_ref: Some("super::<init>".to_string()),
-                line_no,
-                call_form: CallForm::Associated,
-                resolution: Resolution::Unresolved,
-                unresolved_fallback: None,
-            });
+            push_java_call_edge(
+                traversal,
+                JavaCallEdgeSpec {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some("super::<init>".to_string()),
+                    line_no,
+                    call_form: CallForm::Associated,
+                    resolution: Resolution::Unresolved,
+                    unresolved_fallback: None,
+                },
+            );
         }
         _ => {}
     }

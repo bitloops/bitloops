@@ -29,12 +29,20 @@ class Greeter extends Base implements Runner {
 "#;
 
     let artefacts = extract_java_artefacts(content, "src/com/acme/Greeter.java").unwrap();
-    let edges = extract_java_dependency_edges(content, "src/com/acme/Greeter.java", &artefacts)
-        .unwrap();
+    let edges =
+        extract_java_dependency_edges(content, "src/com/acme/Greeter.java", &artefacts).unwrap();
 
     assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Imports));
     assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Calls));
     assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Extends));
-    assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Implements));
-    assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::References));
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Implements)
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::References)
+    );
 }
