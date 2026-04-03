@@ -8,16 +8,16 @@ use rusqlite::Connection;
 
 use super::shared::{determine_retention_class, read_effective_content};
 use super::stats::PreparedPathStats;
+use crate::host::devql::DevqlConfig;
 use crate::host::devql::sync::content_cache::{
-    CacheKey, CachedExtraction, deduped_cached_content_parts, lookup_cached_content_with_connection,
-    persist_cached_content_tx, touch_cache_entries_tx,
+    CacheKey, CachedExtraction, deduped_cached_content_parts,
+    lookup_cached_content_with_connection, persist_cached_content_tx, touch_cache_entries_tx,
 };
 use crate::host::devql::sync::materializer::{
     PreparedMaterialisationRows, persist_prepared_materialisation_tx, prepare_materialization_rows,
     remove_paths_tx,
 };
 use crate::host::devql::sync::types::DesiredFileState;
-use crate::host::devql::DevqlConfig;
 
 const BATCH_FILE_LIMIT: usize = 32;
 const BATCH_ROW_LIMIT: usize = 4000;
@@ -247,10 +247,11 @@ impl SqliteSyncWriter {
                 if let Some(retention_class) = item.cache_store_retention_class {
                     let (artefacts, edges) = deduped_cached_content_parts(&item.extraction);
                     cache_store_operation_estimate += 3 + artefacts.len() + edges.len();
-                    rows_written += persist_cached_content_tx(&tx, &item.extraction, retention_class)
-                        .with_context(|| {
-                            format!("persisting cached extraction for `{}`", item.desired.path)
-                        })?;
+                    rows_written +=
+                        persist_cached_content_tx(&tx, &item.extraction, retention_class)
+                            .with_context(|| {
+                                format!("persisting cached extraction for `{}`", item.desired.path)
+                            })?;
                 }
                 materialisation_operation_estimate += item.prepared_rows.row_operation_estimate();
                 rows_written += persist_prepared_materialisation_tx(
@@ -262,7 +263,12 @@ impl SqliteSyncWriter {
                     &parser_version,
                     &extractor_version,
                 )
-                .with_context(|| format!("materialising `{}` in SQLite sync writer", item.desired.path))?;
+                .with_context(|| {
+                    format!(
+                        "materialising `{}` in SQLite sync writer",
+                        item.desired.path
+                    )
+                })?;
             }
 
             tx.commit()
@@ -426,52 +432,59 @@ fn prepare_sync_item_with_connection(
     let retention_class = determine_retention_class(&desired);
     let path = desired.path.clone();
 
-    let (extraction, cache_hit, cache_miss, parse_error, cache_store_retention_class, cache_touch_key) =
-        match cached {
-            Some(cached) => {
-                let parse_error =
-                    cached.parse_status == crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR;
-                (
-                    cached,
-                    true,
-                    false,
-                    parse_error,
-                    None,
-                    Some(CacheKey {
-                        content_id: desired.effective_content_id.clone(),
-                        language: desired.language.clone(),
-                        parser_version: parser_version.to_string(),
-                        extractor_version: extractor_version.to_string(),
-                    }),
-                )
-            }
-            None => {
-                let content = read_effective_content(cfg, &desired)
-                    .with_context(|| format!("reading effective content for `{}`", desired.path))?;
-                let extraction_started = Instant::now();
-                let Some(extraction) = crate::host::devql::sync::extraction::extract_to_cache_format(
-                    cfg,
-                    &desired.path,
-                    &desired.effective_content_id,
-                    parser_version,
-                    extractor_version,
-                    &content,
-                )
-                .with_context(|| format!("extracting `{}` into sync cache format", desired.path))? else {
-                    stats.extraction = extraction_started.elapsed();
-                    return Ok(PreparedSyncOutcome {
-                        path,
-                        prepared_item: None,
-                        cache_hit: false,
-                        cache_miss: true,
-                        parse_error: true,
-                        stats,
-                    });
-                };
+    let (
+        extraction,
+        cache_hit,
+        cache_miss,
+        parse_error,
+        cache_store_retention_class,
+        cache_touch_key,
+    ) = match cached {
+        Some(cached) => {
+            let parse_error = cached.parse_status
+                == crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR;
+            (
+                cached,
+                true,
+                false,
+                parse_error,
+                None,
+                Some(CacheKey {
+                    content_id: desired.effective_content_id.clone(),
+                    language: desired.language.clone(),
+                    parser_version: parser_version.to_string(),
+                    extractor_version: extractor_version.to_string(),
+                }),
+            )
+        }
+        None => {
+            let content = read_effective_content(cfg, &desired)
+                .with_context(|| format!("reading effective content for `{}`", desired.path))?;
+            let extraction_started = Instant::now();
+            let Some(extraction) = crate::host::devql::sync::extraction::extract_to_cache_format(
+                cfg,
+                &desired.path,
+                &desired.effective_content_id,
+                parser_version,
+                extractor_version,
+                &content,
+            )
+            .with_context(|| format!("extracting `{}` into sync cache format", desired.path))?
+            else {
                 stats.extraction = extraction_started.elapsed();
-                (extraction, false, true, false, Some(retention_class), None)
-            }
-        };
+                return Ok(PreparedSyncOutcome {
+                    path,
+                    prepared_item: None,
+                    cache_hit: false,
+                    cache_miss: true,
+                    parse_error: true,
+                    stats,
+                });
+            };
+            stats.extraction = extraction_started.elapsed();
+            (extraction, false, true, false, Some(retention_class), None)
+        }
+    };
 
     let materialisation_prep_started = Instant::now();
     let prepared_rows = prepare_materialization_rows(

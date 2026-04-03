@@ -362,8 +362,8 @@ pub(crate) fn persist_cached_content_tx(
             )
             .context("preparing content cache artefact insert")?;
         for artefact in &artefacts {
-            let modifiers = serde_json::to_string(&artefact.modifiers)
-                .unwrap_or_else(|_| "[]".to_string());
+            let modifiers =
+                serde_json::to_string(&artefact.modifiers).unwrap_or_else(|_| "[]".to_string());
             let metadata =
                 serde_json::to_string(&artefact.metadata).unwrap_or_else(|_| "{}".to_string());
             affected_rows += stmt
@@ -747,7 +747,9 @@ pub(crate) fn deduped_cached_content_parts(
     extraction: &CachedExtraction,
 ) -> (Vec<CachedArtefact>, Vec<CachedEdge>) {
     (
-        dedupe_last_wins(&extraction.artefacts, |artefact| artefact.artifact_key.as_str()),
+        dedupe_last_wins(&extraction.artefacts, |artefact| {
+            artefact.artifact_key.as_str()
+        }),
         dedupe_last_wins(&extraction.edges, |edge| edge.edge_key.as_str()),
     )
 }

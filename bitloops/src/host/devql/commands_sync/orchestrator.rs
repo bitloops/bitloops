@@ -95,6 +95,10 @@ async fn execute_sync_with_observer_and_stats(
     let _lock =
         sync::lock::SyncLock::acquire(&cfg.config_root).context("acquiring DevQL sync lock")?;
 
+    ensure_repository_row(cfg, relational)
+        .await
+        .context("ensuring repository catalog row for DevQL sync")?;
+
     sync::lock::write_sync_started(
         relational,
         &cfg.repo.repo_id,
@@ -163,9 +167,11 @@ async fn execute_sync_inner(
         0,
     );
     let workspace_started = Instant::now();
-    let workspace =
-        sync::workspace_state::inspect_workspace_for_paths(&cfg.repo_root, requested_paths.as_ref())
-            .context("inspecting workspace for DevQL sync")?;
+    let workspace = sync::workspace_state::inspect_workspace_for_paths(
+        &cfg.repo_root,
+        requested_paths.as_ref(),
+    )
+    .context("inspecting workspace for DevQL sync")?;
     stats.workspace_inspection = workspace_started.elapsed();
 
     emit_progress(
@@ -195,9 +201,10 @@ async fn execute_sync_inner(
         0,
     );
     let stored_started = Instant::now();
-    let stored = load_stored_manifest_for_paths(relational, &cfg.repo.repo_id, requested_paths.as_ref())
-        .await
-        .context("loading stored manifest for DevQL sync")?;
+    let stored =
+        load_stored_manifest_for_paths(relational, &cfg.repo.repo_id, requested_paths.as_ref())
+            .await
+            .context("loading stored manifest for DevQL sync")?;
     stats.stored_manifest_load = stored_started.elapsed();
 
     let classified = sync::manifest::classify_paths(
@@ -474,7 +481,10 @@ async fn execute_sync_inner(
         .await
         .context("finalising batched content cache touch updates")?;
     stats.cache_store_total += touch_started.elapsed();
-    stats.add_writer_commit(touch_outcome.sqlite_commits, touch_outcome.sqlite_rows_written);
+    stats.add_writer_commit(
+        touch_outcome.sqlite_commits,
+        touch_outcome.sqlite_rows_written,
+    );
 
     emit_progress(
         observer,

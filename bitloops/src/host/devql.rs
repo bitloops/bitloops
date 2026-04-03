@@ -87,10 +87,10 @@ pub mod watch;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation;
+#[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::execute_sync_with_stats;
-#[cfg(test)]
-pub(crate) use self::commands_sync::execute_sync_validation;
 #[cfg(test)]
 pub(crate) use self::connection_status::{
     EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,

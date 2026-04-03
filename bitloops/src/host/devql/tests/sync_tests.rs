@@ -13,6 +13,28 @@ async fn sqlite_relational_store_with_sync_schema(
     crate::host::devql::RelationalStorage::local_only(path.to_path_buf())
 }
 
+async fn seed_sync_repository_catalog_row(
+    relational: &crate::host::devql::RelationalStorage,
+    cfg: &crate::host::devql::DevqlConfig,
+) {
+    relational
+        .exec(&format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+             VALUES ('{}', '{}', '{}', '{}', 'main') \
+             ON CONFLICT(repo_id) DO UPDATE SET \
+               provider = excluded.provider, \
+               organization = excluded.organization, \
+               name = excluded.name, \
+               default_branch = excluded.default_branch",
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.provider),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.organization),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.name),
+        ))
+        .await
+        .expect("seed sync repository catalog row");
+}
+
 fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
     crate::host::devql::DevqlConfig {
         config_root: std::path::PathBuf::from("/tmp/repo"),
@@ -185,6 +207,7 @@ async fn repo_sync_state_write_helpers_track_lifecycle() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     crate::host::devql::sync::lock::write_sync_started(
         &relational,
@@ -312,6 +335,7 @@ async fn repo_sync_state_write_failed_marks_repo_as_failed() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     crate::host::devql::sync::lock::write_sync_started(
         &relational,
@@ -361,6 +385,7 @@ async fn repo_sync_state_write_completed_errors_without_started_row() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     let err = crate::host::devql::sync::lock::write_sync_completed(
         &relational,
@@ -386,6 +411,7 @@ async fn repo_sync_state_write_failed_errors_without_started_row() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     let err = crate::host::devql::sync::lock::write_sync_failed(&relational, &cfg.repo.repo_id)
         .await
@@ -427,6 +453,8 @@ CREATE TABLE current_file_state (
     for table in &[
         "repo_sync_state",
         "current_file_state",
+        "artefacts_current",
+        "artefact_edges_current",
         "content_cache",
         "content_cache_artefacts",
         "content_cache_edges",
@@ -480,6 +508,40 @@ CREATE TABLE current_file_state (
         assert_eq!(
             column_count, 1,
             "column {column} should exist on current_file_state"
+        );
+    }
+
+    for table in &[
+        "repo_sync_state",
+        "current_file_state",
+        "artefacts_current",
+        "artefact_edges_current",
+    ] {
+        let mut stmt = db
+            .prepare(&format!("PRAGMA foreign_key_list({table})"))
+            .expect("prepare foreign_key_list");
+        let fk_rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .expect("query foreign_key_list")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect foreign keys");
+        assert!(
+            fk_rows
+                .iter()
+                .any(|(referenced_table, from_column, to_column, on_delete)| {
+                    referenced_table == "repositories"
+                        && from_column == "repo_id"
+                        && to_column == "repo_id"
+                        && on_delete.eq_ignore_ascii_case("CASCADE")
+                }),
+            "table {table} should reference repositories(repo_id) with ON DELETE CASCADE"
         );
     }
 }
@@ -752,7 +814,10 @@ fn workspace_state_filter_limits_results_to_requested_paths() {
         "filtered dirty files should only include requested paths"
     );
     assert!(
-        state.untracked_files.iter().all(|path| path == "src/lib.rs"),
+        state
+            .untracked_files
+            .iter()
+            .all(|path| path == "src/lib.rs"),
         "filtered untracked files should only include requested paths"
     );
 }
@@ -1188,6 +1253,7 @@ async fn materialize_writes_artefacts_current_with_correct_symbol_id() {
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let path = "src/sample.ts";
     let content = r#"import { remoteFoo } from "./remote";
 
@@ -1289,6 +1355,7 @@ async fn materialize_then_re_materialize_is_idempotent() {
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let path = "src/sample.ts";
     let content = r#"import { remoteFoo } from "./remote";
 
@@ -1480,6 +1547,7 @@ async fn materialize_reuses_cached_extraction_at_new_path_with_path_sensitive_id
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let original_path = "src/sample.ts";
     let materialized_path = "nested/other.ts";
     let content = r#"import { remoteFoo } from "./remote";
@@ -1592,6 +1660,7 @@ async fn remove_path_deletes_all_rows() {
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let path = "src/sample.ts";
     let content = r#"import { remoteFoo } from "./remote";
 
@@ -1754,6 +1823,13 @@ async fn full_sync_indexes_all_supported_files() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .expect("read repo_sync_state row");
+    let repository_row: (String, String, String) = db
+        .query_row(
+            "SELECT provider, organization, name FROM repositories WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read repositories row");
 
     assert_eq!(cache_count, 4, "supported files should be cached once each");
     assert!(
@@ -1767,6 +1843,14 @@ async fn full_sync_indexes_all_supported_files() {
     assert_eq!(sync_state.0, "completed");
     assert_eq!(sync_state.1, "full");
     assert_eq!(sync_state.2.as_deref(), Some("main"));
+    assert_eq!(
+        repository_row,
+        (
+            cfg.repo.provider.clone(),
+            cfg.repo.organization.clone(),
+            cfg.repo.name.clone()
+        )
+    );
     assert!(
         sync_state.3.is_some(),
         "completed sync should persist the resolved HEAD commit"

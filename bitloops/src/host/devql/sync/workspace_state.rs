@@ -141,8 +141,9 @@ fn read_staged_changes(
         return parse_staged_changes_from_diff_index(&output);
     }
 
-    let output = run_git_with_optional_paths(repo_root, &["ls-files", "--stage", "-z"], requested_paths)
-        .context("listing staged additions for unborn HEAD workspace inspection")?;
+    let output =
+        run_git_with_optional_paths(repo_root, &["ls-files", "--stage", "-z"], requested_paths)
+            .context("listing staged additions for unborn HEAD workspace inspection")?;
     parse_staged_changes_from_ls_files(&output)
 }
 
@@ -151,8 +152,9 @@ fn read_dirty_files(
     repo_root: &Path,
     requested_paths: Option<&std::collections::HashSet<String>>,
 ) -> Result<Vec<String>> {
-    let output = run_git_with_optional_paths(repo_root, &["diff", "--name-only", "-z"], requested_paths)
-        .context("listing dirty files for workspace inspection")?;
+    let output =
+        run_git_with_optional_paths(repo_root, &["diff", "--name-only", "-z"], requested_paths)
+            .context("listing dirty files for workspace inspection")?;
     collect_paths(repo_root, &output, false)
 }
 
@@ -182,7 +184,10 @@ fn run_git_with_optional_paths(
         return Ok(String::new());
     }
 
-    let mut args = base_args.iter().map(|arg| (*arg).to_string()).collect::<Vec<_>>();
+    let mut args = base_args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
     args.push("--".to_string());
     let mut sorted_paths = requested_paths.iter().cloned().collect::<Vec<_>>();
     sorted_paths.sort();

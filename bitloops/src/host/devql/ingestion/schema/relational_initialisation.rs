@@ -18,6 +18,12 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     if sync_tables_need_rebuild {
         sqlite_exec_path_allow_create(
             sqlite_path,
+            crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite sync repo_sync_state table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
             crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
         )
         .await
@@ -45,9 +51,31 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
 }
 
 fn sync_tables_need_rebuild(conn: &rusqlite::Connection) -> Result<bool> {
-    Ok(!current_file_state_matches_new_shape(conn)?
+    Ok(!repo_sync_state_matches_new_shape(conn)?
+        || !current_file_state_matches_new_shape(conn)?
         || !artefacts_current_matches_new_shape(conn)?
         || !artefact_edges_current_matches_new_shape(conn)?)
+}
+
+fn repo_sync_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "repo_root",
+        "active_branch",
+        "head_commit_sha",
+        "head_tree_sha",
+        "parser_version",
+        "extractor_version",
+        "last_sync_started_at",
+        "last_sync_completed_at",
+        "last_sync_status",
+        "last_sync_reason",
+    ];
+    Ok(
+        sqlite_table_columns(conn, "repo_sync_state")? == expected_columns
+            && sqlite_table_pk_columns(conn, "repo_sync_state")? == vec!["repo_id".to_string()]
+            && sqlite_table_has_repo_catalog_fk(conn, "repo_sync_state")?,
+    )
 }
 
 fn current_file_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
@@ -70,7 +98,8 @@ fn current_file_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<b
     Ok(
         sqlite_table_columns(conn, "current_file_state")? == expected_columns
             && sqlite_table_pk_columns(conn, "current_file_state")?
-                == vec!["repo_id".to_string(), "path".to_string()],
+                == vec!["repo_id".to_string(), "path".to_string()]
+            && sqlite_table_has_repo_catalog_fk(conn, "current_file_state")?,
     )
 }
 
@@ -103,7 +132,8 @@ fn artefacts_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bo
                     "repo_id".to_string(),
                     "path".to_string(),
                     "symbol_id".to_string(),
-                ],
+                ]
+            && sqlite_table_has_repo_catalog_fk(conn, "artefacts_current")?,
     )
 }
 
@@ -128,7 +158,8 @@ fn artefact_edges_current_matches_new_shape(conn: &rusqlite::Connection) -> Resu
     Ok(
         sqlite_table_columns(conn, "artefact_edges_current")? == expected_columns
             && sqlite_table_pk_columns(conn, "artefact_edges_current")?
-                == vec!["repo_id".to_string(), "edge_id".to_string()],
+                == vec!["repo_id".to_string(), "edge_id".to_string()]
+            && sqlite_table_has_repo_catalog_fk(conn, "artefact_edges_current")?,
     )
 }
 
@@ -172,6 +203,38 @@ fn sqlite_table_pk_columns(conn: &rusqlite::Connection, table: &str) -> Result<V
     Ok(pk.into_iter().map(|(_, name)| name).collect())
 }
 
+fn sqlite_table_has_repo_catalog_fk(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA foreign_key_list({table})"))
+        .with_context(|| format!("preparing PRAGMA foreign_key_list for `{table}`"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("querying PRAGMA foreign_key_list for `{table}`"))?;
+    while let Some(row) = rows.next().context("reading PRAGMA foreign key row")? {
+        let referenced_table: String = row
+            .get(2)
+            .with_context(|| format!("reading referenced table from `{table}` foreign key"))?;
+        let from_column: String = row
+            .get(3)
+            .with_context(|| format!("reading source column from `{table}` foreign key"))?;
+        let to_column: String = row
+            .get(4)
+            .with_context(|| format!("reading target column from `{table}` foreign key"))?;
+        let on_delete: String = row
+            .get(6)
+            .with_context(|| format!("reading on_delete action from `{table}` foreign key"))?;
+        if referenced_table == "repositories"
+            && from_column == "repo_id"
+            && to_column == "repo_id"
+            && on_delete.eq_ignore_ascii_case("CASCADE")
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 pub(crate) async fn init_postgres_schema(
     _cfg: &DevqlConfig,
     pg_client: &tokio_postgres::Client,
@@ -202,6 +265,13 @@ pub(crate) async fn init_postgres_schema(
     )
     .await
     .context("creating Postgres DevQL sync tables")?;
+
+    postgres_exec(
+        pg_client,
+        crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
+    )
+    .await
+    .context("rebuilding Postgres sync repo_sync_state table")?;
 
     postgres_exec(
         pg_client,
@@ -264,6 +334,12 @@ mod tests {
             .expect("open existing sqlite db");
         sqlite
             .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+                     VALUES ('repo-1', 'local', 'local', 'repo-1', 'main')",
+                    [],
+                )
+                .expect("insert repository catalog row");
                 conn.execute(
                     "INSERT INTO current_file_state (
                         repo_id, path, language, head_content_id, index_content_id,

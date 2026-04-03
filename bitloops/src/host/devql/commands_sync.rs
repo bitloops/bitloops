@@ -23,7 +23,7 @@ pub use self::summary::{SyncSummary, SyncValidationFileDrift, SyncValidationSumm
 pub(crate) use self::orchestrator::execute_sync;
 #[allow(unused_imports)]
 pub(crate) use self::orchestrator::execute_sync_with_observer;
-#[cfg_attr(not(test), allow(unused_imports))]
-pub(crate) use self::validation::execute_sync_validation;
 #[cfg(test)]
 pub(crate) use self::orchestrator::execute_sync_with_stats;
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use self::validation::execute_sync_validation;

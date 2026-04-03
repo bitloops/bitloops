@@ -674,8 +674,13 @@ async fn devql_repository_branch_selector_applies_live_branch_scope() {
 }
 
 #[tokio::test]
-async fn devql_global_queries_fail_cleanly_when_repo_checkout_is_unknown() {
+async fn devql_global_queries_fail_cleanly_when_repository_catalog_is_empty() {
     let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite");
+    sqlite
+        .execute("DELETE FROM repositories", [])
+        .expect("clear repository catalog");
     let registry_dir = TempDir::new().expect("temp dir");
     let unrelated_root = TempDir::new().expect("temp dir");
     let context = crate::graphql::DevqlGraphqlContext::for_global_request(
@@ -702,8 +707,74 @@ async fn devql_global_queries_fail_cleanly_when_repo_checkout_is_unknown() {
 
     assert_eq!(response.errors.len(), 1, "expected one graphql error");
     assert!(
-        response.errors[0].message.contains("repo checkout unknown"),
+        response.errors[0].message.contains("unknown repository"),
         "unexpected graphql errors: {:?}",
         response.errors
     );
+}
+
+#[tokio::test]
+async fn devql_global_queries_resolve_registry_backed_repository_without_catalog_row() {
+    let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite");
+    sqlite
+        .execute(
+            "DELETE FROM repositories WHERE repo_id = ?1",
+            rusqlite::params![repo_id.as_str()],
+        )
+        .expect("delete repository catalog row");
+
+    let registry_dir = TempDir::new().expect("temp dir");
+    let registry_path = registry_dir.path().join("repo-path-registry.json");
+    crate::devql_transport::persist_repo_path_registry(
+        &registry_path,
+        &crate::devql_transport::RepoPathRegistry {
+            version: 1,
+            entries: vec![crate::devql_transport::RepoPathRegistryEntry {
+                repo_id: repo_id.clone(),
+                provider: "local".to_string(),
+                organisation: "local".to_string(),
+                name: SEEDED_REPO_NAME.to_string(),
+                identity: format!("local://local/{SEEDED_REPO_NAME}"),
+                repo_root: repo.path().to_path_buf(),
+                last_branch: Some("main".to_string()),
+                git_dir_relative_path: Some(".git".to_string()),
+                updated_at_unix: 1,
+            }],
+        },
+    )
+    .expect("persist repo path registry");
+
+    let unrelated_root = TempDir::new().expect("temp dir");
+    let context = crate::graphql::DevqlGraphqlContext::for_global_request(
+        repo.path().to_path_buf(),
+        unrelated_root.path().to_path_buf(),
+        Some(registry_path),
+        super::super::super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context);
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                commits(first: 1) {
+                  totalCount
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["commits"]["totalCount"], 2);
 }
