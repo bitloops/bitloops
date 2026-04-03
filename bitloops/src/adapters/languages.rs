@@ -1,4 +1,5 @@
 pub(crate) mod go;
+pub(crate) mod java;
 pub(crate) mod python;
 pub(crate) mod rust;
 pub(crate) mod ts_js;
@@ -11,6 +12,7 @@ pub(crate) fn builtin_language_adapter_packs() -> Vec<Box<dyn LanguageAdapterPac
         Box::new(ts_js::pack::TsJsLanguageAdapterPack),
         Box::new(python::pack::PythonLanguageAdapterPack),
         Box::new(go::pack::GoLanguageAdapterPack),
+        Box::new(java::pack::JavaLanguageAdapterPack),
     ]
 }
 
@@ -32,6 +34,7 @@ mod tests {
                 "ts-js-language-pack",
                 "python-language-pack",
                 "go-language-pack",
+                "java-language-pack",
             ]
         );
     }
