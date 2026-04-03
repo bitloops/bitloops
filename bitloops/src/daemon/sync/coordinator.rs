@@ -271,10 +271,27 @@ impl SyncCoordinator {
             identity: task.repo_identity.clone(),
         };
         let cfg = DevqlConfig::from_roots(task.config_root.clone(), task.repo_root.clone(), repo)?;
+        let requested_mode = sync_task_mode_to_host(&task.mode);
 
-        if let Err(err) = crate::host::devql::execute_init_schema(&cfg, "queued DevQL sync").await {
-            self.finish_task_failed(&task.task_id, err)?;
-            return Ok(true);
+        let schema_outcome = match crate::host::devql::prepare_sync_execution_schema(
+            &cfg,
+            "queued DevQL sync",
+            &requested_mode,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.finish_task_failed(&task.task_id, err)?;
+                return Ok(true);
+            }
+        };
+        let effective_mode = crate::host::devql::effective_sync_mode_after_schema_preparation(
+            requested_mode,
+            schema_outcome,
+        );
+        if sync_task_mode_from_host(&effective_mode) != task.mode {
+            self.update_task_mode(&task.task_id, sync_task_mode_from_host(&effective_mode))?;
         }
 
         let observer = CoordinatorObserver {
@@ -285,7 +302,7 @@ impl SyncCoordinator {
 
         match crate::host::devql::run_sync_with_summary_and_observer(
             &cfg,
-            sync_task_mode_to_host(&task.mode),
+            effective_mode,
             Some(&observer),
         )
         .await
@@ -295,6 +312,24 @@ impl SyncCoordinator {
         }
 
         Ok(true)
+    }
+
+    fn update_task_mode(
+        &self,
+        task_id: &str,
+        mode: super::super::types::SyncTaskMode,
+    ) -> Result<()> {
+        let task_id = task_id.to_string();
+        self.mutate_state(|state| {
+            let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
+                return Ok(());
+            };
+            task.mode = mode;
+            task.updated_at_unix = unix_timestamp_now();
+            state.last_action = Some("mode_updated".to_string());
+            Ok(())
+        })
+        .map(|_: ()| ())
     }
 
     pub(super) fn recover_running_tasks(&self) -> Result<()> {
@@ -636,6 +671,34 @@ mod tests {
         assert_eq!(task.progress.phase, SyncProgressPhase::Queued);
         assert!(task.error.is_none());
         assert!(task.started_at_unix.is_none());
+    }
+
+    #[test]
+    fn update_task_mode_rewrites_the_persisted_task_mode() {
+        let (dir, cfg) = seeded_cfg();
+        let coordinator = test_coordinator(dir.path());
+        let mut task = sample_task(&cfg, "sync-task-1");
+        task.status = SyncTaskStatus::Running;
+        write_json(
+            &coordinator.state_path,
+            &PersistedSyncQueueState {
+                version: 1,
+                tasks: vec![task],
+                last_action: Some("running".to_string()),
+                updated_at_unix: 1,
+            },
+        )
+        .expect("seed queue state");
+
+        coordinator
+            .update_task_mode("sync-task-1", SyncTaskMode::Repair)
+            .expect("update task mode");
+
+        let task = coordinator
+            .task("sync-task-1")
+            .expect("load task")
+            .expect("task must exist");
+        assert_eq!(task.mode, SyncTaskMode::Repair);
     }
 
     #[test]

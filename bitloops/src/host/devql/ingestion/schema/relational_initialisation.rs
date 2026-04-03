@@ -1,5 +1,16 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PostgresSyncSchemaInitOutcome {
+    pub(crate) rebuilt_current_state: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostgresSyncSchemaPolicy {
+    SafeBootstrap,
+    SyncExecution,
+}
+
 pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.to_path_buf())
         .context("connecting SQLite pool for current-state schema migrations")?;
@@ -238,7 +249,21 @@ fn sqlite_table_has_repo_catalog_fk(conn: &rusqlite::Connection, table: &str) ->
 pub(crate) async fn init_postgres_schema(
     _cfg: &DevqlConfig,
     pg_client: &tokio_postgres::Client,
-) -> Result<()> {
+) -> Result<PostgresSyncSchemaInitOutcome> {
+    init_postgres_schema_with_policy(pg_client, PostgresSyncSchemaPolicy::SafeBootstrap).await
+}
+
+pub(crate) async fn init_postgres_schema_for_sync_execution(
+    _cfg: &DevqlConfig,
+    pg_client: &tokio_postgres::Client,
+) -> Result<PostgresSyncSchemaInitOutcome> {
+    init_postgres_schema_with_policy(pg_client, PostgresSyncSchemaPolicy::SyncExecution).await
+}
+
+async fn init_postgres_schema_with_policy(
+    pg_client: &tokio_postgres::Client,
+    policy: PostgresSyncSchemaPolicy,
+) -> Result<PostgresSyncSchemaInitOutcome> {
     let sql = postgres_schema_sql();
     postgres_exec(pg_client, sql)
         .await
@@ -266,26 +291,43 @@ pub(crate) async fn init_postgres_schema(
     .await
     .context("creating Postgres DevQL sync tables")?;
 
-    postgres_exec(
-        pg_client,
-        crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
-    )
-    .await
-    .context("rebuilding Postgres sync repo_sync_state table")?;
+    let sync_tables_need_rebuild = postgres_sync_tables_need_rebuild(pg_client)
+        .await
+        .context("inspecting Postgres DevQL sync table shape")?;
+    let should_rebuild_sync_tables = match policy {
+        PostgresSyncSchemaPolicy::SafeBootstrap => {
+            sync_tables_need_rebuild
+                && postgres_sync_tables_are_empty(pg_client)
+                    .await
+                    .context("checking whether Postgres sync tables are empty")?
+        }
+        PostgresSyncSchemaPolicy::SyncExecution => sync_tables_need_rebuild,
+    };
 
-    postgres_exec(
-        pg_client,
-        crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
-    )
-    .await
-    .context("rebuilding Postgres sync current_file_state table")?;
+    let mut outcome = PostgresSyncSchemaInitOutcome::default();
+    if should_rebuild_sync_tables {
+        postgres_exec(
+            pg_client,
+            crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding Postgres sync repo_sync_state table")?;
 
-    postgres_exec(
-        pg_client,
-        crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
-    )
-    .await
-    .context("rebuilding Postgres current-state sync tables")?;
+        postgres_exec(
+            pg_client,
+            crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding Postgres sync current_file_state table")?;
+
+        postgres_exec(
+            pg_client,
+            crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding Postgres current-state sync tables")?;
+        outcome.rebuilt_current_state = true;
+    }
 
     crate::capability_packs::semantic_clones::init_postgres_semantic_features_schema(pg_client)
         .await
@@ -313,7 +355,228 @@ pub(crate) async fn init_postgres_schema(
         .await
         .context("creating workspace_revisions table")?;
 
-    Ok(())
+    Ok(outcome)
+}
+
+async fn postgres_sync_tables_need_rebuild(pg_client: &tokio_postgres::Client) -> Result<bool> {
+    Ok(
+        !postgres_repo_sync_state_matches_new_shape(pg_client).await?
+            || !postgres_current_file_state_matches_new_shape(pg_client).await?
+            || !postgres_artefacts_current_matches_new_shape(pg_client).await?
+            || !postgres_artefact_edges_current_matches_new_shape(pg_client).await?,
+    )
+}
+
+async fn postgres_sync_tables_are_empty(pg_client: &tokio_postgres::Client) -> Result<bool> {
+    for table in [
+        "repo_sync_state",
+        "current_file_state",
+        "artefacts_current",
+        "artefact_edges_current",
+    ] {
+        if postgres_table_has_rows(pg_client, table).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn postgres_repo_sync_state_matches_new_shape(
+    pg_client: &tokio_postgres::Client,
+) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "repo_root",
+        "active_branch",
+        "head_commit_sha",
+        "head_tree_sha",
+        "parser_version",
+        "extractor_version",
+        "last_sync_started_at",
+        "last_sync_completed_at",
+        "last_sync_status",
+        "last_sync_reason",
+    ];
+    Ok(
+        postgres_table_columns(pg_client, "repo_sync_state").await? == expected_columns
+            && postgres_table_pk_columns(pg_client, "repo_sync_state").await?
+                == vec!["repo_id".to_string()]
+            && postgres_table_has_repo_catalog_fk(pg_client, "repo_sync_state").await?,
+    )
+}
+
+async fn postgres_current_file_state_matches_new_shape(
+    pg_client: &tokio_postgres::Client,
+) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "path",
+        "language",
+        "head_content_id",
+        "index_content_id",
+        "worktree_content_id",
+        "effective_content_id",
+        "effective_source",
+        "parser_version",
+        "extractor_version",
+        "exists_in_head",
+        "exists_in_index",
+        "exists_in_worktree",
+        "last_synced_at",
+    ];
+    Ok(
+        postgres_table_columns(pg_client, "current_file_state").await? == expected_columns
+            && postgres_table_pk_columns(pg_client, "current_file_state").await?
+                == vec!["repo_id".to_string(), "path".to_string()]
+            && postgres_table_has_repo_catalog_fk(pg_client, "current_file_state").await?,
+    )
+}
+
+async fn postgres_artefacts_current_matches_new_shape(
+    pg_client: &tokio_postgres::Client,
+) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "path",
+        "content_id",
+        "symbol_id",
+        "artefact_id",
+        "language",
+        "canonical_kind",
+        "language_kind",
+        "symbol_fqn",
+        "parent_symbol_id",
+        "parent_artefact_id",
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte",
+        "signature",
+        "modifiers",
+        "docstring",
+        "updated_at",
+    ];
+    Ok(
+        postgres_table_columns(pg_client, "artefacts_current").await? == expected_columns
+            && postgres_table_pk_columns(pg_client, "artefacts_current").await?
+                == vec![
+                    "repo_id".to_string(),
+                    "path".to_string(),
+                    "symbol_id".to_string(),
+                ]
+            && postgres_table_has_repo_catalog_fk(pg_client, "artefacts_current").await?,
+    )
+}
+
+async fn postgres_artefact_edges_current_matches_new_shape(
+    pg_client: &tokio_postgres::Client,
+) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "edge_id",
+        "path",
+        "content_id",
+        "from_symbol_id",
+        "from_artefact_id",
+        "to_symbol_id",
+        "to_artefact_id",
+        "to_symbol_ref",
+        "edge_kind",
+        "language",
+        "start_line",
+        "end_line",
+        "metadata",
+        "updated_at",
+    ];
+    Ok(
+        postgres_table_columns(pg_client, "artefact_edges_current").await? == expected_columns
+            && postgres_table_pk_columns(pg_client, "artefact_edges_current").await?
+                == vec!["repo_id".to_string(), "edge_id".to_string()]
+            && postgres_table_has_repo_catalog_fk(pg_client, "artefact_edges_current").await?,
+    )
+}
+
+async fn postgres_table_columns(
+    pg_client: &tokio_postgres::Client,
+    table: &str,
+) -> Result<Vec<String>> {
+    let rows = pg_client
+        .query(
+            "SELECT column_name
+             FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = $1
+             ORDER BY ordinal_position",
+            &[&table],
+        )
+        .await
+        .with_context(|| format!("querying Postgres column metadata for `{table}`"))?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
+}
+
+async fn postgres_table_pk_columns(
+    pg_client: &tokio_postgres::Client,
+    table: &str,
+) -> Result<Vec<String>> {
+    let rows = pg_client
+        .query(
+            "SELECT kcu.column_name
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.key_column_usage kcu
+               ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema = kcu.table_schema
+             WHERE tc.table_schema = 'public'
+               AND tc.table_name = $1
+               AND tc.constraint_type = 'PRIMARY KEY'
+             ORDER BY kcu.ordinal_position",
+            &[&table],
+        )
+        .await
+        .with_context(|| format!("querying Postgres primary key metadata for `{table}`"))?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
+}
+
+async fn postgres_table_has_repo_catalog_fk(
+    pg_client: &tokio_postgres::Client,
+    table: &str,
+) -> Result<bool> {
+    let rows = pg_client
+        .query(
+            "SELECT rc.delete_rule
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.key_column_usage kcu
+               ON tc.constraint_name = kcu.constraint_name
+              AND tc.table_schema = kcu.table_schema
+             JOIN information_schema.constraint_column_usage ccu
+               ON ccu.constraint_name = tc.constraint_name
+              AND ccu.table_schema = tc.table_schema
+             JOIN information_schema.referential_constraints rc
+               ON rc.constraint_name = tc.constraint_name
+              AND rc.constraint_schema = tc.table_schema
+             WHERE tc.table_schema = 'public'
+               AND tc.table_name = $1
+               AND tc.constraint_type = 'FOREIGN KEY'
+               AND kcu.column_name = 'repo_id'
+               AND ccu.table_name = 'repositories'
+               AND ccu.column_name = 'repo_id'",
+            &[&table],
+        )
+        .await
+        .with_context(|| format!("querying Postgres foreign key metadata for `{table}`"))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .any(|delete_rule| delete_rule.eq_ignore_ascii_case("CASCADE")))
+}
+
+async fn postgres_table_has_rows(pg_client: &tokio_postgres::Client, table: &str) -> Result<bool> {
+    let row = pg_client
+        .query_one(
+            &format!("SELECT EXISTS (SELECT 1 FROM {table} LIMIT 1)"),
+            &[],
+        )
+        .await
+        .with_context(|| format!("checking whether Postgres table `{table}` contains rows"))?;
+    Ok(row.get(0))
 }
 
 #[cfg(test)]

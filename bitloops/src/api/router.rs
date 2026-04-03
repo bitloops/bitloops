@@ -6,7 +6,7 @@ use super::handlers::{
 };
 use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
-    has_bundle_index, resolve_bundle_file, request_path_looks_like_asset,
+    has_bundle_index, request_path_looks_like_asset, resolve_bundle_file,
 };
 use crate::graphql::{
     global_graphql_handler, global_graphql_playground_handler, global_graphql_sdl_handler,
@@ -394,9 +394,10 @@ fn response_with_bytes(
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     if let Some(cache_control) = cache_control {
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(cache_control),
+        );
     }
     response
 }
