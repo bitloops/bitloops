@@ -731,6 +731,33 @@ fn workspace_state_reports_untracked_files() {
 }
 
 #[test]
+fn workspace_state_filter_limits_results_to_requested_paths() {
+    let repo = seed_full_sync_repo();
+    let requested_paths = std::collections::HashSet::from(["src/lib.rs".to_string()]);
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace_for_paths(
+        repo.path(),
+        Some(&requested_paths),
+    )
+    .expect("inspect filtered workspace");
+
+    assert_eq!(state.head_tree.len(), 1);
+    assert!(state.head_tree.contains_key("src/lib.rs"));
+    assert!(
+        state.staged_changes.keys().all(|path| path == "src/lib.rs"),
+        "filtered staged changes should only include requested paths"
+    );
+    assert!(
+        state.dirty_files.iter().all(|path| path == "src/lib.rs"),
+        "filtered dirty files should only include requested paths"
+    );
+    assert!(
+        state.untracked_files.iter().all(|path| path == "src/lib.rs"),
+        "filtered untracked files should only include requested paths"
+    );
+}
+
+#[test]
 fn workspace_state_unborn_head_reports_raw_workspace_state() {
     let repo = tempdir().expect("temp dir");
     crate::test_support::git_fixtures::init_test_repo(
@@ -2762,6 +2789,42 @@ async fn repair_mode_reprocesses_all_paths_using_cache_when_available() {
     assert_eq!(result.cache_misses, 0);
     assert_eq!(repaired_state, baseline_state);
     assert_eq!(retention_class, baseline_retention_class);
+}
+
+#[tokio::test]
+async fn execute_sync_with_stats_reports_batched_sqlite_writes() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let (summary, stats) = crate::host::devql::execute_sync_with_stats(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with stats");
+
+    assert!(summary.paths_added > 0);
+    assert_eq!(stats.prepare_worker_count, summary.paths_added.min(8));
+    assert!(stats.sqlite_commits > 0);
+    assert!(
+        stats.sqlite_commits < summary.paths_added.saturating_mul(2),
+        "batched writer should use fewer commits than per-file cache+materialise writes"
+    );
+    assert!(
+        !stats.workspace_inspection.is_zero(),
+        "workspace inspection timing should be recorded"
+    );
+    assert!(
+        !stats.desired_manifest_build.is_zero(),
+        "manifest timing should be recorded"
+    );
+    assert!(
+        stats.sqlite_rows_written > 0,
+        "writer stats should record SQLite row mutations"
+    );
 }
 
 #[tokio::test]

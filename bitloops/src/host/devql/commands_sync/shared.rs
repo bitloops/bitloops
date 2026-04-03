@@ -48,19 +48,43 @@ pub(super) fn resolve_pack_versions() -> Result<(String, String)> {
     ))
 }
 
-pub(super) async fn load_stored_manifest(
+pub(super) async fn load_stored_manifest_for_paths(
     relational: &RelationalStorage,
     repo_id: &str,
+    requested_paths: Option<&HashSet<String>>,
 ) -> Result<sync::types::StoredManifest> {
-    let rows = relational
-        .query_rows(&format!(
+    let sql = if let Some(requested_paths) = requested_paths {
+        if requested_paths.is_empty() {
+            "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
+             FROM current_file_state WHERE 1 = 0"
+                .to_string()
+        } else {
+            let mut sorted_paths = requested_paths.iter().cloned().collect::<Vec<_>>();
+            sorted_paths.sort();
+            let path_list = sorted_paths
+                .into_iter()
+                .map(|path| format!("'{}'", esc_pg(&path)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
+                 FROM current_file_state \
+                 WHERE repo_id = '{}' AND path IN ({}) \
+                 ORDER BY path",
+                esc_pg(repo_id),
+                path_list,
+            )
+        }
+    } else {
+        format!(
             "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
              FROM current_file_state \
              WHERE repo_id = '{}' \
              ORDER BY path",
             esc_pg(repo_id),
-        ))
-        .await?;
+        )
+    };
+    let rows = relational.query_rows(&sql).await?;
 
     let manifest = rows
         .into_iter()

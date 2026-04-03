@@ -7,6 +7,10 @@ mod orchestrator;
 mod progress;
 #[path = "commands_sync/shared.rs"]
 mod shared;
+#[path = "commands_sync/sqlite_writer.rs"]
+mod sqlite_writer;
+#[path = "commands_sync/stats.rs"]
+mod stats;
 #[path = "commands_sync/summary.rs"]
 mod summary;
 #[path = "commands_sync/validation.rs"]
@@ -21,3 +25,5 @@ pub(crate) use self::orchestrator::execute_sync;
 pub(crate) use self::orchestrator::execute_sync_with_observer;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use self::validation::execute_sync_validation;
+#[cfg(test)]
+pub(crate) use self::orchestrator::execute_sync_with_stats;

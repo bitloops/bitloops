@@ -1,4 +1,7 @@
+#![cfg_attr(not(test), allow(dead_code))]
+
 use anyhow::Result;
+use rusqlite::{Connection, params};
 
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::db_utils::esc_pg;
@@ -42,6 +45,65 @@ pub(crate) async fn run_gc(
     })
 }
 
+pub(crate) fn run_gc_with_connection(
+    conn: &mut Connection,
+    ttl_days: u32,
+) -> Result<(GcResult, usize)> {
+    let candidates = load_gc_candidates_with_connection(conn, ttl_days)?;
+    if candidates.is_empty() {
+        return Ok((
+            GcResult {
+                candidate_count: 0,
+                deleted_count: 0,
+            },
+            0,
+        ));
+    }
+
+    let tx = conn.transaction()?;
+    let mut rows_written = 0usize;
+    {
+        let mut delete_edges = tx.prepare(
+            "DELETE FROM content_cache_edges WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+        )?;
+        let mut delete_artefacts = tx.prepare(
+            "DELETE FROM content_cache_artefacts WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+        )?;
+        let mut delete_cache = tx.prepare(
+            "DELETE FROM content_cache WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+        )?;
+        for candidate in &candidates {
+            rows_written += delete_edges.execute(params![
+                candidate.content_id,
+                candidate.language,
+                candidate.parser_version,
+                candidate.extractor_version,
+            ])?;
+            rows_written += delete_artefacts.execute(params![
+                candidate.content_id,
+                candidate.language,
+                candidate.parser_version,
+                candidate.extractor_version,
+            ])?;
+            rows_written += delete_cache.execute(params![
+                candidate.content_id,
+                candidate.language,
+                candidate.parser_version,
+                candidate.extractor_version,
+            ])?;
+        }
+    }
+    tx.commit()?;
+
+    Ok((
+        GcResult {
+            candidate_count: candidates.len(),
+            deleted_count: candidates.len(),
+        },
+        rows_written,
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GcCandidate {
     content_id: String,
@@ -76,6 +138,38 @@ ORDER BY c.content_id, c.language, c.parser_version, c.extractor_version",
         .filter_map(|row| gc_candidate_from_row(&row))
         .collect::<Vec<_>>();
     Ok(candidates)
+}
+
+fn load_gc_candidates_with_connection(
+    conn: &Connection,
+    ttl_days: u32,
+) -> Result<Vec<GcCandidate>> {
+    let sql = format!(
+        "SELECT c.content_id, c.language, c.parser_version, c.extractor_version \
+FROM content_cache c \
+WHERE c.retention_class = 'worktree_only' \
+AND c.last_accessed_at < datetime('now', '-{} days') \
+AND NOT EXISTS ( \
+    SELECT 1 FROM current_file_state s \
+    WHERE s.effective_content_id = c.content_id \
+      AND s.language = c.language \
+      AND s.parser_version = c.parser_version \
+      AND s.extractor_version = c.extractor_version \
+) \
+ORDER BY c.content_id, c.language, c.parser_version, c.extractor_version",
+        ttl_days,
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    stmt.query_map([], |row| {
+        Ok(GcCandidate {
+            content_id: row.get(0)?,
+            language: row.get(1)?,
+            parser_version: row.get(2)?,
+            extractor_version: row.get(3)?,
+        })
+    })?
+    .collect::<std::result::Result<Vec<_>, _>>()
+    .map_err(Into::into)
 }
 
 fn gc_candidate_from_row(row: &serde_json::Map<String, serde_json::Value>) -> Option<GcCandidate> {

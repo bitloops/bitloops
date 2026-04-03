@@ -1,6 +1,9 @@
-use anyhow::Result;
+#![cfg_attr(not(test), allow(dead_code))]
+
+use anyhow::{Context, Result};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::db_utils::esc_pg;
@@ -18,6 +21,14 @@ pub(crate) struct CachedExtraction {
     pub(crate) parse_status: String,
     pub(crate) artefacts: Vec<CachedArtefact>,
     pub(crate) edges: Vec<CachedEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CacheKey {
+    pub(crate) content_id: String,
+    pub(crate) language: String,
+    pub(crate) parser_version: String,
+    pub(crate) extractor_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +152,128 @@ WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extrac
     }))
 }
 
+pub(crate) fn lookup_cached_content_with_connection(
+    conn: &Connection,
+    content_id: &str,
+    language: &str,
+    parser_version: &str,
+    extractor_version: &str,
+) -> Result<Option<CachedExtraction>> {
+    let header = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT content_id, language, parser_version, extractor_version, parse_status \
+                 FROM content_cache \
+                 WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4 \
+                 LIMIT 1",
+            )
+            .context("preparing content cache header lookup")?;
+        stmt.query_row(
+            params![content_id, language, parser_version, extractor_version],
+            |row| {
+                Ok(CachedHeaderRow {
+                    content_id: row.get(0)?,
+                    language: row.get(1)?,
+                    parser_version: row.get(2)?,
+                    extractor_version: row.get(3)?,
+                    parse_status: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .context("querying content cache header")?
+    };
+    let Some(header) = header else {
+        return Ok(None);
+    };
+
+    let artefacts = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT artifact_key, canonical_kind, language_kind, name, parent_artifact_key, \
+                        start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata \
+                 FROM content_cache_artefacts \
+                 WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4 \
+                 ORDER BY artifact_key",
+            )
+            .context("preparing content cache artefact lookup")?;
+        stmt.query_map(
+            params![content_id, language, parser_version, extractor_version],
+            |row| {
+                Ok(CachedArtefact {
+                    artifact_key: row.get(0)?,
+                    canonical_kind: row.get(1)?,
+                    language_kind: row.get(2)?,
+                    name: row.get(3)?,
+                    parent_artifact_key: row.get(4)?,
+                    start_line: row.get(5)?,
+                    end_line: row.get(6)?,
+                    start_byte: row.get(7)?,
+                    end_byte: row.get(8)?,
+                    signature: row.get(9)?,
+                    modifiers: row
+                        .get::<_, String>(10)
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+                        .unwrap_or_default(),
+                    docstring: row.get(11)?,
+                    metadata: row
+                        .get::<_, String>(12)
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .unwrap_or_else(|| Value::Object(Map::new())),
+                })
+            },
+        )
+        .context("querying content cache artefacts")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("collecting content cache artefacts")?
+    };
+
+    let edges = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata \
+                 FROM content_cache_edges \
+                 WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4 \
+                 ORDER BY edge_key",
+            )
+            .context("preparing content cache edge lookup")?;
+        stmt.query_map(
+            params![content_id, language, parser_version, extractor_version],
+            |row| {
+                Ok(CachedEdge {
+                    edge_key: row.get(0)?,
+                    from_artifact_key: row.get(1)?,
+                    to_artifact_key: row.get(2)?,
+                    to_symbol_ref: row.get(3)?,
+                    edge_kind: row.get(4)?,
+                    start_line: row.get(5)?,
+                    end_line: row.get(6)?,
+                    metadata: row
+                        .get::<_, String>(7)
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .unwrap_or_else(|| Value::Object(Map::new())),
+                })
+            },
+        )
+        .context("querying content cache edges")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("collecting content cache edges")?
+    };
+
+    Ok(Some(CachedExtraction {
+        content_id: header.content_id,
+        language: header.language,
+        parser_version: header.parser_version,
+        extractor_version: header.extractor_version,
+        parse_status: header.parse_status,
+        artefacts,
+        edges,
+    }))
+}
+
 pub(crate) async fn store_cached_content(
     relational: &RelationalStorage,
     extraction: &CachedExtraction,
@@ -167,6 +300,158 @@ pub(crate) async fn store_cached_content(
     );
 
     relational.exec_batch_transactional(&statements).await
+}
+
+pub(crate) fn persist_cached_content_tx(
+    tx: &Transaction<'_>,
+    extraction: &CachedExtraction,
+    retention_class: &str,
+) -> Result<usize> {
+    let (artefacts, edges) = deduped_cached_content_parts(extraction);
+    let mut affected_rows = 0usize;
+
+    affected_rows += tx
+        .execute(
+            "INSERT INTO content_cache (content_id, language, parser_version, extractor_version, retention_class, parse_status, parsed_at, last_accessed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now')) \
+             ON CONFLICT (content_id, language, parser_version, extractor_version) DO UPDATE SET \
+                 retention_class = excluded.retention_class, \
+                 parse_status = excluded.parse_status, \
+                 parsed_at = excluded.parsed_at, \
+                 last_accessed_at = excluded.last_accessed_at",
+            params![
+                extraction.content_id,
+                extraction.language,
+                extraction.parser_version,
+                extraction.extractor_version,
+                retention_class,
+                extraction.parse_status,
+            ],
+        )
+        .context("upserting content cache header")?;
+
+    affected_rows += tx
+        .execute(
+            "DELETE FROM content_cache_edges WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            params![
+                extraction.content_id,
+                extraction.language,
+                extraction.parser_version,
+                extraction.extractor_version,
+            ],
+        )
+        .context("deleting cached content edges before rewrite")?;
+    affected_rows += tx
+        .execute(
+            "DELETE FROM content_cache_artefacts WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            params![
+                extraction.content_id,
+                extraction.language,
+                extraction.parser_version,
+                extraction.extractor_version,
+            ],
+        )
+        .context("deleting cached content artefacts before rewrite")?;
+
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO content_cache_artefacts \
+                 (content_id, language, parser_version, extractor_version, artifact_key, canonical_kind, language_kind, name, parent_artifact_key, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            )
+            .context("preparing content cache artefact insert")?;
+        for artefact in &artefacts {
+            let modifiers = serde_json::to_string(&artefact.modifiers)
+                .unwrap_or_else(|_| "[]".to_string());
+            let metadata =
+                serde_json::to_string(&artefact.metadata).unwrap_or_else(|_| "{}".to_string());
+            affected_rows += stmt
+                .execute(params![
+                    extraction.content_id,
+                    extraction.language,
+                    extraction.parser_version,
+                    extraction.extractor_version,
+                    artefact.artifact_key,
+                    artefact.canonical_kind,
+                    artefact.language_kind,
+                    artefact.name,
+                    artefact.parent_artifact_key,
+                    artefact.start_line,
+                    artefact.end_line,
+                    artefact.start_byte,
+                    artefact.end_byte,
+                    artefact.signature,
+                    modifiers,
+                    artefact.docstring,
+                    metadata,
+                ])
+                .context("inserting cached artefact row")?;
+        }
+    }
+
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO content_cache_edges \
+                 (content_id, language, parser_version, extractor_version, edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )
+            .context("preparing content cache edge insert")?;
+        for edge in &edges {
+            let metadata =
+                serde_json::to_string(&edge.metadata).unwrap_or_else(|_| "{}".to_string());
+            affected_rows += stmt
+                .execute(params![
+                    extraction.content_id,
+                    extraction.language,
+                    extraction.parser_version,
+                    extraction.extractor_version,
+                    edge.edge_key,
+                    edge.from_artifact_key,
+                    edge.to_artifact_key,
+                    edge.to_symbol_ref,
+                    edge.edge_kind,
+                    edge.start_line,
+                    edge.end_line,
+                    metadata,
+                ])
+                .context("inserting cached edge row")?;
+        }
+    }
+
+    Ok(affected_rows)
+}
+
+pub(crate) fn touch_cache_entries_tx(
+    tx: &Transaction<'_>,
+    touches: &HashMap<CacheKey, bool>,
+) -> Result<usize> {
+    if touches.is_empty() {
+        return Ok(0);
+    }
+
+    let mut affected_rows = 0usize;
+    let mut stmt = tx
+        .prepare(
+            "UPDATE content_cache \
+             SET retention_class = CASE WHEN ?5 <> 0 THEN 'git_backed' ELSE retention_class END, \
+                 last_accessed_at = datetime('now') \
+             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+        )
+        .context("preparing content cache touch update")?;
+    for (key, promote_to_git_backed) in touches {
+        affected_rows += stmt
+            .execute(params![
+                key.content_id,
+                key.language,
+                key.parser_version,
+                key.extractor_version,
+                if *promote_to_git_backed { 1 } else { 0 },
+            ])
+            .context("touching content cache entry")?;
+    }
+    Ok(affected_rows)
 }
 
 pub(crate) async fn promote_cached_content_to_git_backed(
@@ -456,6 +741,15 @@ where
 
     deduped.reverse();
     deduped
+}
+
+pub(crate) fn deduped_cached_content_parts(
+    extraction: &CachedExtraction,
+) -> (Vec<CachedArtefact>, Vec<CachedEdge>) {
+    (
+        dedupe_last_wins(&extraction.artefacts, |artefact| artefact.artifact_key.as_str()),
+        dedupe_last_wins(&extraction.edges, |edge| edge.edge_key.as_str()),
+    )
 }
 
 #[cfg(test)]
