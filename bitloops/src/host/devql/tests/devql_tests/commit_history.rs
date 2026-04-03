@@ -434,3 +434,150 @@ async fn execute_ingest_hidden_max_commits_cap_limits_commit_replay_without_publ
     assert_eq!(ingested_commit_count, 1);
     assert!(head_ledger.is_none(), "head commit should remain pending");
 }
+
+#[tokio::test]
+async fn execute_project_bootstrap_first_run_ingests_only_head() {
+    use rusqlite::OptionalExtension;
+
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
+        .expect("write first revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add one"]);
+    let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add two"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_project_bootstrap(&cfg, false)
+        .await
+        .expect("execute first bootstrap");
+
+    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let ingested_commit_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count completed ledger rows");
+    let first_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), first_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read first commit ledger row");
+    let head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read head commit ledger row");
+
+    assert_eq!(ingested_commit_count, 1);
+    assert!(first_ledger.is_none(), "first bootstrap should not backfill older commits");
+    assert_eq!(head_ledger.as_deref(), Some("completed"));
+}
+
+#[tokio::test]
+async fn execute_project_bootstrap_recovery_catches_up_missing_branch_segment() {
+    use rusqlite::OptionalExtension;
+
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
+        .expect("write first revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add one"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add two"]);
+    let bootstrap_head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_project_bootstrap(&cfg, false)
+        .await
+        .expect("execute initial bootstrap");
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\npub fn three() -> i32 { 3 }\n",
+    )
+    .expect("write third revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add three"]);
+    let missed_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\npub fn three() -> i32 { 3 }\npub fn four() -> i32 { 4 }\n",
+    )
+    .expect("write fourth revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add four"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    execute_project_bootstrap(&cfg, false)
+        .await
+        .expect("execute recovery bootstrap");
+
+    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let ingested_commit_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count completed ledger rows");
+    let bootstrap_head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), bootstrap_head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read bootstrap head ledger row");
+    let missed_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), missed_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read missed commit ledger row");
+    let head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read recovery head ledger row");
+
+    assert_eq!(bootstrap_head_ledger.as_deref(), Some("completed"));
+    assert_eq!(missed_ledger.as_deref(), Some("completed"));
+    assert_eq!(head_ledger.as_deref(), Some("completed"));
+    assert_eq!(
+        ingested_commit_count, 3,
+        "recovery bootstrap should catch up both missing commits after the first HEAD-only bootstrap"
+    );
+}

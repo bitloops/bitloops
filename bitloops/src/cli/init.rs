@@ -134,6 +134,8 @@ async fn run_with_io_async(
         args.force,
         out,
     )?;
+    telemetry_consent::bootstrap_project_via_daemon(project_root.as_path(), args.skip_baseline)
+        .await?;
     Ok(())
 }
 

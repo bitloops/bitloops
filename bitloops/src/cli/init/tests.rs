@@ -4,6 +4,7 @@ use super::agent_hooks::{
 use super::*;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
+    with_repo_graphql_executor_hook,
 };
 use crate::cli::{Cli, Commands};
 use crate::config::ensure_daemon_config_exists;
@@ -583,8 +584,10 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
 }
 
 #[test]
-fn run_init_does_not_trigger_project_bootstrap_mutation() {
+fn run_init_triggers_project_bootstrap_mutation_for_recovery() {
+    let saw_bootstrap = std::rc::Rc::new(std::cell::RefCell::new(false));
     let repo = tempfile::tempdir().unwrap();
+    let repo_root = repo.path().to_path_buf();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
@@ -598,9 +601,7 @@ fn run_init_does_not_trigger_project_bootstrap_mutation() {
 
             with_global_graphql_executor_hook(
                 |_runtime_root, query, variables| {
-                    if query.contains("bootstrapProject") {
-                        anyhow::bail!("init should not invoke bootstrapProject");
-                    }
+                    assert!(!query.contains("bootstrapProject"));
                     assert!(query.contains("updateCliTelemetryConsent"));
                     assert_eq!(variables["telemetry"], serde_json::json!(false));
                     Ok(serde_json::json!({
@@ -611,24 +612,53 @@ fn run_init_does_not_trigger_project_bootstrap_mutation() {
                     }))
                 },
                 || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("");
-                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
-                    runtime
-                        .block_on(run_with_io_async(
-                            InitArgs {
-                                install_default_daemon: false,
-                                force: false,
-                                agent: None,
-                                telemetry: Some(false),
-                                no_telemetry: false,
-                                skip_baseline: false,
-                            },
-                            &mut out,
-                            &mut input,
-                            None,
-                        ))
-                        .expect("run init");
+                    with_repo_graphql_executor_hook(
+                        {
+                            let saw_bootstrap = std::rc::Rc::clone(&saw_bootstrap);
+                            let repo_root = repo_root.clone();
+                            move |scope, query, variables| {
+                                *saw_bootstrap.borrow_mut() = true;
+                                let expected_repo_root =
+                                    repo_root.canonicalize().unwrap_or_else(|_| repo_root.clone());
+                                let actual_repo_root = scope
+                                    .repo_root
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| scope.repo_root.clone());
+                                assert_eq!(actual_repo_root, expected_repo_root);
+                                assert!(query.contains("bootstrapProject"));
+                                assert_eq!(variables["skipBaseline"], serde_json::json!(false));
+                                Ok(serde_json::json!({
+                                    "bootstrapProject": {
+                                        "success": true
+                                    }
+                                }))
+                            }
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let mut input = Cursor::new("");
+                            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                            runtime
+                                .block_on(run_with_io_async(
+                                    InitArgs {
+                                        install_default_daemon: false,
+                                        force: false,
+                                        agent: None,
+                                        telemetry: Some(false),
+                                        no_telemetry: false,
+                                        skip_baseline: false,
+                                    },
+                                    &mut out,
+                                    &mut input,
+                                    None,
+                                ))
+                                .expect("run init");
+                        },
+                    );
+                    assert!(
+                        *saw_bootstrap.borrow(),
+                        "init should invoke bootstrapProject after telemetry setup"
+                    );
                 },
             );
         },

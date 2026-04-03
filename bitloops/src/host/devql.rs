@@ -618,16 +618,32 @@ pub async fn execute_project_bootstrap(
     }
 
     run_baseline_ingestion(cfg, &relational).await?;
+    let branch_name = checked_out_branch_name(&cfg.repo_root);
     let head_sha = match run_git(&cfg.repo_root, &["rev-parse", "HEAD"]) {
         Ok(sha) => sha,
         Err(err) if is_missing_head_error(&err) => return Ok(summary),
         Err(err) => return Err(err).context("resolving HEAD for `bitloops init` bootstrap"),
     };
-    let _ = self::commands_ingest::execute_ingest_for_commits(cfg, vec![head_sha.clone()], None, None)
+    let has_historical_state =
+        repo_has_historical_ingest_state(&relational, &cfg.repo.repo_id, branch_name.as_deref())
+            .await
+            .context("checking historical DevQL bootstrap state for `bitloops init`")?;
+    if has_historical_state {
+        let _ = self::commands_ingest::execute_ingest(cfg)
+            .await
+            .context("running recovery historical DevQL ingest for `bitloops init`")?;
+    } else {
+        let _ = self::commands_ingest::execute_ingest_for_commits(
+            cfg,
+            vec![head_sha.clone()],
+            None,
+            None,
+        )
         .await
         .context("running HEAD-only historical DevQL ingest for `bitloops init`")?;
+    }
     if uses_local_ingest_watermarks(&relational)
-        && let Some(branch_name) = checked_out_branch_name(&cfg.repo_root)
+        && let Some(branch_name) = branch_name
     {
         upsert_sync_state_value(
             cfg,

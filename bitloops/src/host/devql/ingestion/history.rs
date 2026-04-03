@@ -62,6 +62,30 @@ pub(super) async fn select_missing_branch_commit_segment(
     list_commit_range(repo_root, head_sha)
 }
 
+pub(super) async fn repo_has_historical_ingest_state(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    branch_name: Option<&str>,
+) -> Result<bool> {
+    if uses_local_ingest_watermarks(relational)
+        && let Some(branch_name) = branch_name.map(str::trim).filter(|value| !value.is_empty())
+    {
+        let watermark_key = historical_branch_watermark_key(branch_name);
+        let branch_watermark = load_sync_state_value_for_repo(relational, repo_id, &watermark_key)
+            .await?;
+        if branch_watermark
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(!load_fully_ingested_commits(relational, repo_id)
+        .await?
+        .is_empty())
+}
+
 pub(super) fn uses_local_ingest_watermarks(relational: &RelationalStorage) -> bool {
     matches!(relational.dialect(), RelationalDialect::Sqlite)
 }

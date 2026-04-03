@@ -5,6 +5,9 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use serde_json::json;
+use crate::devql_transport::discover_slim_cli_repo_scope;
+#[cfg(test)]
+use crate::devql_transport::SlimCliRepoScope;
 
 #[cfg(not(test))]
 use std::io::IsTerminal;
@@ -23,6 +26,14 @@ const UPDATE_CLI_TELEMETRY_MUTATION: &str = r#"
     }
 "#;
 
+const BOOTSTRAP_PROJECT_MUTATION: &str = r#"
+    mutation BootstrapProject($skipBaseline: Boolean!) {
+      bootstrapProject(skipBaseline: $skipBaseline) {
+        success
+      }
+    }
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TelemetryConsentResult {
@@ -36,13 +47,31 @@ struct UpdateCliTelemetryConsentMutationData {
     update_cli_telemetry_consent: TelemetryConsentResult,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapProjectMutationData {
+    bootstrap_project: BootstrapProjectResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapProjectResult {
+    success: bool,
+}
+
 #[cfg(test)]
 type GlobalGraphqlExecutorHook =
     dyn Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static;
 
 #[cfg(test)]
+type RepoGraphqlExecutorHook =
+    dyn Fn(&SlimCliRepoScope, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static;
+
+#[cfg(test)]
 thread_local! {
     static GLOBAL_GRAPHQL_EXECUTOR_HOOK: RefCell<Option<Rc<GlobalGraphqlExecutorHook>>> =
+        RefCell::new(None);
+    static REPO_GRAPHQL_EXECUTOR_HOOK: RefCell<Option<Rc<RepoGraphqlExecutorHook>>> =
         RefCell::new(None);
 }
 
@@ -134,6 +163,32 @@ pub(crate) async fn ensure_existing_config_telemetry_consent(
     Ok(())
 }
 
+pub(crate) async fn bootstrap_project_via_daemon(
+    runtime_root: &Path,
+    skip_baseline: bool,
+) -> Result<()> {
+    #[cfg(test)]
+    if env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
+    {
+        return Ok(());
+    }
+
+    let data: BootstrapProjectMutationData = execute_repo_graphql(
+        runtime_root,
+        BOOTSTRAP_PROJECT_MUTATION,
+        json!({
+            "skipBaseline": skip_baseline,
+        }),
+    )
+    .await?;
+    if !data.bootstrap_project.success {
+        bail!("Bitloops project bootstrap did not complete successfully");
+    }
+    Ok(())
+}
+
 pub(crate) async fn ensure_default_daemon_running() -> Result<()> {
     #[cfg(test)]
     if env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
@@ -197,6 +252,21 @@ async fn execute_global_graphql<T: for<'de> Deserialize<'de>>(
     crate::daemon::execute_graphql(runtime_root, query, variables).await
 }
 
+async fn execute_repo_graphql<T: for<'de> Deserialize<'de>>(
+    runtime_root: &Path,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<T> {
+    let scope = discover_slim_cli_repo_scope(Some(runtime_root))?;
+
+    #[cfg(test)]
+    if let Some(data) = maybe_execute_repo_graphql_via_hook(&scope, query, &variables) {
+        return Ok(serde_json::from_value(data?)?);
+    }
+
+    crate::daemon::execute_slim_graphql(scope.repo_root.as_path(), &scope, query, variables).await
+}
+
 #[cfg(test)]
 pub(crate) fn with_global_graphql_executor_hook<T>(
     hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
@@ -217,6 +287,25 @@ pub(crate) fn with_global_graphql_executor_hook<T>(
 }
 
 #[cfg(test)]
+pub(crate) fn with_repo_graphql_executor_hook<T>(
+    hook: impl Fn(&SlimCliRepoScope, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    REPO_GRAPHQL_EXECUTOR_HOOK.with(|cell: &RefCell<Option<Rc<RepoGraphqlExecutorHook>>>| {
+        assert!(
+            cell.borrow().is_none(),
+            "repo graphql executor hook already installed"
+        );
+        *cell.borrow_mut() = Some(Rc::new(hook));
+    });
+    let result = f();
+    REPO_GRAPHQL_EXECUTOR_HOOK.with(|cell: &RefCell<Option<Rc<RepoGraphqlExecutorHook>>>| {
+        *cell.borrow_mut() = None;
+    });
+    result
+}
+
+#[cfg(test)]
 fn maybe_execute_global_graphql_via_hook(
     runtime_root: &Path,
     query: &str,
@@ -226,5 +315,18 @@ fn maybe_execute_global_graphql_via_hook(
         hook.borrow()
             .as_ref()
             .map(|hook| hook(runtime_root, query, variables))
+    })
+}
+
+#[cfg(test)]
+fn maybe_execute_repo_graphql_via_hook(
+    scope: &SlimCliRepoScope,
+    query: &str,
+    variables: &serde_json::Value,
+) -> Option<Result<serde_json::Value>> {
+    REPO_GRAPHQL_EXECUTOR_HOOK.with(|hook: &RefCell<Option<Rc<RepoGraphqlExecutorHook>>>| {
+        hook.borrow()
+            .as_ref()
+            .map(|hook| hook(scope, query, variables))
     })
 }
