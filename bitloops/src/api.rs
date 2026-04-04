@@ -12,12 +12,14 @@ pub mod tls;
 use crate::graphql;
 use crate::graphql::SubscriptionHub;
 use anyhow::Result;
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 
@@ -196,6 +198,39 @@ impl DashboardState {
 
     pub(crate) fn subscription_hub(&self) -> Arc<SubscriptionHub> {
         Arc::clone(&self.subscription_hub)
+    }
+}
+
+pub(super) fn track_repo_action(
+    repo_root: &Path,
+    descriptor: crate::telemetry::analytics::ActionDescriptor,
+    success: bool,
+    duration: Duration,
+) {
+    let Some(dispatch_context) =
+        crate::telemetry::analytics::load_dispatch_context_for_repo(repo_root)
+    else {
+        return;
+    };
+
+    crate::telemetry::analytics::track_action_detached(
+        Some(&descriptor),
+        &dispatch_context,
+        env!("CARGO_PKG_VERSION"),
+        Some(repo_root),
+        success,
+        duration.as_millis(),
+    );
+}
+
+pub(super) fn status_code_class(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        100..=199 => "1xx",
+        200..=299 => "2xx",
+        300..=399 => "3xx",
+        400..=499 => "4xx",
+        500..=599 => "5xx",
+        _ => "unknown",
     }
 }
 

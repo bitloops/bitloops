@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
+const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
+
 fn setup_git_repo(path: &Path) {
     let status = git_command()
         .args(["init", "-q"])
@@ -43,13 +45,11 @@ fn write_daemon_telemetry_config(config_root: &Path, telemetry: Option<bool>) {
 #[allow(non_snake_case)]
 fn TestEventPayloadSerialization() {
     let payload = EventPayload {
-        event: "cli_command_executed".to_string(),
+        event: "bitloops daemon start".to_string(),
         distinct_id: "test-machine-id".to_string(),
         properties: HashMap::from([
-            (
-                "command".to_string(),
-                Value::String("bitloops status".to_string()),
-            ),
+            ("surface".to_string(), Value::String("cli".to_string())),
+            ("result".to_string(), Value::String("success".to_string())),
             (
                 "strategy".to_string(),
                 Value::String("manual-commit".to_string()),
@@ -58,7 +58,6 @@ fn TestEventPayloadSerialization() {
                 "agent".to_string(),
                 Value::String("claude-code".to_string()),
             ),
-            ("isBitloopsEnabled".to_string(), Value::Bool(true)),
             (
                 "cli_version".to_string(),
                 Value::String("1.0.0".to_string()),
@@ -77,84 +76,173 @@ fn TestEventPayloadSerialization() {
     assert_eq!(decoded.distinct_id, payload.distinct_id);
     assert_eq!(decoded.timestamp, payload.timestamp);
     assert_eq!(
-        decoded.properties.get("command").and_then(Value::as_str),
-        Some("bitloops status")
+        decoded.properties.get("surface").and_then(Value::as_str),
+        Some("cli")
     );
 }
 
 #[test]
 #[allow(non_snake_case)]
-fn TestTrackCommandDetachedSkipsNilCommand() {
-    track_command_detached(None, "manual-commit", "claude-code", true, "1.0.0");
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn TestTrackCommandDetachedSkipsHiddenCommands() {
-    let hidden_cmd = CommandInfo {
-        command_path: "__send_analytics".to_string(),
-        hidden: true,
-        flag_names: Vec::new(),
+fn TestTrackActionDetachedSkipsNilAction() {
+    let ctx = TelemetryDispatchContext {
+        strategy: None,
+        agent: None,
     };
-
-    track_command_detached(
-        Some(&hidden_cmd),
-        "manual-commit",
-        "claude-code",
-        true,
-        "1.0.0",
-    );
+    track_action_detached(None, &ctx, "1.0.0", None, true, 12);
 }
 
 #[test]
 #[allow(non_snake_case)]
-fn TestTrackCommandDetachedRespectsOptOut() {
+fn TestTrackActionDetachedRespectsOptOut() {
     with_env_var(TELEMETRY_OPTOUT_ENV, Some("1"), || {
-        let cmd = CommandInfo {
-            command_path: "status".to_string(),
-            hidden: false,
-            flag_names: Vec::new(),
+        let action = ActionDescriptor {
+            event: "bitloops daemon status".to_string(),
+            surface: "cli",
+            properties: HashMap::new(),
+        };
+        let ctx = TelemetryDispatchContext {
+            strategy: None,
+            agent: None,
         };
 
-        track_command_detached(Some(&cmd), "manual-commit", "claude-code", true, "1.0.0");
+        track_action_detached(Some(&action), &ctx, "1.0.0", None, true, 10);
     });
 }
 
 #[test]
 #[allow(non_snake_case)]
-fn TestBuildEventPayloadAgent() {
+fn TestBuildActionPayloadCommonEnvelope() {
     with_env_var(
         "BITLOOPS_TELEMETRY_DISTINCT_ID",
         Some("fixed-test-id"),
         || {
-            let tests = [
-                ("defaults empty to auto", "", "auto"),
-                ("preserves explicit agent", "claude-code", "claude-code"),
-            ];
+            let payload = build_action_payload(
+                &ActionDescriptor {
+                    event: "bitloops daemon start".to_string(),
+                    surface: "cli",
+                    properties: HashMap::from([(
+                        "flags".to_string(),
+                        Value::Array(vec![Value::String("detached".to_string())]),
+                    )]),
+                },
+                &TelemetryDispatchContext {
+                    strategy: Some("manual-commit".to_string()),
+                    agent: Some("claude-code".to_string()),
+                },
+                "1.0.0",
+                true,
+                42,
+                Some("session-123".to_string()),
+            )
+            .expect("payload");
 
-            for (name, input_agent, expected_agent) in tests {
-                let cmd = CommandInfo {
-                    command_path: "test".to_string(),
-                    hidden: false,
-                    flag_names: Vec::new(),
-                };
-                let payload =
-                    build_event_payload(Some(&cmd), "manual-commit", input_agent, true, "1.0.0");
-                assert!(payload.is_some(), "case {name}: expected non-nil payload");
+            assert_eq!(payload.event, "bitloops daemon start");
+            assert_eq!(
+                payload.properties.get("surface").and_then(Value::as_str),
+                Some("cli")
+            );
+            assert_eq!(
+                payload.properties.get("result").and_then(Value::as_str),
+                Some("success")
+            );
+            assert_eq!(
+                payload
+                    .properties
+                    .get("duration_ms")
+                    .and_then(Value::as_u64),
+                Some(42)
+            );
+            assert_eq!(
+                payload.properties.get("agent").and_then(Value::as_str),
+                Some("claude-code")
+            );
+            assert_eq!(
+                payload
+                    .properties
+                    .get("$session_id")
+                    .and_then(Value::as_str),
+                Some("session-123")
+            );
+        },
+    );
+}
 
-                if let Some(payload) = payload {
-                    let agent = payload
-                        .properties
-                        .get("agent")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    assert_eq!(
-                        agent, expected_agent,
-                        "case {name}: agent property mismatch"
-                    );
-                }
-            }
+#[test]
+#[allow(non_snake_case)]
+fn TestBuildSessionLifecyclePayloadUsesPosthogEventNames() {
+    with_env_var(
+        "BITLOOPS_TELEMETRY_DISTINCT_ID",
+        Some("fixed-test-id"),
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let start = build_session_start_payload("session-123", "manual-commit", "cli")
+                .expect("start payload");
+
+            assert_eq!(start.event, SESSION_STARTED_EVENT);
+            assert_eq!(
+                start.properties.get("$session_id").and_then(Value::as_str),
+                Some("session-123")
+            );
+            assert_eq!(
+                start.properties.get("source").and_then(Value::as_str),
+                Some("cli")
+            );
+            assert!(
+                !start.properties.contains_key("repo_root"),
+                "session start should not include repo_root"
+            );
+
+            let ended = crate::telemetry::sessions::EndedSession {
+                session_id: "session-123".to_string(),
+                repo_root: tmp.path().to_string_lossy().to_string(),
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_600,
+                duration_secs: 600,
+            };
+            let end = build_session_end_payload(&ended, "dashboard").expect("end payload");
+
+            assert_eq!(end.event, SESSION_ENDED_EVENT);
+            assert_eq!(
+                end.properties.get("$session_id").and_then(Value::as_str),
+                Some("session-123")
+            );
+            assert_eq!(
+                end.properties
+                    .get("$session_duration")
+                    .and_then(Value::as_u64),
+                Some(600)
+            );
+            assert_eq!(
+                end.properties.get("source").and_then(Value::as_str),
+                Some("dashboard")
+            );
+            assert!(
+                !end.properties.contains_key("repo_root"),
+                "session end should not include repo_root"
+            );
+        },
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTrackSessionActivityCreatesSessionStoreEntry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state_root = tempfile::tempdir().unwrap();
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+
+    with_process_state(
+        None,
+        &[
+            (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_str.as_str())),
+            ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
+        ],
+        || {
+            track_session_activity_detached(tmp.path(), "dashboard", "dashboard");
+
+            let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+            let store = crate::telemetry::sessions::SessionStore::load(&state_dir);
+            assert_eq!(store.sessions().count(), 1);
         },
     );
 }
@@ -220,8 +308,10 @@ fn TestLoadDispatchContextDetectsAgents() {
     ));
     with_process_state(Some(temp.path()), &env, || {
         let context = load_dispatch_context().expect("dispatch context");
-        assert_eq!(context.strategy, "manual-commit");
-        assert!(context.is_bitloops_enabled);
-        assert_eq!(context.agent, "claude-code,codex,gemini,cursor,opencode");
+        assert_eq!(context.strategy.as_deref(), Some("manual-commit"));
+        assert_eq!(
+            context.agent.as_deref(),
+            Some("claude-code,codex,gemini,cursor,opencode")
+        );
     });
 }

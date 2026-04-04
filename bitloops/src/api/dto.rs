@@ -68,6 +68,10 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub(super) fn status_code(&self) -> StatusCode {
+        self.status
+    }
 }
 
 impl IntoResponse for ApiError {

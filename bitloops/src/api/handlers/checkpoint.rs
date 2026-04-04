@@ -1,9 +1,13 @@
 use std::path::Path;
+use std::time::Instant;
 
 use axum::{
     Json,
     extract::{Path as AxumPath, State},
+    http::StatusCode,
 };
+use serde_json::Value;
+use std::collections::HashMap;
 
 use super::super::dto::{
     ApiCheckpointDetailResponse, ApiCheckpointSessionDetailDto, ApiError, ApiErrorEnvelope,
@@ -36,10 +40,43 @@ pub(crate) async fn handle_api_checkpoint(
     State(state): State<DashboardState>,
     AxumPath((repo_id, checkpoint_id)): AxumPath<(String, String)>,
 ) -> std::result::Result<Json<ApiCheckpointDetailResponse>, ApiError> {
-    let repo_root = resolve_repo_root_from_repo_id(&state, &repo_id).await?;
-    Ok(Json(
-        load_checkpoint_detail(&repo_root, checkpoint_id).await?,
-    ))
+    let started = Instant::now();
+    let (tracked_repo_root, response) = match resolve_repo_root_from_repo_id(&state, &repo_id).await
+    {
+        Ok(repo_root) => {
+            let response = load_checkpoint_detail(&repo_root, checkpoint_id)
+                .await
+                .map(Json);
+            (Some(repo_root), response)
+        }
+        Err(err) => (None, Err(err)),
+    };
+
+    let status = match &response {
+        Ok(_) => StatusCode::OK,
+        Err(err) => err.status_code(),
+    };
+    let mut properties = HashMap::new();
+    properties.insert("http_method".to_string(), Value::String("GET".to_string()));
+    properties.insert("repo_id".to_string(), Value::String(repo_id));
+    properties.insert(
+        "status_code_class".to_string(),
+        Value::String(super::super::status_code_class(status).to_string()),
+    );
+    if let Some(repo_root) = tracked_repo_root.as_deref() {
+        super::super::track_repo_action(
+            repo_root,
+            crate::telemetry::analytics::ActionDescriptor {
+                event: "bitloops dashboard api checkpoint".to_string(),
+                surface: "dashboard",
+                properties,
+            },
+            status.is_success(),
+            started.elapsed(),
+        );
+    }
+
+    response
 }
 
 fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageDto> {

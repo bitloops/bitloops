@@ -70,7 +70,7 @@ async fn run_with_context(
             out,
             &targets,
             &scope.hook_repo_roots,
-            &scope.legacy_repo_roots,
+            &scope.repo_data_roots,
         )?
     {
         writeln!(out, "Uninstall cancelled.")?;
@@ -89,7 +89,7 @@ async fn run_with_context(
             UninstallTarget::AgentHooks => uninstall_agent_hooks(&scope.hook_repo_roots, out),
             UninstallTarget::GitHooks => uninstall_git_hooks(&scope.hook_repo_roots, out),
             UninstallTarget::Shell => uninstall_shell_integration(out),
-            UninstallTarget::Data => uninstall_data(&scope.legacy_repo_roots, out),
+            UninstallTarget::Data => uninstall_data(&scope.repo_data_roots, out),
             UninstallTarget::Caching => uninstall_cache(out),
             UninstallTarget::Config => uninstall_config(out),
             UninstallTarget::Service => uninstall_service(out, context.service_uninstaller),
