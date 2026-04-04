@@ -44,7 +44,7 @@ impl RepoSession {
     }
 
     pub fn is_expired(&self) -> bool {
-        now_secs() - self.last_event_at > SESSION_TIMEOUT.as_secs()
+        now_secs().saturating_sub(self.last_event_at) > SESSION_TIMEOUT.as_secs()
     }
 
     pub fn touch(&mut self) {
@@ -52,7 +52,7 @@ impl RepoSession {
     }
 
     pub fn session_duration_secs(&self) -> u64 {
-        now_secs() - self.started_at
+        now_secs().saturating_sub(self.started_at)
     }
 }
 
@@ -251,5 +251,29 @@ mod tests {
         let mut reloaded = SessionStore::load(tmp.path());
         let new_session_id = reloaded.get_session_id(repo).unwrap();
         assert_ne!(new_session_id, session_id);
+    }
+
+    #[test]
+    fn test_session_expiration_saturates_when_last_event_is_in_future() {
+        let now = now_secs();
+        let session = RepoSession {
+            session_id: "session-1".to_string(),
+            started_at: now,
+            last_event_at: now + 60,
+        };
+
+        assert!(!session.is_expired());
+    }
+
+    #[test]
+    fn test_session_duration_saturates_when_started_at_is_in_future() {
+        let now = now_secs();
+        let session = RepoSession {
+            session_id: "session-1".to_string(),
+            started_at: now + 60,
+            last_event_at: now,
+        };
+
+        assert_eq!(session.session_duration_secs(), 0);
     }
 }

@@ -6,6 +6,16 @@ use std::sync::{OnceLock, RwLock};
 
 use super::constants::BITLOOPS_DIR;
 
+const NESTED_GIT_ENV_KEYS: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+];
+
 #[derive(Clone)]
 struct RepoRootCache {
     cwd: PathBuf,
@@ -32,6 +42,9 @@ pub fn repo_root() -> Result<PathBuf> {
     let mut cmd = Command::new("git");
     cmd.args(["rev-parse", "--show-toplevel"])
         .stdin(Stdio::null());
+    for key in NESTED_GIT_ENV_KEYS {
+        cmd.env_remove(key);
+    }
     if !cwd.as_os_str().is_empty() {
         cmd.current_dir(&cwd);
     }

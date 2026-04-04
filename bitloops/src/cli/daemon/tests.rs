@@ -615,6 +615,35 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
 }
 
 #[test]
+fn send_session_end_for_all_sessions_clears_store_with_valid_json() {
+    let state_root = TempDir::new().expect("temp dir");
+    let repo_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+    let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+
+    let mut store = crate::telemetry::sessions::SessionStore::default();
+    let _ = store.get_or_create_session(repo_root.path());
+    store
+        .save(&state_dir)
+        .expect("save session store before stop");
+
+    send_session_end_for_all_sessions();
+
+    let cleared_path = state_dir.join("telemetry_sessions.json");
+    let cleared_content = fs::read_to_string(&cleared_path).expect("read cleared session store");
+    let cleared_store: crate::telemetry::sessions::SessionStore =
+        serde_json::from_str(&cleared_content).expect("parse cleared session store");
+    assert_eq!(cleared_store.sessions().count(), 0);
+}
+
+#[test]
 fn status_lines_include_sync_queue_and_current_repo_task() {
     let report = DaemonStatusReport {
         runtime: None,

@@ -218,6 +218,7 @@ fn process_session_activity(
 
     let mut lifecycle_events = expired_sessions
         .iter()
+        .filter(|ended| load_dispatch_context_for_repo(Path::new(&ended.repo_root)).is_some())
         .filter_map(|ended| build_session_end_payload(ended, source))
         .collect::<Vec<_>>();
 
@@ -658,7 +659,7 @@ fn spawn_detached_analytics(payload_json: &str) {
     let _ = cmd.spawn();
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn spawn_detached_analytics(payload_json: &str) {
     use std::os::windows::process::CommandExt;
 
@@ -684,6 +685,11 @@ fn spawn_detached_analytics(payload_json: &str) {
     }
 
     let _ = cmd.spawn();
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn spawn_detached_analytics(_payload_json: &str) {
+    // No detached analytics transport is implemented for this target yet.
 }
 
 fn now_rfc3339() -> String {

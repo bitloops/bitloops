@@ -41,13 +41,16 @@ pub(crate) async fn handle_api_checkpoint(
     AxumPath((repo_id, checkpoint_id)): AxumPath<(String, String)>,
 ) -> std::result::Result<Json<ApiCheckpointDetailResponse>, ApiError> {
     let started = Instant::now();
-    let response: std::result::Result<Json<ApiCheckpointDetailResponse>, ApiError> = async {
-        let repo_root = resolve_repo_root_from_repo_id(&state, &repo_id).await?;
-        Ok(Json(
-            load_checkpoint_detail(&repo_root, checkpoint_id).await?,
-        ))
-    }
-    .await;
+    let (tracked_repo_root, response) = match resolve_repo_root_from_repo_id(&state, &repo_id).await
+    {
+        Ok(repo_root) => {
+            let response = load_checkpoint_detail(&repo_root, checkpoint_id)
+                .await
+                .map(Json);
+            (Some(repo_root), response)
+        }
+        Err(err) => (None, Err(err)),
+    };
 
     let status = match &response {
         Ok(_) => StatusCode::OK,
@@ -55,20 +58,23 @@ pub(crate) async fn handle_api_checkpoint(
     };
     let mut properties = HashMap::new();
     properties.insert("http_method".to_string(), Value::String("GET".to_string()));
+    properties.insert("repo_id".to_string(), Value::String(repo_id));
     properties.insert(
         "status_code_class".to_string(),
         Value::String(super::super::status_code_class(status).to_string()),
     );
-    super::super::track_repo_action(
-        &state.repo_root,
-        crate::telemetry::analytics::ActionDescriptor {
-            event: "bitloops dashboard api checkpoint".to_string(),
-            surface: "dashboard",
-            properties,
-        },
-        status.is_success(),
-        started.elapsed(),
-    );
+    if let Some(repo_root) = tracked_repo_root.as_deref() {
+        super::super::track_repo_action(
+            repo_root,
+            crate::telemetry::analytics::ActionDescriptor {
+                event: "bitloops dashboard api checkpoint".to_string(),
+                surface: "dashboard",
+                properties,
+            },
+            status.is_success(),
+            started.elapsed(),
+        );
+    }
 
     response
 }

@@ -35,7 +35,7 @@ mod tests {
         open_repository, repo_root, sanitize_path_for_claude, session_metadata_dir_from_session_id,
         to_relative_path,
     };
-    use crate::test_support::process_state::{with_cwd, with_env_var};
+    use crate::test_support::process_state::{with_cwd, with_env_var, with_process_state};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
@@ -510,6 +510,31 @@ mod tests {
 
         let root2 = with_cwd(repo2.path(), || repo_root().expect("resolve repo2 root"));
         assert_eq!(canonical(&root2), canonical(repo2.path()));
+    }
+
+    #[test]
+    fn test_repo_root_ignores_inherited_git_hook_env() {
+        let repo = tempdir().expect("create repo");
+        init_git_repo(repo.path());
+
+        let fake_git_dir = repo.path().join("nonexistent-hook-git-dir");
+        let fake_work_tree = repo.path().join("nonexistent-hook-worktree");
+        let fake_git_dir_value = fake_git_dir.to_string_lossy().to_string();
+        let fake_work_tree_value = fake_work_tree.to_string_lossy().to_string();
+
+        with_process_state(
+            Some(repo.path()),
+            &[
+                ("GIT_DIR", Some(fake_git_dir_value.as_str())),
+                ("GIT_WORK_TREE", Some(fake_work_tree_value.as_str())),
+                ("GIT_INDEX_FILE", Some(fake_git_dir_value.as_str())),
+            ],
+            || {
+                clear_repo_root_cache();
+                let root = repo_root().expect("repo_root should ignore inherited git hook env");
+                assert_eq!(canonical(&root), canonical(repo.path()));
+            },
+        );
     }
 
     #[test]

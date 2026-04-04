@@ -214,6 +214,12 @@ fn send_session_end_for_all_sessions() {
 
     // End all sessions and send $session_end events
     for (repo_root_str, session) in store.sessions() {
+        if crate::telemetry::analytics::load_dispatch_context_for_repo(Path::new(repo_root_str))
+            .is_none()
+        {
+            continue;
+        }
+
         let ended = crate::telemetry::sessions::EndedSession {
             session_id: session.session_id.clone(),
             repo_root: repo_root_str.clone(),
@@ -225,7 +231,7 @@ fn send_session_end_for_all_sessions() {
     }
 
     // Clear the session file
-    let _ = std::fs::write(&session_path, "{}");
+    let _ = crate::telemetry::sessions::SessionStore::default().save(&state_dir);
 }
 
 pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
