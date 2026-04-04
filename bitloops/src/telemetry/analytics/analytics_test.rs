@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
+const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
+
 fn setup_git_repo(path: &Path) {
     let status = git_command()
         .args(["init", "-q"])
@@ -85,7 +87,15 @@ fn TestEventPayloadSerialization() {
 #[test]
 #[allow(non_snake_case)]
 fn TestTrackCommandDetachedSkipsNilCommand() {
-    track_command_detached(None, "manual-commit", "claude-code", true, "1.0.0");
+    let tmp = tempfile::tempdir().unwrap();
+    track_command_detached(
+        None,
+        "manual-commit",
+        "claude-code",
+        true,
+        "1.0.0",
+        tmp.path(),
+    );
 }
 
 #[test]
@@ -97,12 +107,14 @@ fn TestTrackCommandDetachedSkipsHiddenCommands() {
         flag_names: Vec::new(),
     };
 
+    let tmp = tempfile::tempdir().unwrap();
     track_command_detached(
         Some(&hidden_cmd),
         "manual-commit",
         "claude-code",
         true,
         "1.0.0",
+        tmp.path(),
     );
 }
 
@@ -110,13 +122,21 @@ fn TestTrackCommandDetachedSkipsHiddenCommands() {
 #[allow(non_snake_case)]
 fn TestTrackCommandDetachedRespectsOptOut() {
     with_env_var(TELEMETRY_OPTOUT_ENV, Some("1"), || {
+        let tmp = tempfile::tempdir().unwrap();
         let cmd = CommandInfo {
             command_path: "status".to_string(),
             hidden: false,
             flag_names: Vec::new(),
         };
 
-        track_command_detached(Some(&cmd), "manual-commit", "claude-code", true, "1.0.0");
+        track_command_detached(
+            Some(&cmd),
+            "manual-commit",
+            "claude-code",
+            true,
+            "1.0.0",
+            tmp.path(),
+        );
     });
 }
 
@@ -127,6 +147,7 @@ fn TestBuildEventPayloadAgent() {
         "BITLOOPS_TELEMETRY_DISTINCT_ID",
         Some("fixed-test-id"),
         || {
+            let tmp = tempfile::tempdir().unwrap();
             let tests = [
                 ("defaults empty to auto", "", "auto"),
                 ("preserves explicit agent", "claude-code", "claude-code"),
@@ -138,8 +159,14 @@ fn TestBuildEventPayloadAgent() {
                     hidden: false,
                     flag_names: Vec::new(),
                 };
-                let payload =
-                    build_event_payload(Some(&cmd), "manual-commit", input_agent, true, "1.0.0");
+                let payload = build_event_payload(
+                    Some(&cmd),
+                    "manual-commit",
+                    input_agent,
+                    true,
+                    "1.0.0",
+                    tmp.path(),
+                );
                 assert!(payload.is_some(), "case {name}: expected non-nil payload");
 
                 if let Some(payload) = payload {
@@ -153,8 +180,87 @@ fn TestBuildEventPayloadAgent() {
                         agent, expected_agent,
                         "case {name}: agent property mismatch"
                     );
+
+                    // Verify session_id is added
+                    assert!(
+                        payload.properties.contains_key("$session_id"),
+                        "case {name}: session_id should be present"
+                    );
                 }
             }
+        },
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestBuildSessionLifecyclePayloadUsesPosthogEventNames() {
+    with_env_var(
+        "BITLOOPS_TELEMETRY_DISTINCT_ID",
+        Some("fixed-test-id"),
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let start =
+                build_session_start_payload("session-123", "manual-commit", tmp.path(), "cli")
+                    .expect("start payload");
+
+            assert_eq!(start.event, SESSION_STARTED_EVENT);
+            assert_eq!(
+                start.properties.get("$session_id").and_then(Value::as_str),
+                Some("session-123")
+            );
+            assert_eq!(
+                start.properties.get("source").and_then(Value::as_str),
+                Some("cli")
+            );
+
+            let ended = crate::telemetry::sessions::EndedSession {
+                session_id: "session-123".to_string(),
+                repo_root: tmp.path().to_string_lossy().to_string(),
+                started_at: 1_700_000_000,
+                ended_at: 1_700_000_600,
+                duration_secs: 600,
+            };
+            let end = build_session_end_payload(&ended, "dashboard").expect("end payload");
+
+            assert_eq!(end.event, SESSION_ENDED_EVENT);
+            assert_eq!(
+                end.properties.get("$session_id").and_then(Value::as_str),
+                Some("session-123")
+            );
+            assert_eq!(
+                end.properties
+                    .get("$session_duration")
+                    .and_then(Value::as_u64),
+                Some(600)
+            );
+            assert_eq!(
+                end.properties.get("source").and_then(Value::as_str),
+                Some("dashboard")
+            );
+        },
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTrackSessionActivityCreatesSessionStoreEntry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state_root = tempfile::tempdir().unwrap();
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+
+    with_process_state(
+        None,
+        &[
+            (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_str.as_str())),
+            ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
+        ],
+        || {
+            track_session_activity_detached(tmp.path(), "dashboard", "dashboard");
+
+            let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+            let store = crate::telemetry::sessions::SessionStore::load(&state_dir);
+            assert_eq!(store.sessions().count(), 1);
         },
     );
 }

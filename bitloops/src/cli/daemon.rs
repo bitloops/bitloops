@@ -35,10 +35,7 @@ pub use args::{
     MISSING_SUBCOMMAND_MESSAGE,
 };
 
-use display::{
-    enrichment_status_lines, legacy_repo_data_warnings, print_legacy_repo_data_warnings,
-    status_lines,
-};
+use display::{enrichment_status_lines, status_lines};
 
 pub async fn run(args: DaemonArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -78,7 +75,6 @@ async fn run_start_with_io(
         args.recheck_local_dashboard_net,
         args.bundle_dir
     );
-    print_legacy_repo_data_warnings();
     let preflight = resolve_start_preflight(&args, out, input)?;
 
     if preflight.create_default_config {
@@ -192,9 +188,44 @@ pub async fn run_stop(args: DaemonStopArgs) -> Result<()> {
     if let Some(config_path) = args.config.as_deref() {
         let _ = daemon::resolve_daemon_config(Some(config_path))?;
     }
+
+    // Send $session_end for all active sessions before stopping
+    send_session_end_for_all_sessions();
+
     daemon::stop().await?;
     println!("Bitloops daemon stopped.");
     Ok(())
+}
+
+fn send_session_end_for_all_sessions() {
+    let Ok(state_dir) = crate::utils::platform_dirs::bitloops_state_dir() else {
+        return;
+    };
+    let session_path = state_dir.join("telemetry_sessions.json");
+
+    // Load and end all sessions
+    let Ok(content) = std::fs::read_to_string(&session_path) else {
+        return;
+    };
+    let Ok(store) = serde_json::from_str::<crate::telemetry::sessions::SessionStore>(&content)
+    else {
+        return;
+    };
+
+    // End all sessions and send $session_end events
+    for (repo_root_str, session) in store.sessions() {
+        let ended = crate::telemetry::sessions::EndedSession {
+            session_id: session.session_id.clone(),
+            repo_root: repo_root_str.clone(),
+            started_at: session.started_at,
+            ended_at: crate::telemetry::sessions::now_secs(),
+            duration_secs: session.session_duration_secs(),
+        };
+        crate::telemetry::analytics::track_session_end_detached(&ended, "daemon-stop");
+    }
+
+    // Clear the session file
+    let _ = std::fs::write(&session_path, "{}");
 }
 
 pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
@@ -203,9 +234,6 @@ pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
     }
     let report = daemon::status().await?;
     for line in status_lines(&report) {
-        println!("{line}");
-    }
-    for line in legacy_repo_data_warnings() {
         println!("{line}");
     }
     Ok(())
@@ -332,7 +360,6 @@ pub async fn run_enrichments(args: EnrichmentArgs) -> Result<()> {
 }
 
 pub async fn launch_dashboard() -> Result<()> {
-    print_legacy_repo_data_warnings();
     if let Some(url) = daemon::daemon_url()? {
         crate::api::open_in_default_browser(&url)?;
         println!("Opened Bitloops dashboard at {url}");

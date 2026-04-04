@@ -16,8 +16,9 @@ use crate::graphql::{
 use axum::{
     Router,
     body::Body,
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Request, State},
     http::{HeaderValue, Method, StatusCode, header},
+    middleware::{self, Next},
     response::Response,
     routing::{any, get, post},
 };
@@ -177,6 +178,7 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
 </script>"##;
 
 pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
+    let telemetry_state = state.clone();
     Router::new()
         .route("/api/", get(handle_api_root))
         .nest("/api", build_dashboard_api_router())
@@ -200,6 +202,10 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/", any(handle_dashboard_root))
         .route("/{*path}", any(handle_dashboard_path))
         .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            telemetry_state,
+            touch_dashboard_session,
+        ))
 }
 
 fn build_dashboard_api_router() -> Router<DashboardState> {
@@ -224,6 +230,19 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
         .route("/fetch_bundle", post(handle_api_fetch_bundle))
         .route("/openapi.json", get(handle_api_openapi))
         .fallback(handle_api_not_found)
+}
+
+async fn touch_dashboard_session(
+    State(state): State<DashboardState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    crate::telemetry::analytics::track_session_activity_detached(
+        &state.repo_root,
+        "dashboard",
+        "dashboard",
+    );
+    next.run(request).await
 }
 
 async fn handle_dashboard_root(State(state): State<DashboardState>, method: Method) -> Response {
