@@ -14,39 +14,7 @@ impl DevqlGraphqlContext {
         agent: Option<&str>,
         since: Option<&DateTimeScalar>,
     ) -> Result<Vec<Checkpoint>> {
-        let backend_config = self
-            .backend_config
-            .as_ref()
-            .context("store backend configuration unavailable")?;
-        let repo_id = self.repo_id_for_scope(scope)?;
-
-        let checkpoints = if backend_config.events.has_clickhouse() {
-            let sql = build_clickhouse_checkpoints_sql(&repo_id, scope, agent, since);
-            let rows: Vec<Value> = self
-                .query_clickhouse_data(&sql)
-                .await?
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            rows.into_iter()
-                .map(checkpoint_from_row)
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            let sql = build_duckdb_checkpoints_sql(&repo_id, scope, agent, since);
-            let duckdb_path = backend_config
-                .events
-                .resolve_duckdb_db_path_for_repo(&self.config_root);
-            let rows: Vec<Value> = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
-            rows.into_iter()
-                .map(checkpoint_from_row)
-                .collect::<Result<Vec<_>>>()?
-        };
-
-        if checkpoints.is_empty() {
-            return self.list_committed_checkpoints(scope, agent, since).await;
-        }
-
-        Ok(checkpoints)
+        self.list_committed_checkpoints(scope, agent, since).await
     }
 
     pub(crate) async fn list_telemetry_events(
@@ -87,6 +55,7 @@ impl DevqlGraphqlContext {
     }
 }
 
+#[allow(dead_code)]
 fn build_clickhouse_checkpoints_sql(
     repo_id: &str,
     scope: &ResolverScope,
@@ -133,6 +102,7 @@ LIMIT {}",
     )
 }
 
+#[allow(dead_code)]
 fn build_duckdb_checkpoints_sql(
     repo_id: &str,
     scope: &ResolverScope,
@@ -265,6 +235,7 @@ fn duckdb_project_filter(project_path: &str) -> String {
     )
 }
 
+#[allow(dead_code)]
 fn checkpoint_from_row(row: Value) -> Result<Checkpoint> {
     let checkpoint_id = required_string(&row, "checkpoint_id")?;
     let event_time = parse_event_time(&required_string(&row, "latest_event_time")?)?;
