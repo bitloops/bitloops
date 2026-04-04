@@ -4,7 +4,7 @@ use std::env;
 use std::io::BufRead;
 use std::io::{self, Write};
 
-use crate::cli::{clean, doctor, enable, reset, resume, uninstall};
+use crate::cli::{clean, doctor, enable, reset, resume};
 use crate::config::settings;
 
 use super::args::{CleanArgs, DisableArgs, DoctorArgs, HelpArgs, ResetArgs, ResumeArgs};
@@ -22,10 +22,6 @@ pub fn run_disable_command(args: &DisableArgs) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let mut out = io::stdout();
     enable::run_disable(&cwd, &mut out, args.project)
-}
-
-pub async fn run_uninstall_command(args: uninstall::UninstallArgs) -> Result<()> {
-    uninstall::run(args).await
 }
 
 pub fn run_doctor_command(args: &DoctorArgs) -> Result<()> {

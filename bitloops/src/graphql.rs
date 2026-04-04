@@ -44,7 +44,8 @@ use axum::{
 };
 use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;
-use std::time::Instant;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use crate::devql_transport::{parse_slim_cli_scope_headers, upsert_repo_path_registry_scope};
 
@@ -149,17 +150,17 @@ pub(crate) async fn slim_graphql_handler(
         Ok(scope) => scope,
         Err(err) => {
             let response = graphql_error_response(err).into_response();
-            track_devql_action(
-                &state.repo_root,
-                "bitloops devql slim http",
-                "slim",
-                "http",
-                &signature.0,
-                &signature.1,
-                false,
-                response.status(),
-                started.elapsed(),
-            );
+            track_devql_action(DevqlGraphqlTelemetry {
+                repo_root: state.repo_root.as_path(),
+                event: "bitloops devql slim http",
+                scope: "slim",
+                transport: "http",
+                request_kind: &signature.0,
+                operation_family: &signature.1,
+                success: false,
+                status: response.status(),
+                duration: started.elapsed(),
+            });
             return response;
         }
     };
@@ -167,17 +168,17 @@ pub(crate) async fn slim_graphql_handler(
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(
-            &state.repo_root,
-            "bitloops devql slim http",
-            "slim",
-            "http",
-            &signature.0,
-            &signature.1,
-            false,
-            response.status(),
-            started.elapsed(),
-        );
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: state.repo_root.as_path(),
+            event: "bitloops devql slim http",
+            scope: "slim",
+            transport: "http",
+            request_kind: &signature.0,
+            operation_family: &signature.1,
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
         return response;
     }
     let repo_root = scope
@@ -197,17 +198,17 @@ pub(crate) async fn slim_graphql_handler(
     let (response, success) =
         execute_graphql_request(state.devql_slim_schema(), request.data(context), &headers).await;
     let response = response.into_response();
-    track_devql_action(
-        &repo_root,
-        "bitloops devql slim http",
-        "slim",
-        "http",
-        &signature.0,
-        &signature.1,
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: repo_root.as_path(),
+        event: "bitloops devql slim http",
+        scope: "slim",
+        transport: "http",
+        request_kind: &signature.0,
+        operation_family: &signature.1,
         success,
-        response.status(),
-        started.elapsed(),
-    );
+        status: response.status(),
+        duration: started.elapsed(),
+    });
     response
 }
 
@@ -229,17 +230,17 @@ pub(crate) async fn global_graphql_handler(
     let (response, success) =
         execute_graphql_request(state.devql_global_schema(), request.data(context), &headers).await;
     let response = response.into_response();
-    track_devql_action(
-        &state.repo_root,
-        "bitloops devql global http",
-        "global",
-        "http",
-        &signature.0,
-        &signature.1,
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: state.repo_root.as_path(),
+        event: "bitloops devql global http",
+        scope: "global",
+        transport: "http",
+        request_kind: &signature.0,
+        operation_family: &signature.1,
         success,
-        response.status(),
-        started.elapsed(),
-    );
+        status: response.status(),
+        duration: started.elapsed(),
+    });
     response
 }
 
@@ -254,17 +255,17 @@ pub(crate) async fn slim_graphql_ws_handler(
         Ok(scope) => scope,
         Err(err) => {
             let response = graphql_error_response(err).into_response();
-            track_devql_action(
-                &state.repo_root,
-                "bitloops devql slim ws",
-                "slim",
-                "ws",
-                "subscription",
-                "anonymous",
-                false,
-                response.status(),
-                started.elapsed(),
-            );
+            track_devql_action(DevqlGraphqlTelemetry {
+                repo_root: state.repo_root.as_path(),
+                event: "bitloops devql slim ws",
+                scope: "slim",
+                transport: "ws",
+                request_kind: "subscription",
+                operation_family: "anonymous",
+                success: false,
+                status: response.status(),
+                duration: started.elapsed(),
+            });
             return response;
         }
     };
@@ -272,17 +273,17 @@ pub(crate) async fn slim_graphql_ws_handler(
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(
-            &state.repo_root,
-            "bitloops devql slim ws",
-            "slim",
-            "ws",
-            "subscription",
-            "anonymous",
-            false,
-            response.status(),
-            started.elapsed(),
-        );
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: state.repo_root.as_path(),
+            event: "bitloops devql slim ws",
+            scope: "slim",
+            transport: "ws",
+            request_kind: "subscription",
+            operation_family: "anonymous",
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
         return response;
     }
 
@@ -305,18 +306,18 @@ pub(crate) async fn slim_graphql_ws_handler(
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| GraphQLWebSocket::new(stream, schema, protocol).serve())
         .into_response();
-    track_devql_action(
-        &repo_root,
-        "bitloops devql slim ws",
-        "slim",
-        "ws",
-        "subscription",
-        "anonymous",
-        response.status().is_success()
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: repo_root.as_path(),
+        event: "bitloops devql slim ws",
+        scope: "slim",
+        transport: "ws",
+        request_kind: "subscription",
+        operation_family: "anonymous",
+        success: response.status().is_success()
             || response.status() == axum::http::StatusCode::SWITCHING_PROTOCOLS,
-        response.status(),
-        started.elapsed(),
-    );
+        status: response.status(),
+        duration: started.elapsed(),
+    });
     response
 }
 
@@ -339,18 +340,18 @@ pub(crate) async fn global_graphql_ws_handler(
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| GraphQLWebSocket::new(stream, schema, protocol).serve())
         .into_response();
-    track_devql_action(
-        &state.repo_root,
-        "bitloops devql global ws",
-        "global",
-        "ws",
-        "subscription",
-        "anonymous",
-        response.status().is_success()
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: state.repo_root.as_path(),
+        event: "bitloops devql global ws",
+        scope: "global",
+        transport: "ws",
+        request_kind: "subscription",
+        operation_family: "anonymous",
+        success: response.status().is_success()
             || response.status() == axum::http::StatusCode::SWITCHING_PROTOCOLS,
-        response.status(),
-        started.elapsed(),
-    );
+        status: response.status(),
+        duration: started.elapsed(),
+    });
     response
 }
 
@@ -452,49 +453,52 @@ fn graphql_operation_family(name: &str) -> Option<String> {
     }
 }
 
-fn track_devql_action(
-    repo_root: &std::path::Path,
-    event: &str,
-    scope: &str,
-    transport: &str,
-    request_kind: &str,
-    operation_family: &str,
+/// Inputs for [`track_devql_action`]: DevQL GraphQL/WS request telemetry (HTTP or WebSocket).
+struct DevqlGraphqlTelemetry<'a> {
+    repo_root: &'a Path,
+    event: &'a str,
+    scope: &'a str,
+    transport: &'a str,
+    request_kind: &'a str,
+    operation_family: &'a str,
     success: bool,
     status: axum::http::StatusCode,
-    duration: std::time::Duration,
-) {
+    duration: Duration,
+}
+
+fn track_devql_action(t: DevqlGraphqlTelemetry<'_>) {
     let mut properties = HashMap::new();
-    properties.insert("scope".to_string(), JsonValue::String(scope.to_string()));
+    properties.insert("scope".to_string(), JsonValue::String(t.scope.to_string()));
     properties.insert(
         "transport".to_string(),
-        JsonValue::String(transport.to_string()),
+        JsonValue::String(t.transport.to_string()),
     );
     properties.insert(
         "request_kind".to_string(),
-        JsonValue::String(request_kind.to_string()),
+        JsonValue::String(t.request_kind.to_string()),
     );
     properties.insert(
         "operation_family".to_string(),
-        JsonValue::String(operation_family.to_string()),
+        JsonValue::String(t.operation_family.to_string()),
     );
     properties.insert(
         "status_code_class".to_string(),
-        JsonValue::String(crate::api::status_code_class(status).to_string()),
+        JsonValue::String(crate::api::status_code_class(t.status).to_string()),
     );
 
     crate::api::track_repo_action(
-        repo_root,
+        t.repo_root,
         crate::telemetry::analytics::ActionDescriptor {
-            event: event.to_string(),
-            surface: if transport == "ws" {
+            event: t.event.to_string(),
+            surface: if t.transport == "ws" {
                 "devql_ws"
             } else {
                 "devql_http"
             },
             properties,
         },
-        success,
-        duration,
+        t.success,
+        t.duration,
     );
 }
 

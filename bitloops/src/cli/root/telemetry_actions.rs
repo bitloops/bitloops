@@ -1,9 +1,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
-use super::args::{
-    CleanArgs, DisableArgs, DoctorArgs, HelpArgs, ResetArgs, ResumeArgs,
-};
+use super::args::{CleanArgs, DisableArgs, DoctorArgs, HelpArgs, ResetArgs, ResumeArgs};
 
 fn new_action(
     event: &str,
