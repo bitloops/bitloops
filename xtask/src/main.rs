@@ -200,10 +200,17 @@ fn resolve_workspace_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
 
 fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
     let workspace_root = workspace_root()?;
+    let resolved_lcov_path = resolve_workspace_path(&workspace_root, lcov_path);
+    if let Some(parent) = resolved_lcov_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+    let resolved_lcov_path = resolved_lcov_path.to_string_lossy().to_string();
+
     run_command(
         &workspace_root,
         &format!(
-            "cargo llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {lcov_path}"
+            "cargo llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {resolved_lcov_path}"
         ),
         &[
             "llvm-cov",
@@ -216,7 +223,7 @@ fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
             "--no-default-features",
             "--lcov",
             "--output-path",
-            lcov_path,
+            &resolved_lcov_path,
         ],
     )
 }
