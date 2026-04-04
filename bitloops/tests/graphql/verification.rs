@@ -3,8 +3,27 @@ use serde_json::Value;
 
 const FIXTURE_FILE_PATH: &str = "src/repositories/user_repository.rs";
 
+fn localhost_bind_available(test_name: &str) -> bool {
+    match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping {test_name}: loopback sockets are unavailable in this environment ({err})"
+            );
+            false
+        }
+        Err(err) => panic!("bind localhost for {test_name}: {err}"),
+    }
+}
+
 #[test]
 fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
+    if !localhost_bind_available("bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end") {
+        return;
+    }
     let seeded = seeded_rust_graphql_workspace("graphql-cli-parity");
     let dsl_output = run_query_json(
         &seeded,
@@ -49,6 +68,11 @@ fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
 
 #[test]
 fn bitloops_devql_query_accepts_graphql_as_default_input_mode_end_to_end() {
+    if !localhost_bind_available(
+        "bitloops_devql_query_accepts_graphql_as_default_input_mode_end_to_end",
+    ) {
+        return;
+    }
     let seeded = seeded_rust_graphql_workspace("graphql-cli-default");
     let query = r#"
         {

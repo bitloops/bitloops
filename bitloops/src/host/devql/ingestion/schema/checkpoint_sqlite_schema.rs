@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     strategy TEXT DEFAULT 'manual-commit',
     branch TEXT DEFAULT '',
     cli_version TEXT DEFAULT '',
-    files_touched TEXT DEFAULT '[]',
     checkpoints_count INTEGER DEFAULT 0,
     token_usage TEXT,
     created_at TEXT DEFAULT (datetime('now')),
@@ -83,7 +82,6 @@ CREATE TABLE IF NOT EXISTS checkpoint_sessions (
     agent TEXT DEFAULT '',
     turn_id TEXT DEFAULT '',
     checkpoints_count INTEGER DEFAULT 0,
-    files_touched TEXT DEFAULT '[]',
     is_task INTEGER DEFAULT 0,
     tool_use_id TEXT DEFAULT '',
     transcript_identifier_at_start TEXT DEFAULT '',
@@ -102,6 +100,64 @@ CREATE TABLE IF NOT EXISTS checkpoint_sessions (
 
 CREATE INDEX IF NOT EXISTS checkpoint_sessions_session_idx
 ON checkpoint_sessions (session_id, checkpoint_id);
+
+CREATE TABLE IF NOT EXISTS checkpoint_files (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    path_before TEXT,
+    path_after TEXT,
+    blob_sha_before TEXT,
+    blob_sha_after TEXT
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_checkpoint_idx
+ON checkpoint_files (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_lookup_idx
+ON checkpoint_files (repo_id, path_after, blob_sha_after);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_agent_time_idx
+ON checkpoint_files (repo_id, agent, event_time);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_event_time_idx
+ON checkpoint_files (repo_id, event_time);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_commit_idx
+ON checkpoint_files (repo_id, commit_sha);
+
+CREATE TABLE IF NOT EXISTS checkpoint_artefacts (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    before_symbol_id TEXT,
+    after_symbol_id TEXT,
+    before_artefact_id TEXT,
+    after_artefact_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx
+ON checkpoint_artefacts (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx
+ON checkpoint_artefacts (repo_id, before_artefact_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx
+ON checkpoint_artefacts (repo_id, after_artefact_id);
 
 CREATE TABLE IF NOT EXISTS commit_checkpoints (
     commit_sha TEXT NOT NULL,

@@ -12,7 +12,7 @@ Get the Bitloops codebase building and tests passing on your machine.
 - **Rust** — install via [rustup](https://rustup.rs/)
 - **Git** — you probably have this already
 
-That's it. SQLite and DuckDB are bundled — no external databases needed.
+That's it. No external databases are required for local development.
 
 ## Clone and Build
 
@@ -21,15 +21,18 @@ That's it. SQLite and DuckDB are bundled — no external databases needed.
 git clone https://github.com/YOUR_USERNAME/bitloops.git
 cd bitloops
 
-# Check everything compiles
-cargo check
+# One-time setup for build-time dashboard URLs
+cp bitloops/config/dashboard_urls.template.json bitloops/config/dashboard_urls.json
 
-# Build
-cargo build
+# Fast local checks/builds
+cargo dev-check
+cargo dev-build
 
 # Run
-cargo run -- --version
+cargo run --manifest-path bitloops/Cargo.toml --no-default-features -- --version
 ```
+
+The Cargo `dev-*` aliases are the primary local interface for contributors and agents.
 
 ## Local checks (optional)
 
@@ -45,27 +48,28 @@ If an older setup pointed `core.hooksPath` here, run `bash scripts/setup-hooks.s
 
 ## Running Tests
 
-From `bitloops/`, the usual full run is:
+From the repository root, use the Cargo lanes:
 
 ```bash
-./scripts/test-summary.sh
+# Fast default lane
+cargo dev-check
+cargo dev-test-core
+cargo dev-test-fast
+
+# CLI lane (when command output/parsing changes)
+cargo dev-test-cli
+
+# Slow e2e/integration lane (feature-gated)
+cargo dev-test-slow
+
+# Full lane before handoff/merge
+cargo dev-test-full
+
+# Coverage (single run)
+cargo dev-coverage
 ```
 
-That runs `cargo test --no-fail-fast` and prints combined `test result:` lines at the end. Cargo also defines optional aliases in `.cargo/config.toml` (`test-core`, `test-cli`, `test-integration`, `test-all`). Aliases only work when that config is loaded (run from `bitloops/`); from the repo root use `cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast`, not `cargo test-all --manifest-path …`.
-
-For coverage in one go (llvm-cov + summary tables):
-
-```bash
-./scripts/test-summary.sh --coverage
-```
-
-For HTML/LCOV artifacts (not the baseline gate):
-
-```bash
-./scripts/test-coverage.sh baseline
-```
-
-**DuckDB:** `test-summary.sh` and `check-dev.sh` use prebuilt DuckDB libraries when possible (`DUCKDB_DOWNLOAD_LIB=1` and `--no-default-features`). Set `DUCKDB_USE_BUNDLED=1` to compile from source instead. See `DEVELOPMENT.md` for details.
+`duckdb-bundled` is now opt-in. Use `cargo dev-check-bundled`/`cargo dev-build-bundled` when you need bundled DuckDB (for example offline or unsupported targets).
 
 ## Test Coverage
 
@@ -77,14 +81,18 @@ cargo install cargo-llvm-cov
 
 The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI runs that check on pull requests to `develop` **informationally** (merge is not blocked by it). To enforce the 5% tolerance locally before merging, use `bash scripts/check-dev.sh --full`.
 
+Shell helpers in `bitloops/scripts/` are kept for CI/back-compat purposes, but local workflows should use Cargo `dev-*` commands.
+
 ## Quick Reference
 
 | Task | Command |
 |------|---------|
-| Check compiles | `cargo check` |
-| Build | `cargo build` |
-| Run locally | `cargo run -- <command>` |
-| All tests | `./scripts/test-summary.sh` or `cargo test --no-fail-fast` |
+| Check compiles | `cargo dev-check` |
+| Build | `cargo dev-build` |
+| Run locally | `cargo run --manifest-path bitloops/Cargo.toml --no-default-features -- <command>` |
+| Fast tests | `cargo dev-test-fast` |
+| Slow tests | `cargo dev-test-slow` |
+| Full tests | `cargo dev-test-full` |
 | Format code | `cargo fmt` |
 | Lint | `cargo clippy` |
-| Coverage report | `./scripts/test-summary.sh --coverage` |
+| Coverage report | `cargo dev-coverage` |

@@ -119,12 +119,16 @@ pub fn build_action_payload(
     );
 
     if let Some(strategy) = dispatch_context.strategy.as_deref() {
-        properties.insert("strategy".to_string(), Value::String(strategy.to_string()));
+        properties
+            .entry("strategy".to_string())
+            .or_insert_with(|| Value::String(strategy.to_string()));
     }
     if let Some(agent) = dispatch_context.agent.as_deref()
         && !agent.is_empty()
     {
-        properties.insert("agent".to_string(), Value::String(agent.to_string()));
+        properties
+            .entry("agent".to_string())
+            .or_insert_with(|| Value::String(agent.to_string()));
     }
     if let Some(session_id) = session_id {
         properties.insert("$session_id".to_string(), Value::String(session_id));
@@ -216,9 +220,10 @@ fn process_session_activity(
     let (mut session_store, expired_sessions) =
         crate::telemetry::sessions::SessionStore::load_with_expired(&state_dir);
 
+    let repo_root_key = repo_root.to_string_lossy().to_string();
     let mut lifecycle_events = expired_sessions
         .iter()
-        .filter(|ended| load_dispatch_context_for_repo(Path::new(&ended.repo_root)).is_some())
+        .filter(|ended| ended.repo_root == repo_root_key)
         .filter_map(|ended| build_session_end_payload(ended, source))
         .collect::<Vec<_>>();
 

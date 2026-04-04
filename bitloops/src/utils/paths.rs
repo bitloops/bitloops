@@ -35,16 +35,17 @@ mod tests {
         open_repository, repo_root, sanitize_path_for_claude, session_metadata_dir_from_session_id,
         to_relative_path,
     };
-    use crate::test_support::process_state::{with_cwd, with_env_var, with_process_state};
+    use crate::test_support::process_state::{
+        isolated_git_command, with_cwd, with_env_var, with_process_state,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tempfile::tempdir;
 
     fn init_git_repo(path: &Path) {
-        let status = Command::new("git")
+        let status = isolated_git_command(path)
             .arg("init")
-            .current_dir(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -54,9 +55,8 @@ mod tests {
     }
 
     fn run_git(path: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let output = isolated_git_command(path)
             .args(args)
-            .current_dir(path)
             .output()
             .expect("run git command");
 

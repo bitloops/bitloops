@@ -1,0 +1,239 @@
+#![allow(dead_code)]
+
+use super::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CheckpointFileChangeKind {
+    Add,
+    Modify,
+    Delete,
+    Rename,
+}
+
+impl CheckpointFileChangeKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Modify => "modify",
+            Self::Delete => "delete",
+            Self::Rename => "rename",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CheckpointArtefactChangeKind {
+    Add,
+    Modify,
+    Delete,
+}
+
+impl CheckpointArtefactChangeKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Modify => "modify",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CheckpointProvenanceContext<'a> {
+    pub repo_id: &'a str,
+    pub checkpoint_id: &'a str,
+    pub session_id: &'a str,
+    pub event_time: &'a str,
+    pub agent: &'a str,
+    pub branch: &'a str,
+    pub strategy: &'a str,
+    pub commit_sha: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckpointFileProvenanceRow {
+    pub relation_id: String,
+    pub repo_id: String,
+    pub checkpoint_id: String,
+    pub session_id: String,
+    pub event_time: String,
+    pub agent: String,
+    pub branch: String,
+    pub strategy: String,
+    pub commit_sha: String,
+    pub change_kind: CheckpointFileChangeKind,
+    pub path_before: Option<String>,
+    pub path_after: Option<String>,
+    pub blob_sha_before: Option<String>,
+    pub blob_sha_after: Option<String>,
+}
+
+impl CheckpointFileProvenanceRow {
+    pub(crate) fn display_path(&self) -> String {
+        checkpoint_display_path(self.path_before.as_deref(), self.path_after.as_deref())
+    }
+
+    fn deterministic_id(&self) -> String {
+        deterministic_uuid(&format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.repo_id,
+            self.checkpoint_id,
+            self.change_kind.as_str(),
+            self.path_before.as_deref().unwrap_or(""),
+            self.path_after.as_deref().unwrap_or(""),
+            self.blob_sha_before.as_deref().unwrap_or(""),
+            self.blob_sha_after.as_deref().unwrap_or(""),
+            self.session_id,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckpointArtefactProvenanceRow {
+    pub relation_id: String,
+    pub repo_id: String,
+    pub checkpoint_id: String,
+    pub session_id: String,
+    pub event_time: String,
+    pub agent: String,
+    pub branch: String,
+    pub strategy: String,
+    pub commit_sha: String,
+    pub change_kind: CheckpointArtefactChangeKind,
+    pub before_symbol_id: Option<String>,
+    pub after_symbol_id: Option<String>,
+    pub before_artefact_id: Option<String>,
+    pub after_artefact_id: Option<String>,
+}
+
+impl CheckpointArtefactProvenanceRow {
+    fn deterministic_id(&self) -> String {
+        deterministic_uuid(&format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            self.repo_id,
+            self.checkpoint_id,
+            self.change_kind.as_str(),
+            self.before_symbol_id.as_deref().unwrap_or(""),
+            self.after_symbol_id.as_deref().unwrap_or(""),
+            self.before_artefact_id.as_deref().unwrap_or(""),
+            self.after_artefact_id.as_deref().unwrap_or(""),
+        ))
+    }
+}
+
+#[path = "checkpoint_provenance/artefacts.rs"]
+mod artefacts;
+#[path = "checkpoint_provenance/git.rs"]
+mod git;
+#[path = "checkpoint_provenance/query.rs"]
+mod query;
+#[path = "checkpoint_provenance/sql.rs"]
+mod sql;
+
+pub(crate) use self::artefacts::collect_checkpoint_artefact_provenance_rows;
+#[cfg(test)]
+pub(crate) use self::artefacts::normalise_semantic_source;
+pub(crate) use self::git::collect_checkpoint_file_provenance_rows;
+pub(crate) use self::query::{
+    CheckpointFileActivityFilter, CheckpointFileDebugRow, CheckpointFileExistsSql,
+    CheckpointFileGateway, CheckpointFileScope, CheckpointFileSnapshotMatch,
+    build_checkpoint_file_debug_sql, build_checkpoint_file_exists_clause,
+    build_checkpoint_file_lookup_sql, checkpoint_display_path,
+};
+pub(crate) use self::sql::{
+    build_upsert_checkpoint_artefact_row_sql, build_upsert_checkpoint_file_row_sql,
+    delete_checkpoint_artefact_rows_sql, delete_checkpoint_file_rows_sql,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    const PROVENANCE_TABLE_SQL: &str = "
+        CREATE TABLE checkpoint_files (
+            relation_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            checkpoint_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_time TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            change_kind TEXT NOT NULL,
+            path_before TEXT,
+            path_after TEXT,
+            blob_sha_before TEXT,
+            blob_sha_after TEXT
+        );
+    ";
+
+    async fn sqlite_relational_with_provenance(seed_sql: &str) -> RelationalStorage {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("projection.sqlite");
+        let sql = format!("{PROVENANCE_TABLE_SQL}{seed_sql}");
+        sqlite_exec_path_allow_create(&db_path, &sql)
+            .await
+            .expect("seed checkpoint provenance");
+        std::mem::forget(temp);
+        RelationalStorage::local_only(db_path)
+    }
+
+    #[test]
+    fn build_exists_clause_matches_after_snapshot_identity() {
+        let sql = build_checkpoint_file_exists_clause(CheckpointFileExistsSql {
+            repo_id: "repo-1",
+            path_column: "a.path",
+            blob_sha_column: "a.blob_sha",
+            activity_filter: CheckpointFileActivityFilter {
+                agent: Some("codex"),
+                since: Some("2026-03-20T00:00:00Z"),
+            },
+        });
+
+        assert!(sql.contains("FROM checkpoint_files cf"));
+        assert!(sql.contains("cf.path_after = a.path"));
+        assert!(sql.contains("cf.blob_sha_after = a.blob_sha"));
+    }
+
+    #[tokio::test]
+    async fn list_matching_checkpoints_uses_after_snapshot_identity() {
+        let relational = sqlite_relational_with_provenance(
+            "
+            INSERT INTO checkpoint_files VALUES
+                ('row-1', 'repo-1', 'checkpoint-1', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-old', 'blob-1'),
+                ('row-2', 'repo-1', 'checkpoint-2', 'session-2', '2026-03-22T10:00:00Z', 'codex', 'main', 'manual', 'commit-2', 'rename', 'src/old.rs', 'src/lib.rs', 'blob-old', 'blob-1'),
+                ('row-3', 'repo-1', 'checkpoint-3', 'session-3', '2026-03-23T10:00:00Z', 'codex', 'main', 'manual', 'commit-3', 'delete', 'src/lib.rs', NULL, 'blob-1', NULL),
+                ('row-4', 'repo-1', 'checkpoint-4', 'session-4', '2026-03-24T10:00:00Z', 'codex', 'main', 'manual', 'commit-4', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-2');
+            ",
+        )
+        .await;
+        let gateway = CheckpointFileGateway::new(&relational);
+
+        let rows = gateway
+            .list_matching_checkpoints(
+                "repo-1",
+                "./src/lib.rs",
+                "blob-1",
+                CheckpointFileActivityFilter::default(),
+                10,
+            )
+            .await
+            .expect("lookup matching checkpoints");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].checkpoint_id, "checkpoint-2");
+        assert_eq!(rows[1].checkpoint_id, "checkpoint-1");
+    }
+
+    #[test]
+    fn normalise_semantic_source_removes_comment_only_noise() {
+        let before = "fn demo() {\n    // hello\n    value();\n}\n";
+        let after = "fn demo() {\n    value(); // world\n}\n";
+        assert_eq!(
+            normalise_semantic_source(before),
+            normalise_semantic_source(after),
+        );
+    }
+}

@@ -598,6 +598,8 @@ mod tests {
             dir.path(),
             &["config", "user.email", "rewind-test@example.com"],
         );
+        git_ok(dir.path(), &["config", "commit.gpgsign", "false"]);
+        git_ok(dir.path(), &["config", "tag.gpgsign", "false"]);
         dir
     }
 

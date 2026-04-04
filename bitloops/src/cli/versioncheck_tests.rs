@@ -43,10 +43,10 @@ struct MockServer {
 }
 
 impl MockServer {
-    fn start(status_code: u16, body: &str) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
-        listener.set_nonblocking(true).expect("set nonblocking");
-        let addr = listener.local_addr().expect("get local addr");
+    fn try_start(status_code: u16, body: &str) -> io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let addr = listener.local_addr()?;
         let url = format!("http://{}", addr);
 
         let hits = Arc::new(AtomicUsize::new(0));
@@ -97,11 +97,24 @@ impl MockServer {
             }
         });
 
-        Self {
+        Ok(Self {
             url,
             hits,
             request,
             handle: Some(handle),
+        })
+    }
+
+    fn start_or_skip(status_code: u16, body: &str, test_name: &str) -> Option<Self> {
+        match Self::try_start(status_code, body) {
+            Ok(server) => Some(server),
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "skipping {test_name}: loopback sockets are unavailable in this environment ({err})"
+                );
+                None
+            }
+            Err(err) => panic!("bind mock server: {err}"),
         }
     }
 
@@ -274,7 +287,13 @@ fn test_ensure_global_config_dir() {
 
 #[test]
 fn test_fetch_latest_version() {
-    let server = MockServer::start(200, r#"{"tag_name":"v1.2.3","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v1.2.3","prerelease":false}"#,
+        "test_fetch_latest_version",
+    ) else {
+        return;
+    };
     with_test_overrides(None, Some(server.url.as_str()), || {
         let got = fetch_latest_version().expect("fetch_latest_version should succeed");
 
@@ -294,7 +313,13 @@ fn test_fetch_latest_version() {
 
 #[test]
 fn test_fetch_latest_version_prerelease() {
-    let server = MockServer::start(200, r#"{"tag_name":"v2.0.0-rc1","prerelease":true}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v2.0.0-rc1","prerelease":true}"#,
+        "test_fetch_latest_version_prerelease",
+    ) else {
+        return;
+    };
     with_test_overrides(None, Some(server.url.as_str()), || {
         let result = fetch_latest_version();
         assert!(
@@ -306,7 +331,10 @@ fn test_fetch_latest_version_prerelease() {
 
 #[test]
 fn test_fetch_latest_version_server_error() {
-    let server = MockServer::start(500, "");
+    let Some(server) = MockServer::start_or_skip(500, "", "test_fetch_latest_version_server_error")
+    else {
+        return;
+    };
     with_test_overrides(None, Some(server.url.as_str()), || {
         let result = fetch_latest_version();
         assert!(
@@ -392,7 +420,13 @@ fn test_update_command() {
 
 #[test]
 fn test_check_and_notify_skips_dev_version() {
-    let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v9.9.9","prerelease":false}"#,
+        "test_check_and_notify_skips_dev_version",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     with_test_paths(&tmp_home, &server.url, || {
         let mut buf = Vec::new();
@@ -407,7 +441,13 @@ fn test_check_and_notify_skips_dev_version() {
 
 #[test]
 fn test_check_and_notify_skips_empty_version() {
-    let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v9.9.9","prerelease":false}"#,
+        "test_check_and_notify_skips_empty_version",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     with_test_paths(&tmp_home, &server.url, || {
         let mut buf = Vec::new();
@@ -422,7 +462,13 @@ fn test_check_and_notify_skips_empty_version() {
 
 #[test]
 fn test_check_and_notify_skips_when_disabled_via_env() {
-    let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v9.9.9","prerelease":false}"#,
+        "test_check_and_notify_skips_when_disabled_via_env",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     let config_dir = tmp_home.path().join(GLOBAL_CONFIG_DIR_NAME);
     let config_dir_str = config_dir.to_string_lossy().into_owned();
@@ -451,7 +497,13 @@ fn test_check_and_notify_skips_when_disabled_via_env() {
 
 #[test]
 fn test_check_and_notify_skips_when_cache_is_fresh() {
-    let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v9.9.9","prerelease":false}"#,
+        "test_check_and_notify_skips_when_cache_is_fresh",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     with_test_paths(&tmp_home, &server.url, || {
         let config_dir = global_config_dir_path().expect("resolve config path");
@@ -473,7 +525,13 @@ fn test_check_and_notify_skips_when_cache_is_fresh() {
 
 #[test]
 fn test_check_and_notify_prints_notification_when_outdated() {
-    let server = MockServer::start(200, r#"{"tag_name":"v2.0.0","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v2.0.0","prerelease":false}"#,
+        "test_check_and_notify_prints_notification_when_outdated",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     with_test_paths(&tmp_home, &server.url, || {
         let mut buf = Vec::new();
@@ -498,7 +556,13 @@ fn test_check_and_notify_prints_notification_when_outdated() {
 
 #[test]
 fn test_check_and_notify_no_notification_when_up_to_date() {
-    let server = MockServer::start(200, r#"{"tag_name":"v1.0.0","prerelease":false}"#);
+    let Some(server) = MockServer::start_or_skip(
+        200,
+        r#"{"tag_name":"v1.0.0","prerelease":false}"#,
+        "test_check_and_notify_no_notification_when_up_to_date",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     with_test_paths(&tmp_home, &server.url, || {
         let mut buf = Vec::new();
@@ -514,7 +578,13 @@ fn test_check_and_notify_no_notification_when_up_to_date() {
 
 #[test]
 fn test_check_and_notify_fetch_failure_updates_cache_to_prevent_retry() {
-    let server = MockServer::start(500, "");
+    let Some(server) = MockServer::start_or_skip(
+        500,
+        "",
+        "test_check_and_notify_fetch_failure_updates_cache_to_prevent_retry",
+    ) else {
+        return;
+    };
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     with_test_paths(&tmp_home, &server.url, || {
         let mut buf = Vec::new();
