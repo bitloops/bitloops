@@ -89,6 +89,7 @@ cargo dev-test-full
 
 # Tests with coverage (single llvm-cov run) + coverage summary tables
 cargo dev-coverage
+cargo dev-coverage-metrics
 
 # HTML + LCOV reports (separate from the baseline gate)
 cargo dev-coverage-html
@@ -99,12 +100,8 @@ brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
 # If preview error, do
 rustup component add llvm-tools-preview
 
-# Coverage baseline gate (lines + functions, strict no-regression)
-# - check: fail if current coverage < baseline - 0.05 for either metric
-./scripts/coverage-baseline-check.sh check
-
-# - update: append a new baseline entry intentionally (JSONL history)
-./scripts/coverage-baseline-check.sh update
+# Local compare against default policy thresholds (80/75 with 0.05 tolerance)
+cargo dev-coverage-compare
 
 # Open HTML coverage report
 open bitloops/target/llvm-cov-html/html/index.html
@@ -121,20 +118,14 @@ Coverage outputs:
 
 - HTML: `bitloops/target/llvm-cov-html/html/index.html`
 - LCOV: `bitloops/target/llvm-cov.info`
-- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops/`)
 
 Coverage gate policy:
 
-- On pull requests to `develop`, CI runs the same check **informationally** (does not block merge); enforce locally with `bash scripts/check-dev.sh --full` before merge if you rely on the baseline.
+- On pull requests to `develop`, CI enforces coverage for **non-draft** PRs.
 - Metrics: lines and functions.
 - Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
-- Baseline source on check: latest JSONL record (`tail -n 1`).
-
-When baseline changes are intentional:
-
-- Run `./scripts/coverage-baseline-check.sh update` from `bitloops/`.
-- Commit the appended baseline history entries with your code changes.
-- If baseline decreases, include a short justification in the PR description.
+- Baseline source: GitHub repository variables (`BITLOOPS_COV_BASELINE_LINES_PCT`, `BITLOOPS_COV_BASELINE_FUNCTIONS_PCT`) refreshed on push to `develop`.
+- Fallback when metadata is missing: lines `80.00%`, functions `75.00%`.
 
 `bitloops/scripts/*.sh` helpers remain in-repo for CI/back-compat usage and
 report formatting, but local developer workflows should use the Cargo `dev-*`

@@ -16,6 +16,7 @@ const SLOW_TEST_TARGETS: &[&str] = &[
     "graphql",
     "performance",
 ];
+const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -35,6 +36,10 @@ fn main() {
             let lane = args.next().unwrap_or_else(|| "fast".to_string());
             run_test_lane(&lane)
         }
+        "coverage" => {
+            let subcommand = args.next().unwrap_or_else(|| "run-lcov".to_string());
+            run_coverage_command(&subcommand, args.collect())
+        }
         other => Err(format!("unknown xtask command: {other}")),
     };
 
@@ -51,6 +56,11 @@ fn print_usage() {
     eprintln!("  dev-loop");
     eprintln!("  install");
     eprintln!("  test <lib|core|cli|fast|slow|full>");
+    eprintln!("  coverage run-lcov [--lcov <path>]");
+    eprintln!("  coverage metrics [--lcov <path>]");
+    eprintln!(
+        "  coverage compare --lines <pct> --functions <pct> [--epsilon 0.05] [--lcov <path>]"
+    );
 }
 
 fn run_dev_loop() -> Result<(), String> {
@@ -132,6 +142,247 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
         &format!("cargo {}", run_args.join(" ")),
         &command,
     )
+}
+
+fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), String> {
+    match subcommand {
+        "run-lcov" => {
+            let lcov_path = parse_lcov_path(&raw_args)?;
+            run_coverage_lcov(&lcov_path)
+        }
+        "metrics" => {
+            let lcov_path = parse_lcov_path(&raw_args)?;
+            let workspace_root = workspace_root()?;
+            let metrics = read_lcov_metrics(&resolve_workspace_path(&workspace_root, &lcov_path))?;
+            println!("lines_pct={:.2}", metrics.lines_pct);
+            println!("functions_pct={:.2}", metrics.functions_pct);
+            println!("lines_covered={}", metrics.lines_covered);
+            println!("lines_total={}", metrics.lines_total);
+            println!("functions_covered={}", metrics.functions_covered);
+            println!("functions_total={}", metrics.functions_total);
+            Ok(())
+        }
+        "compare" => {
+            let options = parse_compare_options(&raw_args)?;
+            let workspace_root = workspace_root()?;
+            let metrics =
+                read_lcov_metrics(&resolve_workspace_path(&workspace_root, &options.lcov_path))?;
+            print_coverage_comparison(&metrics, options.lines_baseline, options.functions_baseline);
+
+            if is_regression(metrics.lines_pct, options.lines_baseline, options.epsilon)
+                || is_regression(
+                    metrics.functions_pct,
+                    options.functions_baseline,
+                    options.epsilon,
+                )
+            {
+                return Err(format!(
+                    "coverage regression detected (epsilon {:.2}pp)",
+                    options.epsilon
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "unknown coverage subcommand `{subcommand}` (expected: run-lcov|metrics|compare)"
+        )),
+    }
+}
+
+fn resolve_workspace_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
+    let path = PathBuf::from(raw_path);
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_root.join(path)
+    }
+}
+
+fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    run_command(
+        &workspace_root,
+        &format!(
+            "cargo llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {lcov_path}"
+        ),
+        &[
+            "llvm-cov",
+            "--manifest-path",
+            BITLOOPS_MANIFEST,
+            "--workspace",
+            "--all-targets",
+            "--features",
+            "slow-tests",
+            "--no-default-features",
+            "--lcov",
+            "--output-path",
+            lcov_path,
+        ],
+    )
+}
+
+fn parse_lcov_path(args: &[String]) -> Result<String, String> {
+    let mut lcov_path = DEFAULT_LCOV_PATH.to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--lcov" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--lcov requires a value".to_string());
+                };
+                lcov_path = value.clone();
+                i += 2;
+            }
+            other => return Err(format!("unknown coverage argument: {other}")),
+        }
+    }
+    Ok(lcov_path)
+}
+
+#[derive(Debug, Clone)]
+struct CompareOptions {
+    lines_baseline: f64,
+    functions_baseline: f64,
+    epsilon: f64,
+    lcov_path: String,
+}
+
+fn parse_compare_options(args: &[String]) -> Result<CompareOptions, String> {
+    let mut lines_baseline: Option<f64> = None;
+    let mut functions_baseline: Option<f64> = None;
+    let mut epsilon = 0.05;
+    let mut lcov_path = DEFAULT_LCOV_PATH.to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--lines" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--lines requires a value".to_string());
+                };
+                lines_baseline = Some(parse_f64_flag("--lines", value)?);
+                i += 2;
+            }
+            "--functions" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--functions requires a value".to_string());
+                };
+                functions_baseline = Some(parse_f64_flag("--functions", value)?);
+                i += 2;
+            }
+            "--epsilon" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--epsilon requires a value".to_string());
+                };
+                epsilon = parse_f64_flag("--epsilon", value)?;
+                i += 2;
+            }
+            "--lcov" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--lcov requires a value".to_string());
+                };
+                lcov_path = value.clone();
+                i += 2;
+            }
+            other => return Err(format!("unknown compare argument: {other}")),
+        }
+    }
+
+    Ok(CompareOptions {
+        lines_baseline: lines_baseline.ok_or_else(|| "--lines is required".to_string())?,
+        functions_baseline: functions_baseline
+            .ok_or_else(|| "--functions is required".to_string())?,
+        epsilon,
+        lcov_path,
+    })
+}
+
+fn parse_f64_flag(flag: &str, value: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .map_err(|_| format!("{flag} must be a decimal number"))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CoverageMetrics {
+    lines_covered: u64,
+    lines_total: u64,
+    functions_covered: u64,
+    functions_total: u64,
+    lines_pct: f64,
+    functions_pct: f64,
+}
+
+fn read_lcov_metrics(path: &Path) -> Result<CoverageMetrics, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    parse_lcov_metrics(&content)
+}
+
+fn parse_lcov_metrics(content: &str) -> Result<CoverageMetrics, String> {
+    let mut lines_total = 0_u64;
+    let mut lines_covered = 0_u64;
+    let mut functions_total = 0_u64;
+    let mut functions_covered = 0_u64;
+
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix("LF:") {
+            lines_total += parse_u64_value("LF", value)?;
+        } else if let Some(value) = line.strip_prefix("LH:") {
+            lines_covered += parse_u64_value("LH", value)?;
+        } else if let Some(value) = line.strip_prefix("FNF:") {
+            functions_total += parse_u64_value("FNF", value)?;
+        } else if let Some(value) = line.strip_prefix("FNH:") {
+            functions_covered += parse_u64_value("FNH", value)?;
+        }
+    }
+
+    Ok(CoverageMetrics {
+        lines_covered,
+        lines_total,
+        functions_covered,
+        functions_total,
+        lines_pct: percentage(lines_covered, lines_total),
+        functions_pct: percentage(functions_covered, functions_total),
+    })
+}
+
+fn parse_u64_value(name: &str, raw: &str) -> Result<u64, String> {
+    raw.trim()
+        .parse::<u64>()
+        .map_err(|_| format!("invalid LCOV number for {name}: `{raw}`"))
+}
+
+fn percentage(covered: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        (covered as f64) * 100.0 / (total as f64)
+    }
+}
+
+fn is_regression(current: f64, baseline: f64, epsilon: f64) -> bool {
+    current < (baseline - epsilon)
+}
+
+fn print_coverage_comparison(
+    metrics: &CoverageMetrics,
+    lines_baseline: f64,
+    functions_baseline: f64,
+) {
+    println!("Coverage comparison:");
+    println!(
+        "  Lines      baseline: {:7.2}%  current: {:7.2}%  delta: {:+.2}",
+        lines_baseline,
+        metrics.lines_pct,
+        metrics.lines_pct - lines_baseline
+    );
+    println!(
+        "  Functions  baseline: {:7.2}%  current: {:7.2}%  delta: {:+.2}",
+        functions_baseline,
+        metrics.functions_pct,
+        metrics.functions_pct - functions_baseline
+    );
 }
 
 fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
@@ -555,4 +806,30 @@ fn is_gitignored(file: &Path, git_toplevel: Option<&Path>) -> bool {
         .arg(file)
         .status();
     matches!(status, Ok(s) if s.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_regression, parse_lcov_metrics};
+
+    #[test]
+    fn parses_lcov_metrics() {
+        let lcov = "TN:\nSF:a.rs\nFNF:4\nFNH:3\nLF:10\nLH:8\nend_of_record\nSF:b.rs\nFNF:1\nFNH:1\nLF:2\nLH:2\nend_of_record\n";
+        let metrics = parse_lcov_metrics(lcov).expect("parse lcov");
+
+        assert_eq!(metrics.lines_covered, 10);
+        assert_eq!(metrics.lines_total, 12);
+        assert_eq!(metrics.functions_covered, 4);
+        assert_eq!(metrics.functions_total, 5);
+        assert!((metrics.lines_pct - 83.33).abs() < 0.01);
+        assert!((metrics.functions_pct - 80.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn compare_honours_epsilon_boundary() {
+        assert!(!is_regression(79.95, 80.0, 0.05));
+        assert!(is_regression(79.94, 80.0, 0.05));
+        assert!(!is_regression(74.95, 75.0, 0.05));
+        assert!(is_regression(74.94, 75.0, 0.05));
+    }
 }

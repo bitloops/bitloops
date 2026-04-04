@@ -18,7 +18,9 @@ dev-test-cli = "run --manifest-path ../Cargo.toml --quiet --package xtask -- tes
 dev-test-fast = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test fast"
 dev-test-slow = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test slow"
 dev-test-full = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test full"
-dev-coverage = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path target/llvm-cov.info"
+dev-coverage = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage run-lcov --lcov bitloops/target/llvm-cov.info"
+dev-coverage-metrics = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage metrics --lcov bitloops/target/llvm-cov.info"
+dev-coverage-compare = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage compare --lines 80 --functions 75 --epsilon 0.05 --lcov bitloops/target/llvm-cov.info"
 dev-coverage-html = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --html --output-dir target/llvm-cov-html"
 
 # Explicit bundled-DuckDB aliases for release/offline/exotic targets.

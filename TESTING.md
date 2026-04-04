@@ -12,6 +12,8 @@ Run commands from the repository root.
 | Slow lane tests | `cargo dev-test-slow` |
 | Full lane tests | `cargo dev-test-full` |
 | Coverage (LCOV) | `cargo dev-coverage` |
+| Coverage metrics (lines/functions) | `cargo dev-coverage-metrics` |
+| Coverage compare (default 80/75 fallback policy) | `cargo dev-coverage-compare` |
 | Coverage (HTML) | `cargo dev-coverage-html` |
 | Install local CLI (signed on macOS) | `cargo dev-install` |
 | File-size guardrail | `cargo dev-file-size` |
@@ -99,16 +101,16 @@ cargo dev-test-slow
 
 ```bash
 cargo dev-coverage
+cargo dev-coverage-metrics
 cargo dev-coverage-html
 open bitloops/target/llvm-cov-html/html/index.html
 ```
 
-Coverage baseline tooling remains script-based for now:
+PR coverage gate policy (`develop`, non-draft only):
 
-```bash
-./bitloops/scripts/coverage-baseline-check.sh check
-./bitloops/scripts/coverage-baseline-check.sh update
-```
+- CI compares coverage against GitHub repository metadata baselines.
+- If metadata is missing, CI falls back to `80.00%` lines and `75.00%` functions.
+- Tolerance is `0.05` percentage points in both baseline and fallback modes.
 
 ## Install local binary
 
