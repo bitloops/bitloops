@@ -294,23 +294,6 @@ fn TestProcessSessionActivityScopesExpiredEndEventsToCurrentRepo() {
     let state_root = tempfile::tempdir().unwrap();
     let state_root_str = state_root.path().to_string_lossy().to_string();
 
-    let sessions_path = state_root.path().join("telemetry_sessions.json");
-    let sessions_json = serde_json::json!({
-        "sessions": {
-            repo_active.path().to_string_lossy().to_string(): {
-                "session_id": "active-expired",
-                "started_at": 1,
-                "last_event_at": 0
-            },
-            repo_other.path().to_string_lossy().to_string(): {
-                "session_id": "other-expired",
-                "started_at": 1,
-                "last_event_at": 0
-            }
-        }
-    });
-    std::fs::write(&sessions_path, sessions_json.to_string()).expect("write sessions json");
-
     with_process_state(
         None,
         &[
@@ -318,8 +301,35 @@ fn TestProcessSessionActivityScopesExpiredEndEventsToCurrentRepo() {
             ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
         ],
         || {
-            let activity =
-                process_session_activity(repo_active.path(), "manual-commit", "hook").expect("activity");
+            let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+            std::fs::create_dir_all(&state_dir).expect("create state dir");
+
+            let sessions_path = state_dir.join("telemetry_sessions.json");
+            let mut sessions = serde_json::Map::new();
+            sessions.insert(
+                repo_active.path().to_string_lossy().to_string(),
+                serde_json::json!({
+                    "session_id": "active-expired",
+                    "started_at": 1,
+                    "last_event_at": 0
+                }),
+            );
+            sessions.insert(
+                repo_other.path().to_string_lossy().to_string(),
+                serde_json::json!({
+                    "session_id": "other-expired",
+                    "started_at": 1,
+                    "last_event_at": 0
+                }),
+            );
+            let sessions_json = serde_json::Value::Object(serde_json::Map::from_iter([(
+                "sessions".to_string(),
+                serde_json::Value::Object(sessions),
+            )]));
+            std::fs::write(&sessions_path, sessions_json.to_string()).expect("write sessions json");
+
+            let activity = process_session_activity(repo_active.path(), "manual-commit", "hook")
+                .expect("activity");
             let end_events = activity
                 .lifecycle_events
                 .iter()
