@@ -1,4 +1,7 @@
 use axum::{Json, extract::State, http::StatusCode};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Instant;
 
 use super::super::dto::{
     ApiCheckBundleVersionResponse, ApiError, ApiErrorEnvelope, ApiFetchBundleResponse,
@@ -17,12 +20,13 @@ use super::super::{DashboardState, bundle, bundle_types::BundleError};
 pub(crate) async fn handle_api_check_bundle_version(
     State(state): State<DashboardState>,
 ) -> std::result::Result<Json<ApiCheckBundleVersionResponse>, ApiError> {
+    let started = Instant::now();
     let bundle_dir = state.bundle_dir.display().to_string();
     log::info!(
         "event=dashboard.bundle.check.started operation=check_bundle_version status=started bundle_dir={bundle_dir}"
     );
 
-    match bundle::check_bundle_version(&state).await {
+    let response = match bundle::check_bundle_version(&state).await {
         Ok(result) => {
             let latest_applicable_version = result
                 .latest_applicable_version
@@ -52,7 +56,15 @@ pub(crate) async fn handle_api_check_bundle_version(
             );
             Err(api_error)
         }
-    }
+    };
+    track_bundle_action(
+        &state,
+        "bitloops dashboard api bundle-check",
+        "GET",
+        started.elapsed(),
+        &response,
+    );
+    response
 }
 
 #[utoipa::path(
@@ -70,12 +82,13 @@ pub(crate) async fn handle_api_check_bundle_version(
 pub(crate) async fn handle_api_fetch_bundle(
     State(state): State<DashboardState>,
 ) -> std::result::Result<Json<ApiFetchBundleResponse>, ApiError> {
+    let started = Instant::now();
     let bundle_dir = state.bundle_dir.display().to_string();
     log::info!(
         "event=dashboard.bundle.install.started operation=fetch_bundle status=started bundle_dir={bundle_dir}"
     );
 
-    match bundle::fetch_bundle(&state).await {
+    let response = match bundle::fetch_bundle(&state).await {
         Ok(result) => {
             log::info!(
                 "event=dashboard.bundle.install.succeeded operation=fetch_bundle status=succeeded bundle_dir={} installed_version={} checksum_verified={}",
@@ -114,7 +127,15 @@ pub(crate) async fn handle_api_fetch_bundle(
             );
             Err(api_error)
         }
-    }
+    };
+    track_bundle_action(
+        &state,
+        "bitloops dashboard api bundle-fetch",
+        "POST",
+        started.elapsed(),
+        &response,
+    );
+    response
 }
 
 fn map_bundle_error(error: BundleError) -> ApiError {
@@ -159,4 +180,33 @@ fn bundle_error_code(error: &BundleError) -> &'static str {
         BundleError::BundleInstallFailed(_) => "bundle_install_failed",
         BundleError::Internal(_) => "internal",
     }
+}
+
+fn track_bundle_action<T>(
+    state: &DashboardState,
+    event: &str,
+    method: &str,
+    duration: std::time::Duration,
+    result: &std::result::Result<Json<T>, ApiError>,
+) {
+    let status = match result {
+        Ok(_) => StatusCode::OK,
+        Err(err) => err.status_code(),
+    };
+    let mut properties = HashMap::new();
+    properties.insert("http_method".to_string(), Value::String(method.to_string()));
+    properties.insert(
+        "status_code_class".to_string(),
+        Value::String(super::super::status_code_class(status).to_string()),
+    );
+    super::super::track_repo_action(
+        &state.repo_root,
+        crate::telemetry::analytics::ActionDescriptor {
+            event: event.to_string(),
+            surface: "dashboard",
+            properties,
+        },
+        status.is_success(),
+        duration,
+    );
 }

@@ -16,12 +16,14 @@ use crate::graphql::{
 use axum::{
     Router,
     body::Body,
-    extract::{Path as AxumPath, Request, State},
+    extract::{Path as AxumPath, State},
     http::{HeaderValue, Method, StatusCode, header},
-    middleware::{self, Next},
     response::Response,
     routing::{any, get, post},
 };
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Instant;
 
 const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update-prompt-script">
 (function () {
@@ -178,7 +180,6 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
 </script>"##;
 
 pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
-    let telemetry_state = state.clone();
     Router::new()
         .route("/api/", get(handle_api_root))
         .nest("/api", build_dashboard_api_router())
@@ -202,10 +203,6 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/", any(handle_dashboard_root))
         .route("/{*path}", any(handle_dashboard_path))
         .with_state(state)
-        .layer(middleware::from_fn_with_state(
-            telemetry_state,
-            touch_dashboard_session,
-        ))
 }
 
 fn build_dashboard_api_router() -> Router<DashboardState> {
@@ -232,21 +229,11 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
         .fallback(handle_api_not_found)
 }
 
-async fn touch_dashboard_session(
-    State(state): State<DashboardState>,
-    request: Request,
-    next: Next,
-) -> Response {
-    crate::telemetry::analytics::track_session_activity_detached(
-        &state.repo_root,
-        "dashboard",
-        "dashboard",
-    );
-    next.run(request).await
-}
-
 async fn handle_dashboard_root(State(state): State<DashboardState>, method: Method) -> Response {
-    serve_dashboard_request(&state, "/", method).await
+    let started = Instant::now();
+    let response = serve_dashboard_request(&state, "/", method.clone()).await;
+    track_dashboard_page_event(&state, "/", &method, response.status(), started.elapsed());
+    response
 }
 
 async fn handle_dashboard_path(
@@ -255,7 +242,16 @@ async fn handle_dashboard_path(
     method: Method,
 ) -> Response {
     let request_path = format!("/{path}");
-    serve_dashboard_request(&state, &request_path, method).await
+    let started = Instant::now();
+    let response = serve_dashboard_request(&state, &request_path, method.clone()).await;
+    track_dashboard_page_event(
+        &state,
+        &request_path,
+        &method,
+        response.status(),
+        started.elapsed(),
+    );
+    response
 }
 
 async fn serve_dashboard_request(
@@ -420,4 +416,40 @@ fn response_with_bytes(
         );
     }
     response
+}
+
+fn track_dashboard_page_event(
+    state: &DashboardState,
+    request_path: &str,
+    method: &Method,
+    status: StatusCode,
+    duration: std::time::Duration,
+) {
+    if *method != Method::GET && *method != Method::HEAD {
+        return;
+    }
+    if request_path_looks_like_asset(request_path) {
+        return;
+    }
+
+    let mut properties = HashMap::new();
+    properties.insert(
+        "http_method".to_string(),
+        Value::String(method.as_str().to_string()),
+    );
+    properties.insert(
+        "status_code_class".to_string(),
+        Value::String(super::status_code_class(status).to_string()),
+    );
+
+    super::track_repo_action(
+        &state.repo_root,
+        crate::telemetry::analytics::ActionDescriptor {
+            event: "bitloops dashboard page".to_string(),
+            surface: "dashboard",
+            properties,
+        },
+        status.is_success(),
+        duration,
+    );
 }

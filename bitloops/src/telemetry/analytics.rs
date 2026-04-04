@@ -36,18 +36,16 @@ pub struct EventPayload {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct CommandInfo {
-    pub command_path: String,
-    pub hidden: bool,
-    pub flag_names: Vec<String>,
+pub struct ActionDescriptor {
+    pub event: String,
+    pub surface: &'static str,
+    pub properties: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TelemetryDispatchContext {
-    pub strategy: String,
-    pub agent: String,
-    pub is_bitloops_enabled: bool,
-    pub version: String,
+    pub strategy: Option<String>,
+    pub agent: Option<String>,
 }
 
 #[derive(Args)]
@@ -57,144 +55,123 @@ pub struct SendAnalyticsArgs {
 
 pub fn load_dispatch_context() -> Option<TelemetryDispatchContext> {
     let repo_root = crate::utils::paths::repo_root().ok()?;
-    let settings = crate::config::settings::load_settings(&repo_root).ok()?;
+    load_dispatch_context_for_repo(&repo_root)
+}
 
-    if settings.telemetry != Some(true) {
+pub fn load_global_dispatch_context() -> Option<TelemetryDispatchContext> {
+    let daemon = crate::config::load_daemon_settings(None).ok()?;
+    if daemon.cli.telemetry != Some(true) {
         return None;
     }
 
     Some(TelemetryDispatchContext {
-        strategy: settings.strategy,
-        agent: detect_installed_agents(&repo_root).join(","),
-        is_bitloops_enabled: settings.enabled,
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        strategy: None,
+        agent: None,
     })
 }
 
-pub fn build_event_payload(
-    cmd: Option<&CommandInfo>,
-    strategy: &str,
-    agent: &str,
-    is_bitloops_enabled: bool,
-    version: &str,
-    repo_root: &Path,
-) -> Option<EventPayload> {
-    let command = cmd?;
+pub fn load_dispatch_context_for_repo(repo_root: &Path) -> Option<TelemetryDispatchContext> {
+    let settings = crate::config::settings::load_settings(repo_root).ok()?;
+    if settings.telemetry != Some(true) {
+        return None;
+    }
 
-    // Get or create session for this repo
-    let state_dir = crate::utils::platform_dirs::bitloops_state_dir().ok()?;
-    let mut session_store = crate::telemetry::sessions::SessionStore::load(&state_dir);
-    let session_result = session_store.get_or_create_session(repo_root);
-    let _ = session_store.save(&state_dir);
-
-    build_event_payload_with_session_id(
-        command,
-        strategy,
-        agent,
-        is_bitloops_enabled,
-        version,
-        session_result.session_id,
-    )
+    let agent = detect_installed_agents(repo_root).join(",");
+    Some(TelemetryDispatchContext {
+        strategy: Some(settings.strategy),
+        agent: (!agent.is_empty()).then_some(agent),
+    })
 }
 
-fn build_event_payload_with_session_id(
-    command: &CommandInfo,
-    strategy: &str,
-    agent: &str,
-    is_bitloops_enabled: bool,
+pub fn build_action_payload(
+    descriptor: &ActionDescriptor,
+    dispatch_context: &TelemetryDispatchContext,
     version: &str,
-    session_id: String,
+    success: bool,
+    duration_ms: u128,
+    session_id: Option<String>,
 ) -> Option<EventPayload> {
     let machine_id = distinct_machine_id()?;
-    let selected_agent = if agent.is_empty() { "auto" } else { agent };
+    let mut properties = descriptor.properties.clone();
 
-    let mut properties = HashMap::from([
-        (
-            "command".to_string(),
-            Value::String(command.command_path.clone()),
-        ),
-        ("strategy".to_string(), Value::String(strategy.to_string())),
-        (
-            "agent".to_string(),
-            Value::String(selected_agent.to_string()),
-        ),
-        (
-            "isBitloopsEnabled".to_string(),
-            Value::Bool(is_bitloops_enabled),
-        ),
-        (
-            "cli_version".to_string(),
-            Value::String(version.to_string()),
-        ),
-        ("os".to_string(), Value::String(env::consts::OS.to_string())),
-        (
-            "arch".to_string(),
-            Value::String(env::consts::ARCH.to_string()),
-        ),
-    ]);
+    properties.insert(
+        "surface".to_string(),
+        Value::String(descriptor.surface.to_string()),
+    );
+    properties.insert(
+        "result".to_string(),
+        Value::String(if success { "success" } else { "error" }.to_string()),
+    );
+    properties.insert(
+        "duration_ms".to_string(),
+        Value::Number(serde_json::Number::from(
+            u64::try_from(duration_ms).unwrap_or(u64::MAX),
+        )),
+    );
+    properties.insert(
+        "cli_version".to_string(),
+        Value::String(version.to_string()),
+    );
+    properties.insert("os".to_string(), Value::String(env::consts::OS.to_string()));
+    properties.insert(
+        "arch".to_string(),
+        Value::String(env::consts::ARCH.to_string()),
+    );
 
-    properties.insert("$session_id".to_string(), Value::String(session_id));
-
-    if !command.flag_names.is_empty() {
-        properties.insert(
-            "flags".to_string(),
-            Value::String(command.flag_names.join(",")),
-        );
+    if let Some(strategy) = dispatch_context.strategy.as_deref() {
+        properties.insert("strategy".to_string(), Value::String(strategy.to_string()));
+    }
+    if let Some(agent) = dispatch_context.agent.as_deref()
+        && !agent.is_empty()
+    {
+        properties.insert("agent".to_string(), Value::String(agent.to_string()));
+    }
+    if let Some(session_id) = session_id {
+        properties.insert("$session_id".to_string(), Value::String(session_id));
     }
 
     Some(EventPayload {
-        event: "cli_command_executed".to_string(),
+        event: descriptor.event.clone(),
         distinct_id: machine_id,
         properties,
         timestamp: now_rfc3339(),
     })
 }
 
-pub fn track_command_detached(
-    cmd: Option<&CommandInfo>,
-    strategy: &str,
-    agent: &str,
-    is_bitloops_enabled: bool,
+pub fn track_action_detached(
+    descriptor: Option<&ActionDescriptor>,
+    dispatch_context: &TelemetryDispatchContext,
     version: &str,
-    repo_root: &Path,
+    repo_root: Option<&Path>,
+    success: bool,
+    duration_ms: u128,
 ) {
     if env::var(TELEMETRY_OPTOUT_ENV).is_ok_and(|v| !v.is_empty()) {
         return;
     }
 
-    let Some(command) = cmd else {
+    let Some(descriptor) = descriptor else {
         return;
     };
 
-    if command.hidden {
-        return;
-    }
-
-    let session_id = process_session_activity(repo_root, strategy, "cli").map(|activity| {
-        for payload in activity.lifecycle_events {
-            spawn_detached_event_payload(&payload);
-        }
-        activity.session_id
+    let session_id = repo_root.and_then(|repo_root| {
+        let strategy = dispatch_context.strategy.as_deref()?;
+        process_session_activity(repo_root, strategy, descriptor.surface).map(|activity| {
+            for payload in activity.lifecycle_events {
+                spawn_detached_event_payload(&payload);
+            }
+            activity.session_id
+        })
     });
 
-    let Some(payload) = (match session_id {
-        Some(session_id) => build_event_payload_with_session_id(
-            command,
-            strategy,
-            agent,
-            is_bitloops_enabled,
-            version,
-            session_id,
-        ),
-        None => build_event_payload(
-            Some(command),
-            strategy,
-            agent,
-            is_bitloops_enabled,
-            version,
-            repo_root,
-        ),
-    }) else {
+    let Some(payload) = build_action_payload(
+        descriptor,
+        dispatch_context,
+        version,
+        success,
+        duration_ms,
+        session_id,
+    ) else {
         return;
     };
 
@@ -247,7 +224,7 @@ fn process_session_activity(
     let session_result = session_store.get_or_create_session(repo_root);
     if session_result.is_new_session
         && let Some(payload) =
-            build_session_start_payload(&session_result.session_id, strategy, repo_root, source)
+            build_session_start_payload(&session_result.session_id, strategy, source)
     {
         lifecycle_events.push(payload);
     }
@@ -263,7 +240,6 @@ fn process_session_activity(
 fn build_session_start_payload(
     session_id: &str,
     strategy: &str,
-    repo_root: &Path,
     source: &str,
 ) -> Option<EventPayload> {
     let machine_id = distinct_machine_id()?;
@@ -277,10 +253,6 @@ fn build_session_start_payload(
             Value::String(now_rfc3339()),
         ),
         ("strategy".to_string(), Value::String(strategy.to_string())),
-        (
-            "repo_root".to_string(),
-            Value::String(repo_root.to_string_lossy().to_string()),
-        ),
         ("source".to_string(), Value::String(source.to_string())),
         (
             "cli_version".to_string(),
@@ -322,10 +294,6 @@ fn build_session_end_payload(
         (
             "$session_duration".to_string(),
             Value::Number(serde_json::Number::from(ended.duration_secs)),
-        ),
-        (
-            "repo_root".to_string(),
-            Value::String(ended.repo_root.clone()),
         ),
         ("source".to_string(), Value::String(source.to_string())),
         (
