@@ -773,11 +773,19 @@ fn count_lines(path: &Path) -> Result<u64, String> {
 }
 
 fn is_test_file(path: &Path) -> bool {
-    let path_text = path.to_string_lossy();
-    path_text.contains("/tests/")
-        || path_text.ends_with("_test.rs")
-        || path_text.ends_with("tests.rs")
-        || path_text.ends_with("_tests.rs")
+    let in_tests_dir = path
+        .components()
+        .any(|component| component.as_os_str() == "tests");
+    let file_name = path.file_name().and_then(|name| name.to_str());
+
+    in_tests_dir
+        || matches!(
+            file_name,
+            Some(name)
+                if name.ends_with("_test.rs")
+                    || name.ends_with("tests.rs")
+                    || name.ends_with("_tests.rs")
+        )
 }
 
 fn git_toplevel(root: &Path) -> Option<PathBuf> {
