@@ -272,6 +272,7 @@ fn TestTrackSessionActivityCreatesSessionStoreEntry() {
         &[
             (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_str.as_str())),
             ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
+            ("BITLOOPS_TELEMETRY_FORCE_NO_DISTINCT_ID", None),
         ],
         || {
             track_session_activity_detached(tmp.path(), "dashboard", "dashboard");
@@ -299,6 +300,7 @@ fn TestProcessSessionActivityScopesExpiredEndEventsToCurrentRepo() {
         &[
             (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_str.as_str())),
             ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
+            ("BITLOOPS_TELEMETRY_FORCE_NO_DISTINCT_ID", None),
         ],
         || {
             let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
