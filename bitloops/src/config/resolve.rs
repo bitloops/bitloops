@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::utils::paths;
 
 use super::constants::*;
+#[cfg(not(test))]
+use super::daemon_config::default_daemon_config_exists;
 use super::daemon_config::load_daemon_settings;
 use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
@@ -27,18 +29,27 @@ use super::unified_config::{
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 
-#[cfg(not(test))]
-fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
-    let _ = repo_root;
-    let loaded = load_daemon_settings(None)?;
-    Ok((loaded.root, loaded.settings))
-}
-
 #[cfg(test)]
 fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
     let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
     if repo_toml.is_file() {
         let loaded = load_daemon_settings(Some(&repo_toml))?;
+        return Ok((loaded.root, loaded.settings));
+    }
+
+    Ok((repo_root.to_path_buf(), UnifiedSettings::default()))
+}
+
+#[cfg(not(test))]
+fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
+    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if repo_toml.is_file() {
+        let loaded = load_daemon_settings(Some(&repo_toml))?;
+        return Ok((loaded.root, loaded.settings));
+    }
+
+    if default_daemon_config_exists().unwrap_or(false) {
+        let loaded = load_daemon_settings(None)?;
         return Ok((loaded.root, loaded.settings));
     }
 
