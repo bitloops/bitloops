@@ -1,0 +1,6 @@
+[capture]
+enabled = true
+strategy = "manual-commit"
+
+[telemetry]
+enabled = true

@@ -10,18 +10,18 @@ pub(super) fn confirm_uninstall(
     out: &mut dyn Write,
     targets: &BTreeSet<UninstallTarget>,
     hook_repo_roots: &[PathBuf],
-    legacy_repo_roots: &[PathBuf],
+    repo_data_roots: &[PathBuf],
 ) -> Result<bool> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
-    confirm_uninstall_with_input(out, targets, hook_repo_roots, legacy_repo_roots, &mut input)
+    confirm_uninstall_with_input(out, targets, hook_repo_roots, repo_data_roots, &mut input)
 }
 
 fn confirm_uninstall_with_input(
     out: &mut dyn Write,
     targets: &BTreeSet<UninstallTarget>,
     hook_repo_roots: &[PathBuf],
-    legacy_repo_roots: &[PathBuf],
+    repo_data_roots: &[PathBuf],
     input: &mut dyn BufRead,
 ) -> Result<bool> {
     writeln!(out)?;
@@ -34,7 +34,7 @@ fn confirm_uninstall_with_input(
         writeln!(
             out,
             "  - {}",
-            target.summary(hook_repo_roots.len(), legacy_repo_roots.len())
+            target.summary(hook_repo_roots.len(), repo_data_roots.len())
         )?;
     }
     write!(out, "\nContinue? [y/N]: ")?;
@@ -94,7 +94,7 @@ mod tests {
         let output = String::from_utf8(out).expect("output should be utf-8");
         assert!(output.contains("This will remove the following Bitloops artefacts:"));
         assert!(output.contains("Agent hooks in 2 repo(s)"));
-        assert!(output.contains("Global data directory and legacy .bitloops dirs in 1 repo(s)"));
+        assert!(output.contains("Global data directory and .bitloops dirs in 1 repo(s)"));
         assert!(output.contains("Continue? [y/N]: "));
     }
 }

@@ -273,14 +273,14 @@ pub(crate) fn run_persistent_post_run(hidden_chain: &[bool], command_name: &str)
         flag_names: crate::telemetry::analytics::collect_flag_names_from_argv(&argv),
     };
 
+    // Get repo root first, then build dispatch context
+    let repo_root = env::current_dir()
+        .ok()
+        .and_then(|cwd| enable::find_repo_root(&cwd).ok());
+
     let dispatch_context = crate::telemetry::analytics::load_dispatch_context().or_else(|| {
-        env::current_dir()
-            .ok()
-            .and_then(|cwd| enable::find_repo_root(&cwd).ok())
-            .and_then(|repo_root| {
-                build_telemetry_event(hidden_chain, &repo_root, command_name, build_version())
-            })
-            .map(
+        repo_root.as_ref().and_then(|repo_root| {
+            build_telemetry_event(hidden_chain, repo_root, command_name, build_version()).map(
                 |event| crate::telemetry::analytics::TelemetryDispatchContext {
                     strategy: event.strategy,
                     agent: event.agent,
@@ -288,15 +288,19 @@ pub(crate) fn run_persistent_post_run(hidden_chain: &[bool], command_name: &str)
                     version: event.cli_version,
                 },
             )
+        })
     });
 
-    if let Some(ctx) = dispatch_context {
+    if let Some(ctx) = dispatch_context
+        && let Some(repo) = repo_root.as_ref()
+    {
         crate::telemetry::analytics::track_command_detached(
             Some(&command_info),
             &ctx.strategy,
             &ctx.agent,
             ctx.is_bitloops_enabled,
             &ctx.version,
+            repo,
         );
     }
 
