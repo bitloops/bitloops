@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Cargo-first local testing and quality aliases**: added repository-root and `bitloops/` Cargo aliases for fast local workflows, including `dev-check`, `dev-build`, `dev-install`, `dev-test-core`, `dev-test-cli`, `dev-test-fast`, `dev-test-slow`, `dev-test-full`, `dev-coverage`, `dev-coverage-html`, `dev-fmt`, `dev-fmt-check`, `dev-clippy`, and `dev-file-size`.
+- **One-command local gate (`cargo dev-loop`)**: added an `xtask`-backed alias that runs format-with-fixes, Clippy (`-D warnings`), fast tests, and file-size checks in sequence for repeatable local verification.
 - **Per-repo telemetry sessions**: added daemon-driven session management with per-repo session IDs, 60-minute idle timeout, automatic session renewal, and `$session_id` property on all events for session-based funnel analysis in PostHog.
 - **Telemetry debug logging and Windows support**: added `BITLOOPS_TELEMETRY_DEBUG` environment variable for troubleshooting telemetry dispatch, implemented Windows support for detached analytics events, and added structured debug output for API key configuration, event dispatch, and curl status.
 - **Queued DevQL sync orchestration and progress tracking**: added a daemon-owned sync coordinator with persisted task state, queue-aware sync task models, sync progress phases and counters, GraphQL `enqueueSync`, `syncTask`, `syncTasks`, and `syncProgress` surfaces, `bitloops init --sync[=true|false]`, `bitloops devql sync --status`, and daemon status reporting for global sync queue totals plus current-repository sync activity.
@@ -19,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Test target gating for local performance**: switched `bitloops` to explicit `[[test]]` declarations (`autotests = false`), introduced `slow-tests`, and gated heavy e2e/integration binaries behind `required-features = ["slow-tests"]` so default local test runs stay fast.
+- **DuckDB local defaults**: changed default crate features to opt out of bundled DuckDB compilation (`default = []`), keeping bundled mode explicit for offline/exotic target paths.
+- **Testing documentation refreshed**: expanded `TESTING.md` with test authoring and gating guidance (fast vs slow lane policy, reliability rules, and PR verification checklist) and updated development docs to prefer Cargo aliases over shell wrappers for local workflows.
+- **macOS local test/install resiliency via Cargo**: `dev-test-*` and `dev-install` aliases now route through `xtask`, which pre-signs compiled test executables and the installed CLI binary on macOS (ad-hoc by default, keychain identity optional via `BITLOOPS_CODESIGN_IDENTITY`) to mitigate repeated `syspolicyd` validation churn during local development.
 - **DevQL sync is queue-based by default**: `bitloops devql sync` now enqueues daemon-owned sync work and returns immediately unless `--status` is passed, `bitloops init` can optionally prompt for and follow an initial current-state sync after hook setup, and watcher plus post-commit, post-merge, and post-checkout refresh producers now submit through the shared sync queue in production.
 - **Documentation refreshed for daemon-first DevQL sync flows**: updated the main docs, `quickstart.md`, and `DevQL-Getting_Started.md` to describe `bitloops init --sync=true|false`, the interactive post-hook sync prompt, non-interactive explicit sync selection, queued `bitloops devql sync`, `bitloops devql sync --status`, and sync queue visibility in `bitloops status` and `bitloops daemon status`.
 - **Language adapter canonical typing**: `CanonicalMapping.language_kind`, `supported_language_kinds()`, `LanguageArtefact.language_kind`, and shared canonical-resolution helpers now operate on typed `LanguageKind` values in the logic layer, while string conversion is deferred to persistence/output boundaries.
