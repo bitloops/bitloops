@@ -37,6 +37,15 @@ pub(crate) fn read_committed_returns_checkpoint_summary() {
 pub(crate) fn write_committed_aggregation() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    commit_files(
+        dir.path(),
+        &[
+            ("a.rs", "pub fn a() {}\n"),
+            ("b.rs", "pub fn b() {}\n"),
+            ("c.rs", "pub fn c() {}\n"),
+        ],
+        "prepare committed checkpoint provenance",
+    );
     let checkpoint_id = "b1b2b3b4b5b6";
     write_committed(
         dir.path(),

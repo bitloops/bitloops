@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Normalised checkpoint provenance relations**: committed checkpoint storage now writes canonical `checkpoint_files` and `checkpoint_artefacts` relations instead of persisting committed `files_touched`. File provenance records add/modify/delete/rename semantics with before/after paths and blob SHAs, while artefact provenance is emitted only for semantic artefact changes.
 - **Cargo-first local testing and quality aliases**: added repository-root and `bitloops/` Cargo aliases for fast local workflows, including `dev-check`, `dev-build`, `dev-install`, `dev-test-core`, `dev-test-cli`, `dev-test-fast`, `dev-test-slow`, `dev-test-full`, `dev-coverage`, `dev-coverage-html`, `dev-fmt`, `dev-fmt-check`, `dev-clippy`, and `dev-file-size`.
 - **One-command local gate (`cargo dev-loop`)**: added an `xtask`-backed alias that runs format-with-fixes, Clippy (`-D warnings`), fast tests, and file-size checks in sequence for repeatable local verification.
 - **Cargo-native coverage tooling and baseline publishing workflow**: added `xtask coverage run-lcov|metrics|compare` plus `dev-coverage-metrics` and `dev-coverage-compare` aliases, and introduced a dedicated GitHub Actions workflow that runs on `develop` pushes and publishes lines/functions coverage baselines to repository variables (`BITLOOPS_COV_BASELINE_LINES_PCT`, `BITLOOPS_COV_BASELINE_FUNCTIONS_PCT`, with SHA/timestamp metadata).
@@ -34,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Sandbox-safe local test lanes**: isolated the remaining environment-sensitive test cases so repository-root default lanes stay clean in sandboxed runs. Socket-bound tests now skip cleanly when loopback binds are not permitted, and git-fixture tests disable local commit/tag signing so host SSH signing configuration does not leak into test repos.
 - **Queue-adoption regressions in current-state refresh flows**: restored deterministic host-side test behaviour for watcher capture and manual-commit DevQL refresh paths with test-only inline sync execution, hardened sync worker lifecycle handling when test runtimes drop, corrected malformed SQL in the modularised `commands_sync` shared and validation queries, and cleaned the follow-up Clippy warnings in the new CLI and sync queue paths.
 - **Daemon liveness detection on macOS**: the CLI now treats Unix `kill(pid, 0)` permission errors (`EPERM`) as evidence that the daemon process still exists instead of assuming the process is gone. This fixes cases where a live Bitloops daemon was misreported as stopped, which could break daemon status and lifecycle flows.
 

@@ -39,6 +39,8 @@ use crate::utils::terminal::print_db_status_table;
 pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]
 pub(crate) mod checkpoint_file_snapshots;
+#[path = "devql/checkpoint_provenance.rs"]
+pub(crate) mod checkpoint_provenance;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
 #[path = "devql/commands_projection.rs"]

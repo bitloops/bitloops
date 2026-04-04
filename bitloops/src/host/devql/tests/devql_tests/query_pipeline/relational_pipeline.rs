@@ -34,11 +34,11 @@ async fn build_relational_artefacts_query_uses_projection_exists_for_activity_fi
         .unwrap();
 
     assert!(sql.contains("WITH filtered AS"));
-    assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
-    assert!(sql.contains("cfs.path = a.path"));
-    assert!(sql.contains("cfs.blob_sha = a.content_id"));
-    assert!(sql.contains("cfs.agent = 'codex'"));
-    assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00+00:00'"));
+    assert!(sql.contains("FROM checkpoint_files cf"));
+    assert!(sql.contains("cf.path_after = a.path"));
+    assert!(sql.contains("cf.blob_sha_after = a.content_id"));
+    assert!(sql.contains("cf.agent = 'codex'"));
+    assert!(sql.contains("cf.event_time >= '2026-03-20T00:00:00+00:00'"));
     assert!(!sql.contains("blob_sha IN"));
 }
 
@@ -60,12 +60,12 @@ async fn build_relational_clones_query_uses_shared_filtered_artefact_cte() {
             .unwrap();
 
     assert!(sql.contains("WITH filtered AS"));
-    assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+    assert!(sql.contains("FROM checkpoint_files cf"));
     assert!(sql.contains("JOIN filtered src ON src.symbol_id = ce.source_symbol_id"));
-    assert!(sql.contains("cfs.path = a.path"));
-    assert!(sql.contains("cfs.blob_sha = a.content_id"));
-    assert!(sql.contains("cfs.agent = 'codex'"));
-    assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00+00:00'"));
+    assert!(sql.contains("cf.path_after = a.path"));
+    assert!(sql.contains("cf.blob_sha_after = a.content_id"));
+    assert!(sql.contains("cf.agent = 'codex'"));
+    assert!(sql.contains("cf.event_time >= '2026-03-20T00:00:00+00:00'"));
     assert!(sql.contains("ce.score >= 0.75"));
     assert!(!sql.contains("blob_sha IN"));
 }
@@ -168,11 +168,12 @@ async fn execute_relational_pipeline_filters_activity_by_exact_snapshot_identity
     }
 
     conn.execute(
-        "INSERT INTO checkpoint_file_snapshots (
-            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha,
-            path, blob_sha
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO checkpoint_files (
+            relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+            commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'modify', ?10, ?10, ?11, ?11)",
         rusqlite::params![
+            "relation-1",
             cfg.repo.repo_id.as_str(),
             "checkpoint-1",
             "session-1",
@@ -238,16 +239,27 @@ async fn execute_relational_pipeline_does_not_duplicate_artefacts_for_multiple_m
     )
     .expect("insert artefact row");
 
-    for (checkpoint_id, event_time, commit_sha) in [
-        ("checkpoint-1", "2026-03-21T10:00:00Z", "commit-1"),
-        ("checkpoint-2", "2026-03-22T10:00:00Z", "commit-2"),
+    for (relation_id, checkpoint_id, event_time, commit_sha) in [
+        (
+            "relation-1",
+            "checkpoint-1",
+            "2026-03-21T10:00:00Z",
+            "commit-1",
+        ),
+        (
+            "relation-2",
+            "checkpoint-2",
+            "2026-03-22T10:00:00Z",
+            "commit-2",
+        ),
     ] {
         conn.execute(
-            "INSERT INTO checkpoint_file_snapshots (
-                repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
-                commit_sha, path, blob_sha
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO checkpoint_files (
+                relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+                commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'modify', ?10, ?10, ?11, ?11)",
             rusqlite::params![
+                relation_id,
                 cfg.repo.repo_id.as_str(),
                 checkpoint_id,
                 format!("session-{checkpoint_id}"),
@@ -260,7 +272,7 @@ async fn execute_relational_pipeline_does_not_duplicate_artefacts_for_multiple_m
                 "blob-1",
             ],
         )
-        .expect("insert checkpoint snapshot row");
+        .expect("insert checkpoint provenance row");
     }
 
     let parsed =

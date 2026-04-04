@@ -276,12 +276,16 @@ pub(super) fn insert_checkpoint_file_snapshot_row(
     path: &str,
     blob_sha: &str,
 ) {
+    let relation_id = crate::host::devql::deterministic_uuid(&format!(
+        "{repo_id}|{checkpoint_id}|{path}|{blob_sha}"
+    ));
     conn.execute(
-        "INSERT INTO checkpoint_file_snapshots (
-            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
-            commit_sha, path, blob_sha
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO checkpoint_files (
+            relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+            commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'modify', ?10, ?10, ?11, ?11)",
         rusqlite::params![
+            relation_id,
             repo_id,
             checkpoint_id,
             session_id,
@@ -294,7 +298,7 @@ pub(super) fn insert_checkpoint_file_snapshot_row(
             blob_sha,
         ],
     )
-    .expect("insert checkpoint_file_snapshots row");
+    .expect("insert checkpoint_files row");
 }
 
 pub(super) struct MockHttpResponse {
@@ -318,12 +322,10 @@ pub(super) struct MockSequentialHttpServer {
 }
 
 impl MockSequentialHttpServer {
-    pub(super) fn start(responses: Vec<MockHttpResponse>) -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
-        listener
-            .set_nonblocking(true)
-            .expect("set nonblocking mock server");
-        let addr = listener.local_addr().expect("mock server addr");
+    pub(super) fn try_start(responses: Vec<MockHttpResponse>) -> std::io::Result<Self> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let addr = listener.local_addr()?;
         let url = format!("http://{}", addr);
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
@@ -373,11 +375,11 @@ impl MockSequentialHttpServer {
             }
         });
 
-        Self {
+        Ok(Self {
             url,
             handle: Some(handle),
             shutdown,
-        }
+        })
     }
 }
 
@@ -504,24 +506,26 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
-    let files_touched_raw =
-        serde_json::to_string(seed.files_touched).expect("serialise files_touched");
     let token_usage_raw = serde_json::to_string(&seed.token_usage).expect("serialise token_usage");
+    let provenance_session = seed
+        .sessions
+        .first()
+        .map(|session| (session.session_id, session.agent, session.created_at))
+        .unwrap_or(("session-0", "codex", "2026-01-01T00:00:00Z"));
 
     sqlite
         .with_connection(|conn| {
             conn.execute(
                 "INSERT INTO checkpoints (
                     checkpoint_id, repo_id, strategy, branch, cli_version,
-                    files_touched, checkpoints_count, token_usage
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    checkpoints_count, token_usage
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     seed.checkpoint_id,
                     repo_id.as_str(),
                     "manual-commit",
                     seed.branch,
                     "0.0.3",
-                    files_touched_raw.as_str(),
                     seed.checkpoints_count,
                     token_usage_raw.as_str(),
                 ],
@@ -531,13 +535,13 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
                 conn.execute(
                     "INSERT INTO checkpoint_sessions (
                         checkpoint_id, session_id, session_index, agent, turn_id, checkpoints_count,
-                        files_touched, is_task, tool_use_id, transcript_identifier_at_start,
+                        is_task, tool_use_id, transcript_identifier_at_start,
                         checkpoint_transcript_start, initial_attribution, token_usage, summary,
                         author_name, author_email, transcript_path, created_at
                     ) VALUES (
                         ?1, ?2, ?3, ?4, '', ?5,
-                        ?6, 0, '', '', 0, NULL, NULL, NULL,
-                        'Alice', 'alice@example.com', '', ?7
+                        0, '', '', 0, NULL, NULL, NULL,
+                        'Alice', 'alice@example.com', '', ?6
                     )",
                     rusqlite::params![
                         seed.checkpoint_id,
@@ -545,8 +549,39 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
                         session.session_index,
                         session.agent,
                         session.checkpoints_count,
-                        files_touched_raw.as_str(),
                         session.created_at,
+                    ],
+                )?;
+            }
+
+            for (index, path) in seed.files_touched.iter().enumerate() {
+                let relation_id = crate::host::devql::deterministic_uuid(&format!(
+                    "{}|{}|{}|{}",
+                    repo_id.as_str(),
+                    seed.checkpoint_id,
+                    provenance_session.0,
+                    path
+                ));
+                let blob_sha = format!("seed-blob-{index}");
+                conn.execute(
+                    "INSERT INTO checkpoint_files (
+                        relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+                        commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'manual-commit',
+                        ?8, 'modify', ?9, ?9, ?10, ?10
+                    )",
+                    rusqlite::params![
+                        relation_id,
+                        repo_id.as_str(),
+                        seed.checkpoint_id,
+                        provenance_session.0,
+                        provenance_session.2,
+                        provenance_session.1,
+                        seed.branch,
+                        seed.commit_sha,
+                        path,
+                        blob_sha,
                     ],
                 )?;
             }
