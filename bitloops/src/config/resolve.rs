@@ -93,7 +93,9 @@ pub fn resolve_provider_config() -> Result<ProviderConfig> {
 }
 
 pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConfig> {
-    let settings = daemon_settings_for_repo(repo_root)?.1;
+    let settings = daemon_settings_for_repo(repo_root)
+        .map(|(_, settings)| settings)
+        .unwrap_or_default();
     resolve_provider_from_unified(&settings, |key| env::var(key).ok())
 }
 pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClonesConfig {
