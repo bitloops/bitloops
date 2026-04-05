@@ -24,9 +24,9 @@ impl InteractionEventsStore {
         if events_cfg.has_clickhouse() {
             Self {
                 inner: InteractionEventsStoreInner::ClickHouse {
-                    endpoint: cfg.clickhouse_endpoint(),
-                    user: cfg.clickhouse_user.clone(),
-                    password: cfg.clickhouse_password.clone(),
+                    endpoint: events_cfg.clickhouse_endpoint(),
+                    user: events_cfg.clickhouse_user.clone(),
+                    password: events_cfg.clickhouse_password.clone(),
                 },
             }
         } else {

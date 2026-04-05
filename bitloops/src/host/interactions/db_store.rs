@@ -91,10 +91,13 @@ impl SqliteInteractionEventStore {
 
 impl InteractionEventStore for SqliteInteractionEventStore {
     fn record_session(&self, session: &InteractionSession) -> Result<()> {
-        debug_assert_eq!(
-            session.repo_id, self.repo_id,
-            "repo_id mismatch in record_session"
-        );
+        if session.repo_id != self.repo_id {
+            anyhow::bail!(
+                "repo_id mismatch in record_session: expected '{}', got '{}'",
+                self.repo_id,
+                session.repo_id
+            );
+        }
         self.sqlite.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO interaction_sessions
@@ -145,10 +148,13 @@ impl InteractionEventStore for SqliteInteractionEventStore {
     }
 
     fn record_turn_start(&self, turn: &InteractionTurn) -> Result<()> {
-        debug_assert_eq!(
-            turn.repo_id, self.repo_id,
-            "repo_id mismatch in record_turn_start"
-        );
+        if turn.repo_id != self.repo_id {
+            anyhow::bail!(
+                "repo_id mismatch in record_turn_start: expected '{}', got '{}'",
+                self.repo_id,
+                turn.repo_id
+            );
+        }
         self.sqlite.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO interaction_turns
@@ -202,10 +208,13 @@ impl InteractionEventStore for SqliteInteractionEventStore {
     }
 
     fn record_event(&self, event: &InteractionEvent) -> Result<()> {
-        debug_assert_eq!(
-            event.repo_id, self.repo_id,
-            "repo_id mismatch in record_event"
-        );
+        if event.repo_id != self.repo_id {
+            anyhow::bail!(
+                "repo_id mismatch in record_event: expected '{}', got '{}'",
+                self.repo_id,
+                event.repo_id
+            );
+        }
         let payload_str =
             serde_json::to_string(&event.payload).context("serializing event payload")?;
         self.sqlite.with_connection(|conn| {

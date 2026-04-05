@@ -103,7 +103,7 @@ pub fn handle_lifecycle_session_end(
         apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
         let ended_at = now_rfc3339();
         state.ended_at = Some(ended_at.clone());
-        state.last_interaction_time = Some(now_rfc3339());
+        state.last_interaction_time = Some(ended_at.clone());
         backend.save_session(&state)?;
 
         // ── interaction event persistence ────────────────────────────────────
