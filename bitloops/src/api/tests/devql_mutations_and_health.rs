@@ -217,6 +217,47 @@ enabled = false
 }
 
 #[tokio::test]
+async fn slim_graphql_health_and_default_branch_after_init() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = slim_schema_for_repo(repo.path());
+
+    let init_response = schema
+        .execute(async_graphql::Request::new(
+            r#"mutation { initSchema { success } }"#,
+        ))
+        .await;
+    assert!(
+        init_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        init_response.errors
+    );
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{
+              health {
+                relational { backend status }
+                events { backend status }
+                blob { backend status }
+              }
+              defaultBranch
+            }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["health"]["relational"]["backend"], "sqlite");
+    assert_eq!(json["health"]["events"]["backend"], "duckdb");
+    assert_eq!(json["defaultBranch"], "main");
+}
+
+#[tokio::test]
 async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);

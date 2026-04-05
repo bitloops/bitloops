@@ -483,6 +483,10 @@ mod tests {
         AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, GithubProviderConfig,
         RelationalBackendConfig,
     };
+    use crate::host::capability_host::contexts::{
+        CapabilityHealthContext, CapabilityIngestContext, KnowledgeExecutionContext,
+        KnowledgeIngestContext,
+    };
     use crate::host::devql::RepoIdentity;
     use anyhow::{Result, bail};
     use serde_json::json;
@@ -968,5 +972,203 @@ mod tests {
         assert!(gateway.check_relational().is_ok());
         assert!(gateway.check_documents().is_ok());
         assert!(gateway.check_blobs().is_ok());
+    }
+
+    #[test]
+    fn clone_edges_rebuild_relational_requires_devql_attachment() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path();
+        let repo = test_repo_identity(repo_root);
+        let backends = sqlite_backends(repo_root);
+        let config_root = json!({});
+        let relational = DummyRelationalGateway;
+        let knowledge_relational = DummyKnowledgeRelationalRepository;
+        let knowledge_documents = DummyKnowledgeDocumentRepository;
+        let blob_payloads = DummyBlobPayloads;
+        let connectors = DummyConnectorRegistry {
+            provider_config: ProviderConfig::default(),
+        };
+        let provenance = DummyProvenance;
+        let graph = DummyGraph;
+        let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
+        let runtime = LocalCapabilityRuntime::new(
+            repo_root,
+            &repo,
+            &config_root,
+            &backends,
+            &relational,
+            &knowledge_relational,
+            &knowledge_documents,
+            &blob_payloads,
+            &connectors,
+            &provenance,
+            &graph,
+            &stores,
+            None,
+            languages,
+            None,
+            None,
+            None,
+        );
+
+        let err = CapabilityIngestContext::clone_edges_rebuild_relational(&runtime)
+            .expect_err("expected missing devql relational");
+        assert!(
+            err.to_string()
+                .contains("clone-edge rebuild relational store is not attached")
+        );
+        assert!(CapabilityIngestContext::devql_relational(&runtime).is_none());
+    }
+
+    #[test]
+    fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path();
+        let repo = test_repo_identity(repo_root);
+        let backends = sqlite_backends(repo_root);
+        let config_root = json!({});
+        let relational = DummyRelationalGateway;
+        let knowledge_relational = DummyKnowledgeRelationalRepository;
+        let knowledge_documents = DummyKnowledgeDocumentRepository;
+        let blob_payloads = DummyBlobPayloads;
+        let connectors = DummyConnectorRegistry {
+            provider_config: ProviderConfig::default(),
+        };
+        let provenance = DummyProvenance;
+        let graph = DummyGraph;
+        let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
+        let runtime = LocalCapabilityRuntime::new(
+            repo_root,
+            &repo,
+            &config_root,
+            &backends,
+            &relational,
+            &knowledge_relational,
+            &knowledge_documents,
+            &blob_payloads,
+            &connectors,
+            &provenance,
+            &graph,
+            &stores,
+            None,
+            languages,
+            None,
+            Some("cap:knowledge"),
+            Some("ingest:clone"),
+        );
+
+        assert_eq!(
+            CapabilityIngestContext::invoking_capability_id(&runtime),
+            Some("cap:knowledge")
+        );
+        assert_eq!(
+            CapabilityIngestContext::invoking_ingester_id(&runtime),
+            Some("ingest:clone")
+        );
+    }
+
+    #[test]
+    fn health_context_config_view_reads_capability_slice() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path();
+        let repo = test_repo_identity(repo_root);
+        let backends = sqlite_backends(repo_root);
+        let config_root = json!({ "health-cap": { "ok": true } });
+        let relational = DummyRelationalGateway;
+        let knowledge_relational = DummyKnowledgeRelationalRepository;
+        let knowledge_documents = DummyKnowledgeDocumentRepository;
+        let blob_payloads = DummyBlobPayloads;
+        let connectors = DummyConnectorRegistry {
+            provider_config: ProviderConfig::default(),
+        };
+        let provenance = DummyProvenance;
+        let graph = DummyGraph;
+        let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
+        let runtime = LocalCapabilityRuntime::new(
+            repo_root,
+            &repo,
+            &config_root,
+            &backends,
+            &relational,
+            &knowledge_relational,
+            &knowledge_documents,
+            &blob_payloads,
+            &connectors,
+            &provenance,
+            &graph,
+            &stores,
+            None,
+            languages,
+            None,
+            None,
+            None,
+        );
+
+        let view = CapabilityHealthContext::config_view(&runtime, "health-cap").expect("view");
+        assert_eq!(view.capability_id(), "health-cap");
+        assert_eq!(view.root()["health-cap"]["ok"], json!(true));
+    }
+
+    #[test]
+    fn knowledge_contexts_delegate_to_dummy_repositories() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path();
+        let repo = test_repo_identity(repo_root);
+        let backends = sqlite_backends(repo_root);
+        let config_root = json!({});
+        let relational = DummyRelationalGateway;
+        let knowledge_relational = DummyKnowledgeRelationalRepository;
+        let knowledge_documents = DummyKnowledgeDocumentRepository;
+        let blob_payloads = DummyBlobPayloads;
+        let connectors = DummyConnectorRegistry {
+            provider_config: ProviderConfig::default(),
+        };
+        let provenance = DummyProvenance;
+        let graph = DummyGraph;
+        let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
+        let runtime = LocalCapabilityRuntime::new(
+            repo_root,
+            &repo,
+            &config_root,
+            &backends,
+            &relational,
+            &knowledge_relational,
+            &knowledge_documents,
+            &blob_payloads,
+            &connectors,
+            &provenance,
+            &graph,
+            &stores,
+            None,
+            languages,
+            None,
+            None,
+            None,
+        );
+
+        assert!(KnowledgeExecutionContext::knowledge_relational(&runtime)
+            .initialise_schema()
+            .is_ok());
+        assert!(KnowledgeExecutionContext::knowledge_documents(&runtime)
+            .initialise_schema()
+            .is_ok());
+        assert!(KnowledgeIngestContext::knowledge_relational(&runtime)
+            .list_items_for_repo(&repo.repo_id, 5)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn builtin_language_gateway_resolves_rust_test_support() {
+        let languages = builtin_language_services().expect("built-in language services");
+        let support = languages.resolve_test_support_for_path("src/lib.rs");
+        assert!(
+            support.is_some(),
+            "expected Rust language pack to expose test support for .rs paths"
+        );
     }
 }

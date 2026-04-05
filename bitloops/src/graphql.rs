@@ -596,3 +596,20 @@ mod analytics_signature_tests {
         assert_eq!(signature.1, "anonymous");
     }
 }
+
+#[cfg(test)]
+mod schema_template_tests {
+    use super::{build_global_schema_template, build_slim_schema_template};
+
+    #[test]
+    fn global_and_slim_schema_templates_expose_non_empty_sdl() {
+        let global_sdl = build_global_schema_template().sdl();
+        assert!(global_sdl.len() > 500);
+        assert!(global_sdl.contains("type Mutation"));
+
+        let slim_sdl = build_slim_schema_template().sdl();
+        assert!(slim_sdl.len() > 500);
+        assert!(slim_sdl.contains("type Mutation"));
+        assert_ne!(global_sdl, slim_sdl, "slim schema should differ from global SDL");
+    }
+}

@@ -505,3 +505,29 @@ pub(super) fn open_in_default_browser(url: &str) -> Result<()> {
     });
     Ok(())
 }
+
+#[cfg(test)]
+mod dashboard_runtime_unit_tests {
+    use super::{clickable_url, warning_block_lines};
+
+    #[test]
+    fn clickable_url_inserts_osc8_hyperlink_sequence() {
+        let url = "https://example.test/path";
+        let rendered = clickable_url(url);
+        assert!(rendered.contains(url));
+        assert!(rendered.contains("\x1b]8;;"));
+    }
+
+    #[test]
+    fn warning_block_lines_returns_nothing_for_empty_warning() {
+        assert!(warning_block_lines("", false).is_empty());
+    }
+
+    #[test]
+    fn warning_block_lines_plain_mode_includes_message_lines() {
+        let lines = warning_block_lines("line one\nline two", false);
+        assert!(lines.iter().any(|l| l.contains('⚠')));
+        assert!(lines.iter().any(|l| l.contains("line one")));
+        assert!(lines.iter().any(|l| l.contains("line two")));
+    }
+}
