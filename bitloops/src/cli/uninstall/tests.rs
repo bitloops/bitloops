@@ -430,3 +430,35 @@ fn full_uninstall_removes_supported_temp_artefacts() {
         },
     );
 }
+
+#[test]
+fn service_uninstall_stops_daemon_best_effort_then_runs_service_uninstaller() {
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+
+    with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        let service_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let service_called_ref = service_called.clone();
+
+        run_uninstall_for_test(
+            UninstallArgs {
+                service: true,
+                force: true,
+                ..UninstallArgs::default()
+            },
+            None,
+            None,
+            &move || {
+                service_called_ref.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+            &|| Ok(Vec::new()),
+        )
+        .unwrap();
+
+        assert!(service_called.load(std::sync::atomic::Ordering::SeqCst));
+    });
+}

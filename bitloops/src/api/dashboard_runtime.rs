@@ -45,6 +45,7 @@ pub(super) async fn run(
         .and_then(normalized_host)
         .map(str::to_string);
     let startup_mode = select_startup_mode(&config, local_dashboard_cfg, explicit_host.as_deref())?;
+    log::info!("dashboard startup phase: initialising database pools");
     let db_init = db::init_dashboard_db().await;
     if db_init.startup_health.has_failures() {
         bail!(

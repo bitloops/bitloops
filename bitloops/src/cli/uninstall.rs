@@ -92,7 +92,17 @@ async fn run_with_context(
             UninstallTarget::Data => uninstall_data(&scope.repo_data_roots, out),
             UninstallTarget::Caching => uninstall_cache(out),
             UninstallTarget::Config => uninstall_config(out),
-            UninstallTarget::Service => uninstall_service(out, context.service_uninstaller),
+            UninstallTarget::Service => {
+                if let Err(err) = crate::daemon::stop().await
+                    && !err.to_string().contains("not running")
+                {
+                    writeln!(
+                        err_out,
+                        "Warning: unable to stop Bitloops daemon before removing the service: {err:#}"
+                    )?;
+                }
+                uninstall_service(out, context.service_uninstaller)
+            }
             UninstallTarget::Binaries => uninstall_binaries(out, context.binary_candidates),
         };
 

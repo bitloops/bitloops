@@ -7,6 +7,7 @@ use super::sqlite::SqlitePool;
 use super::{DashboardDbInit, DashboardDbPools, POSTGRES_POOL_SIZE};
 
 pub(super) async fn init_dashboard_db() -> DashboardDbInit {
+    log::info!("dashboard db init: resolving backend configuration");
     let cfg = match DashboardDbConfig::from_env() {
         Ok(cfg) => cfg,
         Err(err) => {
