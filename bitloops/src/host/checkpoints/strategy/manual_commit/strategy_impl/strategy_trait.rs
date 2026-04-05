@@ -363,8 +363,14 @@ impl Strategy for ManualCommitStrategy {
             Ok(repository) => repository,
             Err(err) => {
                 if interaction_spool_ref.is_some_and(spool_has_pending_work) {
+                    eprintln!(
+                        "[bitloops] Warning: failed to resolve interaction event repository for post_commit with pending interaction work: {err:#}"
+                    );
                     return Err(err).context("resolving interaction event repository");
                 }
+                eprintln!(
+                    "[bitloops] Warning: failed to resolve interaction event repository for post_commit without pending interaction work: {err:#}"
+                );
                 update_active_session_base_commits(
                     self.backend.as_ref(),
                     &head,
@@ -516,6 +522,10 @@ impl ManualCommitStrategy {
                         format!("loading interaction session `{session_id}` from event repository")
                     })?
                     .ok_or_else(|| {
+                        eprintln!(
+                            "[bitloops] Warning: missing interaction session for overlapping turns session_id={} checkpoint_id={} commit={}",
+                            session_id, checkpoint_id, head
+                        );
                         anyhow::anyhow!(
                             "missing interaction session `{session_id}` for overlapping interaction turns"
                         )
@@ -600,6 +610,9 @@ fn flush_interaction_spool_or_fail(
     };
     if let Err(err) = spool.flush(repository) {
         if spool_has_pending_work(spool) {
+            eprintln!(
+                "[bitloops] Warning: failed to flush interaction spool before post_commit derivation with pending interaction work: {err:#}"
+            );
             return Err(err).context("flushing interaction spool before post_commit derivation");
         }
         eprintln!("[bitloops] Warning: failed to flush interaction spool: {err:#}");

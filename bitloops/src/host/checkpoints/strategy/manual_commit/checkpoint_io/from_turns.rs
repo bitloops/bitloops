@@ -21,7 +21,6 @@ pub(crate) fn aggregate_turn_files(turns: &[InteractionTurn]) -> Vec<String> {
     files.into_iter().collect()
 }
 
-#[allow(dead_code)]
 pub(crate) fn aggregate_turn_prompts(turns: &[InteractionTurn]) -> Vec<String> {
     turns
         .iter()
@@ -30,6 +29,28 @@ pub(crate) fn aggregate_turn_prompts(turns: &[InteractionTurn]) -> Vec<String> {
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
         .collect()
+}
+
+pub(crate) fn aggregate_turn_transcript_bounds(
+    turns: &[InteractionTurn],
+) -> Option<(usize, usize)> {
+    let mut min_start: Option<usize> = None;
+    let mut max_end: Option<usize> = None;
+
+    for turn in turns {
+        let start = usize::try_from(turn.transcript_offset_start?).ok()?;
+        let end = usize::try_from(turn.transcript_offset_end?).ok()?;
+        if end < start {
+            return None;
+        }
+        min_start = Some(min_start.map_or(start, |current| current.min(start)));
+        max_end = Some(max_end.map_or(end, |current| current.max(end)));
+    }
+
+    match (min_start, max_end) {
+        (Some(start), Some(end)) if end >= start => Some((start, end)),
+        _ => None,
+    }
 }
 
 pub(crate) fn turns_overlap_committed_files(
@@ -67,6 +88,10 @@ mod tests {
                 output_tokens,
                 ..Default::default()
             }),
+            summary: format!("summary-{turn_id}"),
+            prompt_count: 1,
+            transcript_offset_start: Some(0),
+            transcript_offset_end: Some(1),
             files_modified: files.iter().map(|value| value.to_string()).collect(),
             ..Default::default()
         }
@@ -90,5 +115,20 @@ mod tests {
         let usage = aggregate_turn_token_usage(&turns).expect("usage");
         assert_eq!(usage.input_tokens, 30);
         assert_eq!(usage.output_tokens, 12);
+    }
+
+    #[test]
+    fn aggregate_turn_transcript_bounds_returns_outer_span() {
+        let turns = vec![
+            make_turn("t1", "one", &["a.rs"], 1, 1),
+            make_turn("t2", "two", &["b.rs"], 1, 1),
+        ];
+        let mut turns = turns;
+        turns[0].transcript_offset_start = Some(5);
+        turns[0].transcript_offset_end = Some(8);
+        turns[1].transcript_offset_start = Some(2);
+        turns[1].transcript_offset_end = Some(6);
+
+        assert_eq!(aggregate_turn_transcript_bounds(&turns), Some((2, 8)));
     }
 }

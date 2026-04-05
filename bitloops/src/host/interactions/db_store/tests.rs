@@ -162,6 +162,10 @@ fn sample_turn() -> InteractionTurn {
             output_tokens: 5,
             ..Default::default()
         }),
+        summary: "completed change".into(),
+        prompt_count: 2,
+        transcript_offset_start: Some(1),
+        transcript_offset_end: Some(3),
         files_modified: vec!["src/main.rs".into()],
         updated_at: "2026-04-05T10:00:02Z".into(),
         ..Default::default()

@@ -31,6 +31,9 @@ impl SqliteInteractionSpool {
         sqlite
             .execute_batch(schema::SCHEMA)
             .context("initialising interaction spool schema")?;
+        sqlite
+            .with_connection(schema::ensure_additive_columns)
+            .context("ensuring additive interaction spool columns")?;
         Ok(Self { sqlite, repo_id })
     }
 

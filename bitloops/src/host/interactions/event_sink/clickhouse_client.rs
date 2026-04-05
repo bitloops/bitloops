@@ -143,6 +143,13 @@ pub(super) fn turn_from_row(row: &Value) -> Result<InteractionTurn> {
                 .unwrap_or_default(),
             subagent_tokens: None,
         }),
+        summary: optional_string(row, "summary"),
+        prompt_count: row
+            .get("prompt_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default() as u32,
+        transcript_offset_start: nullable_i64(row, "transcript_offset_start"),
+        transcript_offset_end: nullable_i64(row, "transcript_offset_end"),
         files_modified,
         checkpoint_id: empty_to_none(optional_string(row, "checkpoint_id")),
         updated_at: optional_string(row, "updated_at"),
@@ -188,4 +195,14 @@ fn optional_string(row: &Value, field: &str) -> String {
 
 fn empty_to_none(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
+}
+
+fn nullable_i64(row: &Value, field: &str) -> Option<i64> {
+    row.get(field).and_then(|value| match value {
+        Value::Null => None,
+        Value::Number(number) => number.as_i64(),
+        Value::String(text) if text.trim().is_empty() => None,
+        Value::String(text) => text.parse::<i64>().ok(),
+        _ => None,
+    })
 }

@@ -77,11 +77,13 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_interaction_time: Option<String>,
 
-    /// Number of checkpoints/steps created in this session.
+    /// Runtime-only checkpoint counter for temporary-checkpoint/shadow-branch flows.
+    /// Not authoritative provenance input for committed checkpoint derivation.
     #[serde(default, rename = "checkpoint_count")]
     pub step_count: u32,
 
-    /// Transcript line offset where the current checkpoint cycle began.
+    /// Runtime-only transcript line offset where the current checkpoint cycle began.
+    /// Not authoritative provenance input for committed checkpoint derivation.
     #[serde(default)]
     pub checkpoint_transcript_start: i64,
 
@@ -95,7 +97,8 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub untracked_files_at_start: Vec<String>,
 
-    /// Files modified, created, or deleted during this session.
+    /// Runtime-only list of files touched during the current coordination window.
+    /// Not authoritative provenance input for committed checkpoint derivation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files_touched: Vec<String>,
 
@@ -116,7 +119,8 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub last_checkpoint_id: String,
 
-    /// Accumulated token usage for pending checkpoints in this session.
+    /// Runtime-only accumulated token usage for temporary checkpoints.
+    /// Committed checkpoint derivation reads token usage from interaction turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<TokenUsage>,
 
@@ -124,7 +128,8 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub attribution_base_commit: String,
 
-    /// Transcript identifier recorded at the first step of the current checkpoint cycle
+    /// Runtime-only transcript identifier recorded at the first step of the current checkpoint cycle.
+    /// Not authoritative provenance input for committed checkpoint derivation.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub transcript_identifier_at_start: String,
 

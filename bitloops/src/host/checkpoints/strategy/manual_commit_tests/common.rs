@@ -222,7 +222,10 @@ pub(crate) fn commit_files(repo_root: &Path, files: &[(&str, &str)], message: &s
 }
 
 pub(crate) fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
-    paths::default_relational_db_path(repo_root)
+    crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+        repo_root,
+    )
+    .unwrap_or_else(|_| paths::default_relational_db_path(repo_root))
 }
 
 pub(crate) fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {

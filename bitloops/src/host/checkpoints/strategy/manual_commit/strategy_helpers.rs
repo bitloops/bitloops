@@ -348,21 +348,18 @@ impl ManualCommitStrategy {
             )
         });
 
-        let transcript_content = read_transcript_from_disk(&self.repo_root, &session.session_id)
-            .or_else(|| {
-                if session.transcript_path.trim().is_empty() {
-                    return None;
-                }
-                fs::read_to_string(&session.transcript_path)
-                    .ok()
-                    .filter(|content| !content.is_empty())
-            })
-            .unwrap_or_default();
-        let total_transcript_lines = transcript_content.lines().count() as i64;
+        let full_transcript_content =
+            load_interaction_session_transcript(&self.repo_root, session).unwrap_or_default();
+        let total_transcript_lines = full_transcript_content.lines().count() as i64;
+        let transcript_content = scope_interaction_transcript_for_turns(
+            &full_transcript_content,
+            turns,
+            &session.session_id,
+        );
 
-        let mut prompts = extract_user_prompts_from_jsonl(&transcript_content);
+        let mut prompts = aggregate_turn_prompts(turns);
         if prompts.is_empty() {
-            prompts = aggregate_turn_prompts(turns);
+            prompts = extract_user_prompts_from_jsonl(&transcript_content);
         }
         if prompts.is_empty() && !session.first_prompt.trim().is_empty() {
             prompts.push(session.first_prompt.clone());
@@ -511,7 +508,9 @@ impl ManualCommitStrategy {
             state.attribution_base_commit = new_head.to_string();
             state.step_count = 0;
             state.turn_id = turn_id;
-            state.checkpoint_transcript_start = total_transcript_lines;
+            state.checkpoint_transcript_start = aggregate_turn_transcript_bounds(turns)
+                .map(|(_, end)| end as i64)
+                .unwrap_or(total_transcript_lines);
             state.files_touched = remaining_files;
             state.transcript_identifier_at_start.clear();
             state.last_checkpoint_id = checkpoint_id.to_string();
@@ -549,4 +548,50 @@ impl ManualCommitStrategy {
         }
         Ok(())
     }
+}
+
+fn load_interaction_session_transcript(
+    repo_root: &Path,
+    session: &crate::host::interactions::types::InteractionSession,
+) -> Option<String> {
+    read_transcript_from_disk(repo_root, &session.session_id).or_else(|| {
+        if session.transcript_path.trim().is_empty() {
+            return None;
+        }
+        fs::read_to_string(&session.transcript_path)
+            .ok()
+            .filter(|content| !content.is_empty())
+    })
+}
+
+fn scope_interaction_transcript_for_turns(
+    full_transcript: &str,
+    turns: &[crate::host::interactions::types::InteractionTurn],
+    session_id: &str,
+) -> String {
+    if full_transcript.is_empty() {
+        return String::new();
+    }
+
+    let Some((start, end)) = aggregate_turn_transcript_bounds(turns) else {
+        eprintln!(
+            "[bitloops] Warning: falling back to full transcript during checkpoint condensation session_id={} reason=missing_turn_offsets",
+            session_id
+        );
+        return full_transcript.to_string();
+    };
+
+    let lines: Vec<&str> = full_transcript.split_inclusive('\n').collect();
+    if start >= end || end > lines.len() {
+        eprintln!(
+            "[bitloops] Warning: falling back to full transcript during checkpoint condensation session_id={} reason=invalid_turn_offsets start={} end={} line_count={}",
+            session_id,
+            start,
+            end,
+            lines.len()
+        );
+        return full_transcript.to_string();
+    }
+
+    lines[start..end].concat()
 }

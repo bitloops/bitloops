@@ -28,6 +28,15 @@ impl ClickHouseInteractionRepository {
             SCHEMA,
         )
         .context("ensuring ClickHouse interaction schema")?;
+        for sql in TURN_MIGRATIONS {
+            blocking_exec(
+                &self.endpoint,
+                self.user.as_deref(),
+                self.password.as_deref(),
+                sql,
+            )
+            .with_context(|| format!("applying ClickHouse interaction schema migration: {sql}"))?;
+        }
         Ok(())
     }
 
@@ -76,12 +85,16 @@ impl ClickHouseInteractionRepository {
                 turn_id, session_id, repo_id, turn_number, prompt,
                 agent_type, model, started_at, ended_at, has_token_usage,
                 input_tokens, cache_creation_tokens, cache_read_tokens,
-                output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
+                output_tokens, api_call_count, summary, prompt_count,
+                transcript_offset_start, transcript_offset_end,
+                files_modified, checkpoint_id, updated_at
              ) VALUES (
                 '{turn_id}', '{session_id}', '{repo_id}', {turn_number}, '{prompt}',
                 '{agent_type}', '{model}', '{started_at}', '{ended_at}', {has_token_usage},
                 {input_tokens}, {cache_creation_tokens}, {cache_read_tokens},
-                {output_tokens}, {api_call_count}, {files_modified}, '{checkpoint_id}',
+                {output_tokens}, {api_call_count}, '{summary}', {prompt_count},
+                {transcript_offset_start}, {transcript_offset_end},
+                {files_modified}, '{checkpoint_id}',
                 coalesce(parseDateTime64BestEffortOrNull('{updated_at}'), now64(3))
              )",
             turn_id = esc_ch(&turn.turn_id),
@@ -99,6 +112,10 @@ impl ClickHouseInteractionRepository {
             cache_read_tokens = usage.cache_read_tokens,
             output_tokens = usage.output_tokens,
             api_call_count = usage.api_call_count,
+            summary = esc_ch(&turn.summary),
+            prompt_count = turn.prompt_count,
+            transcript_offset_start = nullable_i64(turn.transcript_offset_start),
+            transcript_offset_end = nullable_i64(turn.transcript_offset_end),
             files_modified = files_modified,
             checkpoint_id = esc_ch(turn.checkpoint_id.as_deref().unwrap_or("")),
             updated_at = esc_ch(&turn.updated_at),
@@ -265,6 +282,10 @@ impl ClickHouseInteractionRepository {
                         argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
                         argMax(output_tokens, updated_at) AS output_tokens,
                         argMax(api_call_count, updated_at) AS api_call_count,
+                        argMax(summary, updated_at) AS summary,
+                        argMax(prompt_count, updated_at) AS prompt_count,
+                        argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
+                        argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
                         argMax(files_modified, updated_at) AS files_modified,
                         argMax(checkpoint_id, updated_at) AS checkpoint_id,
                         toString(max(updated_at)) AS updated_at
@@ -305,6 +326,10 @@ impl ClickHouseInteractionRepository {
                         argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
                         argMax(output_tokens, updated_at) AS output_tokens,
                         argMax(api_call_count, updated_at) AS api_call_count,
+                        argMax(summary, updated_at) AS summary,
+                        argMax(prompt_count, updated_at) AS prompt_count,
+                        argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
+                        argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
                         argMax(files_modified, updated_at) AS files_modified,
                         argMax(checkpoint_id, updated_at) AS checkpoint_id,
                         toString(max(updated_at)) AS updated_at
@@ -391,6 +416,10 @@ impl ClickHouseInteractionRepository {
                         argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
                         argMax(output_tokens, updated_at) AS output_tokens,
                         argMax(api_call_count, updated_at) AS api_call_count,
+                        argMax(summary, updated_at) AS summary,
+                        argMax(prompt_count, updated_at) AS prompt_count,
+                        argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
+                        argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
                         argMax(files_modified, updated_at) AS files_modified,
                         argMax(checkpoint_id, updated_at) AS checkpoint_id,
                         toString(max(updated_at)) AS updated_at
@@ -440,6 +469,10 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     cache_read_tokens UInt64,
     output_tokens UInt64,
     api_call_count UInt64,
+    summary String,
+    prompt_count UInt32,
+    transcript_offset_start Nullable(Int64),
+    transcript_offset_end Nullable(Int64),
     files_modified Array(String),
     checkpoint_id String,
     updated_at DateTime64(3, 'UTC')
@@ -462,6 +495,13 @@ ENGINE = ReplacingMergeTree(event_time)
 ORDER BY (repo_id, event_time, event_id);
 "#;
 
+const TURN_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS summary String AFTER api_call_count",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS prompt_count UInt32 AFTER summary",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_offset_start Nullable(Int64) AFTER prompt_count",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_offset_end Nullable(Int64) AFTER transcript_offset_start",
+];
+
 fn format_array(values: &[String]) -> String {
     let values = values
         .iter()
@@ -469,6 +509,12 @@ fn format_array(values: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{values}]")
+}
+
+fn nullable_i64(value: Option<i64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string())
 }
 
 #[cfg(test)]
@@ -524,6 +570,10 @@ mod tests {
                 output_tokens: 7,
                 ..Default::default()
             }),
+            summary: "completed main change".into(),
+            prompt_count: 2,
+            transcript_offset_start: Some(1),
+            transcript_offset_end: Some(3),
             files_modified: vec!["src/main.rs".into()],
             updated_at: "2026-04-05T10:00:02Z".into(),
             ..Default::default()

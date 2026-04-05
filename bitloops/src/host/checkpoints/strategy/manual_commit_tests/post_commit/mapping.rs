@@ -4,6 +4,7 @@ use super::*;
 pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
 
     // Create a session with active state.
     let backend = session_backend(dir.path());
@@ -61,6 +62,7 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
 pub(crate) fn post_commit_creates_full_checkpoint_structure() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
 
     let backend = session_backend(dir.path());
     let state = SessionState {
@@ -109,6 +111,7 @@ pub(crate) fn post_commit_creates_full_checkpoint_structure() {
 pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -148,6 +151,7 @@ pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_
 pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let initial_head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -199,6 +203,7 @@ pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head(
 pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -244,6 +249,7 @@ pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit() {
 pub(crate) fn post_commit_skips_already_mapped_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -299,6 +305,7 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
 pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit_during_rebase() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {

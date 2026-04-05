@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Event-first checkpoint derivation hardening**: `post_commit` now treats the Event DB as the normal interaction read path, while the local spool remains a write-ahead buffer and local mirror only. Checkpoint condensation now prefers captured interaction turns for prompts, token usage, file overlap, and transcript scoping, with transcript-file fallback limited to the committed transcript blob when turn offsets are unavailable. Post-commit coverage is now split between fast fake repository/spool tests and ignored real-DB derivation coverage for DuckDB and ClickHouse.
 - **Test target gating for local performance**: switched `bitloops` to explicit `[[test]]` declarations (`autotests = false`), introduced `slow-tests`, and gated heavy e2e/integration binaries behind `required-features = ["slow-tests"]` so default local test runs stay fast.
 - **DuckDB local defaults**: changed default crate features to opt out of bundled DuckDB compilation (`default = []`), keeping bundled mode explicit for offline/exotic target paths.
 - **Testing documentation refreshed**: expanded `TESTING.md` with test authoring and gating guidance (fast vs slow lane policy, reliability rules, and PR verification checklist) and updated development docs to prefer Cargo aliases over shell wrappers for local workflows.

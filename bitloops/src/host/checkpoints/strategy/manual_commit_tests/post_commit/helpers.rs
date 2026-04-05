@@ -52,6 +52,10 @@ pub(crate) fn seed_interaction_turn(
             output_tokens: 5,
             ..Default::default()
         }),
+        summary: "implemented requested change".to_string(),
+        prompt_count: 1,
+        transcript_offset_start: Some(0),
+        transcript_offset_end: Some(1),
         files_modified: files.iter().map(|file| file.to_string()).collect(),
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()
@@ -67,16 +71,51 @@ pub(crate) fn commit_file(repo_root: &Path, filename: &str, content: &str) {
 }
 
 pub(crate) fn init_devql_schema(repo_root: &Path) -> PathBuf {
-    init_devql_schema_with_postgres_dsn(repo_root, None)
+    init_devql_schema_with_store_backend(repo_root, None, None, None, None, None)
 }
 
 pub(crate) fn init_devql_schema_with_postgres_dsn(
     repo_root: &Path,
     postgres_dsn: Option<&str>,
 ) -> PathBuf {
+    init_devql_schema_with_store_backend(repo_root, postgres_dsn, None, None, None, None)
+}
+
+pub(crate) fn init_devql_schema_with_clickhouse(
+    repo_root: &Path,
+    clickhouse_url: &str,
+    clickhouse_user: Option<&str>,
+    clickhouse_password: Option<&str>,
+    clickhouse_database: Option<&str>,
+) -> PathBuf {
+    init_devql_schema_with_store_backend(
+        repo_root,
+        None,
+        Some(clickhouse_url),
+        clickhouse_user,
+        clickhouse_password,
+        clickhouse_database.or(Some("default")),
+    )
+}
+
+fn init_devql_schema_with_store_backend(
+    repo_root: &Path,
+    postgres_dsn: Option<&str>,
+    clickhouse_url: Option<&str>,
+    clickhouse_user: Option<&str>,
+    clickhouse_password: Option<&str>,
+    clickhouse_database: Option<&str>,
+) -> PathBuf {
     let bitloops_dir = repo_root.join(".bitloops");
     fs::create_dir_all(&bitloops_dir).expect("create .bitloops directory");
-    write_post_commit_test_config(repo_root, None);
+    write_post_commit_test_config(
+        repo_root,
+        None,
+        clickhouse_url,
+        clickhouse_user,
+        clickhouse_password,
+        clickhouse_database,
+    );
 
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
     let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
@@ -149,26 +188,57 @@ CREATE TABLE IF NOT EXISTS repositories (
         "post-commit test must initialise DevQL sync schema in the configured sqlite path"
     );
 
-    if postgres_dsn.is_some() {
-        write_post_commit_test_config(repo_root, postgres_dsn);
-    }
+    write_post_commit_test_config(
+        repo_root,
+        postgres_dsn,
+        clickhouse_url,
+        clickhouse_user,
+        clickhouse_password,
+        clickhouse_database,
+    );
 
     sqlite_path
 }
 
-fn write_post_commit_test_config(repo_root: &Path, postgres_dsn: Option<&str>) {
+fn write_post_commit_test_config(
+    repo_root: &Path,
+    postgres_dsn: Option<&str>,
+    clickhouse_url: Option<&str>,
+    clickhouse_user: Option<&str>,
+    clickhouse_password: Option<&str>,
+    clickhouse_database: Option<&str>,
+) {
     let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
     let duckdb_path = repo_root.join(".bitloops/stores/events/post-commit-events.duckdb");
     let blob_local_path = repo_root.join(".bitloops/stores/blobs/post-commit");
     let postgres_line = postgres_dsn
         .map(|dsn| format!("postgres_dsn = {dsn:?}\n"))
         .unwrap_or_default();
+    let clickhouse_lines = match clickhouse_url {
+        Some(url) => {
+            let mut lines = format!(
+                "clickhouse_url = {url:?}\nclickhouse_database = {database:?}\n",
+                database = clickhouse_database.unwrap_or("default"),
+            );
+            if let Some(user) = clickhouse_user {
+                lines.push_str(&format!("clickhouse_user = {user:?}\n"));
+            }
+            if let Some(password) = clickhouse_password {
+                lines.push_str(&format!("clickhouse_password = {password:?}\n"));
+            }
+            lines
+        }
+        None => format!(
+            "duckdb_path = {duckdb_path:?}\n",
+            duckdb_path = duckdb_path.to_string_lossy()
+        ),
+    };
     fs::write(
         repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
         format!(
-            "[stores.relational]\nsqlite_path = {sqlite_path:?}\n{postgres_line}\n[stores.event]\nduckdb_path = {duckdb_path:?}\n\n[stores.blob]\nlocal_path = {blob_local_path:?}\n",
+            "[stores.relational]\nsqlite_path = {sqlite_path:?}\n{postgres_line}\n[stores.event]\n{clickhouse_lines}\n[stores.blob]\nlocal_path = {blob_local_path:?}\n",
             sqlite_path = sqlite_path.to_string_lossy(),
-            duckdb_path = duckdb_path.to_string_lossy(),
+            clickhouse_lines = clickhouse_lines,
             blob_local_path = blob_local_path.to_string_lossy(),
         ),
     )

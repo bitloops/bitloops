@@ -119,12 +119,15 @@ impl SqliteInteractionSpool {
                 turn_id, session_id, repo_id, turn_number, prompt,
                 agent_type, model, started_at, ended_at, has_token_usage,
                 input_tokens, cache_creation_tokens, cache_read_tokens,
-                output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
+                output_tokens, api_call_count, summary, prompt_count,
+                transcript_offset_start, transcript_offset_end,
+                files_modified, checkpoint_id, updated_at
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18
+                ?14, ?15, ?16, ?17,
+                ?18, ?19, ?20, ?21, ?22
              )
              ON CONFLICT(turn_id) DO UPDATE SET
                 session_id = excluded.session_id,
@@ -174,6 +177,18 @@ impl SqliteInteractionSpool {
                     WHEN excluded.has_token_usage = 1 THEN excluded.api_call_count
                     ELSE interaction_turns.api_call_count
                 END,
+                summary = CASE
+                    WHEN excluded.summary = '' THEN interaction_turns.summary
+                    ELSE excluded.summary
+                END,
+                prompt_count = CASE
+                    WHEN excluded.prompt_count = 0 THEN interaction_turns.prompt_count
+                    ELSE excluded.prompt_count
+                END,
+                transcript_offset_start =
+                    COALESCE(excluded.transcript_offset_start, interaction_turns.transcript_offset_start),
+                transcript_offset_end =
+                    COALESCE(excluded.transcript_offset_end, interaction_turns.transcript_offset_end),
                 files_modified = CASE
                     WHEN excluded.files_modified = '[]' AND interaction_turns.files_modified <> '[]'
                         THEN interaction_turns.files_modified
@@ -203,6 +218,10 @@ impl SqliteInteractionSpool {
                 usage.cache_read_tokens as i64,
                 usage.output_tokens as i64,
                 usage.api_call_count as i64,
+                turn.summary,
+                i64::from(turn.prompt_count),
+                turn.transcript_offset_start,
+                turn.transcript_offset_end,
                 files_modified,
                 checkpoint_id,
                 turn.updated_at,
@@ -523,7 +542,9 @@ impl InteractionSpool for SqliteInteractionSpool {
                 "SELECT turn_id, session_id, repo_id, turn_number, prompt,
                         agent_type, model, started_at, ended_at, has_token_usage,
                         input_tokens, cache_creation_tokens, cache_read_tokens,
-                        output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
+                        output_tokens, api_call_count, summary, prompt_count,
+                        transcript_offset_start, transcript_offset_end,
+                        files_modified, checkpoint_id, updated_at
                  FROM interaction_turns
                  WHERE session_id = ?1 AND repo_id = ?2
                  ORDER BY turn_number ASC, started_at ASC
@@ -542,7 +563,9 @@ impl InteractionSpool for SqliteInteractionSpool {
                 "SELECT turn_id, session_id, repo_id, turn_number, prompt,
                         agent_type, model, started_at, ended_at, has_token_usage,
                         input_tokens, cache_creation_tokens, cache_read_tokens,
-                        output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
+                        output_tokens, api_call_count, summary, prompt_count,
+                        transcript_offset_start, transcript_offset_end,
+                        files_modified, checkpoint_id, updated_at
                  FROM interaction_turns
                  WHERE repo_id = ?1 AND checkpoint_id = ''
                  ORDER BY session_id ASC, turn_number ASC, started_at ASC",

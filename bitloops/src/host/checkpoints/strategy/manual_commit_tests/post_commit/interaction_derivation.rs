@@ -9,6 +9,13 @@ use crate::host::interactions::types::{
     InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
 };
 
+type ClickHouseTestEnv = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 #[derive(Default)]
 struct FakeInteractionRepository {
     repo_id: String,
@@ -309,10 +316,22 @@ fn fake_interaction_turn(
             output_tokens: 5,
             ..Default::default()
         }),
+        summary: format!("summary for {turn_id}"),
+        prompt_count: 1,
+        transcript_offset_start: Some(0),
+        transcript_offset_end: Some(1),
         files_modified: files.iter().map(|file| file.to_string()).collect(),
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()
     }
+}
+
+fn clickhouse_test_env() -> Option<ClickHouseTestEnv> {
+    let url = std::env::var("BITLOOPS_TEST_CLICKHOUSE_URL").ok()?;
+    let user = std::env::var("BITLOOPS_TEST_CLICKHOUSE_USER").ok();
+    let password = std::env::var("BITLOOPS_TEST_CLICKHOUSE_PASSWORD").ok();
+    let database = std::env::var("BITLOOPS_TEST_CLICKHOUSE_DATABASE").ok();
+    Some((url, user, password, database))
 }
 
 #[test]
@@ -373,6 +392,123 @@ pub(crate) fn derive_post_commit_from_event_db_turns_with_fake_sources() {
         sequence[..2],
         ["spool.flush", "repo.list_uncheckpointed_turns"],
         "post_commit should flush the spool before reading the Event DB"
+    );
+}
+
+#[test]
+pub(crate) fn derive_post_commit_scopes_committed_transcript_from_turn_offsets() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    std::fs::write(
+        dir.path().join("transcript.jsonl"),
+        "{\"role\":\"user\",\"content\":\"before\"}\n{\"role\":\"user\",\"content\":\"captured prompt\"}\n{\"role\":\"assistant\",\"content\":\"captured answer\"}\n{\"role\":\"assistant\",\"content\":\"after\"}\n",
+    )
+    .unwrap();
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let session = fake_interaction_session(dir.path(), &repo_id, "sess-sliced");
+    let mut turn = fake_interaction_turn(&repo_id, "sess-sliced", "turn-sliced", &["change.txt"]);
+    turn.prompt = "captured prompt".into();
+    turn.transcript_offset_start = Some(1);
+    turn.transcript_offset_end = Some(3);
+
+    let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())))
+        .with_session(session)
+        .with_turn(turn);
+    let spool = FakeInteractionSpool::new(&repo_id);
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "derive sliced transcript"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+
+    let checkpoint_id = ManualCommitStrategy::new(dir.path())
+        .derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files,
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .expect("derive from interaction source")
+        .expect("checkpoint id");
+
+    let session_content =
+        read_session_content(dir.path(), &checkpoint_id, 0).expect("read session content");
+    assert!(
+        session_content.transcript.contains("captured prompt"),
+        "scoped transcript should contain the recorded turn prompt"
+    );
+    assert!(
+        session_content.transcript.contains("captured answer"),
+        "scoped transcript should contain the recorded turn answer"
+    );
+    assert!(
+        !session_content.transcript.contains("before"),
+        "scoped transcript should exclude content before the recorded turn offsets"
+    );
+    assert!(
+        !session_content.transcript.contains("after"),
+        "scoped transcript should exclude content after the recorded turn offsets"
+    );
+}
+
+#[test]
+pub(crate) fn derive_post_commit_falls_back_to_full_transcript_when_turn_offsets_are_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    std::fs::write(
+        dir.path().join("transcript.jsonl"),
+        "{\"role\":\"user\",\"content\":\"before\"}\n{\"role\":\"user\",\"content\":\"captured prompt\"}\n{\"role\":\"assistant\",\"content\":\"captured answer\"}\n",
+    )
+    .unwrap();
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let session = fake_interaction_session(dir.path(), &repo_id, "sess-fallback");
+    let mut turn =
+        fake_interaction_turn(&repo_id, "sess-fallback", "turn-fallback", &["change.txt"]);
+    turn.prompt = "captured prompt".into();
+    turn.transcript_offset_start = None;
+    turn.transcript_offset_end = None;
+
+    let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())))
+        .with_session(session)
+        .with_turn(turn);
+    let spool = FakeInteractionSpool::new(&repo_id);
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "derive transcript fallback"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+
+    let checkpoint_id = ManualCommitStrategy::new(dir.path())
+        .derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files,
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .expect("derive from interaction source")
+        .expect("checkpoint id");
+
+    let session_content =
+        read_session_content(dir.path(), &checkpoint_id, 0).expect("read session content");
+    assert!(
+        session_content.transcript.contains("before"),
+        "missing turn offsets should fall back to the full transcript"
+    );
+    assert!(
+        session_content.transcript.contains("captured answer"),
+        "fallback transcript should still include the recorded turn content"
     );
 }
 
@@ -559,6 +695,94 @@ pub(crate) fn post_commit_skips_non_overlapping_interaction_turns_duckdb_integra
 
     let turns = open_test_spool(dir.path())
         .list_turns_for_session("sess-2", 10)
+        .expect("list turns after skipped derivation");
+    assert_eq!(turns.len(), 1);
+    assert!(turns[0].checkpoint_id.is_none());
+}
+
+#[test]
+#[ignore = "ad hoc ClickHouse integration coverage"]
+pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns_clickhouse_integration() {
+    let Some((url, user, password, database)) = clickhouse_test_env() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema_with_clickhouse(
+        dir.path(),
+        &url,
+        user.as_deref(),
+        password.as_deref(),
+        database.as_deref(),
+    );
+    seed_interaction_turn(dir.path(), "sess-ch-1", "turn-ch-1", &["change.txt"]);
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(
+        dir.path(),
+        &["commit", "-m", "derive checkpoint from interaction"],
+    );
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+
+    ManualCommitStrategy::new(dir.path())
+        .post_commit()
+        .expect("post_commit should succeed");
+
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head)
+        .cloned()
+        .expect("checkpoint mapping for derived commit");
+    let summary = read_committed(dir.path(), &checkpoint_id)
+        .expect("read derived checkpoint")
+        .expect("derived checkpoint summary");
+    assert_eq!(summary.files_touched, vec!["change.txt"]);
+
+    let turns = open_test_spool(dir.path())
+        .list_turns_for_session("sess-ch-1", 10)
+        .expect("list turns after derivation");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].checkpoint_id.as_deref(),
+        Some(checkpoint_id.as_str())
+    );
+}
+
+#[test]
+#[ignore = "ad hoc ClickHouse integration coverage"]
+pub(crate) fn post_commit_skips_non_overlapping_interaction_turns_clickhouse_integration() {
+    let Some((url, user, password, database)) = clickhouse_test_env() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema_with_clickhouse(
+        dir.path(),
+        &url,
+        user.as_deref(),
+        password.as_deref(),
+        database.as_deref(),
+    );
+    seed_interaction_turn(dir.path(), "sess-ch-2", "turn-ch-2", &["design-notes.md"]);
+
+    std::fs::write(dir.path().join("change.txt"), "real commit\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "non-overlapping interaction"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+
+    ManualCommitStrategy::new(dir.path())
+        .post_commit()
+        .expect("post_commit should succeed");
+
+    let mappings = read_commit_checkpoint_mappings(dir.path()).expect("mappings");
+    assert!(
+        !mappings.contains_key(&head),
+        "non-overlapping interaction turn should not derive a checkpoint"
+    );
+
+    let turns = open_test_spool(dir.path())
+        .list_turns_for_session("sess-ch-2", 10)
         .expect("list turns after skipped derivation");
     assert_eq!(turns.len(), 1);
     assert!(turns[0].checkpoint_id.is_none());

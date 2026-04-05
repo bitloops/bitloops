@@ -230,6 +230,7 @@ pub fn handle_lifecycle_turn_start(
             agent_type: state.agent_type.clone(),
             model: event.model.clone(),
             started_at: now.clone(),
+            prompt_count: 1,
             updated_at: now.clone(),
             ..Default::default()
         };

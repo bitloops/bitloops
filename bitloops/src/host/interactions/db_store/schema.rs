@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+
+use anyhow::{Context, Result};
+
 pub(super) const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id TEXT PRIMARY KEY,
@@ -33,6 +37,10 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     api_call_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    prompt_count INTEGER NOT NULL DEFAULT 0,
+    transcript_offset_start INTEGER,
+    transcript_offset_end INTEGER,
     files_modified TEXT NOT NULL DEFAULT '[]',
     checkpoint_id TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
@@ -76,3 +84,50 @@ CREATE TABLE IF NOT EXISTS interaction_spool_queue (
 CREATE INDEX IF NOT EXISTS interaction_spool_queue_repo_idx
 ON interaction_spool_queue (repo_id, mutation_id);
 "#;
+
+pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()> {
+    let existing = sqlite_table_columns(conn, "interaction_turns")?;
+    let missing = [
+        (
+            "summary",
+            "ALTER TABLE interaction_turns ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "prompt_count",
+            "ALTER TABLE interaction_turns ADD COLUMN prompt_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "transcript_offset_start",
+            "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_start INTEGER",
+        ),
+        (
+            "transcript_offset_end",
+            "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_end INTEGER",
+        ),
+    ];
+    for (column, sql) in missing {
+        if existing.contains(column) {
+            continue;
+        }
+        conn.execute_batch(sql)
+            .with_context(|| format!("adding interaction_turns.{column} column"))?;
+    }
+    Ok(())
+}
+
+fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .with_context(|| format!("preparing PRAGMA table_info for `{table}`"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("querying PRAGMA table_info for `{table}`"))?;
+    let mut columns = HashSet::new();
+    while let Some(row) = rows.next().context("reading PRAGMA row")? {
+        let name: String = row
+            .get(1)
+            .with_context(|| format!("reading column name from `{table}`"))?;
+        columns.insert(name);
+    }
+    Ok(columns)
+}

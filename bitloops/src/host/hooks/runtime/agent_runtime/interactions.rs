@@ -170,6 +170,7 @@ pub(super) fn record_turn_start_interaction(
             prompt: prompt.clone(),
             agent_type: session.agent_type.clone(),
             started_at: event_time.clone(),
+            prompt_count: 1,
             updated_at: event_time.clone(),
             ..Default::default()
         };
@@ -279,6 +280,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
                 .unwrap_or_else(|| event_time.clone()),
             ended_at: Some(event_time.clone()),
             token_usage: token_usage.clone(),
+            prompt_count: 1,
             files_modified: files_modified.to_vec(),
             checkpoint_id: None,
             updated_at: event_time.clone(),
