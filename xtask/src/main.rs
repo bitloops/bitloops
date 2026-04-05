@@ -59,9 +59,7 @@ fn print_usage() {
     eprintln!("  coverage run-lcov [--lcov <path>]");
     eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
-    eprintln!(
-        "  coverage compare --lines <pct> --functions <pct> [--epsilon 0.5] [--lcov <path>]"
-    );
+    eprintln!("  coverage compare --lines <pct> --functions <pct> [--epsilon 0.5] [--lcov <path>]");
 }
 
 fn run_dev_loop() -> Result<(), String> {
