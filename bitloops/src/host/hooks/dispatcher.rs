@@ -7,7 +7,6 @@ use std::time::{Instant, SystemTime};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use crate::adapters::agents::codex::types::{CodexSessionInfoRaw, parse_codex_session_info};
 use crate::adapters::agents::cursor::types::{
     CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
     CursorSessionInfoRaw,
@@ -35,10 +34,10 @@ use crate::utils::paths;
 use super::git;
 use crate::adapters::agents::claude_code::hooks_cmd::{
     PostTaskInput, PostTodoInput, SessionInfoInput, TaskHookInput, UserPromptSubmitInput,
-    handle_post_task, handle_post_todo, handle_pre_task, handle_session_end, handle_session_start,
-    handle_stop, handle_user_prompt_submit_with_strategy,
+    handle_post_task, handle_post_todo, handle_pre_task_with_profile,
+    handle_session_end_with_profile, handle_session_start_with_profile, handle_stop,
+    handle_user_prompt_submit_with_strategy,
 };
-use crate::adapters::agents::codex::hooks_cmd::{handle_session_start_codex, handle_stop_codex};
 use crate::adapters::agents::cursor::hooks_cmd::{
     handle_before_submit_prompt_cursor, handle_session_end_cursor, handle_session_start_cursor,
     handle_stop_cursor,
@@ -500,7 +499,12 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     ClaudeCodeHookVerb::SessionStart => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-start input")?;
-                        handle_session_start(input, backend.as_ref(), Some(&repo_root))
+                        handle_session_start_with_profile(
+                            input,
+                            backend.as_ref(),
+                            Some(&repo_root),
+                            Some(crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE),
+                        )
                     }
                     ClaudeCodeHookVerb::UserPromptSubmit => {
                         let input: UserPromptSubmitInput = serde_json::from_str(&stdin)
@@ -520,12 +524,22 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     ClaudeCodeHookVerb::SessionEnd => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-end input")?;
-                        handle_session_end(input, backend.as_ref())
+                        handle_session_end_with_profile(
+                            input,
+                            backend.as_ref(),
+                            Some(&repo_root),
+                            Some(crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE),
+                        )
                     }
                     ClaudeCodeHookVerb::PreTask => {
                         let input: TaskHookInput =
                             serde_json::from_str(&stdin).context("parsing pre-task input")?;
-                        handle_pre_task(input, backend.as_ref(), Some(&repo_root))
+                        handle_pre_task_with_profile(
+                            input,
+                            backend.as_ref(),
+                            Some(&repo_root),
+                            crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE,
+                        )
                     }
                     ClaudeCodeHookVerb::PostTask => {
                         let input: PostTaskInput =
@@ -560,10 +574,6 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
             result
         }
         HooksAgent::Codex(codex) => {
-            let backend = create_session_backend_or_local(&repo_root);
-            let strategy: Box<dyn Strategy> = strategy_registry
-                .get(&strategy_name, &repo_root)
-                .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
             let hook_name = codex.verb.hook_name();
             let stdin = read_stdin()?;
             let started = Instant::now();
@@ -572,36 +582,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CODEX,
                 hook_name,
                 &strategy_name,
-                || {
-                    let raw: CodexSessionInfoRaw = parse_codex_session_info(&stdin)?;
-                    let session_policy = match codex.verb {
-                        CodexHookVerb::SessionStart => {
-                            crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict
-                        }
-                        CodexHookVerb::Stop => {
-                            crate::host::checkpoints::lifecycle::SessionIdPolicy::PreserveEmpty
-                        }
-                    };
-                    let input = SessionInfoInput {
-                        session_id: crate::host::checkpoints::lifecycle::apply_session_id_policy(
-                            &raw.session_id,
-                            session_policy,
-                        )
-                        .context("validating codex session_id")?,
-                        transcript_path: raw.transcript_path,
-                    };
-                    match codex.verb {
-                        CodexHookVerb::SessionStart => {
-                            handle_session_start_codex(input, backend.as_ref(), Some(&repo_root))
-                        }
-                        CodexHookVerb::Stop => handle_stop_codex(
-                            input,
-                            backend.as_ref(),
-                            strategy.as_ref(),
-                            Some(&repo_root),
-                        ),
-                    }
-                },
+                || route_hook_command_to_lifecycle(AGENT_NAME_CODEX, hook_name, &stdin),
             );
             track_hook_action(
                 &repo_root,
@@ -845,7 +826,7 @@ pub(crate) fn dispatch_cursor_hook(
                 session_id,
                 transcript_path,
             };
-            handle_session_end_cursor(input, backend)
+            handle_session_end_cursor(input, backend, Some(repo_root))
         }
         CursorHookVerb::PreCompact
         | CursorHookVerb::SubagentStart

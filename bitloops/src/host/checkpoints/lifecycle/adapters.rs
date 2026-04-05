@@ -435,6 +435,127 @@ pub fn route_hook_command_to_lifecycle(
     Ok(())
 }
 
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    use crate::adapters::agents::AGENT_NAME_CODEX;
+    use crate::host::interactions::db_store::interaction_spool_db_path;
+    use crate::test_support::process_state::{git_command, with_process_state};
+    use anyhow::Result;
+    use tempfile::TempDir;
+
+    fn git_ok(repo_root: &std::path::Path, args: &[&str]) {
+        let output = git_command()
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+            .unwrap_or_else(|err| panic!("failed to start git {:?}: {err}", args));
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn seed_repo() -> TempDir {
+        let dir = TempDir::new().expect("temp dir");
+        let root = dir.path();
+        git_ok(root, &["init"]);
+        git_ok(root, &["checkout", "-B", "main"]);
+        git_ok(root, &["config", "user.name", "Bitloops Test"]);
+        git_ok(root, &["config", "user.email", "bitloops-test@example.com"]);
+        std::fs::write(root.join("tracked.txt"), "one\n").expect("write tracked file");
+        git_ok(root, &["add", "tracked.txt"]);
+        git_ok(root, &["commit", "-m", "initial"]);
+        dir
+    }
+
+    #[test]
+    fn route_codex_hooks_persist_interactions_to_event_db_even_if_checkpoint_save_fails(
+    ) -> Result<()> {
+        let repo = seed_repo();
+        let transcript_path = repo.path().join("codex-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(
+            &transcript_path,
+            r#"{"messages":[{"type":"user","content":"Refactor tracked file"},{"type":"gemini","content":"Updated tracked file"}]}"#,
+        )
+        .expect("write transcript");
+        std::fs::write(repo.path().join("tracked.txt"), "two\n").expect("modify tracked file");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": "codex-session-1",
+                "transcript_path": transcript_path_str.clone(),
+            })
+            .to_string();
+            route_hook_command_to_lifecycle(
+                AGENT_NAME_CODEX,
+                CODEX_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let stop_payload = serde_json::json!({
+                "sessionId": "codex-session-1",
+                "transcriptPath": transcript_path_str,
+            })
+            .to_string();
+            let err = route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_STOP, &stop_payload)
+                .expect_err("stop should still fail when the relational checkpoint store is absent");
+            assert!(
+                err.to_string().contains("opening temporary checkpoint SQLite database"),
+                "unexpected stop error: {err:#}"
+            );
+            Ok(())
+        })?;
+
+        let backends = crate::config::resolve_store_backend_config_for_repo(repo.path())?;
+        let event_db_path = backends.events.resolve_duckdb_db_path_for_repo(repo.path());
+        assert!(
+            event_db_path.is_file(),
+            "expected events DuckDB at {}",
+            event_db_path.display()
+        );
+
+        let duckdb = duckdb::Connection::open(&event_db_path).expect("open events duckdb");
+        let session_count: i64 = duckdb
+            .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| row.get(0))
+            .expect("count interaction sessions");
+        let turn_count: i64 = duckdb
+            .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| row.get(0))
+            .expect("count interaction turns");
+        let event_count: i64 = duckdb
+            .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| row.get(0))
+            .expect("count interaction events");
+        assert_eq!(session_count, 1);
+        assert_eq!(turn_count, 1);
+        assert_eq!(event_count, 2);
+
+        let spool = rusqlite::Connection::open(interaction_spool_db_path(repo.path()))
+            .expect("open interaction spool");
+        let local_session_count: i64 = spool
+            .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| row.get(0))
+            .expect("count local interaction sessions");
+        let local_turn_count: i64 = spool
+            .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| row.get(0))
+            .expect("count local interaction turns");
+        let local_event_count: i64 = spool
+            .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| row.get(0))
+            .expect("count local interaction events");
+        let queued_mutations: i64 = spool
+            .query_row("SELECT COUNT(*) FROM interaction_spool_queue", [], |row| row.get(0))
+            .expect("count queued interaction mutations");
+        assert_eq!(local_session_count, 1);
+        assert_eq!(local_turn_count, 1);
+        assert_eq!(local_event_count, 2);
+        assert_eq!(queued_mutations, 0);
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct SessionInfoRaw {
     #[serde(default)]

@@ -8,7 +8,7 @@ mod dispatch;
 mod git_workspace;
 mod handlers_session;
 mod handlers_tail;
-mod interaction;
+pub(crate) mod interaction;
 mod time_and_ids;
 mod transcript;
 mod turn_end;

@@ -6,7 +6,7 @@ use crate::host::interactions::event_sink::{
 };
 use crate::host::interactions::store::InteractionSpool;
 
-pub(super) fn resolve_interaction_spool(repo_root: &Path) -> Option<SqliteInteractionSpool> {
+pub(crate) fn resolve_interaction_spool(repo_root: &Path) -> Option<SqliteInteractionSpool> {
     let sqlite =
         crate::storage::SqliteConnectionPool::connect(interaction_spool_db_path(repo_root)).ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
@@ -15,7 +15,7 @@ pub(super) fn resolve_interaction_spool(repo_root: &Path) -> Option<SqliteIntera
     SqliteInteractionSpool::new(sqlite, repo_id).ok()
 }
 
-pub(super) fn resolve_event_repository(repo_root: &Path) -> Option<EventDbInteractionRepository> {
+pub(crate) fn resolve_event_repository(repo_root: &Path) -> Option<EventDbInteractionRepository> {
     let backends = crate::config::resolve_store_backend_config_for_repo(repo_root).ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
@@ -23,7 +23,7 @@ pub(super) fn resolve_event_repository(repo_root: &Path) -> Option<EventDbIntera
     create_event_repository(&backends.events, repo_root, repo_id).ok()
 }
 
-pub(super) fn flush_interaction_spool_best_effort(repo_root: &Path) {
+pub(crate) fn flush_interaction_spool_best_effort(repo_root: &Path) {
     let Some(spool) = resolve_interaction_spool(repo_root) else {
         return;
     };

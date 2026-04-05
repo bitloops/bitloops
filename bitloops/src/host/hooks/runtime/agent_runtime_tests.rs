@@ -19,6 +19,7 @@ use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::{
     git_command, isolated_git_command, with_cwd, with_process_state,
 };
+use anyhow::anyhow;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -52,6 +53,48 @@ fn setup_git_repo(dir: &TempDir) {
 fn run_git(dir: &Path, args: &[&str]) {
     let out = isolated_git_command(dir).args(args).output().unwrap();
     assert!(out.status.success(), "git {:?} failed", args);
+}
+
+fn open_events_duckdb(repo_root: &Path) -> duckdb::Connection {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve store backends");
+    let path = backends.events.resolve_duckdb_db_path_for_repo(repo_root);
+    duckdb::Connection::open(path).expect("open events duckdb")
+}
+
+fn interaction_event_types(repo_root: &Path) -> Vec<String> {
+    let conn = open_events_duckdb(repo_root);
+    let mut stmt = conn
+        .prepare("SELECT event_type FROM interaction_events ORDER BY event_time ASC, event_id ASC")
+        .expect("prepare event type query");
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query event types");
+    rows.collect::<Result<Vec<_>, _>>().expect("collect event types")
+}
+
+fn assert_sorted_event_types(repo_root: &Path, mut expected: Vec<&str>) {
+    let mut actual = interaction_event_types(repo_root);
+    actual.sort();
+    expected.sort();
+    assert_eq!(
+        actual,
+        expected.into_iter().map(str::to_string).collect::<Vec<_>>()
+    );
+}
+
+fn interaction_row_counts(repo_root: &Path) -> (i64, i64, i64) {
+    let conn = open_events_duckdb(repo_root);
+    let sessions = conn
+        .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| row.get(0))
+        .expect("count interaction sessions");
+    let turns = conn
+        .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| row.get(0))
+        .expect("count interaction turns");
+    let events = conn
+        .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| row.get(0))
+        .expect("count interaction events");
+    (sessions, turns, events)
 }
 
 fn write_claude_write_transcript(path: &Path, file_path: &str) {
@@ -96,6 +139,39 @@ impl Strategy for RecordingStrategy {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(ctx.clone());
         Ok(())
+    }
+
+    fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
+    fn commit_msg(&self, _commit_msg_file: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn post_commit(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn pre_push(&self, _remote: &str, _stdin_lines: &[String]) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct FailingStrategy;
+
+impl Strategy for FailingStrategy {
+    fn name(&self) -> &str {
+        "failing"
+    }
+
+    fn save_step(&self, _ctx: &StepContext) -> Result<()> {
+        Err(anyhow!("save_step failed"))
+    }
+
+    fn save_task_step(&self, _ctx: &TaskStepContext) -> Result<()> {
+        Err(anyhow!("save_task_step failed"))
     }
 
     fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
@@ -296,6 +372,59 @@ fn session_end_sets_ended_phase() {
 }
 
 #[test]
+fn claude_stop_persists_interactions_before_save_step_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = FailingStrategy;
+
+    handle_session_start_with_profile(
+        SessionInfoInput {
+            session_id: "claude-event-first".to_string(),
+            transcript_path: "/tmp/claude-event-first.jsonl".to_string(),
+        },
+        &backend,
+        Some(dir.path()),
+        Some(CLAUDE_HOOK_AGENT_PROFILE),
+    )
+    .unwrap();
+
+    handle_user_prompt_submit_with_strategy_and_profile(
+        UserPromptSubmitInput {
+            session_id: "claude-event-first".to_string(),
+            transcript_path: "/tmp/claude-event-first.jsonl".to_string(),
+            prompt: "Update tracked file".to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(dir.path().join("tracked.txt"), "claude-event-first\n").unwrap();
+
+    let err = handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "claude-event-first".to_string(),
+            transcript_path: "/tmp/claude-event-first.jsonl".to_string(),
+        },
+        &backend,
+        &strategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .expect_err("stop should fail after interaction capture");
+    assert!(
+        err.to_string().contains("save_step failed"),
+        "unexpected error: {err:#}"
+    );
+
+    assert_eq!(interaction_row_counts(dir.path()), (1, 1, 3));
+    assert_sorted_event_types(dir.path(), vec!["session_start", "turn_start", "turn_end"]);
+}
+
+#[test]
 fn cursor_session_start_creates_or_updates_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -334,6 +463,53 @@ fn cursor_session_start_rejects_empty_conversation_id() {
         err.to_string().contains("session_id is required"),
         "unexpected error: {err:#}"
     );
+}
+
+#[test]
+fn cursor_stop_persists_interactions_before_save_step_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = FailingStrategy;
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::SessionStart,
+        r#"{"conversation_id":"cursor-event-first","transcript_path":"/tmp/cursor-event-first.jsonl"}"#,
+        &backend,
+        &strategy,
+        dir.path(),
+        "session-start",
+    )
+    .unwrap();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::BeforeSubmitPrompt,
+        r#"{"conversation_id":"cursor-event-first","transcript_path":"/tmp/cursor-event-first.jsonl","prompt":"Update tracked file"}"#,
+        &backend,
+        &strategy,
+        dir.path(),
+        "before-submit-prompt",
+    )
+    .unwrap();
+
+    fs::write(dir.path().join("tracked.txt"), "cursor-event-first\n").unwrap();
+
+    let err = dispatch_cursor_hook(
+        &CursorHookVerb::Stop,
+        r#"{"conversation_id":"cursor-event-first","transcript_path":"/tmp/cursor-event-first.jsonl"}"#,
+        &backend,
+        &strategy,
+        dir.path(),
+        "stop",
+    )
+    .expect_err("stop should fail after interaction capture");
+    assert!(
+        err.to_string().contains("save_step failed"),
+        "unexpected error: {err:#}"
+    );
+
+    assert_eq!(interaction_row_counts(dir.path()), (1, 1, 3));
+    assert_sorted_event_types(dir.path(), vec!["session_start", "turn_start", "turn_end"]);
 }
 
 #[test]
@@ -835,6 +1011,63 @@ fn pre_task_creates_marker() {
     handle_pre_task(input, &backend, None).unwrap();
 
     assert!(backend.load_pre_task_marker("tool-123").unwrap().is_some());
+}
+
+#[test]
+fn claude_post_task_persists_subagent_events_before_save_task_step_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = FailingStrategy;
+
+    backend
+        .save_session(&SessionState {
+            session_id: "claude-subagent-events".to_string(),
+            phase: SessionPhase::Active,
+            turn_id: "turn-subagent".to_string(),
+            agent_type: AGENT_TYPE_CLAUDE_CODE.to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    handle_pre_task_with_profile(
+        TaskHookInput {
+            session_id: "claude-subagent-events".to_string(),
+            transcript_path: "/tmp/claude-subagent-events.jsonl".to_string(),
+            tool_use_id: "tool-subagent".to_string(),
+            tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
+        },
+        &backend,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(dir.path().join("tracked.txt"), "claude-subagent-events\n").unwrap();
+
+    let err = handle_post_task_with_profile(
+        PostTaskInput {
+            session_id: "claude-subagent-events".to_string(),
+            transcript_path: "/tmp/claude-subagent-events.jsonl".to_string(),
+            tool_use_id: "tool-subagent".to_string(),
+            tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
+            tool_response: TaskToolResponse {
+                agent_id: "agent-subagent".to_string(),
+            },
+        },
+        &backend,
+        &strategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .expect_err("post-task should fail after interaction capture");
+    assert!(
+        err.to_string().contains("save_task_step failed"),
+        "unexpected error: {err:#}"
+    );
+
+    assert_eq!(interaction_row_counts(dir.path()), (0, 0, 2));
+    assert_sorted_event_types(dir.path(), vec!["subagent_start", "subagent_end"]);
 }
 
 #[test]
