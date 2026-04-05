@@ -285,10 +285,16 @@ fn test_handle_lifecycle_turn_end_empty_transcript_ref() {
 fn test_handle_lifecycle_turn_end_nonexistent_transcript() {
     let adapter = ClaudeCodeLifecycleAdapter;
     let mut event = sample_event(LifecycleEventType::TurnEnd);
-    event.session_ref = String::from("/nonexistent/path/to/transcript.jsonl");
+    // Use a path whose parent directory cannot exist to ensure immediate failure
+    // (no retry). Avoids false positives from other tests creating /tmp subdirs.
+    event.session_ref =
+        String::from("/nonexistent_bitloops_test_root/no_such_dir/transcript.jsonl");
 
     let err = handle_lifecycle_turn_end(&adapter, &event).unwrap_err();
-    assert!(err.to_string().contains("transcript file not found"));
+    assert!(
+        err.to_string().contains("transcript file not found"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

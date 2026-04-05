@@ -32,13 +32,8 @@ pub fn handle_lifecycle_turn_end(
         return Err(anyhow!("transcript file not specified"));
     }
 
-    let transcript_path = Path::new(&event.session_ref);
-    if !transcript_path.exists() {
-        match transcript_path.parent() {
-            Some(parent) if parent.exists() => {}
-            _ => return Err(anyhow!("transcript file not found: {}", event.session_ref)),
-        }
-    }
+    // Agents flush transcripts asynchronously; retry briefly before giving up.
+    let transcript_data = read_transcript_with_retry(&event.session_ref)?;
 
     if crate::git::is_empty_repository()? {
         return Err(anyhow!("empty repository"));
@@ -53,9 +48,6 @@ pub fn handle_lifecycle_turn_end(
             .map_err(|e| anyhow!("failed to create session directory: {e}"))?;
         Some(path)
     };
-
-    let transcript_data =
-        std::fs::read(&event.session_ref).map_err(|e| anyhow!("failed to read transcript: {e}"))?;
     if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
         let log_path = meta_dir_abs.join(crate::utils::paths::TRANSCRIPT_FILE_NAME);
         std::fs::write(&log_path, &transcript_data)
@@ -292,4 +284,35 @@ pub fn handle_lifecycle_turn_end(
     let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
+}
+
+/// Reads the transcript file with a brief retry window to handle agents that
+/// flush transcripts asynchronously (e.g., Claude Code writes entries after
+/// firing the hook).  Retries for up to 3 seconds at 50 ms intervals, but
+/// only when the parent directory exists (indicating the file may still be
+/// flushing).  If the parent directory itself is missing the error is immediate.
+fn read_transcript_with_retry(path: &str) -> Result<Vec<u8>> {
+    use std::thread::sleep;
+    use std::time::{Duration, Instant};
+
+    let p = Path::new(path);
+    let parent_exists = p.parent().is_some_and(|d| d.exists());
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match std::fs::read(path) {
+            Ok(data) => return Ok(data),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::NotFound
+                    && parent_exists
+                    && Instant::now() < deadline =>
+            {
+                sleep(Duration::from_millis(50));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err(anyhow!("transcript file not found: {path}"));
+            }
+            Err(err) => return Err(anyhow!("failed to read transcript: {err}")),
+        }
+    }
 }
