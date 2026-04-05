@@ -28,10 +28,7 @@ use crate::adapters::agents::{
 #[cfg(test)]
 use crate::host::checkpoints::checkpoint_id::CHECKPOINT_KEY;
 use crate::host::checkpoints::checkpoint_id::is_valid_checkpoint_id;
-use crate::host::checkpoints::session::phase::{
-    Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,
-    transition_with_context,
-};
+use crate::host::checkpoints::session::phase::SessionPhase;
 use crate::host::checkpoints::session::state::{
     PromptAttribution as SessionPromptAttribution, SessionState,
 };

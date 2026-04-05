@@ -24,6 +24,16 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "projection-session",
+        "projection-session-turn",
+        &[
+            "src/projection_a.ts",
+            "src/projection_b.ts",
+            "src/projection_missing.ts",
+        ],
+    );
 
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(

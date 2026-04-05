@@ -112,6 +112,13 @@ impl InteractionEventRepository for EventDbInteractionRepository {
         }
     }
 
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        match self {
+            Self::DuckDb(repository) => repository.list_uncheckpointed_turns(),
+            Self::ClickHouse(repository) => repository.list_uncheckpointed_turns(),
+        }
+    }
+
     fn list_events(
         &self,
         filter: &InteractionEventFilter,

@@ -245,6 +245,25 @@ impl DuckDbInteractionRepository {
             .context("reading interaction turns from DuckDB")
     }
 
+    pub(super) fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        let conn = self.open_or_create()?;
+        conn.execute_batch(SCHEMA)?;
+        let sql = format!(
+            "SELECT turn_id, session_id, repo_id, turn_number, prompt,
+                    agent_type, model, started_at, ended_at, has_token_usage,
+                    input_tokens, cache_creation_tokens, cache_read_tokens,
+                    output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
+             FROM interaction_turns
+             WHERE repo_id = '{repo_id}' AND checkpoint_id = ''
+             ORDER BY session_id ASC, turn_number ASC, started_at ASC",
+            repo_id = esc_pg(&self.repo_id),
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], map_turn_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("reading uncheckpointed interaction turns from DuckDB")
+    }
+
     pub(super) fn list_events(
         &self,
         filter: &InteractionEventFilter,

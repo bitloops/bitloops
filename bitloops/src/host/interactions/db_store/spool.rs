@@ -373,6 +373,19 @@ impl InteractionSpool for SqliteInteractionSpool {
         })
     }
 
+    fn has_pending_mutations(&self) -> Result<bool> {
+        self.sqlite.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM interaction_spool_queue
+                 WHERE repo_id = ?1",
+                rusqlite::params![self.repo_id],
+                |row| row.get(0),
+            )?;
+            Ok(count > 0)
+        })
+    }
+
     fn flush(&self, repository: &dyn InteractionEventRepository) -> Result<usize> {
         super::ensure_repo_id(
             &self.repo_id,

@@ -99,6 +99,17 @@ impl InteractionEventRepository for MockRepository {
             .collect())
     }
 
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        Ok(self
+            .turns
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|turn| turn.checkpoint_id.as_deref().unwrap_or("").is_empty())
+            .cloned()
+            .collect())
+    }
+
     fn list_events(
         &self,
         _filter: &InteractionEventFilter,

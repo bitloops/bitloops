@@ -1,7 +1,7 @@
 use super::*;
 use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
 use crate::host::interactions::event_sink::create_event_repository;
-use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 
 // ── Strategy trait impl ───────────────────────────────────────────────────────
 
@@ -355,179 +355,32 @@ impl Strategy for ManualCommitStrategy {
         }
 
         let interaction_spool = open_interaction_spool(&self.repo_root).ok();
-        if let Some(spool) = interaction_spool.as_ref()
-            && let Ok(backends) =
-                crate::config::resolve_store_backend_config_for_repo(&self.repo_root)
-            && let Ok(repository) = create_event_repository(
-                &backends.events,
-                &self.repo_root,
-                spool.repo_id().to_string(),
-            )
-            && let Err(err) = spool.flush(&repository)
+        let interaction_spool_ref = interaction_spool
+            .as_ref()
+            .map(|spool| spool as &dyn InteractionSpool);
+        let interaction_repository = match resolve_event_repository_for_post_commit(&self.repo_root)
         {
-            eprintln!("[bitloops] Warning: failed to flush interaction spool: {err:#}");
-        }
-
-        let mut turns_by_session: std::collections::BTreeMap<
-            String,
-            Vec<crate::host::interactions::InteractionTurn>,
-        > = std::collections::BTreeMap::new();
-        if let Some(spool) = interaction_spool.as_ref() {
-            for turn in spool.list_uncheckpointed_turns().unwrap_or_default() {
-                turns_by_session
-                    .entry(turn.session_id.clone())
-                    .or_default()
-                    .push(turn);
+            Ok(repository) => repository,
+            Err(err) => {
+                if interaction_spool_ref.is_some_and(spool_has_pending_work) {
+                    return Err(err).context("resolving interaction event repository");
+                }
+                update_active_session_base_commits(
+                    self.backend.as_ref(),
+                    &head,
+                    &std::collections::HashSet::new(),
+                );
+                return Ok(());
             }
-        }
+        };
 
-        let sessions = self.backend.list_sessions().unwrap_or_default();
-        let checkpoint_id = generate_checkpoint_id();
-        let mut condensed_any_session = false;
-
-        for mut state in sessions {
-            let session_turns = turns_by_session
-                .remove(&state.session_id)
-                .unwrap_or_default();
-            let has_derived_pending = !session_turns.is_empty();
-            let has_pending = has_derived_pending
-                || state.phase == SessionPhase::Ended
-                || !state.files_touched.is_empty()
-                || state.step_count > 0;
-            if !has_pending {
-                if state.phase.is_active() && state.base_commit != head {
-                    state.base_commit = head.clone();
-                    let _ = self.backend.save_session(&state);
-                }
-                continue;
-            }
-
-            let transition_actions =
-                self.apply_git_commit_transition(&mut state, is_rebase_in_progress);
-            let should_condense = transition_actions
-                .iter()
-                .any(|action| matches!(action, Action::Condense | Action::CondenseIfFilesTouched));
-            let should_update_active_base = transition_actions
-                .iter()
-                .any(|action| matches!(action, Action::DiscardIfNoFiles));
-
-            if should_condense {
-                if has_derived_pending {
-                    if !turns_overlap_committed_files(&session_turns, &committed_files_set) {
-                        if state.phase.is_active() && state.base_commit != head {
-                            state.base_commit = head.clone();
-                        }
-                        let _ = self.backend.save_session(&state);
-                        continue;
-                    }
-                    hydrate_session_state_from_turns(&mut state, &session_turns);
-                } else if !state.files_touched.is_empty() {
-                    let committed_touched: Vec<String> = state
-                        .files_touched
-                        .iter()
-                        .filter(|f| committed_files.contains(f.as_str()))
-                        .cloned()
-                        .collect();
-                    if committed_touched.is_empty() {
-                        if state.phase.is_active() && state.base_commit != head {
-                            state.base_commit = head.clone();
-                        }
-                        let _ = self.backend.save_session(&state);
-                        continue;
-                    }
-                }
-
-                if let Err(e) = self.condense_session(&mut state, &checkpoint_id, &head) {
-                    eprintln!(
-                        "[bitloops] Warning: condensation failed for session {}: {e}",
-                        state.session_id
-                    );
-                    let _ = self.backend.save_session(&state);
-                    continue;
-                }
-                condensed_any_session = true;
-
-                if has_derived_pending && let Some(spool) = interaction_spool.as_ref() {
-                    let turn_ids = session_turns
-                        .iter()
-                        .map(|turn| turn.turn_id.clone())
-                        .collect::<Vec<_>>();
-                    if let Err(err) =
-                        spool.assign_checkpoint_to_turns(&turn_ids, &checkpoint_id, &now_rfc3339())
-                    {
-                        eprintln!(
-                            "[bitloops] Warning: failed to assign checkpoint {} to interaction turns for session {}: {err:#}",
-                            checkpoint_id, state.session_id
-                        );
-                    }
-                }
-
-                // ACTIVE sessions track all turn checkpoint IDs for stop-time finalization.
-                if state.phase.is_active() {
-                    state.turn_checkpoint_ids.push(checkpoint_id.clone());
-                }
-            } else if should_update_active_base
-                && state.phase.is_active()
-                && state.base_commit != head
-            {
-                state.base_commit = head.clone();
-            }
-
-            let _ = self.backend.save_session(&state);
-        }
-
-        if let Some(spool) = interaction_spool.as_ref() {
-            for (session_id, session_turns) in turns_by_session {
-                if !turns_overlap_committed_files(&session_turns, &committed_files_set) {
-                    continue;
-                }
-                let Some(interaction_session) = spool.load_session(&session_id).ok().flatten()
-                else {
-                    continue;
-                };
-                let mut synthetic_state =
-                    synthetic_session_state_from_interaction(&interaction_session, &session_turns);
-                if let Err(err) = self.condense_session(&mut synthetic_state, &checkpoint_id, &head)
-                {
-                    eprintln!(
-                        "[bitloops] Warning: condensation failed for synthetic session {}: {err}",
-                        synthetic_state.session_id
-                    );
-                    continue;
-                }
-                let turn_ids = session_turns
-                    .iter()
-                    .map(|turn| turn.turn_id.clone())
-                    .collect::<Vec<_>>();
-                if let Err(err) =
-                    spool.assign_checkpoint_to_turns(&turn_ids, &checkpoint_id, &now_rfc3339())
-                {
-                    eprintln!(
-                        "[bitloops] Warning: failed to assign checkpoint {} to synthetic interaction turns for session {}: {err:#}",
-                        checkpoint_id, session_id
-                    );
-                }
-                condensed_any_session = true;
-            }
-        }
-
-        if condensed_any_session
-            && let Some(spool) = interaction_spool.as_ref()
-            && let Ok(backends) =
-                crate::config::resolve_store_backend_config_for_repo(&self.repo_root)
-            && let Ok(repository) = create_event_repository(
-                &backends.events,
-                &self.repo_root,
-                spool.repo_id().to_string(),
-            )
-            && let Err(err) = spool.flush(&repository)
-        {
-            eprintln!(
-                "[bitloops] Warning: failed to flush checkpoint assignments to the interaction event store: {err:#}"
-            );
-        }
-
-        if condensed_any_session {
+        if let Some(checkpoint_id) = self.derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files_set,
+            is_rebase_in_progress,
+            &interaction_repository,
+            interaction_spool_ref,
+        )? {
             insert_commit_checkpoint_mapping(&self.repo_root, &head, &checkpoint_id)?;
             if let Err(err) = run_devql_post_commit_checkpoint_projection_refresh(
                 &self.repo_root,
@@ -608,6 +461,166 @@ impl Strategy for ManualCommitStrategy {
         }
 
         Ok(())
+    }
+}
+
+impl ManualCommitStrategy {
+    pub(crate) fn derive_post_commit_from_interaction_sources(
+        &self,
+        head: &str,
+        committed_files_set: &std::collections::HashSet<String>,
+        is_rebase_in_progress: bool,
+        interaction_repository: &dyn InteractionEventRepository,
+        interaction_spool: Option<&dyn InteractionSpool>,
+    ) -> Result<Option<String>> {
+        flush_interaction_spool_or_fail(interaction_spool, interaction_repository)?;
+
+        let uncheckpointed_turns = interaction_repository
+            .list_uncheckpointed_turns()
+            .context("listing uncheckpointed interaction turns from event repository")?;
+        let mut turns_by_session: std::collections::BTreeMap<
+            String,
+            Vec<crate::host::interactions::InteractionTurn>,
+        > = std::collections::BTreeMap::new();
+        for turn in uncheckpointed_turns {
+            turns_by_session
+                .entry(turn.session_id.clone())
+                .or_default()
+                .push(turn);
+        }
+        let pending_turn_sessions = turns_by_session
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+
+        let checkpoint_id = generate_checkpoint_id();
+        let checkpoint_assigned_at = now_rfc3339();
+        let mut condensed_any_session = false;
+        let mut condensed_sessions = std::collections::HashSet::new();
+
+        if !is_rebase_in_progress {
+            for (session_id, mut session_turns) in turns_by_session {
+                session_turns.sort_by(|left, right| {
+                    left.turn_number
+                        .cmp(&right.turn_number)
+                        .then_with(|| left.started_at.cmp(&right.started_at))
+                        .then_with(|| left.turn_id.cmp(&right.turn_id))
+                });
+                if !turns_overlap_committed_files(&session_turns, committed_files_set) {
+                    continue;
+                }
+
+                let interaction_session = interaction_repository
+                    .load_session(&session_id)
+                    .with_context(|| {
+                        format!("loading interaction session `{session_id}` from event repository")
+                    })?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing interaction session `{session_id}` for overlapping interaction turns"
+                        )
+                    })?;
+
+                let turn_ids = self.condense_interaction_session(
+                    &interaction_session,
+                    &session_turns,
+                    &checkpoint_id,
+                    head,
+                    committed_files_set,
+                )?;
+                interaction_repository
+                    .assign_checkpoint_to_turns(
+                        &turn_ids,
+                        &checkpoint_id,
+                        &checkpoint_assigned_at,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "assigning checkpoint `{checkpoint_id}` to interaction turns for session `{session_id}`"
+                        )
+                    })?;
+                if let Some(spool) = interaction_spool {
+                    spool.assign_checkpoint_to_turns(
+                        &turn_ids,
+                        &checkpoint_id,
+                        &checkpoint_assigned_at,
+                    )?;
+                }
+
+                condensed_any_session = true;
+                condensed_sessions.insert(session_id);
+            }
+        }
+
+        let active_base_skip_sessions = if is_rebase_in_progress {
+            pending_turn_sessions.clone()
+        } else {
+            condensed_sessions.clone()
+        };
+        update_active_session_base_commits(self.backend.as_ref(), head, &active_base_skip_sessions);
+
+        if condensed_any_session
+            && let Some(spool) = interaction_spool
+            && let Err(err) = spool.flush(interaction_repository)
+        {
+            eprintln!(
+                "[bitloops] Warning: failed to flush checkpoint assignments to the interaction event store: {err:#}"
+            );
+        }
+
+        Ok(condensed_any_session.then_some(checkpoint_id))
+    }
+}
+
+fn resolve_event_repository_for_post_commit(
+    repo_root: &Path,
+) -> Result<impl InteractionEventRepository> {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving store backend config for interaction event repository")?;
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for interaction event repository")?
+        .repo_id;
+    create_event_repository(&backends.events, repo_root, repo_id)
+}
+
+fn spool_has_pending_work(spool: &dyn InteractionSpool) -> bool {
+    spool.has_pending_mutations().unwrap_or(false)
+        || spool
+            .list_uncheckpointed_turns()
+            .map(|turns| !turns.is_empty())
+            .unwrap_or(false)
+}
+
+fn flush_interaction_spool_or_fail(
+    spool: Option<&dyn InteractionSpool>,
+    repository: &dyn InteractionEventRepository,
+) -> Result<()> {
+    let Some(spool) = spool else {
+        return Ok(());
+    };
+    if let Err(err) = spool.flush(repository) {
+        if spool_has_pending_work(spool) {
+            return Err(err).context("flushing interaction spool before post_commit derivation");
+        }
+        eprintln!("[bitloops] Warning: failed to flush interaction spool: {err:#}");
+    }
+    Ok(())
+}
+
+fn update_active_session_base_commits(
+    backend: &dyn crate::host::checkpoints::session::SessionBackend,
+    head: &str,
+    skip_session_ids: &std::collections::HashSet<String>,
+) {
+    for mut state in backend.list_sessions().unwrap_or_default() {
+        if !state.phase.is_active() || state.base_commit == head {
+            continue;
+        }
+        if skip_session_ids.contains(&state.session_id) {
+            continue;
+        }
+        state.base_commit = head.to_string();
+        let _ = backend.save_session(&state);
     }
 }
 

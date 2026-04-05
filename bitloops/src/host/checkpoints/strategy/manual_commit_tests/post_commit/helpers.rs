@@ -1,4 +1,64 @@
 use super::*;
+use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
+use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::types::{InteractionSession, InteractionTurn};
+
+pub(crate) fn open_test_spool(repo_root: &Path) -> SqliteInteractionSpool {
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .expect("resolve repo identity")
+        .repo_id;
+    let sqlite = SqliteConnectionPool::connect(interaction_spool_db_path(repo_root))
+        .expect("open interaction spool sqlite");
+    SqliteInteractionSpool::new(sqlite, repo_id).expect("initialise interaction spool")
+}
+
+pub(crate) fn seed_interaction_turn(
+    repo_root: &Path,
+    session_id: &str,
+    turn_id: &str,
+    files: &[&str],
+) {
+    let spool = open_test_spool(repo_root);
+    let transcript_path = repo_root.join("transcript.jsonl");
+    if !transcript_path.exists() {
+        std::fs::write(&transcript_path, "{}\n").expect("seed transcript");
+    }
+    let session = InteractionSession {
+        session_id: session_id.to_string(),
+        repo_id: spool.repo_id().to_string(),
+        agent_type: "codex".to_string(),
+        model: "gpt-5.4".to_string(),
+        first_prompt: "ship it".to_string(),
+        transcript_path: transcript_path.to_string_lossy().to_string(),
+        worktree_path: repo_root.to_string_lossy().to_string(),
+        worktree_id: "main".to_string(),
+        started_at: "2026-04-05T10:00:00Z".to_string(),
+        last_event_at: "2026-04-05T10:00:01Z".to_string(),
+        updated_at: "2026-04-05T10:00:01Z".to_string(),
+        ..Default::default()
+    };
+    let turn = InteractionTurn {
+        turn_id: turn_id.to_string(),
+        session_id: session_id.to_string(),
+        repo_id: spool.repo_id().to_string(),
+        turn_number: 1,
+        prompt: "make the change".to_string(),
+        agent_type: "codex".to_string(),
+        model: "gpt-5.4".to_string(),
+        started_at: "2026-04-05T10:00:01Z".to_string(),
+        ended_at: Some("2026-04-05T10:00:02Z".to_string()),
+        token_usage: Some(TokenUsageMetadata {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..Default::default()
+        }),
+        files_modified: files.iter().map(|file| file.to_string()).collect(),
+        updated_at: "2026-04-05T10:00:02Z".to_string(),
+        ..Default::default()
+    };
+    spool.record_session(&session).expect("record session");
+    spool.record_turn(&turn).expect("record turn");
+}
 
 pub(crate) fn commit_file(repo_root: &Path, filename: &str, content: &str) {
     fs::write(repo_root.join(filename), content).unwrap();

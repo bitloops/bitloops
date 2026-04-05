@@ -6,6 +6,7 @@ use super::helpers::commit_file;
 pub(crate) fn post_commit_active_session_condenses_immediately() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -17,6 +18,7 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-active", "pc-active-turn", &["active.txt"]);
 
     commit_file(dir.path(), "active.txt", "active.txt content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
@@ -28,7 +30,10 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
         crate::host::checkpoints::session::phase::SessionPhase::Active
     );
     assert_eq!(loaded.step_count, 0, "active session should be condensed");
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head_sha)
+        .cloned()
         .expect("post_commit should map active commit to a checkpoint");
     assert!(
         read_committed(dir.path(), &checkpoint_id)
@@ -46,6 +51,7 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
 pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -57,12 +63,21 @@ pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-active-turn",
+        "pc-active-turn-1",
+        &["index.html"],
+    );
 
     commit_file(dir.path(), "index.html", "index.html content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head_sha)
+        .cloned()
         .expect("post_commit should map active commit to a checkpoint");
     let loaded = backend.load_session("pc-active-turn").unwrap().unwrap();
     assert_eq!(
@@ -76,6 +91,7 @@ pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
 pub(crate) fn post_commit_idle_session_condenses() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -87,6 +103,7 @@ pub(crate) fn post_commit_idle_session_condenses() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-idle", "pc-idle-turn", &["idle.txt"]);
 
     commit_file(dir.path(), "idle.txt", "idle.txt content");
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
@@ -103,6 +120,7 @@ pub(crate) fn post_commit_idle_session_condenses() {
 pub(crate) fn post_commit_rebase_during_active_skips_transition() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -114,6 +132,7 @@ pub(crate) fn post_commit_rebase_during_active_skips_transition() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-rebase", "pc-rebase-turn", &["rebase.txt"]);
 
     fs::create_dir_all(dir.path().join(".git").join("rebase-merge")).unwrap();
     commit_file(dir.path(), "rebase.txt", "rebase.txt content");
@@ -135,6 +154,7 @@ pub(crate) fn post_commit_rebase_during_active_skips_transition() {
 pub(crate) fn post_commit_files_touched_resets_after_condensation() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -146,6 +166,7 @@ pub(crate) fn post_commit_files_touched_resets_after_condensation() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-files", "pc-files-turn", &["f1.rs", "f2.rs"]);
 
     fs::write(dir.path().join("f1.rs"), "f1").unwrap();
     fs::write(dir.path().join("f2.rs"), "f2").unwrap();
@@ -160,6 +181,7 @@ pub(crate) fn post_commit_files_touched_resets_after_condensation() {
 pub(crate) fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     let transcript_path = dir.path().join("live-transcript.jsonl");
     fs::write(
@@ -179,12 +201,21 @@ pub(crate) fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "turn-end-session",
+        "turn-end-session-turn",
+        &["turn-end.txt"],
+    );
 
     commit_file(dir.path(), "turn-end.txt", "turn-end.txt content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head_sha)
+        .cloned()
         .expect("post_commit should map turn-end commit to a checkpoint");
 
     // Update the live transcript so turn-end finalization has richer content to persist.

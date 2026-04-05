@@ -29,6 +29,8 @@ pub trait InteractionEventRepository: Send + Sync {
         limit: usize,
     ) -> Result<Vec<InteractionTurn>>;
 
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>>;
+
     fn list_events(
         &self,
         filter: &InteractionEventFilter,
@@ -52,6 +54,8 @@ pub trait InteractionSpool: Send + Sync {
         checkpoint_id: &str,
         assigned_at: &str,
     ) -> Result<()>;
+
+    fn has_pending_mutations(&self) -> Result<bool>;
 
     fn flush(&self, repository: &dyn InteractionEventRepository) -> Result<usize>;
 

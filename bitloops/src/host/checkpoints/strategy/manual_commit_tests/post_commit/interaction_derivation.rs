@@ -1,22 +1,277 @@
-use super::*;
-use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
-use crate::host::interactions::store::InteractionSpool;
-use crate::host::interactions::types::{InteractionSession, InteractionTurn};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
-fn open_test_spool(repo_root: &Path) -> SqliteInteractionSpool {
-    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
-        .expect("resolve repo identity")
-        .repo_id;
-    let sqlite = SqliteConnectionPool::connect(interaction_spool_db_path(repo_root))
-        .expect("open interaction spool sqlite");
-    SqliteInteractionSpool::new(sqlite, repo_id).expect("initialise interaction spool")
+use anyhow::{Result, anyhow};
+
+use super::*;
+use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
+};
+
+#[derive(Default)]
+struct FakeInteractionRepository {
+    repo_id: String,
+    sessions: Mutex<HashMap<String, InteractionSession>>,
+    turns: Mutex<HashMap<String, InteractionTurn>>,
+    operations: Arc<Mutex<Vec<&'static str>>>,
+    fail_list_uncheckpointed_turns: bool,
 }
 
-fn seed_interaction_turn(repo_root: &Path, session_id: &str, turn_id: &str, files: &[&str]) {
-    let spool = open_test_spool(repo_root);
-    let session = InteractionSession {
+impl FakeInteractionRepository {
+    fn new(repo_id: &str, operations: Arc<Mutex<Vec<&'static str>>>) -> Self {
+        Self {
+            repo_id: repo_id.to_string(),
+            operations,
+            ..Default::default()
+        }
+    }
+
+    fn with_session(self, session: InteractionSession) -> Self {
+        self.sessions
+            .lock()
+            .expect("lock sessions")
+            .insert(session.session_id.clone(), session);
+        self
+    }
+
+    fn with_turn(self, turn: InteractionTurn) -> Self {
+        self.turns
+            .lock()
+            .expect("lock turns")
+            .insert(turn.turn_id.clone(), turn);
+        self
+    }
+
+    fn checkpoint_id_for(&self, turn_id: &str) -> Option<String> {
+        self.turns
+            .lock()
+            .expect("lock turns")
+            .get(turn_id)
+            .and_then(|turn| turn.checkpoint_id.clone())
+    }
+}
+
+impl InteractionEventRepository for FakeInteractionRepository {
+    fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+
+    fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
+        self.sessions
+            .lock()
+            .expect("lock sessions")
+            .insert(session.session_id.clone(), session.clone());
+        Ok(())
+    }
+
+    fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
+        self.turns
+            .lock()
+            .expect("lock turns")
+            .insert(turn.turn_id.clone(), turn.clone());
+        Ok(())
+    }
+
+    fn append_event(&self, _event: &InteractionEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        for turn_id in turn_ids {
+            if let Some(turn) = self.turns.lock().expect("lock turns").get_mut(turn_id) {
+                turn.checkpoint_id = Some(checkpoint_id.to_string());
+                turn.updated_at = assigned_at.to_string();
+            }
+        }
+        Ok(())
+    }
+
+    fn list_sessions(
+        &self,
+        _agent: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<InteractionSession>> {
+        Ok(self
+            .sessions
+            .lock()
+            .expect("lock sessions")
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        self.operations
+            .lock()
+            .expect("lock operations")
+            .push("repo.load_session");
+        Ok(self
+            .sessions
+            .lock()
+            .expect("lock sessions")
+            .get(session_id)
+            .cloned())
+    }
+
+    fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        Ok(self
+            .turns
+            .lock()
+            .expect("lock turns")
+            .values()
+            .filter(|turn| turn.session_id == session_id)
+            .cloned()
+            .collect())
+    }
+
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        self.operations
+            .lock()
+            .expect("lock operations")
+            .push("repo.list_uncheckpointed_turns");
+        if self.fail_list_uncheckpointed_turns {
+            return Err(anyhow!("forced list_uncheckpointed_turns failure"));
+        }
+        Ok(self
+            .turns
+            .lock()
+            .expect("lock turns")
+            .values()
+            .filter(|turn| turn.checkpoint_id.as_deref().unwrap_or("").is_empty())
+            .cloned()
+            .collect())
+    }
+
+    fn list_events(
+        &self,
+        _filter: &InteractionEventFilter,
+        _limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Default)]
+struct FakeInteractionSpool {
+    repo_id: String,
+    pending_mutations: bool,
+    flush_error: Option<String>,
+    operations: Arc<Mutex<Vec<&'static str>>>,
+    assigned_turns: Mutex<Vec<String>>,
+}
+
+impl FakeInteractionSpool {
+    fn new(repo_id: &str) -> Self {
+        Self {
+            repo_id: repo_id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn assigned_turns(&self) -> Vec<String> {
+        self.assigned_turns
+            .lock()
+            .expect("lock assigned turns")
+            .clone()
+    }
+}
+
+impl InteractionSpool for FakeInteractionSpool {
+    fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+
+    fn record_session(&self, _session: &InteractionSession) -> Result<()> {
+        Ok(())
+    }
+
+    fn record_turn(&self, _turn: &InteractionTurn) -> Result<()> {
+        Ok(())
+    }
+
+    fn record_event(&self, _event: &InteractionEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        _checkpoint_id: &str,
+        _assigned_at: &str,
+    ) -> Result<()> {
+        self.assigned_turns
+            .lock()
+            .expect("lock assigned turns")
+            .extend(turn_ids.iter().cloned());
+        Ok(())
+    }
+
+    fn has_pending_mutations(&self) -> Result<bool> {
+        Ok(self.pending_mutations)
+    }
+
+    fn flush(&self, _repository: &dyn InteractionEventRepository) -> Result<usize> {
+        self.operations
+            .lock()
+            .expect("lock operations")
+            .push("spool.flush");
+        if let Some(message) = &self.flush_error {
+            return Err(anyhow!(message.clone()));
+        }
+        Ok(0)
+    }
+
+    fn list_sessions(
+        &self,
+        _agent: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<InteractionSession>> {
+        Ok(Vec::new())
+    }
+
+    fn load_session(&self, _session_id: &str) -> Result<Option<InteractionSession>> {
+        Ok(None)
+    }
+
+    fn list_turns_for_session(
+        &self,
+        _session_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        Ok(Vec::new())
+    }
+
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        Ok(Vec::new())
+    }
+
+    fn list_events(
+        &self,
+        _filter: &InteractionEventFilter,
+        _limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        Ok(Vec::new())
+    }
+}
+
+fn fake_interaction_session(
+    repo_root: &Path,
+    repo_id: &str,
+    session_id: &str,
+) -> InteractionSession {
+    InteractionSession {
         session_id: session_id.to_string(),
-        repo_id: spool.repo_id().to_string(),
+        repo_id: repo_id.to_string(),
         agent_type: "codex".to_string(),
         model: "gpt-5.4".to_string(),
         first_prompt: "ship it".to_string(),
@@ -30,11 +285,19 @@ fn seed_interaction_turn(repo_root: &Path, session_id: &str, turn_id: &str, file
         last_event_at: "2026-04-05T10:00:01Z".to_string(),
         updated_at: "2026-04-05T10:00:01Z".to_string(),
         ..Default::default()
-    };
-    let turn = InteractionTurn {
+    }
+}
+
+fn fake_interaction_turn(
+    repo_id: &str,
+    session_id: &str,
+    turn_id: &str,
+    files: &[&str],
+) -> InteractionTurn {
+    InteractionTurn {
         turn_id: turn_id.to_string(),
         session_id: session_id.to_string(),
-        repo_id: spool.repo_id().to_string(),
+        repo_id: repo_id.to_string(),
         turn_number: 1,
         prompt: "make the change".to_string(),
         agent_type: "codex".to_string(),
@@ -49,17 +312,196 @@ fn seed_interaction_turn(repo_root: &Path, session_id: &str, turn_id: &str, file
         files_modified: files.iter().map(|file| file.to_string()).collect(),
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()
-    };
-    spool.record_session(&session).expect("record session");
-    spool.record_turn(&turn).expect("record turn");
+    }
 }
 
 #[test]
-pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns() {
+pub(crate) fn derive_post_commit_from_event_db_turns_with_fake_sources() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
     std::fs::write(dir.path().join("transcript.jsonl"), "{}\n").unwrap();
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let operations = Arc::new(Mutex::new(Vec::new()));
+    let repository = FakeInteractionRepository::new(&repo_id, Arc::clone(&operations))
+        .with_session(fake_interaction_session(dir.path(), &repo_id, "sess-1"))
+        .with_turn(fake_interaction_turn(
+            &repo_id,
+            "sess-1",
+            "turn-1",
+            &["change.txt"],
+        ));
+    let mut spool = FakeInteractionSpool::new(&repo_id);
+    spool.operations = Arc::clone(&operations);
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(
+        dir.path(),
+        &["commit", "-m", "derive checkpoint from fake event repo"],
+    );
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    let checkpoint_id = strategy
+        .derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files,
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .expect("derive from event db")
+        .expect("checkpoint id");
+
+    let summary = read_committed(dir.path(), &checkpoint_id)
+        .expect("read derived checkpoint")
+        .expect("derived checkpoint summary");
+    assert_eq!(summary.files_touched, vec!["change.txt"]);
+    assert_eq!(
+        repository.checkpoint_id_for("turn-1").as_deref(),
+        Some(checkpoint_id.as_str())
+    );
+    assert_eq!(spool.assigned_turns(), vec!["turn-1".to_string()]);
+
+    let sequence = operations.lock().expect("lock operations").clone();
+    assert_eq!(
+        sequence[..2],
+        ["spool.flush", "repo.list_uncheckpointed_turns"],
+        "post_commit should flush the spool before reading the Event DB"
+    );
+}
+
+#[test]
+pub(crate) fn derive_post_commit_ignores_session_state_without_interaction_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let head_before = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    let backend = session_backend(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "sess-state-only".to_string(),
+            phase: SessionPhase::Idle,
+            base_commit: head_before,
+            step_count: 2,
+            files_touched: vec!["state-only.txt".to_string()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    std::fs::write(
+        dir.path().join("state-only.txt"),
+        "pending but uncaptured\n",
+    )
+    .unwrap();
+    git_ok(dir.path(), &["add", "state-only.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "state only pending work"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())));
+    let spool = FakeInteractionSpool::new(&repo_id);
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    let checkpoint_id = strategy
+        .derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files,
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .expect("derive without interaction turns");
+
+    assert!(checkpoint_id.is_none());
+    assert!(
+        !read_commit_checkpoint_mappings(dir.path())
+            .expect("mappings")
+            .contains_key(&head),
+        "session-state-only pending work must not derive a checkpoint"
+    );
+}
+
+#[test]
+pub(crate) fn derive_post_commit_returns_error_when_spool_flush_fails_with_pending_work() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())));
+    let spool = FakeInteractionSpool {
+        repo_id,
+        pending_mutations: true,
+        flush_error: Some("forced flush failure".to_string()),
+        ..FakeInteractionSpool::default()
+    };
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    let err = strategy
+        .derive_post_commit_from_interaction_sources(
+            "deadbeef",
+            &HashSet::new(),
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .expect_err("flush failure with pending work should error");
+    assert!(
+        format!("{err:#}").contains("flushing interaction spool before post_commit derivation")
+    );
+}
+
+#[test]
+pub(crate) fn derive_post_commit_returns_error_when_overlapping_turn_session_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    std::fs::write(dir.path().join("transcript.jsonl"), "{}\n").unwrap();
+
+    std::fs::write(dir.path().join("change.txt"), "hello\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "missing interaction session"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let repository =
+        FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new()))).with_turn(
+            fake_interaction_turn(&repo_id, "missing-session", "turn-1", &["change.txt"]),
+        );
+    let spool = FakeInteractionSpool::new(&repo_id);
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    let err = strategy
+        .derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files,
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .expect_err("missing interaction session should error");
+    assert!(format!("{err:#}").contains("missing interaction session"));
+}
+
+#[test]
+#[ignore = "ad hoc DuckDB integration coverage"]
+pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns_duckdb_integration() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     seed_interaction_turn(dir.path(), "sess-1", "turn-1", &["change.txt"]);
 
     std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
@@ -94,11 +536,11 @@ pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns() {
 }
 
 #[test]
-pub(crate) fn post_commit_skips_non_overlapping_interaction_turns() {
+#[ignore = "ad hoc DuckDB integration coverage"]
+pub(crate) fn post_commit_skips_non_overlapping_interaction_turns_duckdb_integration() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
-    std::fs::write(dir.path().join("transcript.jsonl"), "{}\n").unwrap();
     seed_interaction_turn(dir.path(), "sess-2", "turn-2", &["design-notes.md"]);
 
     std::fs::write(dir.path().join("change.txt"), "real commit\n").unwrap();

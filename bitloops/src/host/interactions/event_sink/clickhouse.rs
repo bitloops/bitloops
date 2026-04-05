@@ -282,6 +282,44 @@ impl ClickHouseInteractionRepository {
         rows.iter().map(turn_from_row).collect()
     }
 
+    pub(super) fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        let rows = blocking_query_rows(
+            &self.endpoint,
+            self.user.as_deref(),
+            self.password.as_deref(),
+            &format!(
+                "SELECT * FROM (
+                    SELECT
+                        turn_id,
+                        argMax(session_id, updated_at) AS session_id,
+                        argMax(repo_id, updated_at) AS repo_id,
+                        argMax(turn_number, updated_at) AS turn_number,
+                        argMax(prompt, updated_at) AS prompt,
+                        argMax(agent_type, updated_at) AS agent_type,
+                        argMax(model, updated_at) AS model,
+                        argMax(started_at, updated_at) AS started_at,
+                        argMax(ended_at, updated_at) AS ended_at,
+                        argMax(has_token_usage, updated_at) AS has_token_usage,
+                        argMax(input_tokens, updated_at) AS input_tokens,
+                        argMax(cache_creation_tokens, updated_at) AS cache_creation_tokens,
+                        argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
+                        argMax(output_tokens, updated_at) AS output_tokens,
+                        argMax(api_call_count, updated_at) AS api_call_count,
+                        argMax(files_modified, updated_at) AS files_modified,
+                        argMax(checkpoint_id, updated_at) AS checkpoint_id,
+                        toString(max(updated_at)) AS updated_at
+                    FROM interaction_turns
+                    WHERE repo_id = '{repo_id}'
+                    GROUP BY turn_id
+                )
+                WHERE checkpoint_id = ''
+                ORDER BY session_id ASC, turn_number ASC, started_at ASC",
+                repo_id = esc_ch(&self.repo_id),
+            ),
+        )?;
+        rows.iter().map(turn_from_row).collect()
+    }
+
     pub(super) fn list_events(
         &self,
         filter: &InteractionEventFilter,

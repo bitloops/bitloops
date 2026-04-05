@@ -18,6 +18,7 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
+    seed_interaction_turn(dir.path(), "pc1", "pc1-turn", &["change.txt"]);
 
     // Make a regular commit.
     fs::write(dir.path().join("change.txt"), "change").unwrap();
@@ -71,6 +72,7 @@ pub(crate) fn post_commit_creates_full_checkpoint_structure() {
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
+    seed_interaction_turn(dir.path(), "pc2", "pc2-turn", &["change2.txt"]);
 
     // post_commit should assign and persist checkpoint ID.
     fs::write(dir.path().join("change2.txt"), "change2").unwrap();
@@ -118,6 +120,12 @@ pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-no-checkpoint-condense",
+        "pc-no-checkpoint-condense-turn",
+        &["condense.txt"],
+    );
 
     fs::write(dir.path().join("condense.txt"), "condense").unwrap();
     git_ok(dir.path(), &["add", "condense.txt"]);
@@ -151,6 +159,7 @@ pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head(
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-squash", "pc-squash-turn", &["squash.txt"]);
 
     fs::write(dir.path().join("squash.txt"), "first\n").unwrap();
     git_ok(dir.path(), &["add", "squash.txt"]);
@@ -246,6 +255,12 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-skip-mapped",
+        "pc-skip-mapped-turn",
+        &["mapped.txt"],
+    );
 
     fs::write(dir.path().join("mapped.txt"), "first").unwrap();
     git_ok(dir.path(), &["add", "mapped.txt"]);
