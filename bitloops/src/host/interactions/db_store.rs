@@ -111,7 +111,7 @@ impl InteractionEventStore for SqliteInteractionEventStore {
                     updated_at = datetime('now')",
                 rusqlite::params![
                     session.session_id,
-                    session.repo_id,
+                    self.repo_id,
                     session.agent_type,
                     session.model,
                     session.first_prompt,
@@ -154,7 +154,7 @@ impl InteractionEventStore for SqliteInteractionEventStore {
                 rusqlite::params![
                     turn.turn_id,
                     turn.session_id,
-                    turn.repo_id,
+                    self.repo_id,
                     turn.turn_number,
                     turn.prompt,
                     turn.agent_type,
@@ -207,7 +207,7 @@ impl InteractionEventStore for SqliteInteractionEventStore {
                     event.event_id,
                     event.session_id,
                     event.turn_id,
-                    event.repo_id,
+                    self.repo_id,
                     event.event_type.as_str(),
                     event.event_time,
                     event.agent_type,
