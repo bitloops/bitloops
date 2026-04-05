@@ -65,6 +65,7 @@ async fn api_commits_filters_by_user_agent_and_time() {
     assert_eq!(commit_files_touched[0]["filepath"], "app.rs");
     assert_eq!(commit_files_touched[0]["additionsCount"].as_u64(), Some(1));
     assert_eq!(commit_files_touched[0]["deletionsCount"].as_u64(), Some(1));
+    assert!(commit_files_touched[0].get("changeKind").is_none());
 
     let checkpoint_files_touched = commits[0]["checkpoint"]["files_touched"]
         .as_array()
@@ -79,6 +80,9 @@ async fn api_commits_filters_by_user_agent_and_time() {
         checkpoint_files_touched[0]["deletionsCount"].as_u64(),
         Some(1)
     );
+    assert_eq!(checkpoint_files_touched[0]["changeKind"], "modify");
+    assert!(checkpoint_files_touched[0]["copiedFromPath"].is_null());
+    assert!(checkpoint_files_touched[0]["copiedFromBlobSha"].is_null());
 
     let timestamp = commits[0]["commit"]["timestamp"]
         .as_i64()
@@ -274,6 +278,9 @@ async fn api_checkpoint_returns_detailed_session_payload() {
     assert_eq!(files_touched[0]["filepath"], "app.rs");
     assert_eq!(files_touched[0]["additionsCount"].as_u64(), Some(1));
     assert_eq!(files_touched[0]["deletionsCount"].as_u64(), Some(1));
+    assert_eq!(files_touched[0]["changeKind"], "modify");
+    assert!(files_touched[0]["copiedFromPath"].is_null());
+    assert!(files_touched[0]["copiedFromBlobSha"].is_null());
 
     let sessions = payload["sessions"].as_array().expect("sessions array");
     assert_eq!(sessions.len(), 1);

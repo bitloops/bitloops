@@ -81,8 +81,10 @@ fn sqlite_connection_pool_initialises_checkpoint_provenance_tables() -> Result<(
         index_names,
         vec![
             "checkpoint_files_agent_time_idx".to_string(),
+            "checkpoint_files_change_kind_idx".to_string(),
             "checkpoint_files_checkpoint_idx".to_string(),
             "checkpoint_files_commit_idx".to_string(),
+            "checkpoint_files_copy_source_idx".to_string(),
             "checkpoint_files_event_time_idx".to_string(),
             "checkpoint_files_lookup_idx".to_string(),
         ],
@@ -105,6 +107,19 @@ fn sqlite_connection_pool_initialises_checkpoint_provenance_tables() -> Result<(
     let artefact_pk_columns =
         sqlite.with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_artefacts"))?;
     assert_eq!(artefact_pk_columns, vec!["relation_id".to_string()]);
+
+    let lineage_exists = sqlite.with_connection(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_artefact_lineage'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count == 1)
+    })?;
+    assert!(
+        lineage_exists,
+        "checkpoint_artefact_lineage should exist after initialise_devql_schema"
+    );
 
     Ok(())
 }

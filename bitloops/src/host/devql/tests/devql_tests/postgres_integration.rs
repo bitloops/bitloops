@@ -150,8 +150,10 @@ async fn init_postgres_schema_creates_checkpoint_provenance_tables() {
         index_names,
         vec![
             "checkpoint_files_agent_time_idx".to_string(),
+            "checkpoint_files_change_kind_idx".to_string(),
             "checkpoint_files_checkpoint_idx".to_string(),
             "checkpoint_files_commit_idx".to_string(),
+            "checkpoint_files_copy_source_idx".to_string(),
             "checkpoint_files_event_time_idx".to_string(),
             "checkpoint_files_lookup_idx".to_string(),
             "checkpoint_files_pkey".to_string(),
@@ -168,6 +170,20 @@ async fn init_postgres_schema_creates_checkpoint_provenance_tables() {
         artefact_table_name.as_deref(),
         Some("checkpoint_artefacts"),
         "expected init_postgres_schema to create checkpoint_artefacts"
+    );
+
+    let lineage_table_name: Option<String> = client
+        .query_one(
+            "SELECT to_regclass('public.checkpoint_artefact_lineage')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        lineage_table_name.as_deref(),
+        Some("checkpoint_artefact_lineage"),
+        "expected init_postgres_schema to create checkpoint_artefact_lineage"
     );
 }
 

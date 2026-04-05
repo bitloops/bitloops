@@ -44,12 +44,25 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	copyLineage: [ArtefactCopyLineage!]!
 }
 
 type ArtefactConnection {
 	edges: [ArtefactEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type ArtefactCopyLineage {
+	checkpointId: String!
+	eventTime: DateTime!
+	commitSha: String!
+	sourceSymbolId: String!
+	sourceArtefactId: ID!
+	destSymbolId: String!
+	destArtefactId: ID!
+	source: Artefact
+	destination: Artefact
 }
 
 type ArtefactEdge {
@@ -153,6 +166,7 @@ type Checkpoint {
 	isTask: Boolean!
 	toolUseId: String
 	commit: Commit
+	fileRelations: [CheckpointFileRelation!]!
 }
 
 type CheckpointConnection {
@@ -164,6 +178,17 @@ type CheckpointConnection {
 type CheckpointEdge {
 	node: Checkpoint!
 	cursor: String!
+}
+
+type CheckpointFileRelation {
+	filepath: String!
+	changeKind: String!
+	pathBefore: String
+	pathAfter: String
+	blobShaBefore: String
+	blobShaAfter: String
+	copiedFromPath: String
+	copiedFromBlobSha: String
 }
 
 type CheckpointTokenUsage {

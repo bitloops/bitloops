@@ -57,6 +57,7 @@ fn print_usage() {
     eprintln!("  install");
     eprintln!("  test <lib|core|cli|fast|slow|full>");
     eprintln!("  coverage run-lcov [--lcov <path>]");
+    eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
     eprintln!(
         "  coverage compare --lines <pct> --functions <pct> [--epsilon 0.05] [--lcov <path>]"
@@ -150,6 +151,10 @@ fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), S
             let lcov_path = parse_lcov_path(&raw_args)?;
             run_coverage_lcov(&lcov_path)
         }
+        "run-all" => {
+            let (lcov_path, html_dir) = parse_coverage_all_paths(&raw_args)?;
+            run_coverage_all(&lcov_path, &html_dir)
+        }
         "metrics" => {
             let lcov_path = parse_lcov_path(&raw_args)?;
             let workspace_root = workspace_root()?;
@@ -183,9 +188,7 @@ fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), S
             }
             Ok(())
         }
-        _ => Err(format!(
-            "unknown coverage subcommand `{subcommand}` (expected: run-lcov|metrics|compare)"
-        )),
+        _ => Err(unknown_coverage_subcommand_error(subcommand)),
     }
 }
 
@@ -198,6 +201,75 @@ fn resolve_workspace_path(workspace_root: &Path, raw_path: &str) -> PathBuf {
     }
 }
 
+/// Cargo argv fragment for `llvm-cov` LCOV export (after `cargo`). Used for tests and `run_coverage_lcov`.
+fn llvm_cov_lcov_cargo_args(output_path: &str) -> Vec<String> {
+    vec![
+        "llvm-cov".to_string(),
+        "--manifest-path".to_string(),
+        BITLOOPS_MANIFEST.to_string(),
+        "--workspace".to_string(),
+        "--all-targets".to_string(),
+        "--features".to_string(),
+        "slow-tests".to_string(),
+        "--no-default-features".to_string(),
+        "--lcov".to_string(),
+        "--output-path".to_string(),
+        output_path.to_string(),
+    ]
+}
+
+fn llvm_cov_lcov_display_command(output_path: &str) -> String {
+    format!(
+        "cargo llvm-cov --manifest-path {} --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {output_path}",
+        BITLOOPS_MANIFEST
+    )
+}
+
+/// Cargo argv for `llvm-cov report --html` (after `cargo`).
+fn llvm_cov_report_html_cargo_args(html_dir: &str) -> Vec<String> {
+    vec![
+        "llvm-cov".to_string(),
+        "report".to_string(),
+        "--manifest-path".to_string(),
+        BITLOOPS_MANIFEST.to_string(),
+        "--html".to_string(),
+        "--output-dir".to_string(),
+        html_dir.to_string(),
+    ]
+}
+
+fn llvm_cov_report_html_display_command(html_dir: &str) -> String {
+    format!(
+        "cargo llvm-cov report --manifest-path {} --html --output-dir {html_dir}",
+        BITLOOPS_MANIFEST
+    )
+}
+
+fn parse_test_binary_json_line(line: &str) -> Option<PathBuf> {
+    let json = serde_json::from_str::<Value>(line).ok()?;
+    let executable = json.get("executable")?.as_str()?;
+    let is_test_profile = json.get("profile")?.get("test")?.as_bool().unwrap_or(false);
+    if is_test_profile {
+        Some(PathBuf::from(executable))
+    } else {
+        None
+    }
+}
+
+fn otool_list_output_links_libduckdb(text: &str) -> bool {
+    text.contains("@rpath/libduckdb.dylib")
+}
+
+fn otool_load_output_contains_rpath(text: &str, rpath: &str) -> bool {
+    text.contains("cmd LC_RPATH") && text.contains(&format!("path {rpath} "))
+}
+
+fn unknown_coverage_subcommand_error(subcommand: &str) -> String {
+    format!(
+        "unknown coverage subcommand `{subcommand}` (expected: run-lcov|run-all|metrics|compare)"
+    )
+}
+
 fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
     let workspace_root = workspace_root()?;
     let resolved_lcov_path = resolve_workspace_path(&workspace_root, lcov_path);
@@ -207,25 +279,23 @@ fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
     }
     let resolved_lcov_path = resolved_lcov_path.to_string_lossy().to_string();
 
-    run_command(
-        &workspace_root,
-        &format!(
-            "cargo llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path {resolved_lcov_path}"
-        ),
-        &[
-            "llvm-cov",
-            "--manifest-path",
-            BITLOOPS_MANIFEST,
-            "--workspace",
-            "--all-targets",
-            "--features",
-            "slow-tests",
-            "--no-default-features",
-            "--lcov",
-            "--output-path",
-            &resolved_lcov_path,
-        ],
-    )
+    let display = llvm_cov_lcov_display_command(&resolved_lcov_path);
+    let args = llvm_cov_lcov_cargo_args(&resolved_lcov_path);
+    run_command_owned(&workspace_root, &display, &prepend_cargo(&args))
+}
+
+fn run_coverage_all(lcov_path: &str, html_dir: &str) -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let resolved_html_dir = resolve_workspace_path(&workspace_root, html_dir);
+    fs::create_dir_all(&resolved_html_dir)
+        .map_err(|err| format!("failed to create {}: {err}", resolved_html_dir.display()))?;
+
+    run_coverage_lcov(lcov_path)?;
+
+    let resolved_html_dir = resolved_html_dir.to_string_lossy().to_string();
+    let display = llvm_cov_report_html_display_command(&resolved_html_dir);
+    let args = llvm_cov_report_html_cargo_args(&resolved_html_dir);
+    run_command_owned(&workspace_root, &display, &prepend_cargo(&args))
 }
 
 fn parse_lcov_path(args: &[String]) -> Result<String, String> {
@@ -244,6 +314,32 @@ fn parse_lcov_path(args: &[String]) -> Result<String, String> {
         }
     }
     Ok(lcov_path)
+}
+
+fn parse_coverage_all_paths(args: &[String]) -> Result<(String, String), String> {
+    let mut lcov_path = DEFAULT_LCOV_PATH.to_string();
+    let mut html_dir = "bitloops/target/llvm-cov-html".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--lcov" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--lcov requires a value".to_string());
+                };
+                lcov_path = value.clone();
+                i += 2;
+            }
+            "--html-dir" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--html-dir requires a value".to_string());
+                };
+                html_dir = value.clone();
+                i += 2;
+            }
+            other => return Err(format!("unknown coverage argument: {other}")),
+        }
+    }
+    Ok((lcov_path, html_dir))
 }
 
 #[derive(Debug, Clone)]
@@ -449,19 +545,8 @@ fn collect_test_binaries(cwd: &Path, args: &[String]) -> Result<Vec<PathBuf>, St
 
     let mut binaries = BTreeSet::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let Ok(json) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(executable) = json.get("executable").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let is_test_profile = json
-            .get("profile")
-            .and_then(|p| p.get("test"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if is_test_profile {
-            binaries.insert(PathBuf::from(executable));
+        if let Some(path) = parse_test_binary_json_line(line) {
+            binaries.insert(path);
         }
     }
 
@@ -572,7 +657,7 @@ fn binary_links_duckdb_via_rpath(binary_path: &Path) -> Result<bool, String> {
     }
     let text = String::from_utf8(output.stdout)
         .map_err(|err| format!("otool output was not valid UTF-8: {err}"))?;
-    Ok(text.contains("@rpath/libduckdb.dylib"))
+    Ok(otool_list_output_links_libduckdb(&text))
 }
 
 fn ensure_executable_path_rpath(binary_path: &Path) -> Result<(), String> {
@@ -615,7 +700,7 @@ fn binary_has_rpath(binary_path: &Path, rpath: &str) -> Result<bool, String> {
     }
     let text = String::from_utf8(output.stdout)
         .map_err(|err| format!("otool output was not valid UTF-8: {err}"))?;
-    Ok(text.contains("cmd LC_RPATH") && text.contains(&format!("path {rpath} ")))
+    Ok(otool_load_output_contains_rpath(&text, rpath))
 }
 
 fn resolve_workspace_duckdb_dylib(workspace_root: &Path) -> Result<PathBuf, String> {
@@ -646,6 +731,12 @@ fn workspace_root() -> Result<PathBuf, String> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "failed to resolve workspace root".to_string())
+}
+
+fn prepend_cargo(args: &[String]) -> Vec<String> {
+    let mut v = vec!["cargo".to_string()];
+    v.extend_from_slice(args);
+    v
 }
 
 fn run_command(cwd: &Path, display: &str, args: &[&str]) -> Result<(), String> {
@@ -825,7 +916,26 @@ fn is_gitignored(file: &Path, git_toplevel: Option<&Path>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_regression, parse_lcov_metrics};
+    use std::env;
+    use std::fs;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use tempfile::TempDir;
+
+    use super::{
+        BITLOOPS_MANIFEST, DEFAULT_LCOV_PATH, SLOW_TEST_TARGETS, collect_rs_files, count_lines,
+        env_u64, is_regression, is_test_file, llvm_cov_lcov_cargo_args,
+        llvm_cov_lcov_display_command, llvm_cov_report_html_cargo_args,
+        llvm_cov_report_html_display_command, otool_list_output_links_libduckdb,
+        otool_load_output_contains_rpath, parse_compare_options, parse_coverage_all_paths,
+        parse_f64_flag, parse_lcov_metrics, parse_lcov_path, parse_test_binary_json_line,
+        parse_u64_value, percentage, prepend_cargo, read_lcov_metrics, resolve_workspace_path,
+        run_file_size_check, test_lane_args, unknown_coverage_subcommand_error, workspace_root,
+    };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parses_lcov_metrics() {
@@ -846,5 +956,338 @@ mod tests {
         assert!(is_regression(79.94, 80.0, 0.05));
         assert!(!is_regression(74.95, 75.0, 0.05));
         assert!(is_regression(74.94, 75.0, 0.05));
+    }
+
+    #[test]
+    fn percentage_zero_total() {
+        assert_eq!(percentage(0, 0), 0.0);
+        assert_eq!(percentage(3, 10), 30.0);
+    }
+
+    #[test]
+    fn parse_u64_value_trims_and_rejects_invalid() {
+        assert_eq!(parse_u64_value("LF", " 42 ").unwrap(), 42);
+        assert!(
+            parse_u64_value("LF", "x")
+                .unwrap_err()
+                .contains("invalid LCOV")
+        );
+    }
+
+    #[test]
+    fn parse_f64_flag_accepts_decimals() {
+        assert_eq!(parse_f64_flag("--lines", "80.5").unwrap(), 80.5);
+        assert!(
+            parse_f64_flag("--lines", "nope")
+                .unwrap_err()
+                .contains("must be a decimal")
+        );
+    }
+
+    #[test]
+    fn parse_lcov_path_default_and_override() {
+        assert_eq!(parse_lcov_path(&[]).unwrap(), DEFAULT_LCOV_PATH.to_string());
+        assert_eq!(
+            parse_lcov_path(&["--lcov".into(), "out.lcov".into()]).unwrap(),
+            "out.lcov"
+        );
+        assert_eq!(
+            parse_lcov_path(&["--lcov".into(), "a".into(), "--lcov".into(), "b".into()]).unwrap(),
+            "b"
+        );
+        assert!(
+            parse_lcov_path(&["--lcov".into()])
+                .unwrap_err()
+                .contains("requires a value")
+        );
+        assert!(
+            parse_lcov_path(&["--what".into()])
+                .unwrap_err()
+                .contains("unknown coverage argument")
+        );
+    }
+
+    #[test]
+    fn parse_coverage_all_paths_defaults_and_flags() {
+        let (lcov, html) = parse_coverage_all_paths(&[]).unwrap();
+        assert_eq!(lcov, DEFAULT_LCOV_PATH);
+        assert_eq!(html, "bitloops/target/llvm-cov-html");
+        let (lcov, html) = parse_coverage_all_paths(&[
+            "--lcov".into(),
+            "c.lcov".into(),
+            "--html-dir".into(),
+            "html-out".into(),
+        ])
+        .unwrap();
+        assert_eq!(lcov, "c.lcov");
+        assert_eq!(html, "html-out");
+        assert!(
+            parse_coverage_all_paths(&["--html-dir".into()])
+                .unwrap_err()
+                .contains("requires a value")
+        );
+    }
+
+    #[test]
+    fn parse_compare_options_required_and_optional_flags() {
+        let opts = parse_compare_options(&[
+            "--lines".into(),
+            "80".into(),
+            "--functions".into(),
+            "75".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.lines_baseline, 80.0);
+        assert_eq!(opts.functions_baseline, 75.0);
+        assert_eq!(opts.epsilon, 0.05);
+        assert_eq!(opts.lcov_path, DEFAULT_LCOV_PATH);
+
+        let opts = parse_compare_options(&[
+            "--lines".into(),
+            "1".into(),
+            "--functions".into(),
+            "2".into(),
+            "--epsilon".into(),
+            "0.1".into(),
+            "--lcov".into(),
+            "m.lcov".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.epsilon, 0.1);
+        assert_eq!(opts.lcov_path, "m.lcov");
+
+        assert!(
+            parse_compare_options(&["--functions".into(), "75".into()])
+                .unwrap_err()
+                .contains("--lines is required")
+        );
+        assert!(
+            parse_compare_options(&["--lines".into(), "80".into()])
+                .unwrap_err()
+                .contains("--functions is required")
+        );
+        assert!(
+            parse_compare_options(&[
+                "--lines".into(),
+                "80".into(),
+                "--functions".into(),
+                "75".into(),
+                "--bad".into(),
+            ])
+            .unwrap_err()
+            .contains("unknown compare argument")
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_path_joins_relative_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let ws = std::fs::canonicalize(tmp.path()).expect("canonicalize");
+        let abs_other = std::fs::canonicalize(tmp.path().join(".")).expect("canonicalize");
+        assert_eq!(
+            resolve_workspace_path(&ws, "rel/out.info"),
+            ws.join("rel/out.info")
+        );
+        let abs_str = abs_other.to_str().expect("utf8 path");
+        assert_eq!(resolve_workspace_path(&ws, abs_str), abs_other);
+    }
+
+    #[test]
+    fn env_u64_reads_integer_or_default() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        let key = format!("XTASK_ENV_U64_TEST_{}", std::process::id());
+        unsafe {
+            env::remove_var(&key);
+        }
+        assert_eq!(env_u64(&key, 99).unwrap(), 99);
+        unsafe {
+            env::set_var(&key, "42");
+        }
+        assert_eq!(env_u64(&key, 99).unwrap(), 42);
+        unsafe {
+            env::set_var(&key, "not_int");
+        }
+        assert!(env_u64(&key, 0).unwrap_err().contains("must be an integer"));
+        unsafe {
+            env::remove_var(&key);
+        }
+    }
+
+    #[test]
+    fn test_lane_args_builds_expected_fragments() {
+        let base = || {
+            vec![
+                "test".to_string(),
+                "--manifest-path".to_string(),
+                BITLOOPS_MANIFEST.to_string(),
+                "--no-fail-fast".to_string(),
+                "--no-default-features".to_string(),
+            ]
+        };
+
+        for lane in ["lib", "core"] {
+            let mut expected = base();
+            expected.push("--lib".to_string());
+            assert_eq!(test_lane_args(lane).unwrap(), expected);
+        }
+
+        let mut expected = base();
+        expected.push("--bin".to_string());
+        expected.push("bitloops".to_string());
+        assert_eq!(test_lane_args("cli").unwrap(), expected);
+
+        assert_eq!(test_lane_args("fast").unwrap(), base());
+
+        let args = test_lane_args("slow").unwrap();
+        assert!(args.contains(&"slow-tests".to_string()));
+        assert_eq!(
+            args.iter().filter(|s| *s == "--test").count(),
+            SLOW_TEST_TARGETS.len()
+        );
+        for t in SLOW_TEST_TARGETS {
+            assert!(args.contains(&(*t).to_string()));
+        }
+
+        let args = test_lane_args("full").unwrap();
+        assert!(args.contains(&"slow-tests".to_string()));
+        assert!(!args.contains(&"--test".to_string()));
+
+        assert!(
+            test_lane_args("nope")
+                .unwrap_err()
+                .contains("unknown test lane")
+        );
+    }
+
+    #[test]
+    fn is_test_file_detects_tests_dir_and_suffixes() {
+        assert!(is_test_file(Path::new("tests/foo.rs")));
+        assert!(is_test_file(Path::new("crate/tests/integration/main.rs")));
+        assert!(is_test_file(Path::new("src/foo_test.rs")));
+        assert!(is_test_file(Path::new("src/tests.rs")));
+        assert!(is_test_file(Path::new("src/api_tests.rs")));
+        assert!(!is_test_file(Path::new("src/api/client.rs")));
+    }
+
+    #[test]
+    fn collect_rs_files_finds_nested_sources() {
+        let tmp = TempDir::new().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("nested")).expect("mkdir");
+        fs::write(tmp.path().join("a.rs"), "fn a() {}\n").expect("write");
+        fs::write(tmp.path().join("nested/b.rs"), "fn b() {}\n").expect("write");
+        let mut out = Vec::new();
+        collect_rs_files(tmp.path(), &mut out).expect("collect");
+        out.sort();
+        assert_eq!(out.len(), 2);
+        assert!(out[0].ends_with("a.rs"));
+        assert!(out[1].ends_with("b.rs"));
+    }
+
+    #[test]
+    fn count_lines_counts_newlines() {
+        let tmp = TempDir::new().expect("tempdir");
+        let p = tmp.path().join("x.rs");
+        fs::write(&p, "a\nb\nc\n").expect("write");
+        assert_eq!(count_lines(&p).unwrap(), 3);
+    }
+
+    #[test]
+    fn run_file_size_check_passes_for_small_tree() {
+        let tmp = TempDir::new().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("pkg")).expect("mkdir");
+        let body: String = (0..50).map(|_| "//x\n").collect();
+        fs::write(tmp.path().join("pkg/lib.rs"), body).expect("write");
+        run_file_size_check(tmp.path()).expect("under default max");
+    }
+
+    #[test]
+    fn run_file_size_check_fails_when_file_exceeds_default_max() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("big.rs");
+        let mut f = fs::File::create(&path).expect("create");
+        for i in 0..1001 {
+            writeln!(f, "// line {i}").expect("write");
+        }
+        drop(f);
+        let err = run_file_size_check(tmp.path()).unwrap_err();
+        assert!(err.contains("file-size check failed"));
+    }
+
+    #[test]
+    fn run_file_size_check_empty_tree_prints_message() {
+        let tmp = TempDir::new().expect("tempdir");
+        run_file_size_check(tmp.path()).expect("no rust files ok");
+    }
+
+    #[test]
+    fn read_lcov_metrics_missing_file_errors() {
+        let tmp = TempDir::new().expect("tempdir");
+        let p = tmp.path().join("nope.lcov");
+        let err = read_lcov_metrics(&p).unwrap_err();
+        assert!(err.contains("failed to read"));
+    }
+
+    #[test]
+    fn workspace_root_points_at_repo_workspace() {
+        let root = workspace_root().expect("workspace root");
+        assert!(root.join("bitloops").join("Cargo.toml").is_file());
+    }
+
+    #[test]
+    fn llvm_cov_lcov_args_and_display_match() {
+        let args = llvm_cov_lcov_cargo_args("/tmp/out.info");
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/out.info"));
+        let full = prepend_cargo(&args);
+        assert_eq!(full[0], "cargo");
+        let display = llvm_cov_lcov_display_command("/tmp/out.info");
+        assert!(display.contains("llvm-cov"));
+        assert!(display.contains("/tmp/out.info"));
+    }
+
+    #[test]
+    fn llvm_cov_report_html_args_round_trip() {
+        let args = llvm_cov_report_html_cargo_args("target/h");
+        assert!(args.contains(&"--html".to_string()));
+        let display = llvm_cov_report_html_display_command("target/h");
+        assert!(display.contains("report"));
+        assert!(display.contains("target/h"));
+    }
+
+    #[test]
+    fn parse_test_binary_json_line_filters_executable() {
+        let line = r#"{"executable":"/tmp/t","profile":{"test":true}}"#;
+        assert_eq!(
+            parse_test_binary_json_line(line),
+            Some(PathBuf::from("/tmp/t"))
+        );
+        assert!(parse_test_binary_json_line(r#"{"profile":{"test":true}}"#).is_none());
+        assert!(
+            parse_test_binary_json_line(r#"{"executable":"/x","profile":{"test":false}}"#)
+                .is_none()
+        );
+        assert!(parse_test_binary_json_line("not json").is_none());
+    }
+
+    #[test]
+    fn otool_heuristics_detect_dylib_and_rpath() {
+        assert!(otool_list_output_links_libduckdb(
+            "\t@rpath/libduckdb.dylib (compatibility version 0.0.0)\n"
+        ));
+        assert!(!otool_list_output_links_libduckdb(
+            "\t/usr/lib/libSystem.B.dylib\n"
+        ));
+        let load = "cmd LC_RPATH\ncmdsize 32\npath @executable_path \n";
+        assert!(otool_load_output_contains_rpath(load, "@executable_path"));
+        assert!(!otool_load_output_contains_rpath(
+            "path /usr/lib/ ",
+            "@executable_path"
+        ));
+    }
+
+    #[test]
+    fn unknown_coverage_subcommand_message_lists_expected() {
+        let e = unknown_coverage_subcommand_error("foo");
+        assert!(e.contains("foo"));
+        assert!(e.contains("run-lcov"));
     }
 }

@@ -118,6 +118,12 @@ pub(super) struct ApiCommitFileDiffDto {
     pub(super) filepath: String,
     pub(super) additions_count: u64,
     pub(super) deletions_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) change_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) copied_from_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) copied_from_blob_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

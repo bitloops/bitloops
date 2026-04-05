@@ -259,6 +259,7 @@ fn checkpoint_from_row(row: Value) -> Result<Checkpoint> {
         created_at: Some(event_time.as_str().to_string()),
         is_task: false,
         tool_use_id: None,
+        scope: crate::graphql::ResolverScope::default(),
     })
 }
 

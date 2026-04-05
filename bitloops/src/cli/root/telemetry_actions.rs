@@ -650,3 +650,40 @@ fn embeddings_action(
         )),
     }
 }
+
+#[cfg(test)]
+mod telemetry_actions_unit_tests {
+    use super::*;
+
+    #[test]
+    fn stage_sequence_from_devql_query_splits_arrow_stages_and_strips_calls() {
+        assert_eq!(
+            stage_sequence_from_devql_query("a -> b( x ) -> c"),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn stage_sequence_from_devql_query_skips_empty_segments() {
+        assert_eq!(
+            stage_sequence_from_devql_query("  foo  ->   -> bar "),
+            vec!["foo", "bar"]
+        );
+    }
+
+    #[test]
+    fn telemetry_action_for_version_includes_check_flag() {
+        let with_check = telemetry_action_for_version(true);
+        assert_eq!(with_check.event, "bitloops version");
+        let flags = with_check
+            .properties
+            .get("flags")
+            .and_then(|v| v.as_array())
+            .expect("flags array");
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].as_str(), Some("check"));
+
+        let plain = telemetry_action_for_version(false);
+        assert!(!plain.properties.contains_key("flags"));
+    }
+}

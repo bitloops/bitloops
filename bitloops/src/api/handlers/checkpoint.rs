@@ -17,10 +17,17 @@ use super::super::{
     API_GIT_SCAN_LIMIT, DashboardState, canonical_agent_key, read_checkpoint_info_for_filtering,
     read_commit_numstat, walk_branch_commits_with_checkpoints,
 };
-use super::file_diffs::{api_file_diff_list_from_numstat, api_zeroed_file_diff_list};
+use super::file_diffs::{
+    api_checkpoint_file_diff_list_from_relations, api_file_diff_list_from_numstat,
+    api_zeroed_file_diff_list,
+};
 use super::params::normalize_checkpoint_id;
 use super::resolve_repo_root_from_repo_id;
 use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_session_content};
+use crate::host::devql::RelationalStorage;
+use crate::host::devql::checkpoint_provenance::{
+    CheckpointFileGateway, CheckpointFileProvenanceDetailRow,
+};
 
 #[utoipa::path(
     get,
@@ -44,7 +51,7 @@ pub(crate) async fn handle_api_checkpoint(
     let (tracked_repo_root, response) = match resolve_repo_root_from_repo_id(&state, &repo_id).await
     {
         Ok(repo_root) => {
-            let response = load_checkpoint_detail(&repo_root, checkpoint_id)
+            let response = load_checkpoint_detail(&repo_root, &repo_id, checkpoint_id)
                 .await
                 .map(Json);
             (Some(repo_root), response)
@@ -91,6 +98,7 @@ fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageD
 
 async fn load_checkpoint_detail(
     repo_root: &Path,
+    repo_id: &str,
     checkpoint_id: String,
 ) -> std::result::Result<ApiCheckpointDetailResponse, ApiError> {
     let checkpoint_id = normalize_checkpoint_id(checkpoint_id)?;
@@ -105,6 +113,15 @@ async fn load_checkpoint_detail(
             "checkpoint not found: {checkpoint_id}"
         )));
     };
+
+    let checkpoint_file_relations =
+        load_checkpoint_file_relations(repo_root, repo_id, &checkpoint_id)
+            .await
+            .map_err(|err| {
+                ApiError::internal(format!(
+                    "failed to read checkpoint file provenance for {checkpoint_id}: {err:#}"
+                ))
+            })?;
 
     let mut sessions = Vec::new();
     for session_index in 0..info.session_count {
@@ -160,6 +177,7 @@ async fn load_checkpoint_detail(
         repo_root,
         &info.branch,
         &info.checkpoint_id,
+        &checkpoint_file_relations,
         &info.files_touched,
     );
     let token_usage = api_token_usage_from_committed(&info);
@@ -179,6 +197,7 @@ fn resolve_checkpoint_files_touched(
     repo_root: &Path,
     branch: &str,
     checkpoint_id: &str,
+    file_relations: &[CheckpointFileProvenanceDetailRow],
     fallback_files_touched: &[String],
 ) -> Vec<super::super::dto::ApiCommitFileDiffDto> {
     let branch_commits = match walk_branch_commits_with_checkpoints(
@@ -196,7 +215,7 @@ fn resolve_checkpoint_files_touched(
                 checkpoint_id,
                 err
             );
-            return api_zeroed_file_diff_list(fallback_files_touched);
+            return fallback_checkpoint_files_touched(file_relations, fallback_files_touched);
         }
     };
 
@@ -205,11 +224,17 @@ fn resolve_checkpoint_files_touched(
         .find(|commit| commit.checkpoint_id == checkpoint_id)
         .map(|commit| commit.sha)
     else {
-        return api_zeroed_file_diff_list(fallback_files_touched);
+        return fallback_checkpoint_files_touched(file_relations, fallback_files_touched);
     };
 
     match read_commit_numstat(repo_root, &commit_sha) {
-        Ok(stats) => api_file_diff_list_from_numstat(stats),
+        Ok(stats) => {
+            if file_relations.is_empty() {
+                api_file_diff_list_from_numstat(stats)
+            } else {
+                api_checkpoint_file_diff_list_from_relations(file_relations, Some(&stats))
+            }
+        }
         Err(err) => {
             log::warn!(
                 "dashboard checkpoint endpoint: failed to read numstat for {} (checkpoint {}): {:#}",
@@ -217,7 +242,37 @@ fn resolve_checkpoint_files_touched(
                 checkpoint_id,
                 err
             );
-            api_zeroed_file_diff_list(fallback_files_touched)
+            fallback_checkpoint_files_touched(file_relations, fallback_files_touched)
         }
     }
+}
+
+fn fallback_checkpoint_files_touched(
+    file_relations: &[CheckpointFileProvenanceDetailRow],
+    fallback_files_touched: &[String],
+) -> Vec<super::super::dto::ApiCommitFileDiffDto> {
+    if file_relations.is_empty() {
+        api_zeroed_file_diff_list(fallback_files_touched)
+    } else {
+        api_checkpoint_file_diff_list_from_relations(file_relations, None)
+    }
+}
+
+async fn load_checkpoint_file_relations(
+    repo_root: &Path,
+    repo_id: &str,
+    checkpoint_id: &str,
+) -> anyhow::Result<Vec<CheckpointFileProvenanceDetailRow>> {
+    let sqlite_path =
+        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+            repo_root,
+        )?;
+    if !sqlite_path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let relational = RelationalStorage::local_only(sqlite_path);
+    CheckpointFileGateway::new(&relational)
+        .list_checkpoint_files(repo_id, checkpoint_id)
+        .await
 }

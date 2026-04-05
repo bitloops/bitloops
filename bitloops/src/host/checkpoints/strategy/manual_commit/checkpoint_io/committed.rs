@@ -343,14 +343,18 @@ fn persist_checkpoint_provenance_rows(
         crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
             repo_root, context,
         )?;
-    let artefact_rows =
-        crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance_rows(
+    let artefact_provenance =
+        crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance(
             repo_root, context, &file_rows,
         )?;
 
     storage
         .sqlite
         .with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM checkpoint_artefact_lineage WHERE repo_id = ?1 AND checkpoint_id = ?2",
+                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+            )?;
             conn.execute(
                 "DELETE FROM checkpoint_artefacts WHERE repo_id = ?1 AND checkpoint_id = ?2",
                 rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
@@ -360,7 +364,11 @@ fn persist_checkpoint_provenance_rows(
                 rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
             )?;
 
-            let mut statements = Vec::with_capacity(file_rows.len() + artefact_rows.len());
+            let mut statements = Vec::with_capacity(
+                file_rows.len()
+                    + artefact_provenance.semantic_rows.len()
+                    + artefact_provenance.lineage_rows.len(),
+            );
             for row in &file_rows {
                 statements.push(
                     crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
@@ -369,13 +377,21 @@ fn persist_checkpoint_provenance_rows(
                     ),
                 );
             }
-            for row in &artefact_rows {
+            for row in &artefact_provenance.semantic_rows {
                 statements.push(
                 crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
                     row,
                     crate::host::devql::RelationalDialect::Sqlite,
                 ),
             );
+            }
+            for row in &artefact_provenance.lineage_rows {
+                statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                        row,
+                        crate::host::devql::RelationalDialect::Sqlite,
+                    ),
+                );
             }
             for statement in statements {
                 conn.execute_batch(&statement)?;

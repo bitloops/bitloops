@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -369,14 +369,24 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
             &cfg.repo_root,
             context,
         )?;
-    let artefact_rows =
-        crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance_rows(
+    let artefact_provenance =
+        crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance(
             &cfg.repo_root,
             context,
             &file_rows,
         )?;
 
-    let mut sqlite_statements = Vec::with_capacity(2 + file_rows.len() + artefact_rows.len());
+    let mut sqlite_statements = Vec::with_capacity(
+        3 + file_rows.len()
+            + artefact_provenance.semantic_rows.len()
+            + artefact_provenance.lineage_rows.len(),
+    );
+    sqlite_statements.push(
+        crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+            &cfg.repo.repo_id,
+            &cp.checkpoint_id,
+        ),
+    );
     sqlite_statements.push(
         crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
             &cfg.repo.repo_id,
@@ -397,9 +407,17 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
             ),
         );
     }
-    for row in &artefact_rows {
+    for row in &artefact_provenance.semantic_rows {
         sqlite_statements.push(
             crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                row,
+                RelationalDialect::Sqlite,
+            ),
+        );
+    }
+    for row in &artefact_provenance.lineage_rows {
+        sqlite_statements.push(
+            crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
                 row,
                 RelationalDialect::Sqlite,
             ),
@@ -410,7 +428,17 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
         .await?;
 
     if relational.remote.is_some() {
-        let mut postgres_statements = Vec::with_capacity(2 + file_rows.len() + artefact_rows.len());
+        let mut postgres_statements = Vec::with_capacity(
+            3 + file_rows.len()
+                + artefact_provenance.semantic_rows.len()
+                + artefact_provenance.lineage_rows.len(),
+        );
+        postgres_statements.push(
+            crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+                &cfg.repo.repo_id,
+                &cp.checkpoint_id,
+            ),
+        );
         postgres_statements.push(
             crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
                 &cfg.repo.repo_id,
@@ -431,9 +459,17 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
                 ),
             );
         }
-        for row in &artefact_rows {
+        for row in &artefact_provenance.semantic_rows {
             postgres_statements.push(
                 crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                    row,
+                    RelationalDialect::Postgres,
+                ),
+            );
+        }
+        for row in &artefact_provenance.lineage_rows {
+            postgres_statements.push(
+                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
                     row,
                     RelationalDialect::Postgres,
                 ),

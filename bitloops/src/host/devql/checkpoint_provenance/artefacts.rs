@@ -6,7 +6,15 @@ pub(crate) fn collect_checkpoint_artefact_provenance_rows(
     ctx: CheckpointProvenanceContext<'_>,
     file_rows: &[CheckpointFileProvenanceRow],
 ) -> Result<Vec<CheckpointArtefactProvenanceRow>> {
-    let mut rows = Vec::new();
+    Ok(collect_checkpoint_artefact_provenance(repo_root, ctx, file_rows)?.semantic_rows)
+}
+
+pub(crate) fn collect_checkpoint_artefact_provenance(
+    repo_root: &Path,
+    ctx: CheckpointProvenanceContext<'_>,
+    file_rows: &[CheckpointFileProvenanceRow],
+) -> Result<CheckpointArtefactProvenanceBundle> {
+    let mut bundle = CheckpointArtefactProvenanceBundle::default();
     for file_row in file_rows {
         let before_artefacts = file_row
             .path_before
@@ -26,93 +34,29 @@ pub(crate) fn collect_checkpoint_artefact_provenance_rows(
             })
             .transpose()?
             .unwrap_or_default();
+        let copy_source_artefacts = file_row
+            .copy_source_path
+            .as_deref()
+            .zip(file_row.copy_source_blob_sha.as_deref())
+            .map(|(path, blob_sha)| {
+                extract_checkpoint_artefacts(repo_root, ctx.repo_id, path, blob_sha)
+            })
+            .transpose()?
+            .unwrap_or_default();
 
-        let mut before_by_key = BTreeMap::<String, ExtractedCheckpointArtefact>::new();
-        let mut after_by_key = BTreeMap::<String, ExtractedCheckpointArtefact>::new();
-        for artefact in before_artefacts {
-            before_by_key.insert(artefact.match_key.clone(), artefact);
-        }
-        for artefact in after_artefacts {
-            after_by_key.insert(artefact.match_key.clone(), artefact);
-        }
-
-        let all_keys = before_by_key
-            .keys()
-            .chain(after_by_key.keys())
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>();
-
-        for key in all_keys {
-            match (before_by_key.get(&key), after_by_key.get(&key)) {
-                (Some(before), Some(after)) => {
-                    if before.semantic_fingerprint == after.semantic_fingerprint {
-                        continue;
-                    }
-                    let mut row = CheckpointArtefactProvenanceRow {
-                        relation_id: String::new(),
-                        repo_id: ctx.repo_id.to_string(),
-                        checkpoint_id: ctx.checkpoint_id.to_string(),
-                        session_id: ctx.session_id.to_string(),
-                        event_time: ctx.event_time.to_string(),
-                        agent: ctx.agent.to_string(),
-                        branch: ctx.branch.to_string(),
-                        strategy: ctx.strategy.to_string(),
-                        commit_sha: ctx.commit_sha.to_string(),
-                        change_kind: CheckpointArtefactChangeKind::Modify,
-                        before_symbol_id: Some(before.symbol_id.clone()),
-                        after_symbol_id: Some(after.symbol_id.clone()),
-                        before_artefact_id: Some(before.artefact_id.clone()),
-                        after_artefact_id: Some(after.artefact_id.clone()),
-                    };
-                    row.relation_id = row.deterministic_id();
-                    rows.push(row);
-                }
-                (Some(before), None) => {
-                    let mut row = CheckpointArtefactProvenanceRow {
-                        relation_id: String::new(),
-                        repo_id: ctx.repo_id.to_string(),
-                        checkpoint_id: ctx.checkpoint_id.to_string(),
-                        session_id: ctx.session_id.to_string(),
-                        event_time: ctx.event_time.to_string(),
-                        agent: ctx.agent.to_string(),
-                        branch: ctx.branch.to_string(),
-                        strategy: ctx.strategy.to_string(),
-                        commit_sha: ctx.commit_sha.to_string(),
-                        change_kind: CheckpointArtefactChangeKind::Delete,
-                        before_symbol_id: Some(before.symbol_id.clone()),
-                        after_symbol_id: None,
-                        before_artefact_id: Some(before.artefact_id.clone()),
-                        after_artefact_id: None,
-                    };
-                    row.relation_id = row.deterministic_id();
-                    rows.push(row);
-                }
-                (None, Some(after)) => {
-                    let mut row = CheckpointArtefactProvenanceRow {
-                        relation_id: String::new(),
-                        repo_id: ctx.repo_id.to_string(),
-                        checkpoint_id: ctx.checkpoint_id.to_string(),
-                        session_id: ctx.session_id.to_string(),
-                        event_time: ctx.event_time.to_string(),
-                        agent: ctx.agent.to_string(),
-                        branch: ctx.branch.to_string(),
-                        strategy: ctx.strategy.to_string(),
-                        commit_sha: ctx.commit_sha.to_string(),
-                        change_kind: CheckpointArtefactChangeKind::Add,
-                        before_symbol_id: None,
-                        after_symbol_id: Some(after.symbol_id.clone()),
-                        before_artefact_id: None,
-                        after_artefact_id: Some(after.artefact_id.clone()),
-                    };
-                    row.relation_id = row.deterministic_id();
-                    rows.push(row);
-                }
-                (None, None) => {}
-            }
-        }
+        bundle.semantic_rows.extend(build_semantic_provenance_rows(
+            ctx,
+            &before_artefacts,
+            &after_artefacts,
+        ));
+        bundle.lineage_rows.extend(build_copy_lineage_rows(
+            ctx,
+            &copy_source_artefacts,
+            &after_artefacts,
+        ));
     }
 
-    Ok(rows)
+    Ok(bundle)
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +65,131 @@ struct ExtractedCheckpointArtefact {
     symbol_id: String,
     artefact_id: String,
     semantic_fingerprint: String,
+}
+
+fn build_semantic_provenance_rows(
+    ctx: CheckpointProvenanceContext<'_>,
+    before_artefacts: &[ExtractedCheckpointArtefact],
+    after_artefacts: &[ExtractedCheckpointArtefact],
+) -> Vec<CheckpointArtefactProvenanceRow> {
+    let before_by_key = artefacts_by_key(before_artefacts);
+    let after_by_key = artefacts_by_key(after_artefacts);
+    let all_keys = before_by_key
+        .keys()
+        .chain(after_by_key.keys())
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut rows = Vec::new();
+    for key in all_keys {
+        match (before_by_key.get(&key), after_by_key.get(&key)) {
+            (Some(before), Some(after)) => {
+                if before.semantic_fingerprint == after.semantic_fingerprint {
+                    continue;
+                }
+                rows.push(build_semantic_row(
+                    ctx,
+                    CheckpointArtefactChangeKind::Modify,
+                    Some(before),
+                    Some(after),
+                ));
+            }
+            (Some(before), None) => rows.push(build_semantic_row(
+                ctx,
+                CheckpointArtefactChangeKind::Delete,
+                Some(before),
+                None,
+            )),
+            (None, Some(after)) => rows.push(build_semantic_row(
+                ctx,
+                CheckpointArtefactChangeKind::Add,
+                None,
+                Some(after),
+            )),
+            (None, None) => {}
+        }
+    }
+    rows
+}
+
+fn build_copy_lineage_rows(
+    ctx: CheckpointProvenanceContext<'_>,
+    source_artefacts: &[ExtractedCheckpointArtefact],
+    dest_artefacts: &[ExtractedCheckpointArtefact],
+) -> Vec<CheckpointArtefactLineageRow> {
+    if source_artefacts.is_empty() || dest_artefacts.is_empty() {
+        return Vec::new();
+    }
+
+    let source_by_key = artefacts_by_key(source_artefacts);
+    let dest_by_key = artefacts_by_key(dest_artefacts);
+    let mut rows = Vec::new();
+    for key in source_by_key
+        .keys()
+        .filter(|key| dest_by_key.contains_key(*key))
+    {
+        let source = source_by_key.get(key).expect("key exists in source map");
+        let dest = dest_by_key.get(key).expect("key exists in dest map");
+        if source.semantic_fingerprint != dest.semantic_fingerprint {
+            continue;
+        }
+
+        let mut row = CheckpointArtefactLineageRow {
+            relation_id: String::new(),
+            repo_id: ctx.repo_id.to_string(),
+            checkpoint_id: ctx.checkpoint_id.to_string(),
+            session_id: ctx.session_id.to_string(),
+            event_time: ctx.event_time.to_string(),
+            agent: ctx.agent.to_string(),
+            branch: ctx.branch.to_string(),
+            strategy: ctx.strategy.to_string(),
+            commit_sha: ctx.commit_sha.to_string(),
+            lineage_kind: CheckpointArtefactLineageKind::Copy,
+            source_symbol_id: source.symbol_id.clone(),
+            source_artefact_id: source.artefact_id.clone(),
+            dest_symbol_id: dest.symbol_id.clone(),
+            dest_artefact_id: dest.artefact_id.clone(),
+        };
+        row.relation_id = row.deterministic_id();
+        rows.push(row);
+    }
+    rows
+}
+
+fn artefacts_by_key(
+    artefacts: &[ExtractedCheckpointArtefact],
+) -> BTreeMap<String, ExtractedCheckpointArtefact> {
+    let mut by_key = BTreeMap::<String, ExtractedCheckpointArtefact>::new();
+    for artefact in artefacts {
+        by_key.insert(artefact.match_key.clone(), artefact.clone());
+    }
+    by_key
+}
+
+fn build_semantic_row(
+    ctx: CheckpointProvenanceContext<'_>,
+    change_kind: CheckpointArtefactChangeKind,
+    before: Option<&ExtractedCheckpointArtefact>,
+    after: Option<&ExtractedCheckpointArtefact>,
+) -> CheckpointArtefactProvenanceRow {
+    let mut row = CheckpointArtefactProvenanceRow {
+        relation_id: String::new(),
+        repo_id: ctx.repo_id.to_string(),
+        checkpoint_id: ctx.checkpoint_id.to_string(),
+        session_id: ctx.session_id.to_string(),
+        event_time: ctx.event_time.to_string(),
+        agent: ctx.agent.to_string(),
+        branch: ctx.branch.to_string(),
+        strategy: ctx.strategy.to_string(),
+        commit_sha: ctx.commit_sha.to_string(),
+        change_kind,
+        before_symbol_id: before.map(|artefact| artefact.symbol_id.clone()),
+        after_symbol_id: after.map(|artefact| artefact.symbol_id.clone()),
+        before_artefact_id: before.map(|artefact| artefact.artefact_id.clone()),
+        after_artefact_id: after.map(|artefact| artefact.artefact_id.clone()),
+    };
+    row.relation_id = row.deterministic_id();
+    row
 }
 
 fn extract_checkpoint_artefacts(
@@ -302,4 +371,162 @@ pub(crate) fn normalise_semantic_source(source: &str) -> String {
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows;
+    use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn formatting_only_edit_produces_no_semantic_rows() {
+        let repo = TempDir::new().expect("temp dir");
+        init_test_repo(
+            repo.path(),
+            "main",
+            "Checkpoint Provenance",
+            "provenance@example.com",
+        );
+        fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+        fs::write(
+            repo.path().join("src/lib.rs"),
+            "pub fn demo() -> i32 {\n    1\n}\n",
+        )
+        .expect("write source file");
+        git_ok(repo.path(), &["add", "src/lib.rs"]);
+        git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+        fs::write(
+            repo.path().join("src/lib.rs"),
+            "pub fn demo() -> i32 {\n    // keep the same behaviour\n    1\n}\n",
+        )
+        .expect("rewrite source file");
+        git_ok(repo.path(), &["add", "src/lib.rs"]);
+        git_ok(repo.path(), &["commit", "-m", "formatting only"]);
+
+        let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+        let ctx = test_context(commit_sha.trim());
+        let file_rows =
+            collect_checkpoint_file_provenance_rows(repo.path(), ctx).expect("collect file rows");
+        let provenance = collect_checkpoint_artefact_provenance(repo.path(), ctx, &file_rows)
+            .expect("collect provenance");
+
+        assert_eq!(file_rows.len(), 1);
+        assert!(provenance.semantic_rows.is_empty());
+        assert!(provenance.lineage_rows.is_empty());
+    }
+
+    #[test]
+    fn pure_copy_produces_add_rows_and_copy_lineage() {
+        let repo = TempDir::new().expect("temp dir");
+        init_test_repo(
+            repo.path(),
+            "main",
+            "Checkpoint Provenance",
+            "provenance@example.com",
+        );
+        fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+        fs::write(
+            repo.path().join("src/lib.rs"),
+            "pub fn demo() -> i32 {\n    1\n}\n",
+        )
+        .expect("write source file");
+        git_ok(repo.path(), &["add", "src/lib.rs"]);
+        git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+        fs::copy(
+            repo.path().join("src/lib.rs"),
+            repo.path().join("src/copied.rs"),
+        )
+        .expect("copy source file");
+        git_ok(repo.path(), &["add", "src/copied.rs"]);
+        git_ok(repo.path(), &["commit", "-m", "copy"]);
+
+        let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+        let ctx = test_context(commit_sha.trim());
+        let file_rows =
+            collect_checkpoint_file_provenance_rows(repo.path(), ctx).expect("collect file rows");
+        let provenance = collect_checkpoint_artefact_provenance(repo.path(), ctx, &file_rows)
+            .expect("collect provenance");
+
+        assert_eq!(file_rows.len(), 1);
+        assert_eq!(file_rows[0].change_kind, CheckpointFileChangeKind::Copy);
+        assert!(!provenance.semantic_rows.is_empty());
+        assert!(
+            provenance
+                .semantic_rows
+                .iter()
+                .all(|row| row.change_kind == CheckpointArtefactChangeKind::Add)
+        );
+        assert!(!provenance.lineage_rows.is_empty());
+        assert!(provenance.lineage_rows.iter().all(|row| {
+            row.lineage_kind == CheckpointArtefactLineageKind::Copy
+                && row.source_artefact_id != row.dest_artefact_id
+        }));
+    }
+
+    #[test]
+    fn copy_with_semantic_edit_only_links_unchanged_artefacts() {
+        let repo = TempDir::new().expect("temp dir");
+        init_test_repo(
+            repo.path(),
+            "main",
+            "Checkpoint Provenance",
+            "provenance@example.com",
+        );
+        fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+        fs::write(
+            repo.path().join("src/lib.rs"),
+            "pub fn first() -> i32 {\n    1\n}\n\npub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("write source file");
+        git_ok(repo.path(), &["add", "src/lib.rs"]);
+        git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+        fs::copy(
+            repo.path().join("src/lib.rs"),
+            repo.path().join("src/copied.rs"),
+        )
+        .expect("copy source file");
+        fs::write(
+            repo.path().join("src/copied.rs"),
+            "pub fn first() -> i32 {\n    10\n}\n\npub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("rewrite copied file");
+        git_ok(repo.path(), &["add", "src/copied.rs"]);
+        git_ok(repo.path(), &["commit", "-m", "copy and edit"]);
+
+        let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+        let ctx = test_context(commit_sha.trim());
+        let file_rows =
+            collect_checkpoint_file_provenance_rows(repo.path(), ctx).expect("collect file rows");
+        let provenance = collect_checkpoint_artefact_provenance(repo.path(), ctx, &file_rows)
+            .expect("collect provenance");
+
+        assert_eq!(file_rows.len(), 1);
+        assert_eq!(file_rows[0].change_kind, CheckpointFileChangeKind::Copy);
+        assert_eq!(provenance.lineage_rows.len(), 1);
+        assert!(
+            provenance
+                .semantic_rows
+                .iter()
+                .all(|row| row.change_kind == CheckpointArtefactChangeKind::Add)
+        );
+    }
+
+    fn test_context<'a>(commit_sha: &'a str) -> CheckpointProvenanceContext<'a> {
+        CheckpointProvenanceContext {
+            repo_id: "repo-1",
+            checkpoint_id: "checkpoint-1",
+            session_id: "session-1",
+            event_time: "2026-03-20T10:00:00Z",
+            agent: "codex",
+            branch: "main",
+            strategy: "manual",
+            commit_sha,
+        }
+    }
 }
