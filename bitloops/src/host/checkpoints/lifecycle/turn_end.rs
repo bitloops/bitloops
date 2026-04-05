@@ -228,49 +228,56 @@ pub fn handle_lifecycle_turn_end(
 
     // ── interaction event persistence ────────────────────────────────────────
     if let Some(store) = resolve_interaction_event_store(&repo_root) {
-        let now = now_rfc3339();
         let turn_id = backend
             .load_session(&session_id)
             .ok()
             .flatten()
-            .map(|s| s.turn_id.clone())
-            .unwrap_or_default();
-        let all_files: Vec<String> = ctx
-            .modified_files
-            .iter()
-            .chain(ctx.new_files.iter())
-            .chain(ctx.deleted_files.iter())
-            .cloned()
-            .collect();
-        let token_meta = ctx.token_usage.as_ref().map(|t| {
-            crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
-                input_tokens: t.input_tokens as u64,
-                cache_creation_tokens: t.cache_creation_tokens as u64,
-                cache_read_tokens: t.cache_read_tokens as u64,
-                output_tokens: t.output_tokens as u64,
-                api_call_count: t.api_call_count as u64,
-                subagent_tokens: None,
+            .map(|s| s.turn_id.clone());
+        if let Some(turn_id) = turn_id.filter(|id| !id.trim().is_empty()) {
+            let now = now_rfc3339();
+            let all_files: Vec<String> = ctx
+                .modified_files
+                .iter()
+                .chain(ctx.new_files.iter())
+                .chain(ctx.deleted_files.iter())
+                .cloned()
+                .collect();
+            let token_meta = ctx.token_usage.as_ref().map(|t| {
+                crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
+                    input_tokens: t.input_tokens as u64,
+                    cache_creation_tokens: t.cache_creation_tokens as u64,
+                    cache_read_tokens: t.cache_read_tokens as u64,
+                    output_tokens: t.output_tokens as u64,
+                    api_call_count: t.api_call_count as u64,
+                    subagent_tokens: None,
+                }
+            });
+            if let Err(err) = store.record_turn_end(&turn_id, &now, token_meta.as_ref(), &all_files)
+            {
+                eprintln!("[bitloops] Warning: failed to record interaction turn end: {err}");
             }
-        });
-        if let Err(err) = store.record_turn_end(&turn_id, &now, token_meta.as_ref(), &all_files) {
-            eprintln!("[bitloops] Warning: failed to record interaction turn end: {err}");
-        }
-        let payload = serde_json::json!({
-            "files_count": all_files.len(),
-            "token_usage": token_meta,
-        });
-        if let Err(err) = store.record_event(&InteractionEvent {
-            event_id: generate_interaction_event_id(),
-            session_id: session_id.to_string(),
-            turn_id: Some(turn_id),
-            repo_id: store.repo_id().to_string(),
-            event_type: InteractionEventType::TurnEnd,
-            event_time: now,
-            agent_type: ctx.agent_type.clone(),
-            model: event.model.clone(),
-            payload,
-        }) {
-            eprintln!("[bitloops] Warning: failed to record turn_end event: {err}");
+            let payload = serde_json::json!({
+                "files_count": all_files.len(),
+                "token_usage": token_meta,
+            });
+            if let Err(err) = store.record_event(&InteractionEvent {
+                event_id: generate_interaction_event_id(),
+                session_id: session_id.to_string(),
+                turn_id: Some(turn_id),
+                repo_id: store.repo_id().to_string(),
+                event_type: InteractionEventType::TurnEnd,
+                event_time: now,
+                agent_type: ctx.agent_type.clone(),
+                model: event.model.clone(),
+                payload,
+            }) {
+                eprintln!("[bitloops] Warning: failed to record turn_end event: {err}");
+            }
+        } else {
+            eprintln!(
+                "[bitloops] Warning: skipping interaction persistence for session {session_id} \
+                 because turn_id is missing or empty"
+            );
         }
     }
 

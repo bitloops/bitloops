@@ -117,16 +117,13 @@ pub(crate) fn derive_checkpoint_from_interaction_turns(
 
 /// Resolves a [`SqliteInteractionEventStore`] for the given repo root.
 ///
-/// Returns an error if the store cannot be created (missing database, etc.).
+/// Returns an error if no existing SQLite database is available.
 #[allow(dead_code)]
 fn resolve_interaction_event_store(repo_root: &Path) -> Result<SqliteInteractionEventStore> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)
         .context("resolving SQLite path for interaction event store")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
-        .context("connecting to SQLite for interaction event store")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising checkpoint schema for interaction event store")?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+        .context("connecting to existing SQLite for interaction event store")?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for interaction event store")?
         .repo_id;

@@ -135,7 +135,7 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}, interaction_events_ingested={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}, interaction_events_attempted={}",
         summary.checkpoints_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
@@ -147,7 +147,7 @@ pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
         summary.symbol_clone_sources_scored,
-        summary.interaction_events_ingested
+        summary.interaction_events_attempted
     )
 }
 

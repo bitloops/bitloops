@@ -381,7 +381,7 @@ pub(crate) async fn execute_ingest_with_observer(
     // Propagate interaction events from checkpoint SQLite to the events store.
     // Failures here are logged but do not block the rest of ingestion.
     match ingest_interaction_events_from_checkpoint(cfg, &backends.events).await {
-        Ok(n) => counters.interaction_events_ingested = n,
+        Ok(n) => counters.interaction_events_attempted = n,
         Err(err) => log::warn!("interaction event ingestion skipped: {err:#}"),
     }
 

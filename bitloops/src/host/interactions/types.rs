@@ -1,7 +1,8 @@
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use serde::{Deserialize, Serialize};
 
-/// Canonical record for an agent session, persisted at SessionStart and updated at SessionEnd.
+/// Canonical record for an agent session.
+/// Core fields are upserted via `record_session`; `ended_at` is set separately via `end_session`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InteractionSession {
     pub session_id: String,

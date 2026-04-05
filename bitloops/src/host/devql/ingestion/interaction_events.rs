@@ -1,28 +1,29 @@
 use super::*;
 
-/// Read all rows from the checkpoint SQLite `interaction_events` table and
-/// insert them into the DuckDB (or ClickHouse) `interaction_events` table.
+/// Read interaction events from the checkpoint SQLite and insert them into
+/// the DuckDB (or ClickHouse) `interaction_events` table.
 ///
-/// Idempotency is achieved via `INSERT ... SELECT ... WHERE NOT EXISTS` on
-/// the DuckDB side so duplicate calls are harmless.
+/// Uses `INSERT OR IGNORE` for idempotency. Returns the number of source
+/// rows attempted (not the number actually inserted — duplicates are silently
+/// skipped by the primary key constraint).
 pub(super) async fn ingest_interaction_events(
     checkpoint_sqlite: &crate::storage::SqliteConnectionPool,
     events_duckdb_path: &Path,
     repo_id: &str,
 ) -> Result<usize> {
-    let rows = read_interaction_events_from_sqlite(checkpoint_sqlite)?;
+    let rows = read_interaction_events_from_sqlite(checkpoint_sqlite, repo_id)?;
     if rows.is_empty() {
         return Ok(0);
     }
 
-    let mut inserted = 0usize;
+    let attempted = rows.len();
+
+    // Batch all rows into a single INSERT OR IGNORE statement.
+    let mut values_clauses = Vec::with_capacity(rows.len());
     for row in &rows {
-        let sql = format!(
-            "INSERT INTO interaction_events \
-             (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
-             SELECT '{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}', \
-                    '{event_type}', '{agent_type}', '{model}', '{payload}' \
-             WHERE NOT EXISTS (SELECT 1 FROM interaction_events WHERE event_id = '{event_id}')",
+        values_clauses.push(format!(
+            "('{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}', \
+             '{event_type}', '{agent_type}', '{model}', '{payload}')",
             event_id = esc_pg(&row.event_id),
             event_time = esc_pg(&row.event_time),
             repo_id = esc_pg(repo_id),
@@ -32,14 +33,19 @@ pub(super) async fn ingest_interaction_events(
             agent_type = esc_pg(&row.agent_type),
             model = esc_pg(&row.model),
             payload = esc_pg(&row.payload),
-        );
-        duckdb_exec_path_allow_create(events_duckdb_path, &sql)
-            .await
-            .with_context(|| format!("inserting interaction event {} into DuckDB", row.event_id))?;
-        inserted += 1;
+        ));
     }
+    let sql = format!(
+        "INSERT OR IGNORE INTO interaction_events \
+         (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
+         VALUES {}",
+        values_clauses.join(", ")
+    );
+    duckdb_exec_path_allow_create(events_duckdb_path, &sql)
+        .await
+        .context("batch-inserting interaction events into DuckDB")?;
 
-    Ok(inserted)
+    Ok(attempted)
 }
 
 #[derive(Debug)]
@@ -56,18 +62,21 @@ struct InteractionEventRow {
 
 fn read_interaction_events_from_sqlite(
     sqlite: &crate::storage::SqliteConnectionPool,
+    repo_id: &str,
 ) -> Result<Vec<InteractionEventRow>> {
+    let repo_id = repo_id.to_string();
     sqlite.with_connection(|conn| {
         let mut stmt = conn
             .prepare(
                 "SELECT event_id, session_id, COALESCE(turn_id, ''), event_type, event_time, \
                  COALESCE(agent_type, ''), COALESCE(model, ''), COALESCE(payload, '{}') \
-                 FROM interaction_events",
+                 FROM interaction_events \
+                 WHERE repo_id = ?1",
             )
             .context("preparing interaction_events query")?;
 
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params![repo_id], |row| {
                 Ok(InteractionEventRow {
                     event_id: row.get(0)?,
                     session_id: row.get(1)?,
