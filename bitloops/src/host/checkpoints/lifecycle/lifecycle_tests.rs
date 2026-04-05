@@ -16,6 +16,7 @@ use super::adapters::{
     ClaudeCodeLifecycleAdapter, CodexLifecycleAdapter, CopilotCliLifecycleAdapter,
     CursorLifecycleAdapter, GeminiCliLifecycleAdapter, OpenCodeLifecycleAdapter,
 };
+use super::canonical::build_phase3_canonical_request;
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy,
     UNKNOWN_SESSION_ID, apply_session_id_policy, create_context_file, dispatch_lifecycle_event,
@@ -67,7 +68,7 @@ fn test_phase3_canonical_request_enriches_rich_builtin_agents() {
     event.session_ref = String::from("/tmp/gemini-session.jsonl");
     event.prompt = String::from("rich lifecycle path");
 
-    let request = super::build_phase3_canonical_request("Gemini", &event).expect("request");
+    let request = build_phase3_canonical_request("Gemini", &event).expect("request");
     assert_eq!(request.agent.agent_key, "gemini");
     assert_eq!(
         request.compatibility,
@@ -92,7 +93,7 @@ fn test_phase3_canonical_request_collapses_simple_builtin_agents() {
     event.session_ref = String::from("/tmp/claude-session.jsonl");
     event.prompt = String::from("simple lifecycle path");
 
-    let request = super::build_phase3_canonical_request("Claude Code", &event).expect("request");
+    let request = build_phase3_canonical_request("Claude Code", &event).expect("request");
     assert_eq!(request.agent.agent_key, "claude-code");
     assert_eq!(
         request.compatibility,
