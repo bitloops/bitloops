@@ -57,6 +57,7 @@ fn print_usage() {
     eprintln!("  install");
     eprintln!("  test <lib|core|cli|fast|slow|full>");
     eprintln!("  coverage run-lcov [--lcov <path>]");
+    eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
     eprintln!(
         "  coverage compare --lines <pct> --functions <pct> [--epsilon 0.05] [--lcov <path>]"
@@ -150,6 +151,10 @@ fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), S
             let lcov_path = parse_lcov_path(&raw_args)?;
             run_coverage_lcov(&lcov_path)
         }
+        "run-all" => {
+            let (lcov_path, html_dir) = parse_coverage_all_paths(&raw_args)?;
+            run_coverage_all(&lcov_path, &html_dir)
+        }
         "metrics" => {
             let lcov_path = parse_lcov_path(&raw_args)?;
             let workspace_root = workspace_root()?;
@@ -184,7 +189,7 @@ fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), S
             Ok(())
         }
         _ => Err(format!(
-            "unknown coverage subcommand `{subcommand}` (expected: run-lcov|metrics|compare)"
+            "unknown coverage subcommand `{subcommand}` (expected: run-lcov|run-all|metrics|compare)"
         )),
     }
 }
@@ -228,6 +233,32 @@ fn run_coverage_lcov(lcov_path: &str) -> Result<(), String> {
     )
 }
 
+fn run_coverage_all(lcov_path: &str, html_dir: &str) -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let resolved_html_dir = resolve_workspace_path(&workspace_root, html_dir);
+    fs::create_dir_all(&resolved_html_dir)
+        .map_err(|err| format!("failed to create {}: {err}", resolved_html_dir.display()))?;
+
+    run_coverage_lcov(lcov_path)?;
+
+    let resolved_html_dir = resolved_html_dir.to_string_lossy().to_string();
+    run_command(
+        &workspace_root,
+        &format!(
+            "cargo llvm-cov report --manifest-path bitloops/Cargo.toml --html --output-dir {resolved_html_dir}"
+        ),
+        &[
+            "llvm-cov",
+            "report",
+            "--manifest-path",
+            BITLOOPS_MANIFEST,
+            "--html",
+            "--output-dir",
+            &resolved_html_dir,
+        ],
+    )
+}
+
 fn parse_lcov_path(args: &[String]) -> Result<String, String> {
     let mut lcov_path = DEFAULT_LCOV_PATH.to_string();
     let mut i = 0;
@@ -244,6 +275,32 @@ fn parse_lcov_path(args: &[String]) -> Result<String, String> {
         }
     }
     Ok(lcov_path)
+}
+
+fn parse_coverage_all_paths(args: &[String]) -> Result<(String, String), String> {
+    let mut lcov_path = DEFAULT_LCOV_PATH.to_string();
+    let mut html_dir = "bitloops/target/llvm-cov-html".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--lcov" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--lcov requires a value".to_string());
+                };
+                lcov_path = value.clone();
+                i += 2;
+            }
+            "--html-dir" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("--html-dir requires a value".to_string());
+                };
+                html_dir = value.clone();
+                i += 2;
+            }
+            other => return Err(format!("unknown coverage argument: {other}")),
+        }
+    }
+    Ok((lcov_path, html_dir))
 }
 
 #[derive(Debug, Clone)]

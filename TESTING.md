@@ -12,6 +12,7 @@ Run commands from the repository root.
 | Slow lane tests | `cargo dev-test-slow` |
 | Full lane tests | `cargo dev-test-full` |
 | Coverage (LCOV) | `cargo dev-coverage` |
+| Coverage (LCOV + HTML, one instrumented run) | `cargo dev-coverage-all` |
 | Coverage metrics (lines/functions) | `cargo dev-coverage-metrics` |
 | Coverage compare (default 80/75 fallback policy) | `cargo dev-coverage-compare` |
 | Coverage (HTML) | `cargo dev-coverage-html` |
@@ -101,6 +102,7 @@ cargo dev-test-slow
 
 ```bash
 cargo dev-coverage
+cargo dev-coverage-all
 cargo dev-coverage-metrics
 cargo dev-coverage-html
 open bitloops/target/llvm-cov-html/html/index.html

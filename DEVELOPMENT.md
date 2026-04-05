@@ -91,6 +91,9 @@ cargo dev-test-full
 cargo dev-coverage
 cargo dev-coverage-metrics
 
+# Coverage with both LCOV and HTML from one instrumented run
+cargo dev-coverage-all
+
 # HTML + LCOV reports (separate from the baseline gate)
 cargo dev-coverage-html
 
