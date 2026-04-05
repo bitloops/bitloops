@@ -4,6 +4,7 @@ use crate::graphql::{
     DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error, bad_user_input_error,
 };
 
+use super::interaction::{InteractionSessionObject, InteractionTurnObject};
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar,
@@ -376,5 +377,38 @@ impl Repository {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[graphql(name = "interactionSessions")]
+    async fn interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<InteractionSessionObject>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_sessions(&self.scope, agent.as_deref(), first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query interaction sessions: {err:#}")))
+    }
+
+    #[graphql(name = "interactionTurns")]
+    async fn interaction_turns(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "sessionId")] session_id: String,
+    ) -> Result<Vec<InteractionTurnObject>> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err(bad_user_input_error("sessionId must not be empty"));
+        }
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_turns(&self.scope, session_id)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to query interaction turns for session `{session_id}`: {err:#}"
+                ))
+            })
     }
 }

@@ -19,6 +19,11 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::interactions::InteractionEventStore;
+use crate::host::interactions::db_store::SqliteInteractionEventStore;
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+};
 
 pub mod adapters;
 
@@ -169,6 +174,40 @@ pub fn handle_lifecycle_session_start(
     }
 
     backend.save_session(&state)?;
+
+    // ── interaction event persistence ────────────────────────────────────────
+    if let Some(store) = resolve_interaction_event_store(&repo_root) {
+        let now = now_rfc3339();
+        let is = InteractionSession {
+            session_id: session_id.clone(),
+            repo_id: store.repo_id().to_string(),
+            agent_type: state.agent_type.clone(),
+            model: event.model.clone(),
+            first_prompt: state.first_prompt.clone(),
+            transcript_path: state.transcript_path.clone(),
+            worktree_path: state.worktree_path.clone(),
+            worktree_id: state.worktree_id.clone(),
+            started_at: now.clone(),
+            ended_at: None,
+        };
+        if let Err(err) = store.record_session(&is) {
+            eprintln!("[bitloops] Warning: failed to record interaction session: {err}");
+        }
+        if let Err(err) = store.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: session_id.clone(),
+            turn_id: None,
+            repo_id: store.repo_id().to_string(),
+            event_type: InteractionEventType::SessionStart,
+            event_time: now,
+            agent_type: state.agent_type.clone(),
+            model: event.model.clone(),
+            payload: serde_json::Value::Object(Default::default()),
+        }) {
+            eprintln!("[bitloops] Warning: failed to record session_start event: {err}");
+        }
+    }
+
     Ok(())
 }
 
@@ -258,6 +297,42 @@ pub fn handle_lifecycle_turn_start(
     }
 
     backend.save_session(&state)?;
+
+    // ── interaction event persistence ────────────────────────────────────────
+    if let Some(store) = resolve_interaction_event_store(&repo_root) {
+        let now = now_rfc3339();
+        let prompt_text = truncate_prompt_for_storage(
+            canonical_request.prompt.as_deref().unwrap_or(&event.prompt),
+        );
+        let turn = InteractionTurn {
+            turn_id: state.turn_id.clone(),
+            session_id: session_id.clone(),
+            repo_id: store.repo_id().to_string(),
+            turn_number: state.step_count + 1,
+            prompt: prompt_text,
+            agent_type: state.agent_type.clone(),
+            model: event.model.clone(),
+            started_at: now.clone(),
+            ..Default::default()
+        };
+        if let Err(err) = store.record_turn_start(&turn) {
+            eprintln!("[bitloops] Warning: failed to record interaction turn start: {err}");
+        }
+        if let Err(err) = store.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: session_id.clone(),
+            turn_id: Some(state.turn_id.clone()),
+            repo_id: store.repo_id().to_string(),
+            event_type: InteractionEventType::TurnStart,
+            event_time: now,
+            agent_type: state.agent_type.clone(),
+            model: event.model.clone(),
+            payload: serde_json::Value::Object(Default::default()),
+        }) {
+            eprintln!("[bitloops] Warning: failed to record turn_start event: {err}");
+        }
+    }
+
     Ok(())
 }
 
@@ -623,6 +698,54 @@ pub fn handle_lifecycle_turn_end(
     )?;
     strategy.save_step(&ctx)?;
 
+    // ── interaction event persistence ────────────────────────────────────────
+    if let Some(store) = resolve_interaction_event_store(&repo_root) {
+        let now = now_rfc3339();
+        let turn_id = backend
+            .load_session(&session_id)
+            .ok()
+            .flatten()
+            .map(|s| s.turn_id.clone())
+            .unwrap_or_default();
+        let all_files: Vec<String> = ctx
+            .modified_files
+            .iter()
+            .chain(ctx.new_files.iter())
+            .chain(ctx.deleted_files.iter())
+            .cloned()
+            .collect();
+        let token_meta = ctx.token_usage.as_ref().map(|t| {
+            crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
+                input_tokens: t.input_tokens as u64,
+                cache_creation_tokens: t.cache_creation_tokens as u64,
+                cache_read_tokens: t.cache_read_tokens as u64,
+                output_tokens: t.output_tokens as u64,
+                api_call_count: t.api_call_count as u64,
+                subagent_tokens: None,
+            }
+        });
+        if let Err(err) = store.record_turn_end(&turn_id, &now, token_meta.as_ref(), &all_files) {
+            eprintln!("[bitloops] Warning: failed to record interaction turn end: {err}");
+        }
+        let payload = serde_json::json!({
+            "files_count": all_files.len(),
+            "token_usage": token_meta,
+        });
+        if let Err(err) = store.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: session_id.to_string(),
+            turn_id: Some(turn_id),
+            repo_id: store.repo_id().to_string(),
+            event_type: InteractionEventType::TurnEnd,
+            event_time: now,
+            agent_type: ctx.agent_type.clone(),
+            model: event.model.clone(),
+            payload,
+        }) {
+            eprintln!("[bitloops] Warning: failed to record turn_end event: {err}");
+        }
+    }
+
     if let Ok(Some(mut state)) = backend.load_session(&session_id) {
         let context = SessionTransitionContext {
             has_files_touched: !state.files_touched.is_empty(),
@@ -688,6 +811,23 @@ pub fn handle_lifecycle_compaction(
         }
     }
 
+    // ── interaction event persistence ────────────────────────────────────────
+    if let Some(store) = resolve_interaction_event_store(&repo_root)
+        && let Err(err) = store.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: event.session_id.clone(),
+            turn_id: None,
+            repo_id: store.repo_id().to_string(),
+            event_type: InteractionEventType::Compaction,
+            event_time: now_rfc3339(),
+            agent_type: String::new(),
+            model: event.model.clone(),
+            payload: serde_json::Value::Object(Default::default()),
+        })
+    {
+        eprintln!("[bitloops] Warning: failed to record compaction event: {err}");
+    }
+
     eprintln!("Context compaction: transcript offset reset");
     Ok(())
 }
@@ -711,24 +851,83 @@ pub fn handle_lifecycle_session_end(
         let transition =
             transition_session_with_context(state.phase, SessionEvent::SessionStop, context);
         apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
-        state.ended_at = Some(now_rfc3339());
+        let ended_at = now_rfc3339();
+        state.ended_at = Some(ended_at.clone());
         state.last_interaction_time = Some(now_rfc3339());
         backend.save_session(&state)?;
+
+        // ── interaction event persistence ────────────────────────────────────
+        if let Some(store) = resolve_interaction_event_store(&repo_root) {
+            if let Err(err) = store.end_session(&session_id, &ended_at) {
+                eprintln!("[bitloops] Warning: failed to end interaction session: {err}");
+            }
+            if let Err(err) = store.record_event(&InteractionEvent {
+                event_id: generate_interaction_event_id(),
+                session_id: session_id.clone(),
+                turn_id: None,
+                repo_id: store.repo_id().to_string(),
+                event_type: InteractionEventType::SessionEnd,
+                event_time: ended_at,
+                agent_type: state.agent_type.clone(),
+                model: event.model.clone(),
+                payload: serde_json::Value::Object(Default::default()),
+            }) {
+                eprintln!("[bitloops] Warning: failed to record session_end event: {err}");
+            }
+        }
     }
     Ok(())
 }
 
 pub fn handle_lifecycle_subagent_start(
     _agent: &dyn LifecycleAgentAdapter,
-    _event: &LifecycleEvent,
+    event: &LifecycleEvent,
 ) -> Result<()> {
+    if let Ok(repo_root) = crate::utils::paths::repo_root()
+        && let Some(store) = resolve_interaction_event_store(&repo_root)
+        && let Err(err) = store.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: event.session_id.clone(),
+            turn_id: None,
+            repo_id: store.repo_id().to_string(),
+            event_type: InteractionEventType::SubagentStart,
+            event_time: now_rfc3339(),
+            agent_type: String::new(),
+            model: event.model.clone(),
+            payload: serde_json::json!({
+                "subagent_id": event.subagent_id,
+                "tool_use_id": event.tool_use_id,
+            }),
+        })
+    {
+        eprintln!("[bitloops] Warning: failed to record subagent_start event: {err}");
+    }
     Ok(())
 }
 
 pub fn handle_lifecycle_subagent_end(
     _agent: &dyn LifecycleAgentAdapter,
-    _event: &LifecycleEvent,
+    event: &LifecycleEvent,
 ) -> Result<()> {
+    if let Ok(repo_root) = crate::utils::paths::repo_root()
+        && let Some(store) = resolve_interaction_event_store(&repo_root)
+        && let Err(err) = store.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: event.session_id.clone(),
+            turn_id: None,
+            repo_id: store.repo_id().to_string(),
+            event_type: InteractionEventType::SubagentEnd,
+            event_time: now_rfc3339(),
+            agent_type: String::new(),
+            model: event.model.clone(),
+            payload: serde_json::json!({
+                "subagent_id": event.subagent_id,
+                "tool_use_id": event.tool_use_id,
+            }),
+        })
+    {
+        eprintln!("[bitloops] Warning: failed to record subagent_end event: {err}");
+    }
     Ok(())
 }
 
@@ -967,6 +1166,26 @@ fn extract_missing_field_name(err: &serde_json::Error) -> Option<String> {
     let tail = &message[start..];
     let end = tail.find('`')?;
     Some(tail[..end].to_string())
+}
+
+/// Resolves an interaction event store for the given repo root.
+/// Returns `None` if the store cannot be created (e.g., no SQLite database).
+fn resolve_interaction_event_store(repo_root: &Path) -> Option<SqliteInteractionEventStore> {
+    let sqlite_path =
+        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+            repo_root,
+        )
+        .ok()?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path).ok()?;
+    sqlite.initialise_checkpoint_schema().ok()?;
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .ok()?
+        .repo_id;
+    Some(SqliteInteractionEventStore::new(sqlite, repo_id))
+}
+
+fn generate_interaction_event_id() -> String {
+    Uuid::new_v4().simple().to_string()
 }
 
 #[cfg(test)]

@@ -239,5 +239,64 @@ CREATE TABLE IF NOT EXISTS checkpoint_blobs (
 
 CREATE INDEX IF NOT EXISTS checkpoint_blobs_lookup_idx
 ON checkpoint_blobs (checkpoint_id, session_index, blob_type);
+
+CREATE TABLE IF NOT EXISTS interaction_sessions (
+    session_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT DEFAULT '',
+    first_prompt TEXT DEFAULT '',
+    transcript_path TEXT DEFAULT '',
+    worktree_path TEXT DEFAULT '',
+    worktree_id TEXT DEFAULT '',
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
+ON interaction_sessions (repo_id);
+
+CREATE TABLE IF NOT EXISTS interaction_turns (
+    turn_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL DEFAULT 1,
+    prompt TEXT DEFAULT '',
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT DEFAULT '',
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    token_usage TEXT,
+    files_modified TEXT DEFAULT '[]',
+    checkpoint_id TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
+ON interaction_turns (session_id, turn_number);
+
+CREATE TABLE IF NOT EXISTS interaction_events (
+    event_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_id TEXT,
+    repo_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent_type TEXT DEFAULT '',
+    model TEXT DEFAULT '',
+    payload TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_events_session_idx
+ON interaction_events (session_id, event_time);
+
+CREATE INDEX IF NOT EXISTS interaction_events_type_idx
+ON interaction_events (repo_id, event_type, event_time);
+
+CREATE INDEX IF NOT EXISTS interaction_events_turn_idx
+ON interaction_events (turn_id, event_time);
 "#
 }

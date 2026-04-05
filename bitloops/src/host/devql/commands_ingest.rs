@@ -378,6 +378,13 @@ pub(crate) async fn execute_ingest_with_observer(
         )
         .await?;
     }
+    // Propagate interaction events from checkpoint SQLite to the events store.
+    // Failures here are logged but do not block the rest of ingestion.
+    match ingest_interaction_events_from_checkpoint(cfg, &backends.events).await {
+        Ok(n) => counters.interaction_events_ingested = n,
+        Err(err) => log::warn!("interaction event ingestion skipped: {err:#}"),
+    }
+
     counters.success = true;
     emit_progress(
         observer,
@@ -417,6 +424,27 @@ fn active_branch_name(repo_root: &Path) -> String {
     .ok()
     .filter(|value| !value.trim().is_empty())
     .unwrap_or_else(|| "main".to_string())
+}
+
+async fn ingest_interaction_events_from_checkpoint(
+    cfg: &DevqlConfig,
+    events_cfg: &crate::config::EventsBackendConfig,
+) -> Result<usize> {
+    if events_cfg.has_clickhouse() {
+        // ClickHouse interaction event ingestion is not yet supported.
+        return Ok(0);
+    }
+    let sqlite_path =
+        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+            &cfg.repo_root,
+        )?;
+    if !sqlite_path.is_file() {
+        return Ok(0);
+    }
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+        .context("opening checkpoint SQLite for interaction event ingestion")?;
+    let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(&cfg.repo_root);
+    ingest_interaction_events(&sqlite, &duckdb_path, &cfg.repo.repo_id).await
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

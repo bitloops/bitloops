@@ -3,6 +3,7 @@ mod commit_checkpoints;
 mod enrichment;
 mod events;
 mod git_history;
+mod interactions;
 mod knowledge;
 mod repository_graph;
 mod temporal_scope;

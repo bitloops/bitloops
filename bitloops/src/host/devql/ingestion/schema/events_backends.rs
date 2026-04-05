@@ -23,6 +23,26 @@ ORDER BY (repo_id, event_time, event_id)
     clickhouse_exec(cfg, sql)
         .await
         .context("creating ClickHouse checkpoint_events table")?;
+
+    let interaction_sql = r#"
+CREATE TABLE IF NOT EXISTS interaction_events (
+    event_id String,
+    event_time DateTime64(3, 'UTC'),
+    repo_id String,
+    session_id String,
+    turn_id String,
+    event_type String,
+    agent_type String,
+    model String,
+    payload String
+)
+ENGINE = ReplacingMergeTree(event_time)
+ORDER BY (repo_id, event_time, event_id)
+"#;
+
+    clickhouse_exec(cfg, interaction_sql)
+        .await
+        .context("creating ClickHouse interaction_events table")?;
     Ok(())
 }
 
@@ -66,6 +86,33 @@ ON checkpoint_events (repo_id, branch, event_type, event_time);
     duckdb_exec_path_allow_create(&duckdb_path, sql)
         .await
         .context("creating DuckDB checkpoint_events table")?;
+
+    let interaction_sql = r#"
+CREATE TABLE IF NOT EXISTS interaction_events (
+    event_id VARCHAR PRIMARY KEY,
+    event_time VARCHAR,
+    repo_id VARCHAR,
+    session_id VARCHAR,
+    turn_id VARCHAR,
+    event_type VARCHAR,
+    agent_type VARCHAR,
+    model VARCHAR,
+    payload VARCHAR
+);
+
+CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
+ON interaction_events (repo_id, event_time);
+
+CREATE INDEX IF NOT EXISTS interaction_events_session_idx
+ON interaction_events (session_id, event_time);
+
+CREATE INDEX IF NOT EXISTS interaction_events_type_idx
+ON interaction_events (repo_id, event_type, event_time);
+"#;
+
+    duckdb_exec_path_allow_create(&duckdb_path, interaction_sql)
+        .await
+        .context("creating DuckDB interaction_events table")?;
     Ok(())
 }
 
@@ -111,5 +158,41 @@ mod tests {
         assert!(rows.contains(&"checkpoint_events_repo_commit_idx".to_string()));
         assert!(rows.contains(&"checkpoint_events_repo_branch_commit_idx".to_string()));
         assert!(rows.contains(&"checkpoint_events_repo_branch_event_time_idx".to_string()));
+    }
+
+    #[tokio::test]
+    async fn init_duckdb_schema_creates_interaction_event_indexes() {
+        let repo = TempDir::new().expect("temp dir");
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(".bitloops/stores/events.duckdb".into()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+
+        init_duckdb_schema(repo.path(), &events_cfg)
+            .await
+            .expect("initialise duckdb schema");
+
+        let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(repo.path());
+        let conn = duckdb::Connection::open(duckdb_path).expect("open duckdb");
+        let mut stmt = conn
+            .prepare(
+                "SELECT index_name
+                 FROM duckdb_indexes()
+                 WHERE table_name = 'interaction_events'
+                 ORDER BY index_name",
+            )
+            .expect("prepare duckdb index query");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query duckdb indexes")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect duckdb indexes");
+
+        assert!(rows.contains(&"interaction_events_repo_time_idx".to_string()));
+        assert!(rows.contains(&"interaction_events_session_idx".to_string()));
+        assert!(rows.contains(&"interaction_events_type_idx".to_string()));
     }
 }
