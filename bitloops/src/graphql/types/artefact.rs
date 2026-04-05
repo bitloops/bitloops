@@ -95,6 +95,20 @@ impl ArtefactFilterInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 #[graphql(complex)]
+pub struct ArtefactCopyLineage {
+    pub checkpoint_id: String,
+    pub event_time: DateTimeScalar,
+    pub commit_sha: String,
+    pub source_symbol_id: String,
+    pub source_artefact_id: ID,
+    pub dest_symbol_id: String,
+    pub dest_artefact_id: ID,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[graphql(complex)]
 pub struct Artefact {
     pub id: ID,
     pub symbol_id: String,
@@ -126,6 +140,33 @@ impl Artefact {
     pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
         self.scope = scope;
         self
+    }
+}
+
+#[ComplexObject]
+impl ArtefactCopyLineage {
+    async fn source(&self, ctx: &Context<'_>) -> Result<Option<Artefact>> {
+        ctx.data_unchecked::<DataLoaders>()
+            .load_artefact_by_id(self.source_artefact_id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve source artefact {}: {err:#}",
+                    self.source_artefact_id.as_ref()
+                ))
+            })
+    }
+
+    async fn destination(&self, ctx: &Context<'_>) -> Result<Option<Artefact>> {
+        ctx.data_unchecked::<DataLoaders>()
+            .load_artefact_by_id(self.dest_artefact_id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve destination artefact {}: {err:#}",
+                    self.dest_artefact_id.as_ref()
+                ))
+            })
     }
 }
 
@@ -378,6 +419,18 @@ impl Artefact {
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
+
+    async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_artefact_copy_lineage(self.id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve checkpoint copy lineage for {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })
+    }
 }
 
 fn stage_limit(first: i32) -> Result<usize> {
@@ -416,14 +469,14 @@ fn build_tests_stage_args(
 
 fn artefact_stage_row(artefact: &Artefact) -> Value {
     json!({
-        "artefact_id": artefact.id.as_ref(),
-        "symbol_id": &artefact.symbol_id,
-        "symbol_fqn": &artefact.symbol_fqn,
-        "canonical_kind": artefact.canonical_kind.as_devql_value(),
-        "path": &artefact.path,
-        "start_line": artefact.start_line,
-        "end_line": artefact.end_line,
-    })
+    "artefact_id": artefact.id.as_ref(),
+    "symbol_id": &artefact.symbol_id,
+    "symbol_fqn": &artefact.symbol_fqn,
+    "canonical_kind": artefact.canonical_kind.as_devql_value(),
+    "path": &artefact.path,
+    "start_line": artefact.start_line,
+    "end_line": artefact.end_line,
+        })
 }
 
 fn decode_stage_rows<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<Vec<T>> {

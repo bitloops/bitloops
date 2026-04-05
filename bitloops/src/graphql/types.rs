@@ -17,9 +17,9 @@ pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
 
-pub use artefact::{Artefact, ArtefactFilterInput, CanonicalKind};
+pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
 pub use chat::{ChatEntry, ChatRole};
-pub use checkpoint::Checkpoint;
+pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{

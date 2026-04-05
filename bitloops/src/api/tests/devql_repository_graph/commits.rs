@@ -49,6 +49,12 @@ async fn devql_repository_queries_resolve_repo_commit_branch_user_agent_and_chec
                             agent
                             strategy
                             filesTouched
+                            fileRelations {
+                              filepath
+                              changeKind
+                              copiedFromPath
+                              copiedFromBlobSha
+                            }
                             eventTime
                           }
                         }
@@ -128,6 +134,15 @@ async fn devql_repository_queries_resolve_repo_commit_branch_user_agent_and_chec
         json!(["app.rs"])
     );
     assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["fileRelations"],
+        json!([{
+            "filepath": "app.rs",
+            "changeKind": "modify",
+            "copiedFromPath": null,
+            "copiedFromBlobSha": null
+        }])
+    );
+    assert_eq!(
         json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["eventTime"],
         "2026-02-27T12:00:00+00:00"
     );
@@ -177,6 +192,12 @@ async fn devql_repository_checkpoint_queries_fall_back_to_committed_storage_when
                       agent
                       strategy
                       filesTouched
+                      fileRelations {
+                        filepath
+                        changeKind
+                        copiedFromPath
+                        copiedFromBlobSha
+                      }
                       eventTime
                       checkpointsCount
                       sessionCount
@@ -230,6 +251,15 @@ async fn devql_repository_checkpoint_queries_fall_back_to_committed_storage_when
     assert_eq!(
         json["repo"]["checkpoints"]["edges"][0]["node"]["filesTouched"],
         json!(["app.rs"])
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["fileRelations"],
+        json!([{
+            "filepath": "app.rs",
+            "changeKind": "modify",
+            "copiedFromPath": null,
+            "copiedFromBlobSha": null
+        }])
     );
     assert_eq!(
         json["repo"]["checkpoints"]["edges"][0]["node"]["eventTime"],

@@ -130,8 +130,8 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
                 &cfg.repo_root,
                 context,
             )?;
-        let artefact_rows =
-            crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance_rows(
+        let artefact_provenance =
+            crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance(
                 &cfg.repo_root,
                 context,
                 &file_rows,
@@ -165,6 +165,12 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
 
         if !options.dry_run {
             sqlite_statements.push(
+                crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+                    &cfg.repo.repo_id,
+                    &checkpoint.checkpoint_id,
+                ),
+            );
+            sqlite_statements.push(
                 crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
                     &cfg.repo.repo_id,
                     &checkpoint.checkpoint_id,
@@ -177,6 +183,12 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
                 ),
             );
             if relational.remote.is_some() {
+                postgres_statements.push(
+                    crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+                        &cfg.repo.repo_id,
+                        &checkpoint.checkpoint_id,
+                    ),
+                );
                 postgres_statements.push(
                     crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
                         &cfg.repo.repo_id,
@@ -207,7 +219,7 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
                     );
                 }
             }
-            for row in &artefact_rows {
+            for row in &artefact_provenance.semantic_rows {
                 sqlite_statements.push(
                     crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
                         row,
@@ -217,6 +229,22 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
                 if relational.remote.is_some() {
                     postgres_statements.push(
                         crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                            row,
+                            RelationalDialect::Postgres,
+                        ),
+                    );
+                }
+            }
+            for row in &artefact_provenance.lineage_rows {
+                sqlite_statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                        row,
+                        RelationalDialect::Sqlite,
+                    ),
+                );
+                if relational.remote.is_some() {
+                    postgres_statements.push(
+                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
                             row,
                             RelationalDialect::Postgres,
                         ),

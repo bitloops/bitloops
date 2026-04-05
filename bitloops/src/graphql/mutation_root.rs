@@ -859,7 +859,8 @@ impl crate::host::devql::IngestionObserver for GraphqlIngestionObserver {
     ) {
         self.context.subscriptions().publish_checkpoint(
             self.repo_name.clone(),
-            Checkpoint::from_ingested(&checkpoint.checkpoint, checkpoint.commit_sha.as_deref()),
+            Checkpoint::from_ingested(&checkpoint.checkpoint, checkpoint.commit_sha.as_deref())
+                .with_scope(self.context.slim_root_scope()),
         );
     }
 }

@@ -8,6 +8,7 @@ pub(crate) enum CheckpointFileChangeKind {
     Modify,
     Delete,
     Rename,
+    Copy,
 }
 
 impl CheckpointFileChangeKind {
@@ -17,6 +18,18 @@ impl CheckpointFileChangeKind {
             Self::Modify => "modify",
             Self::Delete => "delete",
             Self::Rename => "rename",
+            Self::Copy => "copy",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "add" => Some(Self::Add),
+            "modify" => Some(Self::Modify),
+            "delete" => Some(Self::Delete),
+            "rename" => Some(Self::Rename),
+            "copy" => Some(Self::Copy),
+            _ => None,
         }
     }
 }
@@ -66,6 +79,8 @@ pub(crate) struct CheckpointFileProvenanceRow {
     pub path_after: Option<String>,
     pub blob_sha_before: Option<String>,
     pub blob_sha_after: Option<String>,
+    pub copy_source_path: Option<String>,
+    pub copy_source_blob_sha: Option<String>,
 }
 
 impl CheckpointFileProvenanceRow {
@@ -75,7 +90,7 @@ impl CheckpointFileProvenanceRow {
 
     fn deterministic_id(&self) -> String {
         deterministic_uuid(&format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.repo_id,
             self.checkpoint_id,
             self.change_kind.as_str(),
@@ -83,6 +98,8 @@ impl CheckpointFileProvenanceRow {
             self.path_after.as_deref().unwrap_or(""),
             self.blob_sha_before.as_deref().unwrap_or(""),
             self.blob_sha_after.as_deref().unwrap_or(""),
+            self.copy_source_path.as_deref().unwrap_or(""),
+            self.copy_source_blob_sha.as_deref().unwrap_or(""),
             self.session_id,
         ))
     }
@@ -121,6 +138,58 @@ impl CheckpointArtefactProvenanceRow {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CheckpointArtefactLineageKind {
+    Copy,
+}
+
+impl CheckpointArtefactLineageKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckpointArtefactLineageRow {
+    pub relation_id: String,
+    pub repo_id: String,
+    pub checkpoint_id: String,
+    pub session_id: String,
+    pub event_time: String,
+    pub agent: String,
+    pub branch: String,
+    pub strategy: String,
+    pub commit_sha: String,
+    pub lineage_kind: CheckpointArtefactLineageKind,
+    pub source_symbol_id: String,
+    pub source_artefact_id: String,
+    pub dest_symbol_id: String,
+    pub dest_artefact_id: String,
+}
+
+impl CheckpointArtefactLineageRow {
+    fn deterministic_id(&self) -> String {
+        deterministic_uuid(&format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            self.repo_id,
+            self.checkpoint_id,
+            self.lineage_kind.as_str(),
+            self.source_symbol_id,
+            self.source_artefact_id,
+            self.dest_symbol_id,
+            self.dest_artefact_id,
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CheckpointArtefactProvenanceBundle {
+    pub semantic_rows: Vec<CheckpointArtefactProvenanceRow>,
+    pub lineage_rows: Vec<CheckpointArtefactLineageRow>,
+}
+
 #[path = "checkpoint_provenance/artefacts.rs"]
 mod artefacts;
 #[path = "checkpoint_provenance/git.rs"]
@@ -130,18 +199,19 @@ mod query;
 #[path = "checkpoint_provenance/sql.rs"]
 mod sql;
 
-pub(crate) use self::artefacts::collect_checkpoint_artefact_provenance_rows;
+pub(crate) use self::artefacts::collect_checkpoint_artefact_provenance;
 #[cfg(test)]
 pub(crate) use self::artefacts::normalise_semantic_source;
 pub(crate) use self::git::collect_checkpoint_file_provenance_rows;
 pub(crate) use self::query::{
     CheckpointFileActivityFilter, CheckpointFileDebugRow, CheckpointFileExistsSql,
-    CheckpointFileGateway, CheckpointFileScope, CheckpointFileSnapshotMatch,
-    build_checkpoint_file_debug_sql, build_checkpoint_file_exists_clause,
-    build_checkpoint_file_lookup_sql, checkpoint_display_path,
+    CheckpointFileGateway, CheckpointFileProvenanceDetailRow, CheckpointFileScope,
+    CheckpointFileSnapshotMatch, build_checkpoint_file_debug_sql,
+    build_checkpoint_file_exists_clause, build_checkpoint_file_lookup_sql, checkpoint_display_path,
 };
 pub(crate) use self::sql::{
-    build_upsert_checkpoint_artefact_row_sql, build_upsert_checkpoint_file_row_sql,
+    build_upsert_checkpoint_artefact_lineage_row_sql, build_upsert_checkpoint_artefact_row_sql,
+    build_upsert_checkpoint_file_row_sql, delete_checkpoint_artefact_lineage_rows_sql,
     delete_checkpoint_artefact_rows_sql, delete_checkpoint_file_rows_sql,
 };
 
@@ -165,7 +235,26 @@ mod tests {
             path_before TEXT,
             path_after TEXT,
             blob_sha_before TEXT,
-            blob_sha_after TEXT
+            blob_sha_after TEXT,
+            copy_source_path TEXT,
+            copy_source_blob_sha TEXT
+        );
+
+        CREATE TABLE checkpoint_artefact_lineage (
+            relation_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            checkpoint_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_time TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            lineage_kind TEXT NOT NULL,
+            source_symbol_id TEXT NOT NULL,
+            source_artefact_id TEXT NOT NULL,
+            dest_symbol_id TEXT NOT NULL,
+            dest_artefact_id TEXT NOT NULL
         );
     ";
 
@@ -202,10 +291,10 @@ mod tests {
         let relational = sqlite_relational_with_provenance(
             "
             INSERT INTO checkpoint_files VALUES
-                ('row-1', 'repo-1', 'checkpoint-1', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-old', 'blob-1'),
-                ('row-2', 'repo-1', 'checkpoint-2', 'session-2', '2026-03-22T10:00:00Z', 'codex', 'main', 'manual', 'commit-2', 'rename', 'src/old.rs', 'src/lib.rs', 'blob-old', 'blob-1'),
-                ('row-3', 'repo-1', 'checkpoint-3', 'session-3', '2026-03-23T10:00:00Z', 'codex', 'main', 'manual', 'commit-3', 'delete', 'src/lib.rs', NULL, 'blob-1', NULL),
-                ('row-4', 'repo-1', 'checkpoint-4', 'session-4', '2026-03-24T10:00:00Z', 'codex', 'main', 'manual', 'commit-4', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-2');
+                ('row-1', 'repo-1', 'checkpoint-1', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-old', 'blob-1', NULL, NULL),
+                ('row-2', 'repo-1', 'checkpoint-2', 'session-2', '2026-03-22T10:00:00Z', 'codex', 'main', 'manual', 'commit-2', 'rename', 'src/old.rs', 'src/lib.rs', 'blob-old', 'blob-1', NULL, NULL),
+                ('row-3', 'repo-1', 'checkpoint-3', 'session-3', '2026-03-23T10:00:00Z', 'codex', 'main', 'manual', 'commit-3', 'delete', 'src/lib.rs', NULL, 'blob-1', NULL, NULL, NULL),
+                ('row-4', 'repo-1', 'checkpoint-4', 'session-4', '2026-03-24T10:00:00Z', 'codex', 'main', 'manual', 'commit-4', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-2', NULL, NULL);
             ",
         )
         .await;
