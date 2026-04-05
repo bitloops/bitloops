@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::adapter::LifecycleAgentAdapter;
-use super::interaction::resolve_interaction_event_store;
+use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
 use super::time_and_ids::{generate_interaction_event_id, now_rfc3339};
 use super::types::{LifecycleEvent, SessionIdPolicy, apply_session_id_policy};
 use crate::host::checkpoints::session::create_session_backend_or_local;
@@ -10,8 +10,10 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
-use crate::host::interactions::store::InteractionEventStore;
-use crate::host::interactions::types::{InteractionEvent, InteractionEventType};
+use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventType, InteractionSession,
+};
 
 pub fn handle_lifecycle_compaction(
     _agent: &dyn LifecycleAgentAdapter,
@@ -63,12 +65,12 @@ pub fn handle_lifecycle_compaction(
     }
 
     // ── interaction event persistence ────────────────────────────────────────
-    if let Some(store) = resolve_interaction_event_store(&repo_root)
-        && let Err(err) = store.record_event(&InteractionEvent {
+    if let Some(spool) = resolve_interaction_spool(&repo_root)
+        && let Err(err) = spool.record_event(&InteractionEvent {
             event_id: generate_interaction_event_id(),
             session_id: session_id.clone(),
             turn_id: None,
-            repo_id: store.repo_id().to_string(),
+            repo_id: spool.repo_id().to_string(),
             event_type: InteractionEventType::Compaction,
             event_time: now_rfc3339(),
             agent_type: String::new(),
@@ -76,8 +78,9 @@ pub fn handle_lifecycle_compaction(
             payload: serde_json::Value::Object(Default::default()),
         })
     {
-        eprintln!("[bitloops] Warning: failed to record compaction event: {err}");
+        eprintln!("[bitloops] Warning: failed to spool compaction event: {err}");
     }
+    flush_interaction_spool_best_effort(&repo_root);
 
     eprintln!("Context compaction: transcript offset reset");
     Ok(())
@@ -94,7 +97,9 @@ pub fn handle_lifecycle_session_end(
 
     let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
-    if let Some(mut state) = backend.load_session(&session_id)? {
+    let ended_at = now_rfc3339();
+    let maybe_state = backend.load_session(&session_id)?;
+    if let Some(mut state) = maybe_state.clone() {
         let context = SessionTransitionContext {
             has_files_touched: !state.files_touched.is_empty(),
             is_rebase_in_progress: false,
@@ -102,31 +107,53 @@ pub fn handle_lifecycle_session_end(
         let transition =
             transition_session_with_context(state.phase, SessionEvent::SessionStop, context);
         apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
-        let ended_at = now_rfc3339();
         state.ended_at = Some(ended_at.clone());
         state.last_interaction_time = Some(ended_at.clone());
         backend.save_session(&state)?;
-
-        // ── interaction event persistence ────────────────────────────────────
-        if let Some(store) = resolve_interaction_event_store(&repo_root) {
-            if let Err(err) = store.end_session(&session_id, &ended_at) {
-                eprintln!("[bitloops] Warning: failed to end interaction session: {err}");
-            }
-            if let Err(err) = store.record_event(&InteractionEvent {
-                event_id: generate_interaction_event_id(),
+    }
+    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+        let session = maybe_state
+            .map(|state| InteractionSession {
                 session_id: session_id.clone(),
-                turn_id: None,
-                repo_id: store.repo_id().to_string(),
-                event_type: InteractionEventType::SessionEnd,
-                event_time: ended_at,
+                repo_id: spool.repo_id().to_string(),
                 agent_type: state.agent_type.clone(),
                 model: event.model.clone(),
-                payload: serde_json::Value::Object(Default::default()),
-            }) {
-                eprintln!("[bitloops] Warning: failed to record session_end event: {err}");
-            }
+                first_prompt: state.first_prompt.clone(),
+                transcript_path: state.transcript_path.clone(),
+                worktree_path: state.worktree_path.clone(),
+                worktree_id: state.worktree_id.clone(),
+                started_at: state.started_at.clone(),
+                ended_at: Some(ended_at.clone()),
+                last_event_at: ended_at.clone(),
+                updated_at: ended_at.clone(),
+            })
+            .unwrap_or(InteractionSession {
+                session_id: session_id.clone(),
+                repo_id: spool.repo_id().to_string(),
+                model: event.model.clone(),
+                ended_at: Some(ended_at.clone()),
+                last_event_at: ended_at.clone(),
+                updated_at: ended_at.clone(),
+                ..Default::default()
+            });
+        if let Err(err) = spool.record_session(&session) {
+            eprintln!("[bitloops] Warning: failed to spool interaction session end: {err}");
+        }
+        if let Err(err) = spool.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: session_id.clone(),
+            turn_id: None,
+            repo_id: spool.repo_id().to_string(),
+            event_type: InteractionEventType::SessionEnd,
+            event_time: ended_at.clone(),
+            agent_type: session.agent_type.clone(),
+            model: event.model.clone(),
+            payload: serde_json::Value::Object(Default::default()),
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool session_end event: {err}");
         }
     }
+    flush_interaction_spool_best_effort(&repo_root);
     Ok(())
 }
 
@@ -135,12 +162,13 @@ pub fn handle_lifecycle_subagent_start(
     event: &LifecycleEvent,
 ) -> Result<()> {
     if let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Some(store) = resolve_interaction_event_store(&repo_root)
-        && let Err(err) = store.record_event(&InteractionEvent {
+        && let Some(spool) = resolve_interaction_spool(&repo_root)
+    {
+        if let Err(err) = spool.record_event(&InteractionEvent {
             event_id: generate_interaction_event_id(),
             session_id: event.session_id.clone(),
             turn_id: None,
-            repo_id: store.repo_id().to_string(),
+            repo_id: spool.repo_id().to_string(),
             event_type: InteractionEventType::SubagentStart,
             event_time: now_rfc3339(),
             agent_type: String::new(),
@@ -149,9 +177,10 @@ pub fn handle_lifecycle_subagent_start(
                 "subagent_id": event.subagent_id,
                 "tool_use_id": event.tool_use_id,
             }),
-        })
-    {
-        eprintln!("[bitloops] Warning: failed to record subagent_start event: {err}");
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool subagent_start event: {err}");
+        }
+        flush_interaction_spool_best_effort(&repo_root);
     }
     Ok(())
 }
@@ -161,12 +190,13 @@ pub fn handle_lifecycle_subagent_end(
     event: &LifecycleEvent,
 ) -> Result<()> {
     if let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Some(store) = resolve_interaction_event_store(&repo_root)
-        && let Err(err) = store.record_event(&InteractionEvent {
+        && let Some(spool) = resolve_interaction_spool(&repo_root)
+    {
+        if let Err(err) = spool.record_event(&InteractionEvent {
             event_id: generate_interaction_event_id(),
             session_id: event.session_id.clone(),
             turn_id: None,
-            repo_id: store.repo_id().to_string(),
+            repo_id: spool.repo_id().to_string(),
             event_type: InteractionEventType::SubagentEnd,
             event_time: now_rfc3339(),
             agent_type: String::new(),
@@ -175,9 +205,10 @@ pub fn handle_lifecycle_subagent_end(
                 "subagent_id": event.subagent_id,
                 "tool_use_id": event.tool_use_id,
             }),
-        })
-    {
-        eprintln!("[bitloops] Warning: failed to record subagent_end event: {err}");
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool subagent_end event: {err}");
+        }
+        flush_interaction_spool_best_effort(&repo_root);
     }
     Ok(())
 }

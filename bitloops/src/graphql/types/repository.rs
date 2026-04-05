@@ -4,7 +4,7 @@ use crate::graphql::{
     DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error, bad_user_input_error,
 };
 
-use super::interaction::{InteractionSessionObject, InteractionTurnObject};
+use super::interaction::{InteractionEventObject, InteractionSessionObject, InteractionTurnObject};
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar,
@@ -411,5 +411,28 @@ impl Repository {
                     "failed to query interaction turns for session `{session_id}`: {err:#}"
                 ))
             })
+    }
+
+    #[graphql(name = "interactionEvents")]
+    async fn interaction_events(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "sessionId")] session_id: Option<String>,
+        #[graphql(name = "turnId")] turn_id: Option<String>,
+        #[graphql(name = "type")] event_type: Option<String>,
+        since: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<InteractionEventObject>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_events(
+                &self.scope,
+                session_id.as_deref(),
+                turn_id.as_deref(),
+                event_type.as_deref(),
+                since.as_deref(),
+                first,
+            )
+            .await
+            .map_err(|err| backend_error(format!("failed to query interaction events: {err:#}")))
     }
 }

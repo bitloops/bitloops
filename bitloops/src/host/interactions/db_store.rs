@@ -1,275 +1,612 @@
-use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 
-use super::store::InteractionEventStore;
-use super::types::{InteractionEvent, InteractionSession, InteractionTurn};
+use anyhow::{Context, Result};
+use rusqlite::OptionalExtension;
+
+use super::store::{InteractionEventRepository, InteractionSpool};
+use super::types::{
+    InteractionEvent, InteractionEventFilter, InteractionEventType, InteractionMutation,
+    InteractionSession, InteractionTurn,
+};
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::storage::sqlite::SqliteConnectionPool;
 
-/// SQLite-backed implementation of [`InteractionEventStore`].
-pub struct SqliteInteractionEventStore {
+const INTERACTION_SPOOL_FILE_NAME: &str = "interaction_spool.sqlite";
+
+const INTERACTION_SPOOL_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS interaction_sessions (
+    session_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    first_prompt TEXT NOT NULL DEFAULT '',
+    transcript_path TEXT NOT NULL DEFAULT '',
+    worktree_path TEXT NOT NULL DEFAULT '',
+    worktree_id TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    ended_at TEXT,
+    last_event_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
+ON interaction_sessions (repo_id, last_event_at, started_at);
+
+CREATE TABLE IF NOT EXISTS interaction_turns (
+    turn_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL DEFAULT 0,
+    prompt TEXT NOT NULL DEFAULT '',
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    ended_at TEXT,
+    has_token_usage INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    api_call_count INTEGER NOT NULL DEFAULT 0,
+    files_modified TEXT NOT NULL DEFAULT '[]',
+    checkpoint_id TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
+ON interaction_turns (session_id, turn_number, started_at);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
+ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
+
+CREATE TABLE IF NOT EXISTS interaction_events (
+    event_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_id TEXT,
+    repo_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
+ON interaction_events (repo_id, event_time, event_id);
+
+CREATE INDEX IF NOT EXISTS interaction_events_session_idx
+ON interaction_events (session_id, event_time, event_id);
+
+CREATE TABLE IF NOT EXISTS interaction_spool_queue (
+    mutation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT NOT NULL,
+    mutation_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_spool_queue_repo_idx
+ON interaction_spool_queue (repo_id, mutation_id);
+"#;
+
+pub fn interaction_spool_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("event")
+        .join(INTERACTION_SPOOL_FILE_NAME)
+}
+
+pub struct SqliteInteractionSpool {
     sqlite: SqliteConnectionPool,
     repo_id: String,
 }
 
-impl SqliteInteractionEventStore {
-    pub fn new(sqlite: SqliteConnectionPool, repo_id: String) -> Self {
-        Self { sqlite, repo_id }
+impl SqliteInteractionSpool {
+    pub fn new(sqlite: SqliteConnectionPool, repo_id: String) -> Result<Self> {
+        sqlite
+            .execute_batch(INTERACTION_SPOOL_SCHEMA)
+            .context("initialising interaction spool schema")?;
+        Ok(Self { sqlite, repo_id })
     }
 
     pub fn repo_id(&self) -> &str {
         &self.repo_id
     }
 
-    /// List interaction sessions, newest first.
-    /// Optionally filter by agent_type and limit the number of results.
-    pub fn list_sessions(
+    fn enqueue_mutation(
         &self,
-        agent: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<InteractionSession>> {
-        let agent = agent
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let limit = limit.max(1);
+        conn: &rusqlite::Connection,
+        mutation: &InteractionMutation,
+    ) -> Result<()> {
+        let payload =
+            serde_json::to_string(mutation).context("serialising interaction mutation")?;
+        let mutation_type = match mutation {
+            InteractionMutation::UpsertSession { .. } => "upsert_session",
+            InteractionMutation::UpsertTurn { .. } => "upsert_turn",
+            InteractionMutation::AppendEvent { .. } => "append_event",
+            InteractionMutation::AssignCheckpoint { .. } => "assign_checkpoint",
+        };
+        conn.execute(
+            "INSERT INTO interaction_spool_queue
+                (repo_id, mutation_type, payload, updated_at)
+             VALUES (?1, ?2, ?3, datetime('now'))",
+            rusqlite::params![self.repo_id, mutation_type, payload],
+        )
+        .context("enqueueing interaction mutation")?;
+        Ok(())
+    }
 
+    fn upsert_local_session(
+        &self,
+        conn: &rusqlite::Connection,
+        session: &InteractionSession,
+    ) -> Result<()> {
+        ensure_repo_id(&self.repo_id, &session.repo_id, "interaction session")?;
+        conn.execute(
+            "INSERT INTO interaction_sessions (
+                session_id, repo_id, agent_type, model, first_prompt,
+                transcript_path, worktree_path, worktree_id, started_at,
+                ended_at, last_event_at, updated_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9,
+                ?10, ?11, ?12
+             )
+             ON CONFLICT(session_id) DO UPDATE SET
+                repo_id = excluded.repo_id,
+                agent_type = CASE
+                    WHEN excluded.agent_type = '' THEN interaction_sessions.agent_type
+                    ELSE excluded.agent_type
+                END,
+                model = CASE
+                    WHEN excluded.model = '' THEN interaction_sessions.model
+                    ELSE excluded.model
+                END,
+                first_prompt = CASE
+                    WHEN excluded.first_prompt = '' THEN interaction_sessions.first_prompt
+                    ELSE excluded.first_prompt
+                END,
+                transcript_path = CASE
+                    WHEN excluded.transcript_path = '' THEN interaction_sessions.transcript_path
+                    ELSE excluded.transcript_path
+                END,
+                worktree_path = CASE
+                    WHEN excluded.worktree_path = '' THEN interaction_sessions.worktree_path
+                    ELSE excluded.worktree_path
+                END,
+                worktree_id = CASE
+                    WHEN excluded.worktree_id = '' THEN interaction_sessions.worktree_id
+                    ELSE excluded.worktree_id
+                END,
+                started_at = CASE
+                    WHEN excluded.started_at = '' THEN interaction_sessions.started_at
+                    ELSE excluded.started_at
+                END,
+                ended_at = COALESCE(excluded.ended_at, interaction_sessions.ended_at),
+                last_event_at = CASE
+                    WHEN excluded.last_event_at = '' THEN interaction_sessions.last_event_at
+                    ELSE excluded.last_event_at
+                END,
+                updated_at = CASE
+                    WHEN excluded.updated_at = '' THEN interaction_sessions.updated_at
+                    ELSE excluded.updated_at
+                END",
+            rusqlite::params![
+                session.session_id,
+                self.repo_id,
+                session.agent_type,
+                session.model,
+                session.first_prompt,
+                session.transcript_path,
+                session.worktree_path,
+                session.worktree_id,
+                session.started_at,
+                session.ended_at,
+                session.last_event_at,
+                session.updated_at,
+            ],
+        )
+        .context("upserting interaction session in local spool")?;
+        Ok(())
+    }
+
+    fn upsert_local_turn(&self, conn: &rusqlite::Connection, turn: &InteractionTurn) -> Result<()> {
+        ensure_repo_id(&self.repo_id, &turn.repo_id, "interaction turn")?;
+        let usage = turn.token_usage.clone().unwrap_or_default();
+        let has_token_usage = i64::from(turn.token_usage.is_some());
+        let files_modified =
+            serde_json::to_string(&turn.files_modified).context("serialising files_modified")?;
+        let checkpoint_id = turn.checkpoint_id.clone().unwrap_or_default();
+        conn.execute(
+            "INSERT INTO interaction_turns (
+                turn_id, session_id, repo_id, turn_number, prompt,
+                agent_type, model, started_at, ended_at, has_token_usage,
+                input_tokens, cache_creation_tokens, cache_read_tokens,
+                output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13,
+                ?14, ?15, ?16, ?17, ?18
+             )
+             ON CONFLICT(turn_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                repo_id = excluded.repo_id,
+                turn_number = CASE
+                    WHEN excluded.turn_number = 0 THEN interaction_turns.turn_number
+                    ELSE excluded.turn_number
+                END,
+                prompt = CASE
+                    WHEN excluded.prompt = '' THEN interaction_turns.prompt
+                    ELSE excluded.prompt
+                END,
+                agent_type = CASE
+                    WHEN excluded.agent_type = '' THEN interaction_turns.agent_type
+                    ELSE excluded.agent_type
+                END,
+                model = CASE
+                    WHEN excluded.model = '' THEN interaction_turns.model
+                    ELSE excluded.model
+                END,
+                started_at = CASE
+                    WHEN excluded.started_at = '' THEN interaction_turns.started_at
+                    ELSE excluded.started_at
+                END,
+                ended_at = COALESCE(excluded.ended_at, interaction_turns.ended_at),
+                has_token_usage = CASE
+                    WHEN excluded.has_token_usage = 1 THEN 1
+                    ELSE interaction_turns.has_token_usage
+                END,
+                input_tokens = CASE
+                    WHEN excluded.has_token_usage = 1 THEN excluded.input_tokens
+                    ELSE interaction_turns.input_tokens
+                END,
+                cache_creation_tokens = CASE
+                    WHEN excluded.has_token_usage = 1 THEN excluded.cache_creation_tokens
+                    ELSE interaction_turns.cache_creation_tokens
+                END,
+                cache_read_tokens = CASE
+                    WHEN excluded.has_token_usage = 1 THEN excluded.cache_read_tokens
+                    ELSE interaction_turns.cache_read_tokens
+                END,
+                output_tokens = CASE
+                    WHEN excluded.has_token_usage = 1 THEN excluded.output_tokens
+                    ELSE interaction_turns.output_tokens
+                END,
+                api_call_count = CASE
+                    WHEN excluded.has_token_usage = 1 THEN excluded.api_call_count
+                    ELSE interaction_turns.api_call_count
+                END,
+                files_modified = CASE
+                    WHEN excluded.files_modified = '[]' AND interaction_turns.files_modified <> '[]'
+                        THEN interaction_turns.files_modified
+                    ELSE excluded.files_modified
+                END,
+                checkpoint_id = CASE
+                    WHEN excluded.checkpoint_id = '' THEN interaction_turns.checkpoint_id
+                    ELSE excluded.checkpoint_id
+                END,
+                updated_at = CASE
+                    WHEN excluded.updated_at = '' THEN interaction_turns.updated_at
+                    ELSE excluded.updated_at
+                END",
+            rusqlite::params![
+                turn.turn_id,
+                turn.session_id,
+                self.repo_id,
+                i64::from(turn.turn_number),
+                turn.prompt,
+                turn.agent_type,
+                turn.model,
+                turn.started_at,
+                turn.ended_at,
+                has_token_usage,
+                usage.input_tokens as i64,
+                usage.cache_creation_tokens as i64,
+                usage.cache_read_tokens as i64,
+                usage.output_tokens as i64,
+                usage.api_call_count as i64,
+                files_modified,
+                checkpoint_id,
+                turn.updated_at,
+            ],
+        )
+        .context("upserting interaction turn in local spool")?;
+        Ok(())
+    }
+
+    fn insert_local_event(
+        &self,
+        conn: &rusqlite::Connection,
+        event: &InteractionEvent,
+    ) -> Result<()> {
+        ensure_repo_id(&self.repo_id, &event.repo_id, "interaction event")?;
+        let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
+        conn.execute(
+            "INSERT OR IGNORE INTO interaction_events (
+                event_id, session_id, turn_id, repo_id, event_type,
+                event_time, agent_type, model, payload
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                event.event_id,
+                event.session_id,
+                event.turn_id,
+                self.repo_id,
+                event.event_type.as_str(),
+                event.event_time,
+                event.agent_type,
+                event.model,
+                payload,
+            ],
+        )
+        .context("inserting interaction event in local spool")?;
+        Ok(())
+    }
+}
+
+impl InteractionSpool for SqliteInteractionSpool {
+    fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+
+    fn record_session(&self, session: &InteractionSession) -> Result<()> {
+        let mutation = InteractionMutation::UpsertSession {
+            session: session.clone(),
+        };
+        self.sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE;")
+                .context("starting interaction session spool transaction")?;
+            let result = (|| -> Result<()> {
+                self.upsert_local_session(conn, session)?;
+                self.enqueue_mutation(conn, &mutation)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing interaction session spool transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    fn record_turn(&self, turn: &InteractionTurn) -> Result<()> {
+        let mutation = InteractionMutation::UpsertTurn { turn: turn.clone() };
+        self.sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE;")
+                .context("starting interaction turn spool transaction")?;
+            let result = (|| -> Result<()> {
+                self.upsert_local_turn(conn, turn)?;
+                self.enqueue_mutation(conn, &mutation)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing interaction turn spool transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    fn record_event(&self, event: &InteractionEvent) -> Result<()> {
+        let mutation = InteractionMutation::AppendEvent {
+            event: event.clone(),
+        };
+        self.sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE;")
+                .context("starting interaction event spool transaction")?;
+            let result = (|| -> Result<()> {
+                self.insert_local_event(conn, event)?;
+                self.enqueue_mutation(conn, &mutation)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing interaction event spool transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        if turn_ids.is_empty() {
+            return Ok(());
+        }
+        let mutation = InteractionMutation::AssignCheckpoint {
+            turn_ids: turn_ids.to_vec(),
+            checkpoint_id: checkpoint_id.to_string(),
+            assigned_at: assigned_at.to_string(),
+        };
+        self.sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE;")
+                .context("starting checkpoint assignment spool transaction")?;
+            let result = (|| -> Result<()> {
+                let placeholders: Vec<String> = (1..=turn_ids.len())
+                    .map(|idx| format!("?{}", idx + 2))
+                    .collect();
+                let sql = format!(
+                    "UPDATE interaction_turns
+                     SET checkpoint_id = ?1, updated_at = ?2
+                     WHERE turn_id IN ({})",
+                    placeholders.join(", ")
+                );
+                let mut params: Vec<&dyn rusqlite::types::ToSql> =
+                    vec![&checkpoint_id, &assigned_at];
+                for turn_id in turn_ids {
+                    params.push(turn_id);
+                }
+                conn.execute(&sql, params.as_slice())
+                    .context("updating local turn checkpoint ids")?;
+                self.enqueue_mutation(conn, &mutation)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing checkpoint assignment spool transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    fn flush(&self, repository: &dyn InteractionEventRepository) -> Result<usize> {
+        ensure_repo_id(
+            &self.repo_id,
+            repository.repo_id(),
+            "interaction repository",
+        )?;
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT mutation_id, payload
+                 FROM interaction_spool_queue
+                 WHERE repo_id = ?1
+                 ORDER BY mutation_id ASC",
+            )?;
+            let queue_rows = stmt
+                .query_map(rusqlite::params![self.repo_id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .context("reading interaction spool queue")?;
+
+            let mut flushed = 0usize;
+            for (mutation_id, payload) in queue_rows {
+                let mutation: InteractionMutation =
+                    serde_json::from_str(&payload).context("deserialising interaction mutation")?;
+                let apply_result = match &mutation {
+                    InteractionMutation::UpsertSession { session } => {
+                        repository.upsert_session(session)
+                    }
+                    InteractionMutation::UpsertTurn { turn } => repository.upsert_turn(turn),
+                    InteractionMutation::AppendEvent { event } => repository.append_event(event),
+                    InteractionMutation::AssignCheckpoint {
+                        turn_ids,
+                        checkpoint_id,
+                        assigned_at,
+                    } => {
+                        repository.assign_checkpoint_to_turns(turn_ids, checkpoint_id, assigned_at)
+                    }
+                };
+
+                match apply_result {
+                    Ok(()) => {
+                        conn.execute(
+                            "DELETE FROM interaction_spool_queue WHERE mutation_id = ?1",
+                            rusqlite::params![mutation_id],
+                        )
+                        .context("deleting flushed interaction mutation")?;
+                        flushed += 1;
+                    }
+                    Err(err) => {
+                        conn.execute(
+                            "UPDATE interaction_spool_queue
+                             SET attempts = attempts + 1,
+                                 last_error = ?2,
+                                 updated_at = datetime('now')
+                             WHERE mutation_id = ?1",
+                            rusqlite::params![mutation_id, format!("{err:#}")],
+                        )
+                        .context("recording interaction spool flush failure")?;
+                        return Err(err).with_context(|| {
+                            format!("flushing interaction mutation {mutation_id}")
+                        });
+                    }
+                }
+            }
+            Ok(flushed)
+        })
+    }
+
+    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>> {
+        let limit = limit.max(1);
         self.sqlite.with_connection(|conn| {
             let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-                if let Some(ref agent) = agent {
+                if let Some(agent) = agent.map(str::trim).filter(|value| !value.is_empty()) {
                     (
                         format!(
                             "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                                transcript_path, worktree_path, worktree_id,
-                                started_at, ended_at
-                         FROM interaction_sessions
-                         WHERE repo_id = ?1 AND agent_type = ?2
-                         ORDER BY started_at DESC
-                         LIMIT {limit}"
+                                    transcript_path, worktree_path, worktree_id, started_at,
+                                    ended_at, last_event_at, updated_at
+                             FROM interaction_sessions
+                             WHERE repo_id = ?1 AND agent_type = ?2
+                             ORDER BY COALESCE(NULLIF(last_event_at, ''), started_at) DESC, session_id DESC
+                             LIMIT {limit}"
                         ),
-                        vec![
-                            Box::new(self.repo_id.clone()) as Box<dyn rusqlite::types::ToSql>,
-                            Box::new(agent.clone()),
-                        ],
+                        vec![Box::new(self.repo_id.clone()), Box::new(agent.to_string())],
                     )
                 } else {
                     (
                         format!(
                             "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                                transcript_path, worktree_path, worktree_id,
-                                started_at, ended_at
-                         FROM interaction_sessions
-                         WHERE repo_id = ?1
-                         ORDER BY started_at DESC
-                         LIMIT {limit}"
+                                    transcript_path, worktree_path, worktree_id, started_at,
+                                    ended_at, last_event_at, updated_at
+                             FROM interaction_sessions
+                             WHERE repo_id = ?1
+                             ORDER BY COALESCE(NULLIF(last_event_at, ''), started_at) DESC, session_id DESC
+                             LIMIT {limit}"
                         ),
-                        vec![Box::new(self.repo_id.clone()) as Box<dyn rusqlite::types::ToSql>],
+                        vec![Box::new(self.repo_id.clone())],
                     )
                 };
 
-            let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| {
-                Ok(InteractionSession {
-                    session_id: row.get(0)?,
-                    repo_id: row.get(1)?,
-                    agent_type: row.get(2)?,
-                    model: row.get(3)?,
-                    first_prompt: row.get(4)?,
-                    transcript_path: row.get(5)?,
-                    worktree_path: row.get(6)?,
-                    worktree_id: row.get(7)?,
-                    started_at: row.get(8)?,
-                    ended_at: row.get(9)?,
-                })
-            })?;
-            rows.map(|r| r.context("reading interaction_sessions row"))
-                .collect()
-        })
-    }
-}
-
-impl InteractionEventStore for SqliteInteractionEventStore {
-    fn record_session(&self, session: &InteractionSession) -> Result<()> {
-        if session.repo_id != self.repo_id {
-            anyhow::bail!(
-                "repo_id mismatch in record_session: expected '{}', got '{}'",
-                self.repo_id,
-                session.repo_id
-            );
-        }
-        self.sqlite.with_connection(|conn| {
-            conn.execute(
-                "INSERT INTO interaction_sessions
-                    (session_id, repo_id, agent_type, model, first_prompt,
-                     transcript_path, worktree_path, worktree_id, started_at,
-                     ended_at, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                         datetime('now'), datetime('now'))
-                 ON CONFLICT (session_id) DO UPDATE SET
-                    agent_type = excluded.agent_type,
-                    model = excluded.model,
-                    first_prompt = CASE WHEN interaction_sessions.first_prompt = ''
-                                        THEN excluded.first_prompt
-                                        ELSE interaction_sessions.first_prompt END,
-                    transcript_path = excluded.transcript_path,
-                    worktree_path = excluded.worktree_path,
-                    worktree_id = excluded.worktree_id,
-                    updated_at = datetime('now')",
-                rusqlite::params![
-                    session.session_id,
-                    self.repo_id,
-                    session.agent_type,
-                    session.model,
-                    session.first_prompt,
-                    session.transcript_path,
-                    session.worktree_path,
-                    session.worktree_id,
-                    session.started_at,
-                    session.ended_at,
-                ],
-            )
-            .context("upserting interaction_sessions row")?;
-            Ok(())
-        })
-    }
-
-    fn end_session(&self, session_id: &str, ended_at: &str) -> Result<()> {
-        self.sqlite.with_connection(|conn| {
-            conn.execute(
-                "UPDATE interaction_sessions
-                 SET ended_at = ?2, updated_at = datetime('now')
-                 WHERE session_id = ?1",
-                rusqlite::params![session_id, ended_at],
-            )
-            .context("updating interaction_sessions ended_at")?;
-            Ok(())
-        })
-    }
-
-    fn record_turn_start(&self, turn: &InteractionTurn) -> Result<()> {
-        if turn.repo_id != self.repo_id {
-            anyhow::bail!(
-                "repo_id mismatch in record_turn_start: expected '{}', got '{}'",
-                self.repo_id,
-                turn.repo_id
-            );
-        }
-        self.sqlite.with_connection(|conn| {
-            conn.execute(
-                "INSERT INTO interaction_turns
-                    (turn_id, session_id, repo_id, turn_number, prompt,
-                     agent_type, model, started_at, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
-                 ON CONFLICT (turn_id) DO UPDATE SET
-                    prompt = excluded.prompt,
-                    agent_type = excluded.agent_type,
-                    model = excluded.model",
-                rusqlite::params![
-                    turn.turn_id,
-                    turn.session_id,
-                    self.repo_id,
-                    turn.turn_number,
-                    turn.prompt,
-                    turn.agent_type,
-                    turn.model,
-                    turn.started_at,
-                ],
-            )
-            .context("inserting interaction_turns row")?;
-            Ok(())
-        })
-    }
-
-    fn record_turn_end(
-        &self,
-        turn_id: &str,
-        ended_at: &str,
-        token_usage: Option<&TokenUsageMetadata>,
-        files_modified: &[String],
-    ) -> Result<()> {
-        let token_json = token_usage
-            .map(serde_json::to_string)
-            .transpose()
-            .context("serializing token_usage for interaction_turns")?;
-        let files_json =
-            serde_json::to_string(files_modified).context("serializing files_modified")?;
-
-        self.sqlite.with_connection(|conn| {
-            conn.execute(
-                "UPDATE interaction_turns
-                 SET ended_at = ?2, token_usage = ?3, files_modified = ?4
-                 WHERE turn_id = ?1",
-                rusqlite::params![turn_id, ended_at, token_json, files_json],
-            )
-            .context("updating interaction_turns at turn end")?;
-            Ok(())
-        })
-    }
-
-    fn record_event(&self, event: &InteractionEvent) -> Result<()> {
-        if event.repo_id != self.repo_id {
-            anyhow::bail!(
-                "repo_id mismatch in record_event: expected '{}', got '{}'",
-                self.repo_id,
-                event.repo_id
-            );
-        }
-        let payload_str =
-            serde_json::to_string(&event.payload).context("serializing event payload")?;
-        self.sqlite.with_connection(|conn| {
-            conn.execute(
-                "INSERT INTO interaction_events
-                    (event_id, session_id, turn_id, repo_id, event_type,
-                     event_time, agent_type, model, payload, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
-                 ON CONFLICT (event_id) DO NOTHING",
-                rusqlite::params![
-                    event.event_id,
-                    event.session_id,
-                    event.turn_id,
-                    self.repo_id,
-                    event.event_type.as_str(),
-                    event.event_time,
-                    event.agent_type,
-                    event.model,
-                    payload_str,
-                ],
-            )
-            .context("inserting interaction_events row")?;
-            Ok(())
+                params.iter().map(|value| value.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(param_refs.as_slice(), map_session_row)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .context("reading interaction sessions from spool")
         })
     }
 
     fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
         self.sqlite.with_connection(|conn| {
-            let mut stmt = conn.prepare(
+            conn.query_row(
                 "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                        transcript_path, worktree_path, worktree_id,
-                        started_at, ended_at
+                        transcript_path, worktree_path, worktree_id, started_at,
+                        ended_at, last_event_at, updated_at
                  FROM interaction_sessions
-                 WHERE session_id = ?1",
-            )?;
-            let mut rows = stmt.query(rusqlite::params![session_id])?;
-            match rows.next()? {
-                Some(row) => Ok(Some(InteractionSession {
-                    session_id: row.get(0)?,
-                    repo_id: row.get(1)?,
-                    agent_type: row.get(2)?,
-                    model: row.get(3)?,
-                    first_prompt: row.get(4)?,
-                    transcript_path: row.get(5)?,
-                    worktree_path: row.get(6)?,
-                    worktree_id: row.get(7)?,
-                    started_at: row.get(8)?,
-                    ended_at: row.get(9)?,
-                })),
-                None => Ok(None),
-            }
+                 WHERE session_id = ?1 AND repo_id = ?2
+                 LIMIT 1",
+                rusqlite::params![session_id, self.repo_id],
+                map_session_row,
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
         })
     }
 
-    fn load_turns_for_session(
+    fn list_turns_for_session(
         &self,
         session_id: &str,
         limit: usize,
@@ -278,433 +615,415 @@ impl InteractionEventStore for SqliteInteractionEventStore {
         self.sqlite.with_connection(|conn| {
             let sql = format!(
                 "SELECT turn_id, session_id, repo_id, turn_number, prompt,
-                        agent_type, model, started_at, ended_at,
-                        token_usage, files_modified, checkpoint_id
+                        agent_type, model, started_at, ended_at, has_token_usage,
+                        input_tokens, cache_creation_tokens, cache_read_tokens,
+                        output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
                  FROM interaction_turns
-                 WHERE session_id = ?1
-                 ORDER BY turn_number ASC
+                 WHERE session_id = ?1 AND repo_id = ?2
+                 ORDER BY turn_number ASC, started_at ASC
                  LIMIT {limit}"
             );
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(rusqlite::params![session_id], |row| {
-                Ok(TurnRow {
-                    turn_id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    repo_id: row.get(2)?,
-                    turn_number: row.get(3)?,
-                    prompt: row.get(4)?,
-                    agent_type: row.get(5)?,
-                    model: row.get(6)?,
-                    started_at: row.get(7)?,
-                    ended_at: row.get(8)?,
-                    token_usage_json: row.get(9)?,
-                    files_modified_json: row.get(10)?,
-                    checkpoint_id: row.get(11)?,
-                })
-            })?;
-            rows.map(|r| {
-                let r = r.context("reading interaction_turns row")?;
-                turn_row_to_interaction_turn(r)
-            })
-            .collect()
+            let rows = stmt.query_map(rusqlite::params![session_id, self.repo_id], map_turn_row)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .context("reading interaction turns from spool")
         })
     }
 
-    fn pending_turns_for_session(&self, session_id: &str) -> Result<Vec<InteractionTurn>> {
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT turn_id, session_id, repo_id, turn_number, prompt,
-                        agent_type, model, started_at, ended_at,
-                        token_usage, files_modified, checkpoint_id
+                        agent_type, model, started_at, ended_at, has_token_usage,
+                        input_tokens, cache_creation_tokens, cache_read_tokens,
+                        output_tokens, api_call_count, files_modified, checkpoint_id, updated_at
                  FROM interaction_turns
-                 WHERE session_id = ?1 AND checkpoint_id IS NULL
-                 ORDER BY turn_number ASC",
+                 WHERE repo_id = ?1 AND checkpoint_id = ''
+                 ORDER BY session_id ASC, turn_number ASC, started_at ASC",
             )?;
-            let rows = stmt.query_map(rusqlite::params![session_id], |row| {
-                Ok(TurnRow {
-                    turn_id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    repo_id: row.get(2)?,
-                    turn_number: row.get(3)?,
-                    prompt: row.get(4)?,
-                    agent_type: row.get(5)?,
-                    model: row.get(6)?,
-                    started_at: row.get(7)?,
-                    ended_at: row.get(8)?,
-                    token_usage_json: row.get(9)?,
-                    files_modified_json: row.get(10)?,
-                    checkpoint_id: row.get(11)?,
-                })
-            })?;
-            rows.map(|r| {
-                let r = r.context("reading interaction_turns row")?;
-                turn_row_to_interaction_turn(r)
-            })
-            .collect()
+            let rows = stmt.query_map(rusqlite::params![self.repo_id], map_turn_row)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .context("reading uncheckpointed turns from spool")
         })
     }
 
-    fn assign_checkpoint_to_turns(&self, turn_ids: &[&str], checkpoint_id: &str) -> Result<()> {
-        if turn_ids.is_empty() {
-            return Ok(());
-        }
+    fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        let limit = limit.max(1);
         self.sqlite.with_connection(|conn| {
-            let placeholders: Vec<String> = (1..=turn_ids.len()).map(|i| format!("?{i}")).collect();
-            let sql = format!(
-                "UPDATE interaction_turns SET checkpoint_id = ?{} WHERE turn_id IN ({})",
-                turn_ids.len() + 1,
-                placeholders.join(", ")
+            let mut sql = String::from(
+                "SELECT event_id, session_id, turn_id, repo_id, event_type,
+                        event_time, agent_type, model, payload
+                 FROM interaction_events
+                 WHERE repo_id = ?1",
             );
+            let mut values: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(self.repo_id.clone())];
+            append_event_filter_sql(&mut sql, &mut values, filter);
+            sql.push_str(" ORDER BY event_time DESC, event_id DESC");
+            sql.push_str(&format!(" LIMIT {limit}"));
+
+            let params: Vec<&dyn rusqlite::types::ToSql> =
+                values.iter().map(|value| value.as_ref()).collect();
             let mut stmt = conn.prepare(&sql)?;
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = turn_ids
-                .iter()
-                .map(|id| Box::new(id.to_string()) as Box<dyn rusqlite::types::ToSql>)
-                .collect();
-            params.push(Box::new(checkpoint_id.to_string()));
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
-            stmt.execute(param_refs.as_slice())
-                .context("assigning checkpoint_id to interaction_turns")?;
-            Ok(())
+            let rows = stmt.query_map(params.as_slice(), map_event_row)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .context("reading interaction events from spool")
         })
     }
 }
 
-struct TurnRow {
-    turn_id: String,
-    session_id: String,
-    repo_id: String,
-    turn_number: i64,
-    prompt: String,
-    agent_type: String,
-    model: String,
-    started_at: String,
-    ended_at: Option<String>,
-    token_usage_json: Option<String>,
-    files_modified_json: Option<String>,
-    checkpoint_id: Option<String>,
+fn ensure_repo_id(expected: &str, actual: &str, entity: &str) -> Result<()> {
+    if expected == actual {
+        return Ok(());
+    }
+    anyhow::bail!("repo_id mismatch for {entity}: expected '{expected}', got '{actual}'");
 }
 
-fn turn_row_to_interaction_turn(r: TurnRow) -> Result<InteractionTurn> {
-    let token_usage = r
-        .token_usage_json
+fn append_event_filter_sql(
+    sql: &mut String,
+    values: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    filter: &InteractionEventFilter,
+) {
+    if let Some(session_id) = filter
+        .session_id
         .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(serde_json::from_str)
-        .transpose()
-        .context("deserializing token_usage from interaction_turns")?;
-    let files_modified: Vec<String> = r
-        .files_modified_json
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(serde_json::from_str)
-        .transpose()
-        .context("deserializing files_modified from interaction_turns")?
-        .unwrap_or_default();
-    let turn_number = u32::try_from(r.turn_number)
-        .context("turn_number out of u32 range in interaction_turns")?;
+        .filter(|value| !value.is_empty())
+    {
+        sql.push_str(&format!(" AND session_id = ?{}", values.len() + 1));
+        values.push(Box::new(session_id.to_string()));
+    }
+    if let Some(turn_id) = filter.turn_id.as_deref().filter(|value| !value.is_empty()) {
+        sql.push_str(&format!(" AND turn_id = ?{}", values.len() + 1));
+        values.push(Box::new(turn_id.to_string()));
+    }
+    if let Some(event_type) = filter.event_type {
+        sql.push_str(&format!(" AND event_type = ?{}", values.len() + 1));
+        values.push(Box::new(event_type.as_str().to_string()));
+    }
+    if let Some(since) = filter.since.as_deref().filter(|value| !value.is_empty()) {
+        sql.push_str(&format!(" AND event_time >= ?{}", values.len() + 1));
+        values.push(Box::new(since.to_string()));
+    }
+}
+
+fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InteractionSession> {
+    Ok(InteractionSession {
+        session_id: row.get(0)?,
+        repo_id: row.get(1)?,
+        agent_type: row.get(2)?,
+        model: row.get(3)?,
+        first_prompt: row.get(4)?,
+        transcript_path: row.get(5)?,
+        worktree_path: row.get(6)?,
+        worktree_id: row.get(7)?,
+        started_at: row.get(8)?,
+        ended_at: row.get(9)?,
+        last_event_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+fn map_turn_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InteractionTurn> {
+    let has_token_usage: i64 = row.get(9)?;
+    let files_modified_json: String = row.get(15)?;
+    let files_modified =
+        serde_json::from_str::<Vec<String>>(&files_modified_json).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(
+                15,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            )
+        })?;
+    let checkpoint_id: String = row.get(16)?;
     Ok(InteractionTurn {
-        turn_id: r.turn_id,
-        session_id: r.session_id,
-        repo_id: r.repo_id,
-        turn_number,
-        prompt: r.prompt,
-        agent_type: r.agent_type,
-        model: r.model,
-        started_at: r.started_at,
-        ended_at: r.ended_at,
-        token_usage,
+        turn_id: row.get(0)?,
+        session_id: row.get(1)?,
+        repo_id: row.get(2)?,
+        turn_number: u32::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
+        prompt: row.get(4)?,
+        agent_type: row.get(5)?,
+        model: row.get(6)?,
+        started_at: row.get(7)?,
+        ended_at: row.get(8)?,
+        token_usage: (has_token_usage == 1).then(|| TokenUsageMetadata {
+            input_tokens: row.get::<_, i64>(10).unwrap_or_default().max(0) as u64,
+            cache_creation_tokens: row.get::<_, i64>(11).unwrap_or_default().max(0) as u64,
+            cache_read_tokens: row.get::<_, i64>(12).unwrap_or_default().max(0) as u64,
+            output_tokens: row.get::<_, i64>(13).unwrap_or_default().max(0) as u64,
+            api_call_count: row.get::<_, i64>(14).unwrap_or_default().max(0) as u64,
+            subagent_tokens: None,
+        }),
         files_modified,
-        checkpoint_id: r.checkpoint_id,
+        checkpoint_id: (!checkpoint_id.trim().is_empty()).then_some(checkpoint_id),
+        updated_at: row.get(17)?,
+    })
+}
+
+fn map_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InteractionEvent> {
+    let payload_raw: String = row.get(8)?;
+    let payload = serde_json::from_str::<serde_json::Value>(&payload_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    let event_type_raw: String = row.get(4)?;
+    let event_type = InteractionEventType::parse(&event_type_raw).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown interaction event type `{event_type_raw}`"),
+            )),
+        )
+    })?;
+    Ok(InteractionEvent {
+        event_id: row.get(0)?,
+        session_id: row.get(1)?,
+        turn_id: row.get(2)?,
+        repo_id: row.get(3)?,
+        event_type,
+        event_time: row.get(5)?,
+        agent_type: row.get(6)?,
+        model: row.get(7)?,
+        payload,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
     use super::*;
 
-    fn test_store() -> (tempfile::TempDir, SqliteInteractionEventStore) {
+    struct MockRepository {
+        repo_id: String,
+        sessions: Mutex<HashMap<String, InteractionSession>>,
+        turns: Mutex<HashMap<String, InteractionTurn>>,
+        events: Mutex<Vec<InteractionEvent>>,
+    }
+
+    impl MockRepository {
+        fn new(repo_id: &str) -> Self {
+            Self {
+                repo_id: repo_id.to_string(),
+                sessions: Mutex::new(HashMap::new()),
+                turns: Mutex::new(HashMap::new()),
+                events: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl InteractionEventRepository for MockRepository {
+        fn repo_id(&self) -> &str {
+            &self.repo_id
+        }
+
+        fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(session.session_id.clone(), session.clone());
+            Ok(())
+        }
+
+        fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
+            self.turns
+                .lock()
+                .unwrap()
+                .insert(turn.turn_id.clone(), turn.clone());
+            Ok(())
+        }
+
+        fn append_event(&self, event: &InteractionEvent) -> Result<()> {
+            self.events.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+
+        fn assign_checkpoint_to_turns(
+            &self,
+            turn_ids: &[String],
+            checkpoint_id: &str,
+            assigned_at: &str,
+        ) -> Result<()> {
+            let mut turns = self.turns.lock().unwrap();
+            for turn_id in turn_ids {
+                if let Some(turn) = turns.get_mut(turn_id) {
+                    turn.checkpoint_id = Some(checkpoint_id.to_string());
+                    turn.updated_at = assigned_at.to_string();
+                }
+            }
+            Ok(())
+        }
+
+        fn list_sessions(
+            &self,
+            _agent: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<InteractionSession>> {
+            Ok(self.sessions.lock().unwrap().values().cloned().collect())
+        }
+
+        fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+            Ok(self.sessions.lock().unwrap().get(session_id).cloned())
+        }
+
+        fn list_turns_for_session(
+            &self,
+            session_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<InteractionTurn>> {
+            Ok(self
+                .turns
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|turn| turn.session_id == session_id)
+                .cloned()
+                .collect())
+        }
+
+        fn list_events(
+            &self,
+            _filter: &InteractionEventFilter,
+            _limit: usize,
+        ) -> Result<Vec<InteractionEvent>> {
+            Ok(self.events.lock().unwrap().clone())
+        }
+    }
+
+    fn test_spool() -> (tempfile::TempDir, SqliteInteractionSpool) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("test.db");
-        let pool = SqliteConnectionPool::connect(db_path).expect("sqlite connect");
-        pool.execute_batch(crate::host::devql::checkpoint_schema_sql_sqlite())
-            .expect("init checkpoint schema");
+        let sqlite = SqliteConnectionPool::connect(dir.path().join("interaction-spool.sqlite"))
+            .expect("sqlite");
         (
             dir,
-            SqliteInteractionEventStore::new(pool, "test-repo".into()),
+            SqliteInteractionSpool::new(sqlite, "repo-test".into()).expect("spool"),
         )
     }
 
-    #[test]
-    fn record_and_load_session() {
-        let (_dir, store) = test_store();
-        let session = InteractionSession {
-            session_id: "s1".into(),
-            repo_id: "test-repo".into(),
-            agent_type: "claude-code".into(),
-            model: "claude-opus-4-6".into(),
+    fn sample_session() -> InteractionSession {
+        InteractionSession {
+            session_id: "session-1".into(),
+            repo_id: "repo-test".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
             first_prompt: "hello".into(),
-            started_at: "2026-04-04T10:00:00Z".into(),
+            transcript_path: "/tmp/transcript.jsonl".into(),
+            worktree_path: "/tmp/repo".into(),
+            worktree_id: "main".into(),
+            started_at: "2026-04-05T10:00:00Z".into(),
+            last_event_at: "2026-04-05T10:00:00Z".into(),
+            updated_at: "2026-04-05T10:00:00Z".into(),
             ..Default::default()
-        };
-        store.record_session(&session).expect("record session");
-        let loaded = store.load_session("s1").expect("load").expect("found");
-        assert_eq!(loaded.session_id, "s1");
-        assert_eq!(loaded.agent_type, "claude-code");
-        assert_eq!(loaded.first_prompt, "hello");
-        assert!(loaded.ended_at.is_none());
+        }
     }
 
-    #[test]
-    fn record_session_upsert_preserves_first_prompt() {
-        let (_dir, store) = test_store();
-        let session = InteractionSession {
-            session_id: "s1".into(),
-            repo_id: "test-repo".into(),
-            agent_type: "claude-code".into(),
-            first_prompt: "original".into(),
-            started_at: "2026-04-04T10:00:00Z".into(),
-            ..Default::default()
-        };
-        store.record_session(&session).expect("first insert");
-
-        let updated = InteractionSession {
-            first_prompt: "new prompt".into(),
-            model: "updated-model".into(),
-            ..session.clone()
-        };
-        store.record_session(&updated).expect("upsert");
-
-        let loaded = store.load_session("s1").expect("load").expect("found");
-        assert_eq!(loaded.first_prompt, "original");
-        assert_eq!(loaded.model, "updated-model");
-    }
-
-    #[test]
-    fn end_session_sets_ended_at() {
-        let (_dir, store) = test_store();
-        store
-            .record_session(&InteractionSession {
-                session_id: "s1".into(),
-                repo_id: "test-repo".into(),
-                started_at: "2026-04-04T10:00:00Z".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        store.end_session("s1", "2026-04-04T11:00:00Z").unwrap();
-        let loaded = store.load_session("s1").unwrap().unwrap();
-        assert_eq!(loaded.ended_at.as_deref(), Some("2026-04-04T11:00:00Z"));
-    }
-
-    #[test]
-    fn record_turn_start_and_end_round_trip() {
-        let (_dir, store) = test_store();
-        store
-            .record_session(&InteractionSession {
-                session_id: "s1".into(),
-                repo_id: "test-repo".into(),
-                started_at: "2026-04-04T10:00:00Z".into(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        let turn = InteractionTurn {
-            turn_id: "t1".into(),
-            session_id: "s1".into(),
-            repo_id: "test-repo".into(),
+    fn sample_turn() -> InteractionTurn {
+        InteractionTurn {
+            turn_id: "turn-1".into(),
+            session_id: "session-1".into(),
+            repo_id: "repo-test".into(),
             turn_number: 1,
-            prompt: "fix bug".into(),
-            agent_type: "claude-code".into(),
-            started_at: "2026-04-04T10:01:00Z".into(),
+            prompt: "fix it".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            started_at: "2026-04-05T10:00:01Z".into(),
+            ended_at: Some("2026-04-05T10:00:02Z".into()),
+            token_usage: Some(TokenUsageMetadata {
+                input_tokens: 10,
+                output_tokens: 5,
+                ..Default::default()
+            }),
+            files_modified: vec!["src/main.rs".into()],
+            updated_at: "2026-04-05T10:00:02Z".into(),
             ..Default::default()
-        };
-        store.record_turn_start(&turn).unwrap();
-
-        let usage = TokenUsageMetadata {
-            input_tokens: 200,
-            output_tokens: 100,
-            cache_creation_tokens: 10,
-            cache_read_tokens: 5,
-            api_call_count: 3,
-            subagent_tokens: None,
-        };
-        store
-            .record_turn_end(
-                "t1",
-                "2026-04-04T10:02:00Z",
-                Some(&usage),
-                &["src/main.rs".to_string()],
-            )
-            .unwrap();
-
-        let turns = store.load_turns_for_session("s1", 1000).unwrap();
-        assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].turn_id, "t1");
-        assert_eq!(turns[0].ended_at.as_deref(), Some("2026-04-04T10:02:00Z"));
-        let tu = turns[0].token_usage.as_ref().unwrap();
-        assert_eq!(tu.input_tokens, 200);
-        assert_eq!(tu.output_tokens, 100);
-        assert_eq!(turns[0].files_modified, vec!["src/main.rs"]);
-    }
-
-    #[test]
-    fn pending_turns_excludes_assigned() {
-        let (_dir, store) = test_store();
-        store
-            .record_session(&InteractionSession {
-                session_id: "s1".into(),
-                repo_id: "test-repo".into(),
-                started_at: "2026-04-04T10:00:00Z".into(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        for i in 1..=3 {
-            store
-                .record_turn_start(&InteractionTurn {
-                    turn_id: format!("t{i}"),
-                    session_id: "s1".into(),
-                    repo_id: "test-repo".into(),
-                    turn_number: i,
-                    started_at: format!("2026-04-04T10:0{i}:00Z"),
-                    ..Default::default()
-                })
-                .unwrap();
         }
-
-        store.assign_checkpoint_to_turns(&["t1"], "cp-1").unwrap();
-
-        let pending = store.pending_turns_for_session("s1").unwrap();
-        assert_eq!(pending.len(), 2);
-        assert_eq!(pending[0].turn_id, "t2");
-        assert_eq!(pending[1].turn_id, "t3");
-
-        let all = store.load_turns_for_session("s1", 1000).unwrap();
-        assert_eq!(all.len(), 3);
-        assert_eq!(all[0].checkpoint_id.as_deref(), Some("cp-1"));
-        assert!(all[1].checkpoint_id.is_none());
     }
 
-    #[test]
-    fn record_event_and_idempotent() {
-        let (_dir, store) = test_store();
-        let event = InteractionEvent {
-            event_id: "e1".into(),
-            session_id: "s1".into(),
-            turn_id: Some("t1".into()),
-            repo_id: "test-repo".into(),
-            event_type: super::super::types::InteractionEventType::TurnEnd,
-            event_time: "2026-04-04T10:02:00Z".into(),
-            agent_type: "claude-code".into(),
-            model: "claude-opus-4-6".into(),
-            payload: serde_json::json!({"input_tokens": 100}),
-        };
-        store.record_event(&event).expect("first insert");
-        store.record_event(&event).expect("duplicate is no-op");
-    }
-
-    #[test]
-    fn turns_ordered_by_turn_number() {
-        let (_dir, store) = test_store();
-        store
-            .record_session(&InteractionSession {
-                session_id: "s1".into(),
-                repo_id: "test-repo".into(),
-                started_at: "2026-04-04T10:00:00Z".into(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Insert out of order
-        for i in [3, 1, 2] {
-            store
-                .record_turn_start(&InteractionTurn {
-                    turn_id: format!("t{i}"),
-                    session_id: "s1".into(),
-                    repo_id: "test-repo".into(),
-                    turn_number: i,
-                    started_at: format!("2026-04-04T10:0{i}:00Z"),
-                    ..Default::default()
-                })
-                .unwrap();
+    fn sample_event() -> InteractionEvent {
+        InteractionEvent {
+            event_id: "event-1".into(),
+            session_id: "session-1".into(),
+            turn_id: Some("turn-1".into()),
+            repo_id: "repo-test".into(),
+            event_type: InteractionEventType::TurnEnd,
+            event_time: "2026-04-05T10:00:02Z".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            payload: serde_json::json!({"files_modified": ["src/main.rs"]}),
         }
-
-        let turns = store.load_turns_for_session("s1", 1000).unwrap();
-        let numbers: Vec<u32> = turns.iter().map(|t| t.turn_number).collect();
-        assert_eq!(numbers, vec![1, 2, 3]);
     }
 
     #[test]
-    fn list_sessions_returns_newest_first() {
-        let (_dir, store) = test_store();
-        for (id, time) in [
-            ("s1", "2026-04-04T08:00:00Z"),
-            ("s2", "2026-04-04T10:00:00Z"),
-        ] {
-            store
-                .record_session(&InteractionSession {
-                    session_id: id.into(),
-                    repo_id: "test-repo".into(),
-                    agent_type: "claude-code".into(),
-                    started_at: time.into(),
-                    ..Default::default()
-                })
-                .unwrap();
-        }
-        let sessions = store.list_sessions(None, 100).unwrap();
-        assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].session_id, "s2", "newest first");
-        assert_eq!(sessions[1].session_id, "s1");
+    fn record_and_flush_interactions() {
+        let (_dir, spool) = test_spool();
+        let repository = MockRepository::new("repo-test");
+
+        spool
+            .record_session(&sample_session())
+            .expect("record session");
+        spool.record_turn(&sample_turn()).expect("record turn");
+        spool.record_event(&sample_event()).expect("record event");
+
+        let flushed = spool.flush(&repository).expect("flush");
+        assert_eq!(flushed, 3);
+        assert!(repository.load_session("session-1").unwrap().is_some());
+        assert_eq!(
+            repository
+                .list_turns_for_session("session-1", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            repository
+                .list_events(&Default::default(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
-    fn list_sessions_filters_by_agent() {
-        let (_dir, store) = test_store();
-        store
-            .record_session(&InteractionSession {
-                session_id: "s1".into(),
-                repo_id: "test-repo".into(),
-                agent_type: "claude-code".into(),
-                started_at: "2026-04-04T10:00:00Z".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        store
-            .record_session(&InteractionSession {
-                session_id: "s2".into(),
-                repo_id: "test-repo".into(),
-                agent_type: "cursor".into(),
-                started_at: "2026-04-04T11:00:00Z".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        let sessions = store.list_sessions(Some("cursor"), 100).unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "s2");
+    fn assign_checkpoint_updates_local_and_remote_turns() {
+        let (_dir, spool) = test_spool();
+        let repository = MockRepository::new("repo-test");
+        spool.record_turn(&sample_turn()).expect("record turn");
+        spool.flush(&repository).expect("flush turn");
+
+        spool
+            .assign_checkpoint_to_turns(&["turn-1".to_string()], "cp-1", "2026-04-05T10:10:00Z")
+            .expect("assign checkpoint");
+        spool.flush(&repository).expect("flush assignment");
+
+        let local_turn = spool
+            .list_turns_for_session("session-1", 10)
+            .expect("local turns")
+            .pop()
+            .expect("one local turn");
+        assert_eq!(local_turn.checkpoint_id.as_deref(), Some("cp-1"));
+
+        let remote_turn = repository
+            .list_turns_for_session("session-1", 10)
+            .expect("remote turns")
+            .pop()
+            .expect("one remote turn");
+        assert_eq!(remote_turn.checkpoint_id.as_deref(), Some("cp-1"));
     }
 
     #[test]
-    fn list_sessions_respects_limit() {
-        let (_dir, store) = test_store();
-        for i in 1..=5 {
-            store
-                .record_session(&InteractionSession {
-                    session_id: format!("s{i}"),
-                    repo_id: "test-repo".into(),
-                    agent_type: "claude-code".into(),
-                    started_at: format!("2026-04-04T{:02}:00:00Z", 10 + i),
-                    ..Default::default()
-                })
-                .unwrap();
-        }
-        let sessions = store.list_sessions(None, 2).unwrap();
-        assert_eq!(sessions.len(), 2);
-    }
-
-    #[test]
-    fn list_sessions_empty_when_no_sessions() {
-        let (_dir, store) = test_store();
-        let sessions = store.list_sessions(None, 100).unwrap();
-        assert!(sessions.is_empty());
+    fn list_uncheckpointed_turns_excludes_assigned_turns() {
+        let (_dir, spool) = test_spool();
+        let turn = sample_turn();
+        spool.record_turn(&turn).expect("record turn");
+        assert_eq!(spool.list_uncheckpointed_turns().unwrap().len(), 1);
+        spool
+            .assign_checkpoint_to_turns(&["turn-1".to_string()], "cp-1", "2026-04-05T10:10:00Z")
+            .expect("assign checkpoint");
+        assert!(spool.list_uncheckpointed_turns().unwrap().is_empty());
     }
 }

@@ -1,8 +1,6 @@
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use serde::{Deserialize, Serialize};
 
-/// Canonical record for an agent session.
-/// Core fields are upserted via `record_session`; `ended_at` is set separately via `end_session`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InteractionSession {
     pub session_id: String,
@@ -19,12 +17,15 @@ pub struct InteractionSession {
     pub worktree_path: String,
     #[serde(default)]
     pub worktree_id: String,
+    #[serde(default)]
     pub started_at: String,
     pub ended_at: Option<String>,
+    #[serde(default)]
+    pub last_event_at: String,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
-/// One row per agent turn within a session.
-/// Created at TurnStart with minimal data, completed at TurnEnd with token_usage and files.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InteractionTurn {
     pub turn_id: String,
@@ -38,16 +39,18 @@ pub struct InteractionTurn {
     pub agent_type: String,
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
     pub started_at: String,
     pub ended_at: Option<String>,
     pub token_usage: Option<TokenUsageMetadata>,
     #[serde(default)]
     pub files_modified: Vec<String>,
     pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
-/// Fine-grained event for a lifecycle transition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InteractionEvent {
     pub event_id: String,
     pub session_id: String,
@@ -63,9 +66,37 @@ pub struct InteractionEvent {
     pub payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct InteractionEventFilter {
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub event_type: Option<InteractionEventType>,
+    pub since: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InteractionMutation {
+    UpsertSession {
+        session: InteractionSession,
+    },
+    UpsertTurn {
+        turn: InteractionTurn,
+    },
+    AppendEvent {
+        event: InteractionEvent,
+    },
+    AssignCheckpoint {
+        turn_ids: Vec<String>,
+        checkpoint_id: String,
+        assigned_at: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum InteractionEventType {
+    #[default]
     SessionStart,
     TurnStart,
     TurnEnd,
@@ -131,12 +162,26 @@ mod tests {
     }
 
     #[test]
-    fn event_type_serde_round_trip() {
-        let v = InteractionEventType::TurnEnd;
-        let json = serde_json::to_string(&v).unwrap();
-        assert_eq!(json, r#""turn_end""#);
-        let parsed: InteractionEventType = serde_json::from_str(&json).unwrap();
-        assert_eq!(v, parsed);
+    fn interaction_mutation_round_trip() {
+        let mutation = InteractionMutation::AssignCheckpoint {
+            turn_ids: vec!["turn-1".into(), "turn-2".into()],
+            checkpoint_id: "cp-1".into(),
+            assigned_at: "2026-04-05T12:00:00Z".into(),
+        };
+        let json = serde_json::to_string(&mutation).unwrap();
+        let parsed: InteractionMutation = serde_json::from_str(&json).unwrap();
+        match parsed {
+            InteractionMutation::AssignCheckpoint {
+                turn_ids,
+                checkpoint_id,
+                assigned_at,
+            } => {
+                assert_eq!(turn_ids, vec!["turn-1", "turn-2"]);
+                assert_eq!(checkpoint_id, "cp-1");
+                assert_eq!(assigned_at, "2026-04-05T12:00:00Z");
+            }
+            other => panic!("unexpected mutation: {other:?}"),
+        }
     }
 
     #[test]
@@ -148,6 +193,8 @@ mod tests {
             model: "claude-opus-4-6".into(),
             first_prompt: "hello".into(),
             started_at: "2026-04-04T10:00:00Z".into(),
+            last_event_at: "2026-04-04T10:01:00Z".into(),
+            updated_at: "2026-04-04T10:01:00Z".into(),
             ..Default::default()
         };
         let json = serde_json::to_string(&session).unwrap();
@@ -173,6 +220,7 @@ mod tests {
                 ..Default::default()
             }),
             files_modified: vec!["src/main.rs".into()],
+            updated_at: "2026-04-04T10:02:00Z".into(),
             ..Default::default()
         };
         let json = serde_json::to_string(&turn).unwrap();
@@ -182,25 +230,5 @@ mod tests {
         assert_eq!(parsed.token_usage.unwrap().input_tokens, 100);
         assert_eq!(parsed.files_modified, vec!["src/main.rs"]);
         assert!(parsed.checkpoint_id.is_none());
-    }
-
-    #[test]
-    fn interaction_event_serde_round_trip() {
-        let event = InteractionEvent {
-            event_id: "evt-1".into(),
-            session_id: "sess-1".into(),
-            turn_id: Some("turn-1".into()),
-            repo_id: "repo-1".into(),
-            event_type: InteractionEventType::TurnEnd,
-            event_time: "2026-04-04T10:02:00Z".into(),
-            agent_type: "claude-code".into(),
-            model: "claude-opus-4-6".into(),
-            payload: serde_json::json!({"token_usage": {"input_tokens": 100}}),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        let parsed: InteractionEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.event_id, "evt-1");
-        assert_eq!(parsed.event_type, InteractionEventType::TurnEnd);
-        assert_eq!(parsed.turn_id.as_deref(), Some("turn-1"));
     }
 }

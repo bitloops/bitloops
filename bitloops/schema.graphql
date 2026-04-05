@@ -378,6 +378,17 @@ type InitSchemaResult {
 	eventsBackend: String!
 }
 
+type InteractionEventObject {
+	id: ID!
+	sessionId: String!
+	turnId: String
+	eventType: String!
+	eventTime: String!
+	agentType: String!
+	model: String
+	payload: JSON
+}
+
 type InteractionSessionObject {
 	id: ID!
 	agentType: String!
@@ -602,6 +613,7 @@ type Repository {
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
 	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
+	interactionEvents(sessionId: String, turnId: String, type: String, since: String, first: Int): [InteractionEventObject!]!
 }
 
 enum SaveSelector {

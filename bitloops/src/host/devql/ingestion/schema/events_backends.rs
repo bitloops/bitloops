@@ -25,6 +25,46 @@ ORDER BY (repo_id, event_time, event_id)
         .context("creating ClickHouse checkpoint_events table")?;
 
     let interaction_sql = r#"
+CREATE TABLE IF NOT EXISTS interaction_sessions (
+    session_id String,
+    repo_id String,
+    agent_type String,
+    model String,
+    first_prompt String,
+    transcript_path String,
+    worktree_path String,
+    worktree_id String,
+    started_at String,
+    ended_at String,
+    last_event_at String,
+    updated_at DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (repo_id, session_id);
+
+CREATE TABLE IF NOT EXISTS interaction_turns (
+    turn_id String,
+    session_id String,
+    repo_id String,
+    turn_number UInt32,
+    prompt String,
+    agent_type String,
+    model String,
+    started_at String,
+    ended_at String,
+    has_token_usage UInt8,
+    input_tokens UInt64,
+    cache_creation_tokens UInt64,
+    cache_read_tokens UInt64,
+    output_tokens UInt64,
+    api_call_count UInt64,
+    files_modified Array(String),
+    checkpoint_id String,
+    updated_at DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (repo_id, session_id, turn_id);
+
 CREATE TABLE IF NOT EXISTS interaction_events (
     event_id String,
     event_time DateTime64(3, 'UTC'),
@@ -88,6 +128,51 @@ ON checkpoint_events (repo_id, branch, event_type, event_time);
         .context("creating DuckDB checkpoint_events table")?;
 
     let interaction_sql = r#"
+CREATE TABLE IF NOT EXISTS interaction_sessions (
+    session_id VARCHAR PRIMARY KEY,
+    repo_id VARCHAR,
+    agent_type VARCHAR,
+    model VARCHAR,
+    first_prompt VARCHAR,
+    transcript_path VARCHAR,
+    worktree_path VARCHAR,
+    worktree_id VARCHAR,
+    started_at VARCHAR,
+    ended_at VARCHAR,
+    last_event_at VARCHAR,
+    updated_at VARCHAR
+);
+
+CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
+ON interaction_sessions (repo_id, last_event_at, started_at);
+
+CREATE TABLE IF NOT EXISTS interaction_turns (
+    turn_id VARCHAR PRIMARY KEY,
+    session_id VARCHAR,
+    repo_id VARCHAR,
+    turn_number INTEGER,
+    prompt VARCHAR,
+    agent_type VARCHAR,
+    model VARCHAR,
+    started_at VARCHAR,
+    ended_at VARCHAR,
+    has_token_usage INTEGER,
+    input_tokens BIGINT,
+    cache_creation_tokens BIGINT,
+    cache_read_tokens BIGINT,
+    output_tokens BIGINT,
+    api_call_count BIGINT,
+    files_modified VARCHAR,
+    checkpoint_id VARCHAR,
+    updated_at VARCHAR
+);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
+ON interaction_turns (session_id, turn_number, started_at);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
+ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
+
 CREATE TABLE IF NOT EXISTS interaction_events (
     event_id VARCHAR PRIMARY KEY,
     event_time VARCHAR,
@@ -181,7 +266,7 @@ mod tests {
             .prepare(
                 "SELECT index_name
                  FROM duckdb_indexes()
-                 WHERE table_name = 'interaction_events'
+                 WHERE table_name IN ('interaction_sessions', 'interaction_turns', 'interaction_events')
                  ORDER BY index_name",
             )
             .expect("prepare duckdb index query");
@@ -191,6 +276,9 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("collect duckdb indexes");
 
+        assert!(rows.contains(&"interaction_sessions_repo_idx".to_string()));
+        assert!(rows.contains(&"interaction_turns_session_idx".to_string()));
+        assert!(rows.contains(&"interaction_turns_pending_idx".to_string()));
         assert!(rows.contains(&"interaction_events_repo_time_idx".to_string()));
         assert!(rows.contains(&"interaction_events_session_idx".to_string()));
         assert!(rows.contains(&"interaction_events_type_idx".to_string()));

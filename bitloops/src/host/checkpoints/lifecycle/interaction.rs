@@ -1,21 +1,36 @@
 use std::path::Path;
 
-use crate::host::interactions::db_store::SqliteInteractionEventStore;
+use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
+use crate::host::interactions::event_sink::{
+    EventDbInteractionRepository, create_event_repository,
+};
+use crate::host::interactions::store::InteractionSpool;
 
-/// Resolves an interaction event store for the given repo root.
-/// Returns `None` if no existing SQLite database is available.
-pub(super) fn resolve_interaction_event_store(
-    repo_root: &Path,
-) -> Option<SqliteInteractionEventStore> {
-    let sqlite_path =
-        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
-            repo_root,
-        )
-        .ok()?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+pub(super) fn resolve_interaction_spool(repo_root: &Path) -> Option<SqliteInteractionSpool> {
+    let sqlite =
+        crate::storage::SqliteConnectionPool::connect(interaction_spool_db_path(repo_root)).ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
         .repo_id;
-    Some(SqliteInteractionEventStore::new(sqlite, repo_id))
+    SqliteInteractionSpool::new(sqlite, repo_id).ok()
+}
+
+pub(super) fn resolve_event_repository(repo_root: &Path) -> Option<EventDbInteractionRepository> {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root).ok()?;
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .ok()?
+        .repo_id;
+    create_event_repository(&backends.events, repo_root, repo_id).ok()
+}
+
+pub(super) fn flush_interaction_spool_best_effort(repo_root: &Path) {
+    let Some(spool) = resolve_interaction_spool(repo_root) else {
+        return;
+    };
+    let Some(repository) = resolve_event_repository(repo_root) else {
+        return;
+    };
+    if let Err(err) = spool.flush(&repository) {
+        eprintln!("[bitloops] Warning: failed to flush interaction spool: {err:#}");
+    }
 }

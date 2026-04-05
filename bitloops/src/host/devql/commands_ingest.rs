@@ -378,13 +378,6 @@ pub(crate) async fn execute_ingest_with_observer(
         )
         .await?;
     }
-    // Propagate interaction events from checkpoint SQLite to the events store.
-    // Failures here are logged but do not block the rest of ingestion.
-    match ingest_interaction_events_from_checkpoint(cfg, &backends.events).await {
-        Ok(n) => counters.interaction_events_attempted = n,
-        Err(err) => log::warn!("interaction event ingestion skipped: {err:#}"),
-    }
-
     counters.success = true;
     emit_progress(
         observer,
@@ -424,25 +417,6 @@ fn active_branch_name(repo_root: &Path) -> String {
     .ok()
     .filter(|value| !value.trim().is_empty())
     .unwrap_or_else(|| "main".to_string())
-}
-
-async fn ingest_interaction_events_from_checkpoint(
-    cfg: &DevqlConfig,
-    events_cfg: &crate::config::EventsBackendConfig,
-) -> Result<usize> {
-    let sqlite_path =
-        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
-            &cfg.repo_root,
-        )?;
-    if !sqlite_path.is_file() {
-        return Ok(0);
-    }
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
-        .context("opening checkpoint SQLite for interaction event ingestion")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("ensuring interaction tables exist for ingestion")?;
-    ingest_interaction_events(&sqlite, cfg, events_cfg, &cfg.repo.repo_id).await
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

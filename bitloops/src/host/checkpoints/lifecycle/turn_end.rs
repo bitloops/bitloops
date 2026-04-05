@@ -7,8 +7,8 @@ use super::git_workspace::{
     detect_file_changes_for_turn_end, filter_and_normalize_paths_for_turn_end,
     filter_to_uncommitted_files_for_turn_end, merge_unique_for_turn_end,
 };
-use super::interaction::resolve_interaction_event_store;
-use super::time_and_ids::{generate_interaction_event_id, now_rfc3339};
+use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
+use super::time_and_ids::{generate_interaction_event_id, generate_lifecycle_turn_id, now_rfc3339};
 use super::transcript::{create_context_file, resolve_transcript_offset};
 use super::types::{LifecycleEvent, PrePromptState, SessionIdPolicy, apply_session_id_policy};
 use crate::host::checkpoints::session::create_session_backend_or_local;
@@ -17,8 +17,10 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
-use crate::host::interactions::store::InteractionEventStore;
-use crate::host::interactions::types::{InteractionEvent, InteractionEventType};
+use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+};
 
 pub fn handle_lifecycle_turn_end(
     agent: &dyn LifecycleAgentAdapter,
@@ -207,67 +209,133 @@ pub fn handle_lifecycle_turn_end(
         token_usage,
     };
 
+    let interaction_now = now_rfc3339();
+    let session_before_capture = backend.load_session(&session_id).ok().flatten();
+    let turn_id = session_before_capture
+        .as_ref()
+        .map(|state| state.turn_id.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(generate_lifecycle_turn_id);
+    let turn_number = session_before_capture
+        .as_ref()
+        .map(|state| state.step_count + 1)
+        .unwrap_or(1);
+    let all_files: Vec<String> = ctx
+        .modified_files
+        .iter()
+        .chain(ctx.new_files.iter())
+        .chain(ctx.deleted_files.iter())
+        .cloned()
+        .collect();
+    let token_meta = ctx.token_usage.as_ref().map(|t| {
+        crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
+            input_tokens: t.input_tokens.max(0) as u64,
+            cache_creation_tokens: t.cache_creation_tokens.max(0) as u64,
+            cache_read_tokens: t.cache_read_tokens.max(0) as u64,
+            output_tokens: t.output_tokens.max(0) as u64,
+            api_call_count: t.api_call_count.max(0) as u64,
+            subagent_tokens: None,
+        }
+    });
+
+    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+        let session = session_before_capture
+            .as_ref()
+            .map(|state| InteractionSession {
+                session_id: session_id.clone(),
+                repo_id: spool.repo_id().to_string(),
+                agent_type: state.agent_type.clone(),
+                model: event.model.clone(),
+                first_prompt: state.first_prompt.clone(),
+                transcript_path: state.transcript_path.clone(),
+                worktree_path: state.worktree_path.clone(),
+                worktree_id: state.worktree_id.clone(),
+                started_at: if state.started_at.trim().is_empty() {
+                    interaction_now.clone()
+                } else {
+                    state.started_at.clone()
+                },
+                ended_at: state.ended_at.clone(),
+                last_event_at: interaction_now.clone(),
+                updated_at: interaction_now.clone(),
+            })
+            .unwrap_or(InteractionSession {
+                session_id: session_id.clone(),
+                repo_id: spool.repo_id().to_string(),
+                agent_type: ctx.agent_type.clone(),
+                model: event.model.clone(),
+                first_prompt: last_prompt.clone(),
+                transcript_path: event.session_ref.clone(),
+                worktree_path: repo_root.to_string_lossy().to_string(),
+                worktree_id: crate::utils::paths::get_worktree_id(&repo_root).unwrap_or_default(),
+                started_at: interaction_now.clone(),
+                ended_at: None,
+                last_event_at: interaction_now.clone(),
+                updated_at: interaction_now.clone(),
+            });
+        if let Err(err) = spool.record_session(&session) {
+            eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
+        }
+
+        let turn = InteractionTurn {
+            turn_id: turn_id.clone(),
+            session_id: session_id.clone(),
+            repo_id: spool.repo_id().to_string(),
+            turn_number,
+            prompt: all_prompts
+                .last()
+                .cloned()
+                .unwrap_or_else(|| last_prompt.clone()),
+            agent_type: ctx.agent_type.clone(),
+            model: event.model.clone(),
+            started_at: session_before_capture
+                .as_ref()
+                .and_then(|state| {
+                    (!state
+                        .last_interaction_time
+                        .clone()
+                        .unwrap_or_default()
+                        .is_empty())
+                    .then(|| state.last_interaction_time.clone().unwrap_or_default())
+                })
+                .unwrap_or_else(|| interaction_now.clone()),
+            ended_at: Some(interaction_now.clone()),
+            token_usage: token_meta.clone(),
+            files_modified: all_files.clone(),
+            checkpoint_id: None,
+            updated_at: interaction_now.clone(),
+        };
+        if let Err(err) = spool.record_turn(&turn) {
+            eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
+        }
+        if let Err(err) = spool.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: session_id.to_string(),
+            turn_id: Some(turn_id.clone()),
+            repo_id: spool.repo_id().to_string(),
+            event_type: InteractionEventType::TurnEnd,
+            event_time: interaction_now.clone(),
+            agent_type: ctx.agent_type.clone(),
+            model: event.model.clone(),
+            payload: serde_json::json!({
+                "files_modified": all_files,
+                "files_count": all_files.len(),
+                "prompt_count": all_prompts.len(),
+                "summary": summary,
+                "token_usage": token_meta,
+            }),
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool turn_end event: {err}");
+        }
+    }
+    flush_interaction_spool_best_effort(&repo_root);
+
     let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
     let strategy = registry.get(
         crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
         &repo_root,
     )?;
     strategy.save_step(&ctx)?;
-
-    // ── interaction event persistence ────────────────────────────────────────
-    if let Some(store) = resolve_interaction_event_store(&repo_root) {
-        let turn_id = backend
-            .load_session(&session_id)
-            .ok()
-            .flatten()
-            .map(|s| s.turn_id.clone());
-        if let Some(turn_id) = turn_id.filter(|id| !id.trim().is_empty()) {
-            let now = now_rfc3339();
-            let all_files: Vec<String> = ctx
-                .modified_files
-                .iter()
-                .chain(ctx.new_files.iter())
-                .chain(ctx.deleted_files.iter())
-                .cloned()
-                .collect();
-            let token_meta = ctx.token_usage.as_ref().map(|t| {
-                crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
-                    input_tokens: t.input_tokens.max(0) as u64,
-                    cache_creation_tokens: t.cache_creation_tokens.max(0) as u64,
-                    cache_read_tokens: t.cache_read_tokens.max(0) as u64,
-                    output_tokens: t.output_tokens.max(0) as u64,
-                    api_call_count: t.api_call_count.max(0) as u64,
-                    subagent_tokens: None,
-                }
-            });
-            if let Err(err) = store.record_turn_end(&turn_id, &now, token_meta.as_ref(), &all_files)
-            {
-                eprintln!("[bitloops] Warning: failed to record interaction turn end: {err}");
-            }
-            let payload = serde_json::json!({
-                "files_count": all_files.len(),
-                "token_usage": token_meta,
-            });
-            if let Err(err) = store.record_event(&InteractionEvent {
-                event_id: generate_interaction_event_id(),
-                session_id: session_id.to_string(),
-                turn_id: Some(turn_id),
-                repo_id: store.repo_id().to_string(),
-                event_type: InteractionEventType::TurnEnd,
-                event_time: now,
-                agent_type: ctx.agent_type.clone(),
-                model: event.model.clone(),
-                payload,
-            }) {
-                eprintln!("[bitloops] Warning: failed to record turn_end event: {err}");
-            }
-        } else {
-            eprintln!(
-                "[bitloops] Warning: skipping interaction persistence for session {session_id} \
-                 because turn_id is missing or empty"
-            );
-        }
-    }
 
     if let Ok(Some(mut state)) = backend.load_session(&session_id) {
         let context = SessionTransitionContext {

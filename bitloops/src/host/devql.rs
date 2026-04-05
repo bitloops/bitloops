@@ -135,7 +135,7 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}, interaction_events_attempted={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
         summary.checkpoints_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
@@ -147,7 +147,6 @@ pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
         summary.symbol_clone_sources_scored,
-        summary.interaction_events_attempted
     )
 }
 
@@ -757,9 +756,6 @@ mod ingestion_artefact_persistence_edges;
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
 #[path = "devql/ingestion/artefact_persistence.rs"]
 mod ingestion_artefact_persistence;
-// ingestion: interaction event propagation from checkpoint SQLite to events store
-#[path = "devql/ingestion/interaction_events.rs"]
-mod ingestion_interaction_events;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
 // ingestion: Rust dependency edge orchestration
@@ -795,7 +791,6 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
-use self::ingestion_interaction_events::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
