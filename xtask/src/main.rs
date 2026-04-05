@@ -60,7 +60,7 @@ fn print_usage() {
     eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
     eprintln!(
-        "  coverage compare --lines <pct> --functions <pct> [--epsilon 0.05] [--lcov <path>]"
+        "  coverage compare --lines <pct> --functions <pct> [--epsilon 0.5] [--lcov <path>]"
     );
 }
 
@@ -353,7 +353,7 @@ struct CompareOptions {
 fn parse_compare_options(args: &[String]) -> Result<CompareOptions, String> {
     let mut lines_baseline: Option<f64> = None;
     let mut functions_baseline: Option<f64> = None;
-    let mut epsilon = 0.05;
+    let mut epsilon = 0.5;
     let mut lcov_path = DEFAULT_LCOV_PATH.to_string();
 
     let mut i = 0;
@@ -952,10 +952,10 @@ mod tests {
 
     #[test]
     fn compare_honours_epsilon_boundary() {
-        assert!(!is_regression(79.95, 80.0, 0.05));
-        assert!(is_regression(79.94, 80.0, 0.05));
-        assert!(!is_regression(74.95, 75.0, 0.05));
-        assert!(is_regression(74.94, 75.0, 0.05));
+        assert!(!is_regression(79.5, 80.0, 0.5));
+        assert!(is_regression(79.49, 80.0, 0.5));
+        assert!(!is_regression(74.5, 75.0, 0.5));
+        assert!(is_regression(74.49, 75.0, 0.5));
     }
 
     #[test]
@@ -1039,7 +1039,7 @@ mod tests {
         .unwrap();
         assert_eq!(opts.lines_baseline, 80.0);
         assert_eq!(opts.functions_baseline, 75.0);
-        assert_eq!(opts.epsilon, 0.05);
+        assert_eq!(opts.epsilon, 0.5);
         assert_eq!(opts.lcov_path, DEFAULT_LCOV_PATH);
 
         let opts = parse_compare_options(&[

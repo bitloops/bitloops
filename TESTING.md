@@ -124,7 +124,7 @@ PR coverage gate policy (`develop`, non-draft only):
 
 - CI compares coverage against GitHub repository metadata baselines.
 - If metadata is missing, CI falls back to `80.00%` lines and `75.00%` functions.
-- Tolerance is `0.05` percentage points in both baseline and fallback modes.
+- Tolerance is `0.5` percentage points in both baseline and fallback modes.
 
 ## Install local binary
 

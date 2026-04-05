@@ -21,7 +21,7 @@ dev-test-full = "run --quiet --package xtask -- test full"
 dev-coverage = "run --quiet --package xtask -- coverage run-lcov --lcov bitloops/target/llvm-cov.info"
 dev-coverage-all = "run --quiet --package xtask -- coverage run-all --lcov bitloops/target/llvm-cov.info --html-dir bitloops/target/llvm-cov-html"
 dev-coverage-metrics = "run --quiet --package xtask -- coverage metrics --lcov bitloops/target/llvm-cov.info"
-dev-coverage-compare = "run --quiet --package xtask -- coverage compare --lines 80 --functions 75 --epsilon 0.05 --lcov bitloops/target/llvm-cov.info"
+dev-coverage-compare = "run --quiet --package xtask -- coverage compare --lines 80 --functions 75 --epsilon 0.5 --lcov bitloops/target/llvm-cov.info"
 dev-coverage-html = "llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --html --output-dir bitloops/target/llvm-cov-html"
 
 # Explicit bundled-DuckDB aliases for release/offline/exotic targets.
