@@ -4,10 +4,8 @@ use std::path::Path;
 use crate::adapters::agents::TranscriptPositionProvider;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 
-/// Captures pre-prompt state (including transcript position from the agent) for consumption at turn end.
-///
-/// **Orchestration stub:** currently saves transcript_offset 0 without calling the agent.
-/// Implement by calling `agent.get_transcript_position(session_ref)` and persisting that offset.
+/// Captures pre-prompt state for consumption at turn end, including the
+/// transcript position returned by `agent.get_transcript_position(session_ref)`.
 pub fn capture_pre_prompt_state(
     agent: &dyn TranscriptPositionProvider,
     session_id: &str,

@@ -71,9 +71,15 @@ fn resolve_interaction_store(
     let sqlite = match crate::storage::SqliteConnectionPool::connect_existing(sqlite_path) {
         Ok(pool) => pool,
         Err(err) if is_missing_sqlite_store_error(&err) => return None,
-        Err(_) => return None,
+        Err(err) => {
+            log::warn!("interaction store unavailable: {err:#}");
+            return None;
+        }
     };
-    sqlite.initialise_checkpoint_schema().ok()?;
+    if let Err(err) = sqlite.initialise_checkpoint_schema() {
+        log::warn!("interaction store schema init failed: {err:#}");
+        return None;
+    }
     Some(SqliteInteractionEventStore::new(
         sqlite,
         repo_id.to_string(),

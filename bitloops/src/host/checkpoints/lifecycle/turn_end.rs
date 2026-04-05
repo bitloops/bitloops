@@ -240,11 +240,11 @@ pub fn handle_lifecycle_turn_end(
                 .collect();
             let token_meta = ctx.token_usage.as_ref().map(|t| {
                 crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
-                    input_tokens: t.input_tokens as u64,
-                    cache_creation_tokens: t.cache_creation_tokens as u64,
-                    cache_read_tokens: t.cache_read_tokens as u64,
-                    output_tokens: t.output_tokens as u64,
-                    api_call_count: t.api_call_count as u64,
+                    input_tokens: t.input_tokens.max(0) as u64,
+                    cache_creation_tokens: t.cache_creation_tokens.max(0) as u64,
+                    cache_read_tokens: t.cache_read_tokens.max(0) as u64,
+                    output_tokens: t.output_tokens.max(0) as u64,
+                    api_call_count: t.api_call_count.max(0) as u64,
                     subagent_tokens: None,
                 }
             });
