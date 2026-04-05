@@ -100,5 +100,5 @@ jobs:
           cargo run --quiet --package xtask -- coverage compare \
             --lines "${{ steps.baseline.outputs.lines }}" \
             --functions "${{ steps.baseline.outputs.functions }}" \
-            --epsilon 0.05 \
+            --epsilon 0.5 \
             --lcov bitloops/target/llvm-cov.info

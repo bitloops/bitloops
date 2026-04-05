@@ -8,6 +8,7 @@ pub mod dependency_edge;
 pub mod file_context;
 pub mod health;
 pub mod ingestion;
+pub mod interaction;
 pub mod knowledge;
 pub mod project;
 pub mod repository;

@@ -378,6 +378,37 @@ type InitSchemaResult {
 	eventsBackend: String!
 }
 
+type InteractionSessionObject {
+	id: ID!
+	agentType: String!
+	model: String
+	firstPrompt: String
+	startedAt: String!
+	endedAt: String
+}
+
+type InteractionTokenUsage {
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+}
+
+type InteractionTurnObject {
+	id: ID!
+	sessionId: String!
+	turnNumber: Int!
+	prompt: String
+	agentType: String!
+	model: String
+	startedAt: String!
+	endedAt: String
+	tokenUsage: InteractionTokenUsage
+	filesModified: [String!]!
+	checkpointId: String
+}
+
 """
 A scalar that can represent any JSON value.
 """
@@ -569,6 +600,8 @@ type Repository {
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
+	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
 }
 
 enum SaveSelector {
