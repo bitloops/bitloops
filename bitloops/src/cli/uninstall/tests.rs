@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,8 +11,8 @@ use super::targets::{
     ALL_TARGETS, UninstallTarget, collect_requested_targets, validate_scope_flags,
 };
 use super::{
-    BinaryCandidatesFn, NO_FLAGS_ERROR, RunContext, ServiceUninstaller, UninstallArgs,
-    UninstallSelector, run_with_context,
+    BinaryCandidatesFn, DaemonStopper, NO_FLAGS_ERROR, RunContext, ServiceUninstaller,
+    UninstallArgs, UninstallSelector, run_with_context,
 };
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
@@ -100,6 +101,7 @@ fn run_uninstall_for_test(
     args: UninstallArgs,
     cwd: Option<&Path>,
     select_fn: Option<&UninstallSelector>,
+    daemon_stopper: &DaemonStopper,
     service_uninstaller: &ServiceUninstaller,
     binary_candidates: &BinaryCandidatesFn,
 ) -> Result<String> {
@@ -111,6 +113,7 @@ fn run_uninstall_for_test(
     let mut err = Vec::new();
     let context = RunContext {
         select_fn,
+        daemon_stopper,
         service_uninstaller,
         binary_candidates,
     };
@@ -262,6 +265,7 @@ fn uninstall_git_hooks_uses_all_known_repos_by_default() {
             },
             None,
             None,
+            &|| Box::pin(async { Ok(()) }),
             &|| Ok(()),
             &|| Ok(Vec::new()),
         )
@@ -309,6 +313,7 @@ fn only_current_project_limits_hook_removal() {
                 },
                 None,
                 None,
+                &|| Box::pin(async { Ok(()) }),
                 &|| Ok(()),
                 &|| Ok(Vec::new()),
             )
@@ -342,6 +347,7 @@ fn data_target_removes_only_data() {
             },
             None,
             None,
+            &|| Box::pin(async { Ok(()) }),
             &|| Ok(()),
             &|| Ok(Vec::new()),
         )
@@ -408,6 +414,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
                 },
                 None,
                 None,
+                &|| Box::pin(async { Ok(()) }),
                 &move || {
                     service_called_ref.store(true, std::sync::atomic::Ordering::SeqCst);
                     Ok(())
@@ -440,8 +447,9 @@ fn service_uninstall_stops_daemon_best_effort_then_runs_service_uninstaller() {
     let home = tempfile::tempdir().unwrap();
 
     with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
-        let service_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let service_called_ref = service_called.clone();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop_events = events.clone();
+        let service_events = events.clone();
 
         run_uninstall_for_test(
             UninstallArgs {
@@ -452,13 +460,21 @@ fn service_uninstall_stops_daemon_best_effort_then_runs_service_uninstaller() {
             None,
             None,
             &move || {
-                service_called_ref.store(true, std::sync::atomic::Ordering::SeqCst);
+                let stop_events = stop_events.clone();
+                Box::pin(async move {
+                    stop_events.lock().unwrap().push("stop");
+                    Ok(())
+                })
+            },
+            &move || {
+                service_events.lock().unwrap().push("service");
                 Ok(())
             },
             &|| Ok(Vec::new()),
         )
         .unwrap();
 
-        assert!(service_called.load(std::sync::atomic::Ordering::SeqCst));
+        let recorded = events.lock().unwrap().clone();
+        assert_eq!(recorded, vec!["stop", "service"]);
     });
 }
