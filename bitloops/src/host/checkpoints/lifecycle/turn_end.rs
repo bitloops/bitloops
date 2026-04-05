@@ -157,11 +157,7 @@ pub fn handle_lifecycle_turn_end(
     }
 
     let last_prompt = all_prompts.last().cloned().unwrap_or_default();
-    let commit_message = if last_prompt.len() > 72 {
-        format!("{}...", &last_prompt[..69])
-    } else {
-        last_prompt.clone()
-    };
+    let commit_message = crate::utils::strings::truncate_runes(&last_prompt, 72, "...");
 
     if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
         let context_path = meta_dir_abs.join(crate::utils::paths::CONTEXT_FILE_NAME);
