@@ -60,7 +60,7 @@ impl InteractionTurnObject {
         Self {
             id: ID(turn.turn_id.clone()),
             session_id: turn.session_id.clone(),
-            turn_number: turn.turn_number as i32,
+            turn_number: i32::try_from(turn.turn_number).unwrap_or(i32::MAX),
             prompt: non_empty(&turn.prompt),
             agent_type: turn.agent_type.clone(),
             model: non_empty(&turn.model),

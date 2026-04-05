@@ -17,7 +17,8 @@ pub fn handle_lifecycle_compaction(
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if event.session_id.is_empty() {
+    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
+    if session_id.is_empty() {
         eprintln!("Context compaction: transcript offset reset");
         return Ok(());
     }
@@ -34,7 +35,7 @@ pub fn handle_lifecycle_compaction(
     };
 
     let backend = create_session_backend_or_local(&repo_root);
-    match backend.load_session(&event.session_id) {
+    match backend.load_session(&session_id) {
         Ok(Some(mut state)) => {
             let context = SessionTransitionContext {
                 has_files_touched: !state.files_touched.is_empty(),
@@ -65,7 +66,7 @@ pub fn handle_lifecycle_compaction(
     if let Some(store) = resolve_interaction_event_store(&repo_root)
         && let Err(err) = store.record_event(&InteractionEvent {
             event_id: generate_interaction_event_id(),
-            session_id: event.session_id.clone(),
+            session_id: session_id.clone(),
             turn_id: None,
             repo_id: store.repo_id().to_string(),
             event_type: InteractionEventType::Compaction,
