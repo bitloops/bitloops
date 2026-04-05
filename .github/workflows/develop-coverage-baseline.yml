@@ -1,0 +1,83 @@
+name: Develop Coverage Baseline
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - "bitloops/**"
+      - "xtask/**"
+      - ".cargo/config.toml"
+      - "bitloops/.cargo/config.toml"
+      - ".github/workflows/develop-coverage-baseline.yml"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  DUCKDB_DOWNLOAD_LIB: "1"
+
+jobs:
+  publish-coverage-baseline:
+    name: Publish coverage baseline metadata
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: dev-baseline
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Generate LCOV
+        run: cargo dev-coverage
+      - name: Extract coverage metrics
+        id: metrics
+        run: |
+          set -euo pipefail
+          METRICS="$(cargo dev-coverage-metrics)"
+          echo "$METRICS"
+
+          lines="$(echo "$METRICS" | awk -F= '/^lines_pct=/{print $2}')"
+          functions="$(echo "$METRICS" | awk -F= '/^functions_pct=/{print $2}')"
+
+          if [[ -z "$lines" || -z "$functions" ]]; then
+            echo "Failed to extract coverage metrics from xtask output" >&2
+            exit 1
+          fi
+
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "functions=$functions" >> "$GITHUB_OUTPUT"
+      - name: Update repository coverage variables
+        uses: actions/github-script@v7
+        env:
+          LINES: ${{ steps.metrics.outputs.lines }}
+          FUNCTIONS: ${{ steps.metrics.outputs.functions }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const now = new Date().toISOString();
+
+            async function upsert(name, value) {
+              try {
+                await github.rest.actions.updateRepoVariable({ owner, repo, name, value });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.actions.createRepoVariable({ owner, repo, name, value });
+                } else {
+                  throw error;
+                }
+              }
+            }
+
+            await upsert("BITLOOPS_COV_BASELINE_LINES_PCT", process.env.LINES);
+            await upsert("BITLOOPS_COV_BASELINE_FUNCTIONS_PCT", process.env.FUNCTIONS);
+            await upsert("BITLOOPS_COV_BASELINE_SHA", context.sha);
+            await upsert("BITLOOPS_COV_BASELINE_UPDATED_AT", now);
+
+            core.info(`Coverage baseline updated: lines=${process.env.LINES}, functions=${process.env.FUNCTIONS}, sha=${context.sha}`);

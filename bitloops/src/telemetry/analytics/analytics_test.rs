@@ -169,6 +169,42 @@ fn TestBuildActionPayloadCommonEnvelope() {
 
 #[test]
 #[allow(non_snake_case)]
+fn TestBuildActionPayloadPreservesDescriptorAgent() {
+    with_env_var(
+        "BITLOOPS_TELEMETRY_DISTINCT_ID",
+        Some("fixed-test-id"),
+        || {
+            let payload = build_action_payload(
+                &ActionDescriptor {
+                    event: "bitloops hook".to_string(),
+                    surface: "hook",
+                    properties: HashMap::from([(
+                        "agent".to_string(),
+                        Value::String("codex".to_string()),
+                    )]),
+                },
+                &TelemetryDispatchContext {
+                    strategy: Some("manual-commit".to_string()),
+                    agent: Some("claude-code,codex,cursor,opencode".to_string()),
+                },
+                "1.0.0",
+                true,
+                5,
+                None,
+            )
+            .expect("payload");
+
+            assert_eq!(
+                payload.properties.get("agent").and_then(Value::as_str),
+                Some("codex"),
+                "descriptor-specific agent should not be overwritten by dispatch context"
+            );
+        },
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn TestBuildSessionLifecyclePayloadUsesPosthogEventNames() {
     with_env_var(
         "BITLOOPS_TELEMETRY_DISTINCT_ID",
@@ -236,6 +272,7 @@ fn TestTrackSessionActivityCreatesSessionStoreEntry() {
         &[
             (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_str.as_str())),
             ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
+            ("BITLOOPS_TELEMETRY_FORCE_NO_DISTINCT_ID", None),
         ],
         || {
             track_session_activity_detached(tmp.path(), "dashboard", "dashboard");
@@ -243,6 +280,67 @@ fn TestTrackSessionActivityCreatesSessionStoreEntry() {
             let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
             let store = crate::telemetry::sessions::SessionStore::load(&state_dir);
             assert_eq!(store.sessions().count(), 1);
+        },
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestProcessSessionActivityScopesExpiredEndEventsToCurrentRepo() {
+    let repo_active = tempfile::tempdir().unwrap();
+    let repo_other = tempfile::tempdir().unwrap();
+    setup_git_repo(repo_active.path());
+    setup_git_repo(repo_other.path());
+
+    let state_root = tempfile::tempdir().unwrap();
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+
+    with_process_state(
+        None,
+        &[
+            (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_str.as_str())),
+            ("BITLOOPS_TELEMETRY_DISTINCT_ID", Some("fixed-test-id")),
+            ("BITLOOPS_TELEMETRY_FORCE_NO_DISTINCT_ID", None),
+        ],
+        || {
+            let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+            std::fs::create_dir_all(&state_dir).expect("create state dir");
+
+            let sessions_path = state_dir.join("telemetry_sessions.json");
+            let mut sessions = serde_json::Map::new();
+            sessions.insert(
+                repo_active.path().to_string_lossy().to_string(),
+                serde_json::json!({
+                    "session_id": "active-expired",
+                    "started_at": 1,
+                    "last_event_at": 0
+                }),
+            );
+            sessions.insert(
+                repo_other.path().to_string_lossy().to_string(),
+                serde_json::json!({
+                    "session_id": "other-expired",
+                    "started_at": 1,
+                    "last_event_at": 0
+                }),
+            );
+            let sessions_json = serde_json::Value::Object(serde_json::Map::from_iter([(
+                "sessions".to_string(),
+                serde_json::Value::Object(sessions),
+            )]));
+            std::fs::write(&sessions_path, sessions_json.to_string()).expect("write sessions json");
+
+            let activity = process_session_activity(repo_active.path(), "manual-commit", "hook")
+                .expect("activity");
+            let end_events = activity
+                .lifecycle_events
+                .iter()
+                .filter(|event| event.event == SESSION_ENDED_EVENT)
+                .count();
+            assert_eq!(
+                end_events, 1,
+                "only the current repo should emit an expired session-end event"
+            );
         },
     );
 }

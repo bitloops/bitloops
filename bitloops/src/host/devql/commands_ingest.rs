@@ -152,33 +152,50 @@ pub(crate) async fn execute_ingest_with_observer(
         )
         .await?;
 
-        for path in &cp.files_touched {
-            let normalized_path = normalize_repo_path(path);
-            if normalized_path.is_empty() {
-                continue;
-            }
+        let checkpoint_event_time = checkpoint_event_time_rfc3339(&cp, commit_info);
+        let provenance_context = crate::host::devql::checkpoint_provenance::CheckpointProvenanceContext {
+            repo_id: &cfg.repo.repo_id,
+            checkpoint_id: &cp.checkpoint_id,
+            session_id: &cp.session_id,
+            event_time: &checkpoint_event_time,
+            agent: &cp.agent,
+            branch: &cp.branch,
+            strategy: &cp.strategy,
+            commit_sha: &commit_sha,
+        };
+        let checkpoint_file_rows =
+            crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
+                &cfg.repo_root,
+                provenance_context,
+            )?;
+        let mut seen_after_snapshots = std::collections::BTreeSet::new();
 
-            let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
-                .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, path));
-            let Some(blob_sha) = blob_sha else {
+        for file_row in &checkpoint_file_rows {
+            let Some(normalized_path) = file_row.path_after.as_deref() else {
                 continue;
             };
-            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+            let Some(blob_sha) = file_row.blob_sha_after.as_deref() else {
+                continue;
+            };
+            if !seen_after_snapshots.insert((normalized_path.to_string(), blob_sha.to_string())) {
+                continue;
+            };
+            let content = git_blob_content(&cfg.repo_root, blob_sha).unwrap_or_default();
 
             upsert_file_state_row(
                 &cfg.repo.repo_id,
                 &relational,
                 &commit_sha,
-                &normalized_path,
-                &blob_sha,
+                normalized_path,
+                blob_sha,
             )
             .await?;
             let file_artefact = upsert_file_artefact_row(
                 &cfg.repo.repo_id,
                 &cfg.repo_root,
                 &relational,
-                &normalized_path,
-                &blob_sha,
+                normalized_path,
+                blob_sha,
             )
             .await?;
             upsert_language_artefacts(
@@ -194,8 +211,8 @@ pub(crate) async fn execute_ingest_with_observer(
                     commit_unix: commit_info
                         .expect("commit_info exists when sha exists")
                         .commit_unix,
-                    path: &normalized_path,
-                    blob_sha: &blob_sha,
+                    path: normalized_path,
+                    blob_sha,
                 },
                 &file_artefact,
             )
@@ -205,15 +222,15 @@ pub(crate) async fn execute_ingest_with_observer(
             let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
                 &relational,
                 &cfg.repo.repo_id,
-                &blob_sha,
-                &normalized_path,
+                blob_sha,
+                normalized_path,
             )
             .await?;
             let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
                 &relational,
                 &cfg.repo.repo_id,
-                &blob_sha,
-                &normalized_path,
+                blob_sha,
+                normalized_path,
             )
             .await?;
             let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(

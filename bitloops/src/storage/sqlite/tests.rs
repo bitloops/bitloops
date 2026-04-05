@@ -41,7 +41,7 @@ fn sqlite_connection_pool_initialises_devql_schema_workspace_revisions_table() -
 }
 
 #[test]
-fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> Result<()> {
+fn sqlite_connection_pool_initialises_checkpoint_provenance_tables() -> Result<()> {
     let temp = TempDir::new().context("creating temp dir")?;
     let sqlite_path = temp.path().join("devql.sqlite");
     let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
@@ -49,7 +49,7 @@ fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> 
 
     let exists = sqlite.with_connection(|conn| {
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_file_snapshots'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_files'",
             [],
             |row| row.get(0),
         )?;
@@ -57,28 +57,19 @@ fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> 
     })?;
     assert!(
         exists,
-        "checkpoint_file_snapshots should exist after initialise_devql_schema"
+        "checkpoint_files should exist after initialise_devql_schema"
     );
 
-    let pk_columns = sqlite
-        .with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_file_snapshots"))?;
-    assert_eq!(
-        pk_columns,
-        vec![
-            "repo_id".to_string(),
-            "checkpoint_id".to_string(),
-            "path".to_string(),
-            "blob_sha".to_string(),
-        ],
-        "checkpoint_file_snapshots should use the composite projection key"
-    );
+    let pk_columns =
+        sqlite.with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_files"))?;
+    assert_eq!(pk_columns, vec!["relation_id".to_string()]);
 
     let index_names: Vec<String> = sqlite.with_connection(|conn| {
         let mut stmt = conn.prepare(
             "SELECT name
              FROM sqlite_master
              WHERE type = 'index'
-               AND tbl_name = 'checkpoint_file_snapshots'
+               AND tbl_name = 'checkpoint_files'
                AND name NOT LIKE 'sqlite_autoindex_%'
              ORDER BY name",
         )?;
@@ -89,14 +80,31 @@ fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> 
     assert_eq!(
         index_names,
         vec![
-            "checkpoint_file_snapshots_agent_time_idx".to_string(),
-            "checkpoint_file_snapshots_checkpoint_idx".to_string(),
-            "checkpoint_file_snapshots_commit_idx".to_string(),
-            "checkpoint_file_snapshots_event_time_idx".to_string(),
-            "checkpoint_file_snapshots_lookup_idx".to_string(),
+            "checkpoint_files_agent_time_idx".to_string(),
+            "checkpoint_files_checkpoint_idx".to_string(),
+            "checkpoint_files_commit_idx".to_string(),
+            "checkpoint_files_event_time_idx".to_string(),
+            "checkpoint_files_lookup_idx".to_string(),
         ],
-        "checkpoint_file_snapshots should create the expected lookup indexes"
+        "checkpoint_files should create the expected lookup indexes"
     );
+
+    let artefact_exists = sqlite.with_connection(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_artefacts'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count == 1)
+    })?;
+    assert!(
+        artefact_exists,
+        "checkpoint_artefacts should exist after initialise_devql_schema"
+    );
+
+    let artefact_pk_columns =
+        sqlite.with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_artefacts"))?;
+    assert_eq!(artefact_pk_columns, vec!["relation_id".to_string()]);
 
     Ok(())
 }
@@ -221,7 +229,7 @@ fn initialise_devql_schema_is_idempotent() -> Result<()> {
 
     let projection_exists = sqlite.with_connection(|conn| {
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_file_snapshots'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_files'",
             [],
             |row| row.get(0),
         )?;
@@ -229,7 +237,7 @@ fn initialise_devql_schema_is_idempotent() -> Result<()> {
     })?;
     assert!(
         projection_exists,
-        "checkpoint_file_snapshots should still exist after double init"
+        "checkpoint_files should still exist after double init"
     );
     Ok(())
 }

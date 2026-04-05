@@ -37,6 +37,8 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.name", "Test"]);
     run_git(repo, &["config", "user.email", "test@example.com"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "tag.gpgsign", "false"]);
     fs::write(repo.join("README.md"), "dashboard e2e\n").expect("write readme");
     run_git(repo, &["add", "README.md"]);
     run_git(repo, &["commit", "-m", "init"]);
@@ -83,6 +85,22 @@ fn pick_port() -> u16 {
     let port = listener.local_addr().expect("local addr").port();
     drop(listener);
     port
+}
+
+fn localhost_bind_available(test_name: &str) -> bool {
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping {test_name}: loopback sockets are unavailable in this environment ({err})"
+            );
+            false
+        }
+        Err(err) => panic!("bind localhost for {test_name}: {err}"),
+    }
 }
 
 fn build_bundle_archive(version: &str) -> Vec<u8> {
@@ -214,6 +232,9 @@ async fn wait_until_ready(url: &str, child: &mut Child) {
 
 #[tokio::test]
 async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
+    if !localhost_bind_available("e2e_dashboard_bundle_lifecycle_missing_install_served") {
+        return;
+    }
     let repo = TempDir::new().expect("repo temp dir");
     init_repo(repo.path());
 

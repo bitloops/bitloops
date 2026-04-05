@@ -97,7 +97,6 @@ pub(crate) struct CommittedMetadata {
     pub(crate) cli_version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) turn_id: String,
-    pub(crate) files_touched: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) is_task: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -164,6 +163,7 @@ pub(crate) struct WriteCommittedOptions {
     pub(crate) prompts: Option<Vec<String>>,
     pub(crate) context: Option<Vec<u8>>,
     pub(crate) checkpoints_count: u32,
+    #[allow(dead_code)]
     pub(crate) files_touched: Vec<String>,
     pub(crate) token_usage_input: Option<u64>,
     pub(crate) token_usage_output: Option<u64>,

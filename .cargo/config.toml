@@ -1,0 +1,28 @@
+[env]
+# Fast local default for hosts with official DuckDB prebuilts (including Apple silicon macOS).
+DUCKDB_DOWNLOAD_LIB = { value = "1", force = false }
+
+[alias]
+# Cargo-first local developer surface from repository root.
+dev-check = "check --manifest-path bitloops/Cargo.toml --no-default-features"
+dev-build = "build --manifest-path bitloops/Cargo.toml --no-default-features"
+dev-install = "run --quiet --package xtask -- install"
+dev-file-size = "run --quiet --package xtask -- file-size bitloops"
+dev-loop = "run --quiet --package xtask -- dev-loop"
+dev-fmt = "fmt --all --manifest-path bitloops/Cargo.toml"
+dev-fmt-check = "fmt --all --check --manifest-path bitloops/Cargo.toml"
+dev-clippy = "clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings"
+dev-test-lib = "run --quiet --package xtask -- test lib"
+dev-test-core = "run --quiet --package xtask -- test core"
+dev-test-cli = "run --quiet --package xtask -- test cli"
+dev-test-fast = "run --quiet --package xtask -- test fast"
+dev-test-slow = "run --quiet --package xtask -- test slow"
+dev-test-full = "run --quiet --package xtask -- test full"
+dev-coverage = "run --quiet --package xtask -- coverage run-lcov --lcov bitloops/target/llvm-cov.info"
+dev-coverage-metrics = "run --quiet --package xtask -- coverage metrics --lcov bitloops/target/llvm-cov.info"
+dev-coverage-compare = "run --quiet --package xtask -- coverage compare --lines 80 --functions 75 --epsilon 0.05 --lcov bitloops/target/llvm-cov.info"
+dev-coverage-html = "llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --html --output-dir bitloops/target/llvm-cov-html"
+
+# Explicit bundled-DuckDB aliases for release/offline/exotic targets.
+dev-check-bundled = "check --manifest-path bitloops/Cargo.toml --features duckdb-bundled"
+dev-build-bundled = "build --manifest-path bitloops/Cargo.toml --features duckdb-bundled"

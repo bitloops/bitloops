@@ -116,15 +116,14 @@ fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &
             conn.execute(
                 "INSERT INTO checkpoints (
                     checkpoint_id, repo_id, strategy, branch, cli_version,
-                    files_touched, checkpoints_count
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    checkpoints_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     checkpoint_id,
                     repo_id.as_str(),
                     "manual-commit",
                     "",
                     "0.0.3",
-                    "[]",
                     1_i64,
                 ],
             )?;

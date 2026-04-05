@@ -104,19 +104,39 @@ impl SyncObserver for CoordinatorObserver {
 
 impl SyncCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
-        static INSTANCE: OnceLock<Arc<SyncCoordinator>> = OnceLock::new();
-        Arc::clone(INSTANCE.get_or_init(|| {
-            let coordinator = Arc::new(Self {
-                state_path: sync_state_path(),
-                state_lock_path: sync_state_lock_path(),
-                lock: Mutex::new(()),
-                notify: Notify::new(),
-                worker_started: AtomicBool::new(false),
-                subscription_hub: Mutex::new(None),
-            });
-            coordinator.ensure_state_file();
-            coordinator
-        }))
+        let state_path = sync_state_path();
+        let state_lock_path = sync_state_lock_path();
+        static INSTANCE: OnceLock<Mutex<Arc<SyncCoordinator>>> = OnceLock::new();
+        let slot = INSTANCE.get_or_init(|| {
+            Mutex::new(Self::new_shared_instance(
+                state_path.clone(),
+                state_lock_path.clone(),
+            ))
+        });
+        let coordinator = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        #[cfg(test)]
+        let mut coordinator = coordinator;
+
+        #[cfg(test)]
+        if coordinator.state_path != state_path || coordinator.state_lock_path != state_lock_path {
+            *coordinator = Self::new_shared_instance(state_path, state_lock_path);
+        }
+
+        Arc::clone(&coordinator)
+    }
+
+    fn new_shared_instance(state_path: PathBuf, state_lock_path: PathBuf) -> Arc<Self> {
+        let coordinator = Arc::new(Self {
+            state_path,
+            state_lock_path,
+            lock: Mutex::new(()),
+            notify: Notify::new(),
+            worker_started: AtomicBool::new(false),
+            subscription_hub: Mutex::new(None),
+        });
+        coordinator.ensure_state_file();
+        coordinator
     }
 
     pub(crate) fn activate_worker(self: &Arc<Self>, hub: Option<Arc<SubscriptionHub>>) {

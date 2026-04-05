@@ -57,6 +57,7 @@ struct MetadataCommitInput<'a> {
     transcript: &'a [u8],
     prompt: &'a str,
     context: &'a str,
+    #[allow(dead_code)]
     files_touched: &'a [String],
     author_name: &'a str,
     author_email: &'a str,
@@ -194,7 +195,6 @@ impl AutoCommitStrategy {
             created_at: now_rfc3339(),
             cli_version: env!("CARGO_PKG_VERSION").to_string(),
             turn_id: String::new(),
-            files_touched: input.files_touched.to_vec(),
             is_task: input.is_task,
             tool_use_id: input.tool_use_id.to_string(),
             transcript_identifier_at_start: String::new(),
