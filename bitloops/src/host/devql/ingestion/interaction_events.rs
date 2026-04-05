@@ -18,32 +18,35 @@ pub(super) async fn ingest_interaction_events(
 
     let attempted = rows.len();
 
-    // Batch all rows into a single INSERT OR IGNORE statement.
-    let mut values_clauses = Vec::with_capacity(rows.len());
-    for row in &rows {
-        values_clauses.push(format!(
-            "('{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}', \
-             '{event_type}', '{agent_type}', '{model}', '{payload}')",
-            event_id = esc_pg(&row.event_id),
-            event_time = esc_pg(&row.event_time),
-            repo_id = esc_pg(repo_id),
-            session_id = esc_pg(&row.session_id),
-            turn_id = esc_pg(&row.turn_id),
-            event_type = esc_pg(&row.event_type),
-            agent_type = esc_pg(&row.agent_type),
-            model = esc_pg(&row.model),
-            payload = esc_pg(&row.payload),
-        ));
+    // Insert in bounded chunks to avoid exceeding SQL length limits on large histories.
+    const CHUNK_SIZE: usize = 1000;
+    for chunk in rows.chunks(CHUNK_SIZE) {
+        let mut values_clauses = Vec::with_capacity(chunk.len());
+        for row in chunk {
+            values_clauses.push(format!(
+                "('{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}', \
+                 '{event_type}', '{agent_type}', '{model}', '{payload}')",
+                event_id = esc_pg(&row.event_id),
+                event_time = esc_pg(&row.event_time),
+                repo_id = esc_pg(repo_id),
+                session_id = esc_pg(&row.session_id),
+                turn_id = esc_pg(&row.turn_id),
+                event_type = esc_pg(&row.event_type),
+                agent_type = esc_pg(&row.agent_type),
+                model = esc_pg(&row.model),
+                payload = esc_pg(&row.payload),
+            ));
+        }
+        let sql = format!(
+            "INSERT OR IGNORE INTO interaction_events \
+             (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
+             VALUES {}",
+            values_clauses.join(", ")
+        );
+        duckdb_exec_path_allow_create(events_duckdb_path, &sql)
+            .await
+            .context("batch-inserting interaction events into DuckDB")?;
     }
-    let sql = format!(
-        "INSERT OR IGNORE INTO interaction_events \
-         (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
-         VALUES {}",
-        values_clauses.join(", ")
-    );
-    duckdb_exec_path_allow_create(events_duckdb_path, &sql)
-        .await
-        .context("batch-inserting interaction events into DuckDB")?;
 
     Ok(attempted)
 }

@@ -373,11 +373,13 @@ fn turn_row_to_interaction_turn(r: TurnRow) -> Result<InteractionTurn> {
         .transpose()
         .context("deserializing files_modified from interaction_turns")?
         .unwrap_or_default();
+    let turn_number = u32::try_from(r.turn_number)
+        .context("turn_number out of u32 range in interaction_turns")?;
     Ok(InteractionTurn {
         turn_id: r.turn_id,
         session_id: r.session_id,
         repo_id: r.repo_id,
-        turn_number: r.turn_number as u32,
+        turn_number,
         prompt: r.prompt,
         agent_type: r.agent_type,
         model: r.model,
