@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, anyhow};
 
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
@@ -320,6 +321,9 @@ fn fake_interaction_turn(
         prompt_count: 1,
         transcript_offset_start: Some(0),
         transcript_offset_end: Some(1),
+        transcript_fragment: format!(
+            "{{\"type\":\"user\",\"content\":\"make the change {turn_id}\"}}\n{{\"type\":\"assistant\",\"content\":\"done {turn_id}\"}}\n"
+        ),
         files_modified: files.iter().map(|file| file.to_string()).collect(),
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()
@@ -414,6 +418,8 @@ pub(crate) fn derive_post_commit_scopes_committed_transcript_from_turn_offsets()
     turn.prompt = "captured prompt".into();
     turn.transcript_offset_start = Some(1);
     turn.transcript_offset_end = Some(3);
+    turn.transcript_fragment =
+        "{\"role\":\"user\",\"content\":\"captured prompt\"}\n{\"role\":\"assistant\",\"content\":\"captured answer\"}\n".into();
 
     let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())))
         .with_session(session)
@@ -458,12 +464,13 @@ pub(crate) fn derive_post_commit_scopes_committed_transcript_from_turn_offsets()
 }
 
 #[test]
-pub(crate) fn derive_post_commit_falls_back_to_full_transcript_when_turn_offsets_are_missing() {
+pub(crate) fn derive_post_commit_uses_event_native_transcript_when_turn_offsets_are_missing() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
+    let transcript_path = dir.path().join("transcript.jsonl");
     std::fs::write(
-        dir.path().join("transcript.jsonl"),
+        &transcript_path,
         "{\"role\":\"user\",\"content\":\"before\"}\n{\"role\":\"user\",\"content\":\"captured prompt\"}\n{\"role\":\"assistant\",\"content\":\"captured answer\"}\n",
     )
     .unwrap();
@@ -477,6 +484,8 @@ pub(crate) fn derive_post_commit_falls_back_to_full_transcript_when_turn_offsets
     turn.prompt = "captured prompt".into();
     turn.transcript_offset_start = None;
     turn.transcript_offset_end = None;
+    turn.transcript_fragment =
+        "{\"role\":\"user\",\"content\":\"captured prompt\"}\n{\"role\":\"assistant\",\"content\":\"captured answer\"}\n".into();
 
     let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())))
         .with_session(session)
@@ -488,6 +497,7 @@ pub(crate) fn derive_post_commit_falls_back_to_full_transcript_when_turn_offsets
     git_ok(dir.path(), &["commit", "-m", "derive transcript fallback"]);
     let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
     let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+    std::fs::remove_file(&transcript_path).expect("delete transcript file");
 
     let checkpoint_id = ManualCommitStrategy::new(dir.path())
         .derive_post_commit_from_interaction_sources(
@@ -503,12 +513,62 @@ pub(crate) fn derive_post_commit_falls_back_to_full_transcript_when_turn_offsets
     let session_content =
         read_session_content(dir.path(), &checkpoint_id, 0).expect("read session content");
     assert!(
-        session_content.transcript.contains("before"),
-        "missing turn offsets should fall back to the full transcript"
+        session_content.transcript.contains("captured answer"),
+        "event-native transcript should include the recorded turn content"
     );
     assert!(
-        session_content.transcript.contains("captured answer"),
-        "fallback transcript should still include the recorded turn content"
+        !session_content.transcript.contains("before"),
+        "checkpoint derivation should no longer fall back to the transcript file"
+    );
+}
+
+#[test]
+pub(crate) fn derive_post_commit_errors_when_overlapping_turn_is_missing_transcript_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let session = fake_interaction_session(dir.path(), &repo_id, "sess-missing-fragment");
+    let mut turn = fake_interaction_turn(
+        &repo_id,
+        "sess-missing-fragment",
+        "turn-missing-fragment",
+        &["change.txt"],
+    );
+    turn.transcript_fragment.clear();
+    let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())))
+        .with_session(session)
+        .with_turn(turn);
+    let spool = FakeInteractionSpool::new(&repo_id);
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "missing transcript fragment"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
+
+    let err = ManualCommitStrategy::new(dir.path())
+        .derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files,
+            false,
+            &repository,
+            Some(&spool),
+        )
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("missing transcript_fragment"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !read_commit_checkpoint_mappings(dir.path())
+            .expect("read mappings")
+            .contains_key(&head),
+        "failed derivation must not write a commit mapping"
     );
 }
 
@@ -523,8 +583,11 @@ pub(crate) fn derive_post_commit_ignores_session_state_without_interaction_turns
             session_id: "sess-state-only".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head_before,
-            step_count: 2,
-            files_touched: vec!["state-only.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 2,
+                files_touched: vec!["state-only.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -647,6 +710,7 @@ pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns_duckdb_integ
         &["commit", "-m", "derive checkpoint from interaction"],
     );
     let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    std::fs::remove_file(dir.path().join("transcript.jsonl")).expect("delete transcript file");
 
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().expect("post_commit should succeed");
@@ -724,6 +788,7 @@ pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns_clickhouse_i
         &["commit", "-m", "derive checkpoint from interaction"],
     );
     let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    std::fs::remove_file(dir.path().join("transcript.jsonl")).expect("delete transcript file");
 
     ManualCommitStrategy::new(dir.path())
         .post_commit()
@@ -746,6 +811,37 @@ pub(crate) fn post_commit_derives_checkpoint_from_interaction_turns_clickhouse_i
     assert_eq!(
         turns[0].checkpoint_id.as_deref(),
         Some(checkpoint_id.as_str())
+    );
+}
+
+#[test]
+#[ignore = "ad hoc DuckDB integration coverage"]
+pub(crate) fn post_commit_errors_when_duckdb_interaction_turn_is_missing_transcript_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn_with_fragment(
+        dir.path(),
+        "sess-missing-fragment-db",
+        "turn-missing-fragment-db",
+        &["change.txt"],
+        "",
+    );
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "missing transcript fragment"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+
+    let err = ManualCommitStrategy::new(dir.path())
+        .post_commit()
+        .expect_err("post_commit should fail when transcript fragments are missing");
+    assert!(err.to_string().contains("missing transcript_fragment"));
+    assert!(
+        !read_commit_checkpoint_mappings(dir.path())
+            .expect("mappings")
+            .contains_key(&head),
+        "failed derivation must not write a commit mapping"
     );
 }
 
@@ -786,4 +882,44 @@ pub(crate) fn post_commit_skips_non_overlapping_interaction_turns_clickhouse_int
         .expect("list turns after skipped derivation");
     assert_eq!(turns.len(), 1);
     assert!(turns[0].checkpoint_id.is_none());
+}
+
+#[test]
+#[ignore = "ad hoc ClickHouse integration coverage"]
+pub(crate) fn post_commit_errors_when_clickhouse_interaction_turn_is_missing_transcript_fragment() {
+    let Some((url, user, password, database)) = clickhouse_test_env() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema_with_clickhouse(
+        dir.path(),
+        &url,
+        user.as_deref(),
+        password.as_deref(),
+        database.as_deref(),
+    );
+    seed_interaction_turn_with_fragment(
+        dir.path(),
+        "sess-ch-missing-fragment",
+        "turn-ch-missing-fragment",
+        &["change.txt"],
+        "",
+    );
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "missing transcript fragment"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+
+    let err = ManualCommitStrategy::new(dir.path())
+        .post_commit()
+        .expect_err("post_commit should fail when transcript fragments are missing");
+    assert!(err.to_string().contains("missing transcript_fragment"));
+    assert!(
+        !read_commit_checkpoint_mappings(dir.path())
+            .expect("mappings")
+            .contains_key(&head),
+        "failed derivation must not write a commit mapping"
+    );
 }

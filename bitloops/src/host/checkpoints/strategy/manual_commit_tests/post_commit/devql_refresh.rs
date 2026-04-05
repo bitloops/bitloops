@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 use super::helpers::{commit_file, init_devql_schema};
 
@@ -14,13 +15,16 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
             session_id: "projection-session".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
             agent_type: "claude-code".to_string(),
-            files_touched: vec![
-                "src/projection_a.ts".to_string(),
-                "src/projection_b.ts".to_string(),
-                "src/projection_missing.ts".to_string(),
-            ],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec![
+                    "src/projection_a.ts".to_string(),
+                    "src/projection_b.ts".to_string(),
+                    "src/projection_missing.ts".to_string(),
+                ],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();

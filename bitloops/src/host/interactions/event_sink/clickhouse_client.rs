@@ -150,6 +150,7 @@ pub(super) fn turn_from_row(row: &Value) -> Result<InteractionTurn> {
             .unwrap_or_default() as u32,
         transcript_offset_start: nullable_i64(row, "transcript_offset_start"),
         transcript_offset_end: nullable_i64(row, "transcript_offset_end"),
+        transcript_fragment: optional_string(row, "transcript_fragment"),
         files_modified,
         checkpoint_id: empty_to_none(optional_string(row, "checkpoint_id")),
         updated_at: optional_string(row, "updated_at"),

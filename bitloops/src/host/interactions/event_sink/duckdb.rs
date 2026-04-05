@@ -85,14 +85,14 @@ impl DuckDbInteractionRepository {
                 agent_type, model, started_at, ended_at, has_token_usage,
                 input_tokens, cache_creation_tokens, cache_read_tokens,
                 output_tokens, api_call_count, summary, prompt_count,
-                transcript_offset_start, transcript_offset_end,
+                transcript_offset_start, transcript_offset_end, transcript_fragment,
                 files_modified, checkpoint_id, updated_at
              ) VALUES (
                 '{turn_id}', '{session_id}', '{repo_id}', {turn_number}, '{prompt}',
                 '{agent_type}', '{model}', '{started_at}', {ended_at}, {has_token_usage},
                 {input_tokens}, {cache_creation_tokens}, {cache_read_tokens},
                 {output_tokens}, {api_call_count}, '{summary}', {prompt_count},
-                {transcript_offset_start}, {transcript_offset_end},
+                {transcript_offset_start}, {transcript_offset_end}, '{transcript_fragment}',
                 '{files_modified}', '{checkpoint_id}', '{updated_at}'
              )",
             turn_id = esc_pg(&turn.turn_id),
@@ -114,6 +114,7 @@ impl DuckDbInteractionRepository {
             prompt_count = turn.prompt_count,
             transcript_offset_start = quoted_nullable_i64(turn.transcript_offset_start),
             transcript_offset_end = quoted_nullable_i64(turn.transcript_offset_end),
+            transcript_fragment = esc_pg(&turn.transcript_fragment),
             files_modified = esc_pg(&files_modified),
             checkpoint_id = esc_pg(turn.checkpoint_id.as_deref().unwrap_or("")),
             updated_at = esc_pg(&turn.updated_at),
@@ -240,7 +241,7 @@ impl DuckDbInteractionRepository {
                     agent_type, model, started_at, ended_at, has_token_usage,
                     input_tokens, cache_creation_tokens, cache_read_tokens,
                     output_tokens, api_call_count, summary, prompt_count,
-                    transcript_offset_start, transcript_offset_end,
+                    transcript_offset_start, transcript_offset_end, transcript_fragment,
                     files_modified, checkpoint_id, updated_at
              FROM interaction_turns
              WHERE repo_id = '{repo_id}' AND session_id = '{session_id}'
@@ -264,7 +265,7 @@ impl DuckDbInteractionRepository {
                     agent_type, model, started_at, ended_at, has_token_usage,
                     input_tokens, cache_creation_tokens, cache_read_tokens,
                     output_tokens, api_call_count, summary, prompt_count,
-                    transcript_offset_start, transcript_offset_end,
+                    transcript_offset_start, transcript_offset_end, transcript_fragment,
                     files_modified, checkpoint_id, updated_at
              FROM interaction_turns
              WHERE repo_id = '{repo_id}' AND checkpoint_id = ''
@@ -340,6 +341,7 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     prompt_count INTEGER,
     transcript_offset_start BIGINT,
     transcript_offset_end BIGINT,
+    transcript_fragment VARCHAR,
     files_modified VARCHAR,
     checkpoint_id VARCHAR,
     updated_at VARCHAR
@@ -399,6 +401,10 @@ fn ensure_turn_columns(conn: &duckdb::Connection) -> Result<()> {
         (
             "transcript_offset_end",
             "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_end BIGINT",
+        ),
+        (
+            "transcript_fragment",
+            "ALTER TABLE interaction_turns ADD COLUMN transcript_fragment VARCHAR DEFAULT ''",
         ),
     ];
     for (column, alter_sql) in missing {
@@ -461,12 +467,12 @@ fn map_session_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionSession> 
 }
 
 fn map_turn_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionTurn> {
-    let files_modified_raw: String = row.get(19)?;
+    let files_modified_raw: String = row.get(20)?;
     let files_modified =
         serde_json::from_str::<Vec<String>>(&files_modified_raw).map_err(|err| {
-            duckdb::Error::FromSqlConversionFailure(19, duckdb::types::Type::Text, Box::new(err))
+            duckdb::Error::FromSqlConversionFailure(20, duckdb::types::Type::Text, Box::new(err))
         })?;
-    let checkpoint_id: String = row.get(20)?;
+    let checkpoint_id: String = row.get(21)?;
     let has_token_usage: i32 = row.get(9)?;
     Ok(InteractionTurn {
         turn_id: row.get(0)?,
@@ -492,9 +498,10 @@ fn map_turn_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionTurn> {
         prompt_count: u32::try_from(row.get::<_, i32>(16)?).unwrap_or_default(),
         transcript_offset_start: row.get(17)?,
         transcript_offset_end: row.get(18)?,
+        transcript_fragment: row.get(19)?,
         files_modified,
         checkpoint_id: (!checkpoint_id.trim().is_empty()).then_some(checkpoint_id),
-        updated_at: row.get(21)?,
+        updated_at: row.get(22)?,
     })
 }
 
@@ -571,6 +578,7 @@ mod tests {
             prompt_count: 2,
             transcript_offset_start: Some(1),
             transcript_offset_end: Some(3),
+            transcript_fragment: "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".into(),
             files_modified: vec!["src/main.rs".into()],
             updated_at: "2026-04-05T10:00:02Z".into(),
             ..Default::default()
@@ -619,6 +627,13 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+        assert!(
+            repository
+                .list_turns_for_session("sess-1", 10)
+                .unwrap()[0]
+                .transcript_fragment
+                .contains("\"assistant\"")
         );
         assert_eq!(
             repository

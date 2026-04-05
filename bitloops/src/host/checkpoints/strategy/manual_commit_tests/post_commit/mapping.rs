@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 #[test]
 pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
@@ -14,8 +15,11 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
         base_commit: head.clone(),
         agent_type: "claude-code".to_string(),
         first_prompt: "test prompt".to_string(),
-        step_count: 1,
-        files_touched: vec!["change.txt".to_string()],
+        pending: PendingCheckpointState {
+            step_count: 1,
+            files_touched: vec!["change.txt".to_string()],
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -70,7 +74,10 @@ pub(crate) fn post_commit_creates_full_checkpoint_structure() {
         phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
         base_commit: head.clone(),
         agent_type: "claude-code".to_string(),
-        files_touched: vec!["change2.txt".to_string()],
+        pending: PendingCheckpointState {
+            files_touched: vec!["change2.txt".to_string()],
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -118,8 +125,11 @@ pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_
             session_id: "pc-no-checkpoint-condense".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["condense.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["condense.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -158,8 +168,11 @@ pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head(
             session_id: "pc-squash".to_string(),
             phase: SessionPhase::Idle,
             base_commit: initial_head,
-            step_count: 2,
-            files_touched: vec!["squash.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 2,
+                files_touched: vec!["squash.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -256,8 +269,11 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
             session_id: "pc-skip-mapped".to_string(),
             phase: SessionPhase::Active,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["mapped.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["mapped.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -283,8 +299,8 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
 
     let mut resumed = backend.load_session("pc-skip-mapped").unwrap().unwrap();
     resumed.phase = SessionPhase::Active;
-    resumed.step_count = 1;
-    resumed.files_touched = vec!["mapped.txt".to_string()];
+    resumed.pending.step_count = 1;
+    resumed.pending.files_touched = vec!["mapped.txt".to_string()];
     backend.save_session(&resumed).unwrap();
 
     strategy.post_commit().unwrap();

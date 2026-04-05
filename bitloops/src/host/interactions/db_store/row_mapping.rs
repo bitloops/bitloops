@@ -23,16 +23,16 @@ pub(super) fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inter
 
 pub(super) fn map_turn_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InteractionTurn> {
     let has_token_usage: i64 = row.get(9)?;
-    let files_modified_json: String = row.get(19)?;
+    let files_modified_json: String = row.get(20)?;
     let files_modified =
         serde_json::from_str::<Vec<String>>(&files_modified_json).map_err(|err| {
             rusqlite::Error::FromSqlConversionFailure(
-                19,
+                20,
                 rusqlite::types::Type::Text,
                 Box::new(err),
             )
         })?;
-    let checkpoint_id: String = row.get(20)?;
+    let checkpoint_id: String = row.get(21)?;
     Ok(InteractionTurn {
         turn_id: row.get(0)?,
         session_id: row.get(1)?,
@@ -55,9 +55,10 @@ pub(super) fn map_turn_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Interact
         prompt_count: u32::try_from(row.get::<_, i64>(16)?).unwrap_or_default(),
         transcript_offset_start: row.get(17)?,
         transcript_offset_end: row.get(18)?,
+        transcript_fragment: row.get(19)?,
         files_modified,
         checkpoint_id: (!checkpoint_id.trim().is_empty()).then_some(checkpoint_id),
-        updated_at: row.get(21)?,
+        updated_at: row.get(22)?,
     })
 }
 

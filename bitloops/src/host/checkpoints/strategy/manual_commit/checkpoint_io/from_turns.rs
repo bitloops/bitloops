@@ -92,6 +92,7 @@ mod tests {
             prompt_count: 1,
             transcript_offset_start: Some(0),
             transcript_offset_end: Some(1),
+            transcript_fragment: format!("{{\"turn_id\":\"{turn_id}\"}}\n"),
             files_modified: files.iter().map(|value| value.to_string()).collect(),
             ..Default::default()
         }

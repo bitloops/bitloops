@@ -2,6 +2,7 @@
 
 use crate::adapters::agents::TokenUsage;
 use serde::{Deserialize, Serialize};
+use std::ops::{Deref, DerefMut};
 
 use super::phase::SessionPhase;
 
@@ -25,6 +26,34 @@ pub struct PromptAttribution {
     pub agent_lines_removed: i32,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub user_added_per_file: std::collections::BTreeMap<String, i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PendingCheckpointState {
+    /// Runtime-only checkpoint counter for temporary-checkpoint/shadow-branch flows.
+    /// Not authoritative provenance input for committed checkpoint derivation.
+    #[serde(default, rename = "checkpoint_count")]
+    pub step_count: u32,
+
+    /// Runtime-only transcript line offset where the current checkpoint cycle began.
+    /// Not authoritative provenance input for committed checkpoint derivation.
+    #[serde(default)]
+    pub checkpoint_transcript_start: i64,
+
+    /// Runtime-only list of files touched during the current coordination window.
+    /// Not authoritative provenance input for committed checkpoint derivation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+
+    /// Runtime-only accumulated token usage for temporary checkpoints.
+    /// Committed checkpoint derivation reads token usage from interaction turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
+
+    /// Runtime-only transcript identifier recorded at the first step of the current checkpoint cycle.
+    /// Not authoritative provenance input for committed checkpoint derivation.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub transcript_identifier_at_start: String,
 }
 
 /// Full session state.
@@ -77,16 +106,6 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_interaction_time: Option<String>,
 
-    /// Runtime-only checkpoint counter for temporary-checkpoint/shadow-branch flows.
-    /// Not authoritative provenance input for committed checkpoint derivation.
-    #[serde(default, rename = "checkpoint_count")]
-    pub step_count: u32,
-
-    /// Runtime-only transcript line offset where the current checkpoint cycle began.
-    /// Not authoritative provenance input for committed checkpoint derivation.
-    #[serde(default)]
-    pub checkpoint_transcript_start: i64,
-
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub condensed_transcript_lines: i64,
 
@@ -96,11 +115,6 @@ pub struct SessionState {
     /// Files that existed (untracked) when the session started.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub untracked_files_at_start: Vec<String>,
-
-    /// Runtime-only list of files touched during the current coordination window.
-    /// Not authoritative provenance input for committed checkpoint derivation.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files_touched: Vec<String>,
 
     /// Path to the live Claude Code transcript file.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -119,19 +133,9 @@ pub struct SessionState {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub last_checkpoint_id: String,
 
-    /// Runtime-only accumulated token usage for temporary checkpoints.
-    /// Committed checkpoint derivation reads token usage from interaction turns.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_usage: Option<TokenUsage>,
-
     /// Base commit at the start of the current attribution window.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub attribution_base_commit: String,
-
-    /// Runtime-only transcript identifier recorded at the first step of the current checkpoint cycle.
-    /// Not authoritative provenance input for committed checkpoint derivation.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub transcript_identifier_at_start: String,
 
     /// User/agent attribution snapshots captured at each prompt start.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -140,6 +144,10 @@ pub struct SessionState {
     /// Attribution captured at prompt start and consumed on the next checkpoint save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_prompt_attribution: Option<PromptAttribution>,
+
+    /// Runtime-only pending checkpoint coordination state.
+    #[serde(flatten)]
+    pub pending: PendingCheckpointState,
 }
 
 /// State captured at `user-prompt-submit` time; consumed by `stop`.
@@ -188,11 +196,11 @@ impl SessionState {
     pub fn normalize_after_load(&mut self) {
         self.phase = SessionPhase::from_string(self.phase.as_str());
 
-        if self.checkpoint_transcript_start == 0 {
+        if self.pending.checkpoint_transcript_start == 0 {
             if self.condensed_transcript_lines > 0 {
-                self.checkpoint_transcript_start = self.condensed_transcript_lines;
+                self.pending.checkpoint_transcript_start = self.condensed_transcript_lines;
             } else if self.transcript_lines_at_start > 0 {
-                self.checkpoint_transcript_start = self.transcript_lines_at_start;
+                self.pending.checkpoint_transcript_start = self.transcript_lines_at_start;
             }
         }
 
@@ -202,6 +210,20 @@ impl SessionState {
         if self.attribution_base_commit.is_empty() && !self.base_commit.is_empty() {
             self.attribution_base_commit = self.base_commit.clone();
         }
+    }
+}
+
+impl Deref for SessionState {
+    type Target = PendingCheckpointState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pending
+    }
+}
+
+impl DerefMut for SessionState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pending
     }
 }
 
@@ -257,7 +279,9 @@ pub fn find_most_recent_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{PrePromptState, SessionState, find_most_recent_session};
+    use super::{
+        PendingCheckpointState, PrePromptState, SessionState, find_most_recent_session,
+    };
 
     // CLI-257
     #[test]
@@ -267,29 +291,32 @@ mod tests {
             ..SessionState::default()
         };
         state.normalize_after_load();
-        assert_eq!(state.checkpoint_transcript_start, 150);
+        assert_eq!(state.pending.checkpoint_transcript_start, 150);
         assert_eq!(state.condensed_transcript_lines, 0);
         assert_eq!(state.transcript_lines_at_start, 0);
 
         let mut state = SessionState {
-            checkpoint_transcript_start: 200,
+            pending: PendingCheckpointState {
+                checkpoint_transcript_start: 200,
+                ..Default::default()
+            },
             condensed_transcript_lines: 150,
             ..SessionState::default()
         };
         state.normalize_after_load();
-        assert_eq!(state.checkpoint_transcript_start, 200);
+        assert_eq!(state.pending.checkpoint_transcript_start, 200);
         assert_eq!(state.condensed_transcript_lines, 0);
 
         let mut state = SessionState::default();
         state.normalize_after_load();
-        assert_eq!(state.checkpoint_transcript_start, 0);
+        assert_eq!(state.pending.checkpoint_transcript_start, 0);
 
         let mut state = SessionState {
             transcript_lines_at_start: 42,
             ..SessionState::default()
         };
         state.normalize_after_load();
-        assert_eq!(state.checkpoint_transcript_start, 42);
+        assert_eq!(state.pending.checkpoint_transcript_start, 42);
         assert_eq!(state.transcript_lines_at_start, 0);
 
         let mut state = SessionState {
@@ -298,17 +325,20 @@ mod tests {
             ..SessionState::default()
         };
         state.normalize_after_load();
-        assert_eq!(state.checkpoint_transcript_start, 150);
+        assert_eq!(state.pending.checkpoint_transcript_start, 150);
         assert_eq!(state.condensed_transcript_lines, 0);
         assert_eq!(state.transcript_lines_at_start, 0);
 
         let mut state = SessionState {
-            checkpoint_transcript_start: 200,
+            pending: PendingCheckpointState {
+                checkpoint_transcript_start: 200,
+                ..Default::default()
+            },
             transcript_lines_at_start: 42,
             ..SessionState::default()
         };
         state.normalize_after_load();
-        assert_eq!(state.checkpoint_transcript_start, 200);
+        assert_eq!(state.pending.checkpoint_transcript_start, 200);
         assert_eq!(state.transcript_lines_at_start, 0);
     }
 
@@ -348,10 +378,10 @@ mod tests {
             state.normalize_after_load();
 
             assert_eq!(
-                state.checkpoint_transcript_start, expected_cts,
+                state.pending.checkpoint_transcript_start, expected_cts,
                 "{case_name}"
             );
-            assert_eq!(state.step_count, expected_step_count, "{case_name}");
+            assert_eq!(state.pending.step_count, expected_step_count, "{case_name}");
             assert_eq!(state.condensed_transcript_lines, 0, "{case_name}");
             assert_eq!(state.transcript_lines_at_start, 0, "{case_name}");
         }
@@ -432,6 +462,33 @@ mod tests {
         let json = serde_json::to_string(&state).expect("serialize");
         let restored: SessionState = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored.last_checkpoint_id, "deadbeefcafe");
+    }
+
+    #[test]
+    fn session_state_pending_round_trip_preserves_flattened_keys() {
+        let original = SessionState {
+            session_id: "s-pending".to_string(),
+            pending: PendingCheckpointState {
+                step_count: 3,
+                checkpoint_transcript_start: 12,
+                files_touched: vec!["src/lib.rs".to_string()],
+                transcript_identifier_at_start: "msg-1".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert!(json.contains("\"checkpoint_count\":3"));
+        assert!(json.contains("\"checkpoint_transcript_start\":12"));
+        assert!(json.contains("\"files_touched\":[\"src/lib.rs\"]"));
+
+        let mut restored: SessionState = serde_json::from_str(&json).expect("deserialize");
+        restored.normalize_after_load();
+        assert_eq!(restored.pending.step_count, 3);
+        assert_eq!(restored.pending.checkpoint_transcript_start, 12);
+        assert_eq!(restored.pending.files_touched, vec!["src/lib.rs"]);
+        assert_eq!(restored.pending.transcript_identifier_at_start, "msg-1");
     }
 
     #[test]

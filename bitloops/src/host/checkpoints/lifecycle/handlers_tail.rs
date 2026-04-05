@@ -40,7 +40,7 @@ pub fn handle_lifecycle_compaction(
     match backend.load_session(&session_id) {
         Ok(Some(mut state)) => {
             let context = SessionTransitionContext {
-                has_files_touched: !state.files_touched.is_empty(),
+                has_files_touched: !state.pending.files_touched.is_empty(),
                 is_rebase_in_progress: false,
             };
             let transition =
@@ -51,7 +51,7 @@ pub fn handle_lifecycle_compaction(
             }
 
             // Compaction resets transcript offset after transition.
-            state.checkpoint_transcript_start = 0;
+            state.pending.checkpoint_transcript_start = 0;
             if let Err(err) = backend.save_session(&state) {
                 eprintln!(
                     "[bitloops] Warning: failed to save session state after compaction: {err}"
@@ -101,7 +101,7 @@ pub fn handle_lifecycle_session_end(
     let maybe_state = backend.load_session(&session_id)?;
     if let Some(mut state) = maybe_state.clone() {
         let context = SessionTransitionContext {
-            has_files_touched: !state.files_touched.is_empty(),
+            has_files_touched: !state.pending.files_touched.is_empty(),
             is_rebase_in_progress: false,
         };
         let transition =

@@ -30,12 +30,13 @@ use crate::adapters::agents::canonical::{
 
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::phase::SessionPhase;
-use crate::host::checkpoints::session::state::SessionState;
+use crate::host::checkpoints::session::state::{PendingCheckpointState, SessionState};
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Cursor;
+use std::path::Path;
 
 fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
     LifecycleEvent {
@@ -47,6 +48,35 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         subagent_id: String::from("subagent-1"),
         model: String::new(),
     }
+}
+
+fn open_events_duckdb(repo_root: &Path) -> duckdb::Connection {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve store backends");
+    let path = backends.events.resolve_duckdb_db_path_for_repo(repo_root);
+    duckdb::Connection::open(path).expect("open events duckdb")
+}
+
+fn latest_turn_fragment(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT transcript_fragment FROM interaction_turns ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn transcript_fragment")
+}
+
+fn latest_turn_end_payload(repo_root: &Path) -> serde_json::Value {
+    let conn = open_events_duckdb(repo_root);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM interaction_events WHERE event_type = 'turn_end' ORDER BY event_time DESC, event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read turn_end payload");
+    serde_json::from_str(&payload).expect("parse turn_end payload")
 }
 
 #[test]
@@ -324,6 +354,42 @@ fn test_handle_lifecycle_turn_end_empty_repository() {
     });
 }
 
+#[test]
+fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("transcript.jsonl");
+    std::fs::write(
+        &transcript_path,
+        "{\"messages\":[{\"type\":\"user\",\"content\":\"Update tracked file\"},{\"type\":\"gemini\",\"content\":\"Implemented the change\"}]}",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("tracked.txt"), "changed\n").unwrap();
+
+    let adapter = GeminiCliLifecycleAdapter;
+    let mut event = sample_event(LifecycleEventType::TurnEnd);
+    event.session_id = "fragment-session".to_string();
+    event.session_ref = transcript_path.to_string_lossy().to_string();
+    event.prompt = "Update tracked file".to_string();
+
+    with_cwd(dir.path(), || {
+        handle_lifecycle_turn_end(&adapter, &event).expect("turn end should persist fragment");
+
+        let fragment = latest_turn_fragment(dir.path());
+        assert!(
+            fragment.contains("Implemented the change"),
+            "turn row should persist the completed transcript fragment"
+        );
+
+        let payload = latest_turn_end_payload(dir.path());
+        assert_eq!(
+            payload["transcript_fragment"].as_str().unwrap_or_default(),
+            fragment,
+            "turn_end event payload should mirror the persisted transcript fragment"
+        );
+    });
+}
+
 // CLI-869
 #[test]
 fn test_handle_lifecycle_compaction_resets_transcript_offset() {
@@ -345,8 +411,11 @@ fn test_handle_lifecycle_compaction_applies_phase_transition_and_persists_reset(
             .save_session(&SessionState {
                 session_id: "session-compaction".to_string(),
                 phase: SessionPhase::Active,
-                files_touched: vec!["tracked.txt".to_string()],
-                checkpoint_transcript_start: 77,
+                pending: PendingCheckpointState {
+                    files_touched: vec!["tracked.txt".to_string()],
+                    checkpoint_transcript_start: 77,
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .unwrap();
@@ -389,7 +458,10 @@ fn test_handle_lifecycle_session_end_marks_session_ended() {
             .save_session(&SessionState {
                 session_id: "copilot-session-end".to_string(),
                 phase: SessionPhase::Active,
-                files_touched: vec!["file.txt".to_string()],
+                pending: PendingCheckpointState {
+                    files_touched: vec!["file.txt".to_string()],
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .unwrap();

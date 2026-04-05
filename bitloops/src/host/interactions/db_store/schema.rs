@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     prompt_count INTEGER NOT NULL DEFAULT 0,
     transcript_offset_start INTEGER,
     transcript_offset_end INTEGER,
+    transcript_fragment TEXT NOT NULL DEFAULT '',
     files_modified TEXT NOT NULL DEFAULT '[]',
     checkpoint_id TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
@@ -103,6 +104,10 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
         (
             "transcript_offset_end",
             "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_end INTEGER",
+        ),
+        (
+            "transcript_fragment",
+            "ALTER TABLE interaction_turns ADD COLUMN transcript_fragment TEXT NOT NULL DEFAULT ''",
         ),
     ];
     for (column, sql) in missing {

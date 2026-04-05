@@ -86,14 +86,14 @@ impl ClickHouseInteractionRepository {
                 agent_type, model, started_at, ended_at, has_token_usage,
                 input_tokens, cache_creation_tokens, cache_read_tokens,
                 output_tokens, api_call_count, summary, prompt_count,
-                transcript_offset_start, transcript_offset_end,
+                transcript_offset_start, transcript_offset_end, transcript_fragment,
                 files_modified, checkpoint_id, updated_at
              ) VALUES (
                 '{turn_id}', '{session_id}', '{repo_id}', {turn_number}, '{prompt}',
                 '{agent_type}', '{model}', '{started_at}', '{ended_at}', {has_token_usage},
                 {input_tokens}, {cache_creation_tokens}, {cache_read_tokens},
                 {output_tokens}, {api_call_count}, '{summary}', {prompt_count},
-                {transcript_offset_start}, {transcript_offset_end},
+                {transcript_offset_start}, {transcript_offset_end}, '{transcript_fragment}',
                 {files_modified}, '{checkpoint_id}',
                 coalesce(parseDateTime64BestEffortOrNull('{updated_at}'), now64(3))
              )",
@@ -116,6 +116,7 @@ impl ClickHouseInteractionRepository {
             prompt_count = turn.prompt_count,
             transcript_offset_start = nullable_i64(turn.transcript_offset_start),
             transcript_offset_end = nullable_i64(turn.transcript_offset_end),
+            transcript_fragment = esc_ch(&turn.transcript_fragment),
             files_modified = files_modified,
             checkpoint_id = esc_ch(turn.checkpoint_id.as_deref().unwrap_or("")),
             updated_at = esc_ch(&turn.updated_at),
@@ -286,6 +287,7 @@ impl ClickHouseInteractionRepository {
                         argMax(prompt_count, updated_at) AS prompt_count,
                         argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
                         argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
+                        argMax(transcript_fragment, updated_at) AS transcript_fragment,
                         argMax(files_modified, updated_at) AS files_modified,
                         argMax(checkpoint_id, updated_at) AS checkpoint_id,
                         toString(max(updated_at)) AS updated_at
@@ -330,6 +332,7 @@ impl ClickHouseInteractionRepository {
                         argMax(prompt_count, updated_at) AS prompt_count,
                         argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
                         argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
+                        argMax(transcript_fragment, updated_at) AS transcript_fragment,
                         argMax(files_modified, updated_at) AS files_modified,
                         argMax(checkpoint_id, updated_at) AS checkpoint_id,
                         toString(max(updated_at)) AS updated_at
@@ -420,6 +423,7 @@ impl ClickHouseInteractionRepository {
                         argMax(prompt_count, updated_at) AS prompt_count,
                         argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
                         argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
+                        argMax(transcript_fragment, updated_at) AS transcript_fragment,
                         argMax(files_modified, updated_at) AS files_modified,
                         argMax(checkpoint_id, updated_at) AS checkpoint_id,
                         toString(max(updated_at)) AS updated_at
@@ -473,6 +477,7 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     prompt_count UInt32,
     transcript_offset_start Nullable(Int64),
     transcript_offset_end Nullable(Int64),
+    transcript_fragment String,
     files_modified Array(String),
     checkpoint_id String,
     updated_at DateTime64(3, 'UTC')
@@ -500,6 +505,7 @@ const TURN_MIGRATIONS: &[&str] = &[
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS prompt_count UInt32 AFTER summary",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_offset_start Nullable(Int64) AFTER prompt_count",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_offset_end Nullable(Int64) AFTER transcript_offset_start",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_fragment String AFTER transcript_offset_end",
 ];
 
 fn format_array(values: &[String]) -> String {
@@ -574,6 +580,7 @@ mod tests {
             prompt_count: 2,
             transcript_offset_start: Some(1),
             transcript_offset_end: Some(3),
+            transcript_fragment: "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".into(),
             files_modified: vec!["src/main.rs".into()],
             updated_at: "2026-04-05T10:00:02Z".into(),
             ..Default::default()

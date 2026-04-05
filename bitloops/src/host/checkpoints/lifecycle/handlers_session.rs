@@ -165,7 +165,7 @@ pub fn handle_lifecycle_turn_start(
             ..Default::default()
         }
     });
-    let should_replace_bootstrap_prompt = state.step_count == 0
+    let should_replace_bootstrap_prompt = state.pending.step_count == 0
         && state.turn_id.trim().is_empty()
         && state.phase == crate::host::checkpoints::session::phase::SessionPhase::Idle;
     if state.first_prompt.is_empty() || should_replace_bootstrap_prompt {
@@ -202,7 +202,7 @@ pub fn handle_lifecycle_turn_start(
 
     let prompt_text =
         truncate_prompt_for_storage(canonical_request.prompt.as_deref().unwrap_or(&event.prompt));
-    let turn_number = state.step_count + 1;
+    let turn_number = state.pending.step_count + 1;
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
         let session = InteractionSession {
             session_id: session_id.clone(),

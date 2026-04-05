@@ -51,6 +51,21 @@ fn interaction_event_id() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
+fn read_transcript_fragment(transcript_path: &str, start_offset: i64) -> (String, Option<i64>) {
+    if transcript_path.trim().is_empty() {
+        return (String::new(), None);
+    }
+    let Ok(transcript_text) = std::fs::read_to_string(transcript_path) else {
+        return (String::new(), None);
+    };
+    let lines: Vec<&str> = transcript_text.split_inclusive('\n').collect();
+    let start = start_offset.max(0) as usize;
+    if start > lines.len() {
+        return (String::new(), None);
+    }
+    (lines[start..].concat(), Some(lines.len() as i64))
+}
+
 pub(super) fn token_usage_metadata(token_usage: Option<&TokenUsage>) -> Option<TokenUsageMetadata> {
     token_usage.map(|token_usage| TokenUsageMetadata {
         input_tokens: token_usage.input_tokens.max(0) as u64,
@@ -161,7 +176,7 @@ pub(super) fn record_turn_start_interaction(
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
         }
-        let turn_number = state.step_count + 1;
+        let turn_number = state.pending.step_count + 1;
         let turn = InteractionTurn {
             turn_id: state.turn_id.clone(),
             session_id: state.session_id.clone(),
@@ -200,6 +215,7 @@ pub(super) struct TurnEndInteraction<'a> {
     pub(super) repo_root: Option<&'a Path>,
     pub(super) session_id: &'a str,
     pub(super) transcript_path: &'a str,
+    pub(super) transcript_offset_start: i64,
     pub(super) state: Option<&'a SessionState>,
     pub(super) prompt: &'a str,
     pub(super) turn_started_at: Option<&'a str>,
@@ -213,6 +229,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         repo_root,
         session_id,
         transcript_path,
+        transcript_offset_start,
         state,
         prompt,
         turn_started_at,
@@ -223,6 +240,8 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
     let event_time = now_rfc3339();
     let token_usage = token_usage_metadata(token_usage);
     let prompt = truncate_prompt_for_storage(prompt);
+    let (transcript_fragment, transcript_offset_end) =
+        read_transcript_fragment(transcript_path, transcript_offset_start);
     with_interaction_spool(repo_root, |spool| {
         let Some(repo_root) = repo_root else {
             return;
@@ -263,7 +282,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             turn_id: turn_id.clone(),
             session_id: session_id.to_string(),
             repo_id: spool.repo_id().to_string(),
-            turn_number: state.map_or(1, |state| state.step_count + 1),
+            turn_number: state.map_or(1, |state| state.pending.step_count + 1),
             prompt: prompt.clone(),
             agent_type: agent_type.clone(),
             started_at: turn_started_at
@@ -281,6 +300,9 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             ended_at: Some(event_time.clone()),
             token_usage: token_usage.clone(),
             prompt_count: 1,
+            transcript_offset_start: Some(transcript_offset_start),
+            transcript_offset_end,
+            transcript_fragment: transcript_fragment.clone(),
             files_modified: files_modified.to_vec(),
             checkpoint_id: None,
             updated_at: event_time.clone(),
@@ -301,6 +323,9 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             payload: serde_json::json!({
                 "files_modified": files_modified,
                 "files_count": files_modified.len(),
+                "transcript_offset_start": transcript_offset_start,
+                "transcript_offset_end": transcript_offset_end,
+                "transcript_fragment": transcript_fragment,
                 "token_usage": token_usage,
             }),
         }) {

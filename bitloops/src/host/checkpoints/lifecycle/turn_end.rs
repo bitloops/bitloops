@@ -218,7 +218,7 @@ pub fn handle_lifecycle_turn_end(
         .unwrap_or_else(generate_lifecycle_turn_id);
     let turn_number = session_before_capture
         .as_ref()
-        .map(|state| state.step_count + 1)
+        .map(|state| state.pending.step_count + 1)
         .unwrap_or(1);
     let all_files: Vec<String> = ctx
         .modified_files
@@ -237,6 +237,11 @@ pub fn handle_lifecycle_turn_end(
             subagent_tokens: None,
         }
     });
+    let transcript_fragment = transcript_fragment_from_offsets(
+        &transcript_data,
+        transcript_offset,
+        new_transcript_position,
+    );
 
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
         let session = session_before_capture
@@ -305,6 +310,7 @@ pub fn handle_lifecycle_turn_end(
             prompt_count: all_prompts.len().min(u32::MAX as usize) as u32,
             transcript_offset_start: Some(transcript_offset as i64),
             transcript_offset_end: Some(new_transcript_position as i64),
+            transcript_fragment: transcript_fragment.clone(),
             files_modified: all_files.clone(),
             checkpoint_id: None,
             updated_at: interaction_now.clone(),
@@ -328,6 +334,7 @@ pub fn handle_lifecycle_turn_end(
                 "summary": summary,
                 "transcript_offset_start": transcript_offset,
                 "transcript_offset_end": new_transcript_position,
+                "transcript_fragment": transcript_fragment,
                 "token_usage": token_meta,
             }),
         }) {
@@ -345,7 +352,7 @@ pub fn handle_lifecycle_turn_end(
 
     if let Ok(Some(mut state)) = backend.load_session(&session_id) {
         let context = SessionTransitionContext {
-            has_files_touched: !state.files_touched.is_empty(),
+            has_files_touched: !state.pending.files_touched.is_empty(),
             is_rebase_in_progress: false,
         };
         let transition =
@@ -358,6 +365,19 @@ pub fn handle_lifecycle_turn_end(
     let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
+}
+
+fn transcript_fragment_from_offsets(
+    transcript_data: &[u8],
+    start_offset: usize,
+    end_offset: usize,
+) -> String {
+    let transcript_text = String::from_utf8_lossy(transcript_data);
+    let lines: Vec<&str> = transcript_text.split_inclusive('\n').collect();
+    if start_offset >= end_offset || end_offset > lines.len() {
+        return String::new();
+    }
+    lines[start_offset..end_offset].concat()
 }
 
 /// Reads the transcript file with a brief retry window to handle agents that

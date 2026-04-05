@@ -166,6 +166,7 @@ fn sample_turn() -> InteractionTurn {
         prompt_count: 2,
         transcript_offset_start: Some(1),
         transcript_offset_end: Some(3),
+        transcript_fragment: "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".into(),
         files_modified: vec!["src/main.rs".into()],
         updated_at: "2026-04-05T10:00:02Z".into(),
         ..Default::default()
@@ -206,6 +207,13 @@ fn record_and_flush_interactions() {
             .unwrap()
             .len(),
         1
+    );
+    assert!(
+        repository
+            .list_turns_for_session("session-1", 10)
+            .unwrap()[0]
+            .transcript_fragment
+            .contains("\"assistant\"")
     );
     assert_eq!(
         repository

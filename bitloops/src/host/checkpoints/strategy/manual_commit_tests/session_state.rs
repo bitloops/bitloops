@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 #[test]
 pub(crate) fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
@@ -159,7 +160,7 @@ pub(crate) fn save_step_increments_step_count() {
         session_id: "s4".to_string(),
         base_commit: head.clone(),
         phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
-        step_count: 0,
+        pending: PendingCheckpointState::default(),
         ..Default::default()
     };
     backend.save_session(&state).unwrap();

@@ -52,6 +52,8 @@ pub struct InteractionTurn {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_offset_end: Option<i64>,
     #[serde(default)]
+    pub transcript_fragment: String,
+    #[serde(default)]
     pub files_modified: Vec<String>,
     pub checkpoint_id: Option<String>,
     #[serde(default)]
@@ -231,6 +233,7 @@ mod tests {
             prompt_count: 2,
             transcript_offset_start: Some(4),
             transcript_offset_end: Some(9),
+            transcript_fragment: "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".into(),
             files_modified: vec!["src/main.rs".into()],
             updated_at: "2026-04-04T10:02:00Z".into(),
             ..Default::default()
@@ -244,6 +247,7 @@ mod tests {
         assert_eq!(parsed.prompt_count, 2);
         assert_eq!(parsed.transcript_offset_start, Some(4));
         assert_eq!(parsed.transcript_offset_end, Some(9));
+        assert!(parsed.transcript_fragment.contains("\"assistant\""));
         assert_eq!(parsed.files_modified, vec!["src/main.rs"]);
         assert!(parsed.checkpoint_id.is_none());
     }

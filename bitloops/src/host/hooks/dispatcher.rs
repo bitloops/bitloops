@@ -807,7 +807,8 @@ pub(crate) fn dispatch_cursor_hook(
                     || session.is_none()
                     || session.as_ref().is_some_and(|state| {
                         state.phase == SessionPhase::Active
-                            || (state.phase == SessionPhase::Idle && state.step_count == 0)
+                            || (state.phase == SessionPhase::Idle
+                                && state.pending.step_count == 0)
                     }));
 
             if should_finalize_turn {

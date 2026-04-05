@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 use crate::adapters::agents::canonical_agent_key;
 use crate::host::checkpoints::session::create_session_backend_or_local;
-use crate::host::checkpoints::session::state::SessionState;
+use crate::host::checkpoints::session::state::{PendingCheckpointState, SessionState};
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedMetadata, WriteCommittedOptions, insert_commit_checkpoint_mapping,
     persist_committed_checkpoint_db_and_blobs, redact_bytes, redact_jsonl_bytes_with_fallback,
@@ -322,12 +322,10 @@ impl SessionInitializer for AutoCommitStrategy {
             base_commit,
             started_at: now.clone(),
             last_interaction_time: Some(now),
-            step_count: 0,
-            checkpoint_transcript_start: 0,
-            files_touched: vec![],
             agent_type: canonical_agent_key(agent_type),
             transcript_path: transcript_path.to_string(),
             first_prompt: truncate_prompt(user_prompt),
+            pending: PendingCheckpointState::default(),
             ..Default::default()
         };
         backend.save_session(&state)?;

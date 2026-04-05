@@ -18,6 +18,22 @@ pub(crate) fn seed_interaction_turn(
     turn_id: &str,
     files: &[&str],
 ) {
+    seed_interaction_turn_with_fragment(
+        repo_root,
+        session_id,
+        turn_id,
+        files,
+        "{\"type\":\"user\",\"content\":\"make the change\"}\n",
+    );
+}
+
+pub(crate) fn seed_interaction_turn_with_fragment(
+    repo_root: &Path,
+    session_id: &str,
+    turn_id: &str,
+    files: &[&str],
+    transcript_fragment: &str,
+) {
     let spool = open_test_spool(repo_root);
     let transcript_path = repo_root.join("transcript.jsonl");
     if !transcript_path.exists() {
@@ -56,6 +72,7 @@ pub(crate) fn seed_interaction_turn(
         prompt_count: 1,
         transcript_offset_start: Some(0),
         transcript_offset_end: Some(1),
+        transcript_fragment: transcript_fragment.to_string(),
         files_modified: files.iter().map(|file| file.to_string()).collect(),
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()

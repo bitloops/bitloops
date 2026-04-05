@@ -292,6 +292,7 @@ pub fn handle_stop_with_profile(
         repo_root,
         session_id: &session_id,
         transcript_path: &input.transcript_path,
+        transcript_offset_start: transcript_start,
         state: state.as_ref(),
         prompt,
         turn_started_at,

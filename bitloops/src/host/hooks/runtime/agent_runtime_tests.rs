@@ -6,6 +6,7 @@ use crate::host::checkpoints::lifecycle::UNKNOWN_SESSION_ID;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::local_backend::LocalFileBackend;
 use crate::host::checkpoints::session::phase::SessionPhase;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 use crate::host::checkpoints::strategy::manual_commit::ManualCommitStrategy;
 use crate::host::checkpoints::strategy::noop::NoOpStrategy;
 use crate::host::checkpoints::strategy::registry;
@@ -102,6 +103,28 @@ fn interaction_row_counts(repo_root: &Path) -> (i64, i64, i64) {
         })
         .expect("count interaction events");
     (sessions, turns, events)
+}
+
+fn interaction_turn_fragment(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT transcript_fragment FROM interaction_turns ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn transcript_fragment")
+}
+
+fn interaction_turn_end_payload(repo_root: &Path) -> serde_json::Value {
+    let conn = open_events_duckdb(repo_root);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM interaction_events WHERE event_type = 'turn_end' ORDER BY event_time DESC, event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read turn_end payload");
+    serde_json::from_str(&payload).expect("parse turn_end payload")
 }
 
 fn write_claude_write_transcript(path: &Path, file_path: &str) {
@@ -429,6 +452,71 @@ fn claude_stop_persists_interactions_before_save_step_failure() {
 
     assert_eq!(interaction_row_counts(dir.path()), (1, 1, 3));
     assert_sorted_event_types(dir.path(), vec!["session_start", "turn_start", "turn_end"]);
+}
+
+#[test]
+fn claude_stop_persists_transcript_fragment_in_event_store() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let transcript_path = transcript_dir.path().join("claude-fragment.jsonl");
+
+    handle_session_start_with_profile(
+        SessionInfoInput {
+            session_id: "claude-fragment".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+        },
+        &backend,
+        Some(dir.path()),
+        Some(CLAUDE_HOOK_AGENT_PROFILE),
+    )
+    .unwrap();
+
+    handle_user_prompt_submit_with_strategy_and_profile(
+        UserPromptSubmitInput {
+            session_id: "claude-fragment".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+            prompt: "Update tracked file".to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(
+        &transcript_path,
+        "{\"type\":\"user\",\"message\":{\"content\":\"Update tracked file\"}}\n\
+{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Implemented the change\"}]}}\n",
+    )
+    .unwrap();
+
+    handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "claude-fragment".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    let transcript_fragment = interaction_turn_fragment(dir.path());
+    assert!(
+        transcript_fragment.contains("Implemented the change"),
+        "turn row should persist the completed transcript fragment"
+    );
+
+    let payload = interaction_turn_end_payload(dir.path());
+    assert_eq!(
+        payload["transcript_fragment"].as_str().unwrap_or_default(),
+        transcript_fragment,
+        "turn_end event payload should mirror the persisted transcript fragment"
+    );
 }
 
 #[test]
@@ -869,7 +957,7 @@ fn cursor_session_end_with_idle_zero_steps_still_saves_checkpoint() {
         .save_session(&SessionState {
             session_id: "cursor-s3-idle-zero".to_string(),
             phase: SessionPhase::Idle,
-            step_count: 0,
+            pending: PendingCheckpointState::default(),
             ..Default::default()
         })
         .unwrap();
@@ -1084,7 +1172,10 @@ fn post_task_deletes_marker_without_mutating_step_count() {
     let state = SessionState {
         session_id: "s8".to_string(),
         phase: SessionPhase::Active,
-        step_count: 2,
+        pending: PendingCheckpointState {
+            step_count: 2,
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -1121,7 +1212,7 @@ fn post_todo_noop_when_no_changes_in_subagent() {
     let state = SessionState {
         session_id: "s9".to_string(),
         phase: SessionPhase::Active,
-        step_count: 0,
+        pending: PendingCheckpointState::default(),
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -1153,7 +1244,10 @@ fn post_todo_noop_when_not_in_subagent() {
     let state = SessionState {
         session_id: "s10".to_string(),
         phase: SessionPhase::Active,
-        step_count: 5,
+        pending: PendingCheckpointState {
+            step_count: 5,
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -1530,7 +1624,10 @@ fn post_task_saves_task_step_when_changes_exist() {
         .save_session(&SessionState {
             session_id: "post-task".to_string(),
             phase: SessionPhase::Active,
-            step_count: 7,
+            pending: PendingCheckpointState {
+                step_count: 7,
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();

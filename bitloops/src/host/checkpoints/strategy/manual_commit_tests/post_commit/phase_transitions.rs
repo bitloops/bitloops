@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 use super::helpers::commit_file;
 
@@ -13,8 +14,11 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
             session_id: "pc-active".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
             base_commit: head,
-            step_count: 2,
-            files_touched: vec!["active.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 2,
+                files_touched: vec!["active.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -58,8 +62,11 @@ pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
             session_id: "pc-active-turn".to_string(),
             phase: SessionPhase::Active,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["index.html".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["index.html".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -98,8 +105,11 @@ pub(crate) fn post_commit_idle_session_condenses() {
             session_id: "pc-idle".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["idle.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["idle.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -127,8 +137,11 @@ pub(crate) fn post_commit_rebase_during_active_skips_transition() {
             session_id: "pc-rebase".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
             base_commit: head,
-            step_count: 3,
-            files_touched: vec!["rebase.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 3,
+                files_touched: vec!["rebase.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -161,8 +174,11 @@ pub(crate) fn post_commit_files_touched_resets_after_condensation() {
             session_id: "pc-files".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["f1.rs".to_string(), "f2.rs".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["f1.rs".to_string(), "f2.rs".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -195,8 +211,11 @@ pub(crate) fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
             session_id: "turn-end-session".to_string(),
             phase: SessionPhase::Active,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["turn-end.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["turn-end.txt".to_string()],
+                ..Default::default()
+            },
             transcript_path: transcript_path.to_string_lossy().to_string(),
             ..Default::default()
         })

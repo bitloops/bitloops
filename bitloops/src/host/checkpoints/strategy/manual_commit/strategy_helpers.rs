@@ -26,7 +26,6 @@ impl ManualCommitStrategy {
                 started_at: now_rfc3339(),
                 phase: SessionPhase::Active,
                 turn_id: generate_checkpoint_id(),
-                step_count: 0,
                 untracked_files_at_start: collect_untracked_files_at_start(&self.repo_root),
                 agent_type: canonicalize_agent_type(agent_type),
                 transcript_path: transcript_path.to_string(),
@@ -68,7 +67,7 @@ impl ManualCommitStrategy {
         &self,
         state: &SessionState,
     ) -> SessionPromptAttribution {
-        let checkpoint_number = state.step_count as i32 + 1;
+        let checkpoint_number = state.pending.step_count as i32 + 1;
         let mut changed_files: BTreeMap<String, String> = BTreeMap::new();
         if let Ok((modified, new_files, deleted)) = working_tree_changes(&self.repo_root) {
             for file in modified.into_iter().chain(new_files).chain(deleted) {
@@ -160,9 +159,10 @@ impl ManualCommitStrategy {
     ) -> Result<()> {
         let committed_files =
             files_changed_in_commit(&self.repo_root, new_head).unwrap_or_default();
-        let had_tracked_files = !state.files_touched.is_empty();
+        let had_tracked_files = !state.pending.files_touched.is_empty();
         let committed_touched: Vec<String> = if had_tracked_files {
             state
+                .pending
                 .files_touched
                 .iter()
                 .filter(|f| committed_files.contains(f.as_str()))
@@ -196,13 +196,14 @@ impl ManualCommitStrategy {
         let prompts = extract_user_prompts_from_jsonl(&transcript_content);
         let context = generate_context_from_prompts(&prompts).into_bytes();
         let token_usage = state
+            .pending
             .token_usage
             .as_ref()
             .map(token_usage_metadata_from_runtime)
             .or_else(|| {
                 calculate_token_usage_from_transcript(
                     &transcript_content,
-                    state.checkpoint_transcript_start,
+                    state.pending.checkpoint_transcript_start,
                 )
             });
         let (author_name, author_email) = get_commit_author(&self.repo_root, new_head)
@@ -228,13 +229,13 @@ impl ManualCommitStrategy {
                 };
                 let scoped = crate::host::checkpoints::summarize::scope_transcript_for_checkpoint(
                     transcript_content.as_bytes(),
-                    state.checkpoint_transcript_start.max(0) as usize,
+                    state.pending.checkpoint_transcript_start.max(0) as usize,
                     summarize_agent,
                 );
                 if !scoped.is_empty() {
                     match crate::host::checkpoints::summarize::generate_from_transcript(
                         &scoped,
-                        &state.files_touched,
+                        &state.pending.files_touched,
                         summarize_agent,
                         None,
                     ) {
@@ -265,14 +266,14 @@ impl ManualCommitStrategy {
                 transcript: transcript_content.clone().into_bytes(),
                 prompts: Some(prompts),
                 context: Some(context),
-                checkpoints_count: state.step_count,
+                checkpoints_count: state.pending.step_count,
                 files_touched: committed_touched,
                 token_usage_input: None,
                 token_usage_output: None,
                 token_usage_api_call_count: None,
                 turn_id: state.turn_id.clone(),
-                transcript_identifier_at_start: state.transcript_identifier_at_start.clone(),
-                checkpoint_transcript_start: state.checkpoint_transcript_start,
+                transcript_identifier_at_start: state.pending.transcript_identifier_at_start.clone(),
+                checkpoint_transcript_start: state.pending.checkpoint_transcript_start,
                 token_usage,
                 initial_attribution,
                 author_name,
@@ -290,17 +291,17 @@ impl ManualCommitStrategy {
             &self.repo_root,
             latest_session_tree_hash.as_deref(),
             new_head,
-            &state.files_touched,
+            &state.pending.files_touched,
             &committed_files,
         );
 
         // Update session state.
         state.base_commit = new_head.to_string();
         state.attribution_base_commit = new_head.to_string();
-        state.step_count = 0;
-        state.checkpoint_transcript_start = total_transcript_lines;
-        state.files_touched = remaining_files;
-        state.transcript_identifier_at_start.clear();
+        state.pending.step_count = 0;
+        state.pending.checkpoint_transcript_start = total_transcript_lines;
+        state.pending.files_touched = remaining_files;
+        state.pending.transcript_identifier_at_start.clear();
         state.last_checkpoint_id = checkpoint_id.to_string();
         state.prompt_attributions.clear();
         state.pending_prompt_attribution = None;
@@ -348,14 +349,21 @@ impl ManualCommitStrategy {
             )
         });
 
-        let full_transcript_content =
-            load_interaction_session_transcript(&self.repo_root, session).unwrap_or_default();
-        let total_transcript_lines = full_transcript_content.lines().count() as i64;
-        let transcript_content = scope_interaction_transcript_for_turns(
-            &full_transcript_content,
-            turns,
-            &session.session_id,
-        );
+        if let Some(missing_turn) = turns
+            .iter()
+            .find(|turn| turn.transcript_fragment.trim().is_empty())
+        {
+            anyhow::bail!(
+                "interaction turn {} is missing transcript_fragment for session {}",
+                missing_turn.turn_id,
+                session.session_id
+            );
+        }
+
+        let transcript_content = turns
+            .iter()
+            .map(|turn| turn.transcript_fragment.as_str())
+            .collect::<String>();
 
         let mut prompts = aggregate_turn_prompts(turns);
         if prompts.is_empty() {
@@ -365,8 +373,7 @@ impl ManualCommitStrategy {
             prompts.push(session.first_prompt.clone());
         }
         let context = generate_context_from_prompts(&prompts).into_bytes();
-        let token_usage = aggregate_turn_token_usage(turns)
-            .or_else(|| calculate_token_usage_from_transcript(&transcript_content, 0));
+        let token_usage = aggregate_turn_token_usage(turns);
         let (author_name, author_email) = get_commit_author(&self.repo_root, new_head)
             .unwrap_or(get_git_author_from_repo(&self.repo_root)?);
 
@@ -506,13 +513,13 @@ impl ManualCommitStrategy {
 
             state.base_commit = new_head.to_string();
             state.attribution_base_commit = new_head.to_string();
-            state.step_count = 0;
+            state.pending.step_count = 0;
             state.turn_id = turn_id;
-            state.checkpoint_transcript_start = aggregate_turn_transcript_bounds(turns)
+            state.pending.checkpoint_transcript_start = aggregate_turn_transcript_bounds(turns)
                 .map(|(_, end)| end as i64)
-                .unwrap_or(total_transcript_lines);
-            state.files_touched = remaining_files;
-            state.transcript_identifier_at_start.clear();
+                .unwrap_or_default();
+            state.pending.files_touched = remaining_files;
+            state.pending.transcript_identifier_at_start.clear();
             state.last_checkpoint_id = checkpoint_id.to_string();
             state.prompt_attributions.clear();
             state.pending_prompt_attribution = None;
@@ -548,50 +555,4 @@ impl ManualCommitStrategy {
         }
         Ok(())
     }
-}
-
-fn load_interaction_session_transcript(
-    repo_root: &Path,
-    session: &crate::host::interactions::types::InteractionSession,
-) -> Option<String> {
-    read_transcript_from_disk(repo_root, &session.session_id).or_else(|| {
-        if session.transcript_path.trim().is_empty() {
-            return None;
-        }
-        fs::read_to_string(&session.transcript_path)
-            .ok()
-            .filter(|content| !content.is_empty())
-    })
-}
-
-fn scope_interaction_transcript_for_turns(
-    full_transcript: &str,
-    turns: &[crate::host::interactions::types::InteractionTurn],
-    session_id: &str,
-) -> String {
-    if full_transcript.is_empty() {
-        return String::new();
-    }
-
-    let Some((start, end)) = aggregate_turn_transcript_bounds(turns) else {
-        eprintln!(
-            "[bitloops] Warning: falling back to full transcript during checkpoint condensation session_id={} reason=missing_turn_offsets",
-            session_id
-        );
-        return full_transcript.to_string();
-    };
-
-    let lines: Vec<&str> = full_transcript.split_inclusive('\n').collect();
-    if start >= end || end > lines.len() {
-        eprintln!(
-            "[bitloops] Warning: falling back to full transcript during checkpoint condensation session_id={} reason=invalid_turn_offsets start={} end={} line_count={}",
-            session_id,
-            start,
-            end,
-            lines.len()
-        );
-        return full_transcript.to_string();
-    }
-
-    lines[start..end].concat()
 }

@@ -120,14 +120,14 @@ impl SqliteInteractionSpool {
                 agent_type, model, started_at, ended_at, has_token_usage,
                 input_tokens, cache_creation_tokens, cache_read_tokens,
                 output_tokens, api_call_count, summary, prompt_count,
-                transcript_offset_start, transcript_offset_end,
+                transcript_offset_start, transcript_offset_end, transcript_fragment,
                 files_modified, checkpoint_id, updated_at
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20, ?21, ?22
+                ?18, ?19, ?20, ?21, ?22, ?23
              )
              ON CONFLICT(turn_id) DO UPDATE SET
                 session_id = excluded.session_id,
@@ -189,6 +189,10 @@ impl SqliteInteractionSpool {
                     COALESCE(excluded.transcript_offset_start, interaction_turns.transcript_offset_start),
                 transcript_offset_end =
                     COALESCE(excluded.transcript_offset_end, interaction_turns.transcript_offset_end),
+                transcript_fragment = CASE
+                    WHEN excluded.transcript_fragment = '' THEN interaction_turns.transcript_fragment
+                    ELSE excluded.transcript_fragment
+                END,
                 files_modified = CASE
                     WHEN excluded.files_modified = '[]' AND interaction_turns.files_modified <> '[]'
                         THEN interaction_turns.files_modified
@@ -222,6 +226,7 @@ impl SqliteInteractionSpool {
                 i64::from(turn.prompt_count),
                 turn.transcript_offset_start,
                 turn.transcript_offset_end,
+                turn.transcript_fragment,
                 files_modified,
                 checkpoint_id,
                 turn.updated_at,
@@ -543,7 +548,7 @@ impl InteractionSpool for SqliteInteractionSpool {
                         agent_type, model, started_at, ended_at, has_token_usage,
                         input_tokens, cache_creation_tokens, cache_read_tokens,
                         output_tokens, api_call_count, summary, prompt_count,
-                        transcript_offset_start, transcript_offset_end,
+                        transcript_offset_start, transcript_offset_end, transcript_fragment,
                         files_modified, checkpoint_id, updated_at
                  FROM interaction_turns
                  WHERE session_id = ?1 AND repo_id = ?2
@@ -564,7 +569,7 @@ impl InteractionSpool for SqliteInteractionSpool {
                         agent_type, model, started_at, ended_at, has_token_usage,
                         input_tokens, cache_creation_tokens, cache_read_tokens,
                         output_tokens, api_call_count, summary, prompt_count,
-                        transcript_offset_start, transcript_offset_end,
+                        transcript_offset_start, transcript_offset_end, transcript_fragment,
                         files_modified, checkpoint_id, updated_at
                  FROM interaction_turns
                  WHERE repo_id = ?1 AND checkpoint_id = ''

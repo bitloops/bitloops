@@ -66,7 +66,7 @@ impl Strategy for ManualCommitStrategy {
         }
 
         let default_prompt_attr = SessionPromptAttribution {
-            checkpoint_number: state.step_count as i32 + 1,
+            checkpoint_number: state.pending.step_count as i32 + 1,
             ..Default::default()
         };
         let prompt_attr = state
@@ -135,7 +135,7 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                step_number: state.step_count + 1,
+                step_number: state.pending.step_count + 1,
                 modified_files: modified.clone(),
                 new_files: new_files.clone(),
                 deleted_files: deleted.clone(),
@@ -144,7 +144,7 @@ impl Strategy for ManualCommitStrategy {
                 commit_message: commit_msg,
                 author_name,
                 author_email,
-                is_first_checkpoint: state.step_count == 0,
+                is_first_checkpoint: state.pending.step_count == 0,
             },
         )?;
         if !result.skipped && result.commit_hash.is_empty() {
@@ -155,7 +155,10 @@ impl Strategy for ManualCommitStrategy {
         // Still persist token_usage when provided so turn-end can record usage without a new commit.
         if result.skipped {
             if let Some(usage) = &ctx.token_usage {
-                state.token_usage = Some(accumulate_token_usage(state.token_usage.take(), usage));
+                state.pending.token_usage = Some(accumulate_token_usage(
+                    state.pending.token_usage.take(),
+                    usage,
+                ));
                 self.backend.save_session(&state)?;
             }
             return Ok(());
@@ -163,16 +166,22 @@ impl Strategy for ManualCommitStrategy {
 
         // Update session state.
         state.base_commit = head;
-        state.step_count += 1;
+        state.pending.step_count += 1;
         state.cli_version = CLI_VERSION.to_string();
         state.pending_prompt_attribution = None;
         state.prompt_attributions.push(prompt_attr);
         // Record transcript identifier at the first step.
-        if state.step_count == 1 && state.transcript_identifier_at_start.is_empty() {
-            state.transcript_identifier_at_start = ctx.step_transcript_identifier.clone();
+        if state.pending.step_count == 1
+            && state.pending.transcript_identifier_at_start.is_empty()
+        {
+            state.pending.transcript_identifier_at_start =
+                ctx.step_transcript_identifier.clone();
         }
         if let Some(usage) = &ctx.token_usage {
-            state.token_usage = Some(accumulate_token_usage(state.token_usage.take(), usage));
+            state.pending.token_usage = Some(accumulate_token_usage(
+                state.pending.token_usage.take(),
+                usage,
+            ));
         }
         let all_files: Vec<String> = modified
             .iter()
@@ -180,7 +189,7 @@ impl Strategy for ManualCommitStrategy {
             .chain(deleted.iter())
             .cloned()
             .collect();
-        merge_files_touched(&mut state.files_touched, &all_files);
+        merge_files_touched(&mut state.pending.files_touched, &all_files);
         self.backend.save_session(&state)?;
 
         Ok(())
@@ -262,7 +271,7 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryTaskOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                step_number: state.step_count,
+                step_number: state.pending.step_count,
                 tool_use_id: ctx.tool_use_id.clone(),
                 agent_id: ctx.agent_id.clone(),
                 modified_files: ctx.modified_files.clone(),
@@ -284,7 +293,7 @@ impl Strategy for ManualCommitStrategy {
             anyhow::bail!("task checkpoint commit hash is empty");
         }
 
-        // Update session state — accumulate files_touched but don't bump step_count
+        // Update session state — accumulate pending files but don't bump checkpoint count
         // (task checkpoints are subordinate to regular turn checkpoints).
         let all_files: Vec<String> = ctx
             .modified_files
@@ -293,7 +302,7 @@ impl Strategy for ManualCommitStrategy {
             .chain(ctx.deleted_files.iter())
             .cloned()
             .collect();
-        merge_files_touched(&mut state.files_touched, &all_files);
+        merge_files_touched(&mut state.pending.files_touched, &all_files);
         self.backend.save_session(&state)?;
 
         Ok(())
