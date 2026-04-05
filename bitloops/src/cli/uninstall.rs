@@ -1,5 +1,7 @@
+use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use anyhow::{Result, bail};
 
@@ -30,9 +32,12 @@ type UninstallSelector =
     dyn Fn(&[UninstallTarget]) -> std::result::Result<Vec<UninstallTarget>, String>;
 type ServiceUninstaller = dyn Fn() -> Result<()>;
 type BinaryCandidatesFn = dyn Fn() -> Result<Vec<PathBuf>>;
+type DaemonStopFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+type DaemonStopper = dyn Fn() -> DaemonStopFuture;
 
 struct RunContext<'a> {
     select_fn: Option<&'a UninstallSelector>,
+    daemon_stopper: &'a DaemonStopper,
     service_uninstaller: &'a ServiceUninstaller,
     binary_candidates: &'a BinaryCandidatesFn,
 }
@@ -44,6 +49,7 @@ pub async fn run(args: UninstallArgs) -> Result<()> {
     let mut err = stderr.lock();
     let context = RunContext {
         select_fn: None,
+        daemon_stopper: &|| Box::pin(crate::daemon::stop()),
         service_uninstaller: &default_service_uninstaller,
         binary_candidates: &known_binary_candidates,
     };
@@ -92,7 +98,17 @@ async fn run_with_context(
             UninstallTarget::Data => uninstall_data(&scope.repo_data_roots, out),
             UninstallTarget::Caching => uninstall_cache(out),
             UninstallTarget::Config => uninstall_config(out),
-            UninstallTarget::Service => uninstall_service(out, context.service_uninstaller),
+            UninstallTarget::Service => {
+                if let Err(err) = (context.daemon_stopper)().await
+                    && !is_daemon_not_running_error(&err)
+                {
+                    writeln!(
+                        err_out,
+                        "Warning: unable to stop Bitloops daemon before removing the service: {err:#}"
+                    )?;
+                }
+                uninstall_service(out, context.service_uninstaller)
+            }
             UninstallTarget::Binaries => uninstall_binaries(out, context.binary_candidates),
         };
 
@@ -116,3 +132,7 @@ async fn run_with_context(
 
 #[cfg(test)]
 mod tests;
+
+fn is_daemon_not_running_error(err: &anyhow::Error) -> bool {
+    err.to_string() == "Bitloops daemon is not running. Start it with `bitloops daemon start`."
+}
