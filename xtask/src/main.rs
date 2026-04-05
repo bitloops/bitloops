@@ -248,11 +248,7 @@ fn llvm_cov_report_html_display_command(html_dir: &str) -> String {
 fn parse_test_binary_json_line(line: &str) -> Option<PathBuf> {
     let json = serde_json::from_str::<Value>(line).ok()?;
     let executable = json.get("executable")?.as_str()?;
-    let is_test_profile = json
-        .get("profile")?
-        .get("test")?
-        .as_bool()
-        .unwrap_or(false);
+    let is_test_profile = json.get("profile")?.get("test")?.as_bool().unwrap_or(false);
     if is_test_profile {
         Some(PathBuf::from(executable))
     } else {
@@ -1265,7 +1261,10 @@ mod tests {
             Some(PathBuf::from("/tmp/t"))
         );
         assert!(parse_test_binary_json_line(r#"{"profile":{"test":true}}"#).is_none());
-        assert!(parse_test_binary_json_line(r#"{"executable":"/x","profile":{"test":false}}"#).is_none());
+        assert!(
+            parse_test_binary_json_line(r#"{"executable":"/x","profile":{"test":false}}"#)
+                .is_none()
+        );
         assert!(parse_test_binary_json_line("not json").is_none());
     }
 
@@ -1274,10 +1273,15 @@ mod tests {
         assert!(otool_list_output_links_libduckdb(
             "\t@rpath/libduckdb.dylib (compatibility version 0.0.0)\n"
         ));
-        assert!(!otool_list_output_links_libduckdb("\t/usr/lib/libSystem.B.dylib\n"));
+        assert!(!otool_list_output_links_libduckdb(
+            "\t/usr/lib/libSystem.B.dylib\n"
+        ));
         let load = "cmd LC_RPATH\ncmdsize 32\npath @executable_path \n";
         assert!(otool_load_output_contains_rpath(load, "@executable_path"));
-        assert!(!otool_load_output_contains_rpath("path /usr/lib/ ", "@executable_path"));
+        assert!(!otool_load_output_contains_rpath(
+            "path /usr/lib/ ",
+            "@executable_path"
+        ));
     }
 
     #[test]

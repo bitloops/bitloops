@@ -610,6 +610,9 @@ mod schema_template_tests {
         let slim_sdl = build_slim_schema_template().sdl();
         assert!(slim_sdl.len() > 500);
         assert!(slim_sdl.contains("type Mutation"));
-        assert_ne!(global_sdl, slim_sdl, "slim schema should differ from global SDL");
+        assert_ne!(
+            global_sdl, slim_sdl,
+            "slim schema should differ from global SDL"
+        );
     }
 }
