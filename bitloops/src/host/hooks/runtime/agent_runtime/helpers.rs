@@ -1,4 +1,18 @@
-use super::*;
+use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command;
+
+#[cfg(test)]
+use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use crate::adapters::agents::claude_code::transcript as claude_transcript;
+use crate::host::checkpoints::transcript::commit_message;
+use crate::utils::{paths, strings};
+
+use super::types::*;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 

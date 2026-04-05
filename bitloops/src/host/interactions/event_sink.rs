@@ -3,9 +3,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::store::InteractionEventRepository;
-use super::types::{
-    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
-};
+use super::types::{InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn};
 use crate::config::EventsBackendConfig;
 
 mod clickhouse;

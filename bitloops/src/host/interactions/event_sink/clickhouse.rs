@@ -469,9 +469,7 @@ mod tests {
             updated_at: "2026-04-05T10:00:01Z".into(),
             ..Default::default()
         };
-        repository
-            .upsert_session(&session)
-            .expect("upsert session");
+        repository.upsert_session(&session).expect("upsert session");
 
         let turn = InteractionTurn {
             turn_id: "turn-1".into(),
@@ -505,9 +503,7 @@ mod tests {
             model: "gpt-5.4".into(),
             payload: serde_json::json!({"token_usage": {"input_tokens": 11}}),
         };
-        repository
-            .append_event(&event)
-            .expect("append event");
+        repository.append_event(&event).expect("append event");
         assert!(!repository.list_sessions(None, 10).unwrap().is_empty());
     }
 }

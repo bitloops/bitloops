@@ -473,8 +473,8 @@ mod route_tests {
     }
 
     #[test]
-    fn route_codex_hooks_persist_interactions_to_event_db_even_if_checkpoint_save_fails(
-    ) -> Result<()> {
+    fn route_codex_hooks_persist_interactions_to_event_db_even_if_checkpoint_save_fails()
+    -> Result<()> {
         let repo = seed_repo();
         let transcript_path = repo.path().join("codex-transcript.json");
         let transcript_path_str = transcript_path.to_string_lossy().to_string();
@@ -502,10 +502,14 @@ mod route_tests {
                 "transcriptPath": transcript_path_str,
             })
             .to_string();
-            let err = route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_STOP, &stop_payload)
-                .expect_err("stop should still fail when the relational checkpoint store is absent");
+            let err =
+                route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_STOP, &stop_payload)
+                    .expect_err(
+                        "stop should still fail when the relational checkpoint store is absent",
+                    );
             assert!(
-                err.to_string().contains("opening temporary checkpoint SQLite database"),
+                err.to_string()
+                    .contains("opening temporary checkpoint SQLite database"),
                 "unexpected stop error: {err:#}"
             );
             Ok(())
@@ -521,13 +525,19 @@ mod route_tests {
 
         let duckdb = duckdb::Connection::open(&event_db_path).expect("open events duckdb");
         let session_count: i64 = duckdb
-            .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| {
+                row.get(0)
+            })
             .expect("count interaction sessions");
         let turn_count: i64 = duckdb
-            .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| {
+                row.get(0)
+            })
             .expect("count interaction turns");
         let event_count: i64 = duckdb
-            .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| {
+                row.get(0)
+            })
             .expect("count interaction events");
         assert_eq!(session_count, 1);
         assert_eq!(turn_count, 1);
@@ -536,16 +546,24 @@ mod route_tests {
         let spool = rusqlite::Connection::open(interaction_spool_db_path(repo.path()))
             .expect("open interaction spool");
         let local_session_count: i64 = spool
-            .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| {
+                row.get(0)
+            })
             .expect("count local interaction sessions");
         let local_turn_count: i64 = spool
-            .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| {
+                row.get(0)
+            })
             .expect("count local interaction turns");
         let local_event_count: i64 = spool
-            .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| {
+                row.get(0)
+            })
             .expect("count local interaction events");
         let queued_mutations: i64 = spool
-            .query_row("SELECT COUNT(*) FROM interaction_spool_queue", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_spool_queue", [], |row| {
+                row.get(0)
+            })
             .expect("count queued interaction mutations");
         assert_eq!(local_session_count, 1);
         assert_eq!(local_turn_count, 1);

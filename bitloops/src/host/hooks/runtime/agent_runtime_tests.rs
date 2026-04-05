@@ -70,7 +70,8 @@ fn interaction_event_types(repo_root: &Path) -> Vec<String> {
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .expect("query event types");
-    rows.collect::<Result<Vec<_>, _>>().expect("collect event types")
+    rows.collect::<Result<Vec<_>, _>>()
+        .expect("collect event types")
 }
 
 fn assert_sorted_event_types(repo_root: &Path, mut expected: Vec<&str>) {
@@ -86,13 +87,19 @@ fn assert_sorted_event_types(repo_root: &Path, mut expected: Vec<&str>) {
 fn interaction_row_counts(repo_root: &Path) -> (i64, i64, i64) {
     let conn = open_events_duckdb(repo_root);
     let sessions = conn
-        .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| {
+            row.get(0)
+        })
         .expect("count interaction sessions");
     let turns = conn
-        .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| {
+            row.get(0)
+        })
         .expect("count interaction turns");
     let events = conn
-        .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| {
+            row.get(0)
+        })
         .expect("count interaction events");
     (sessions, turns, events)
 }

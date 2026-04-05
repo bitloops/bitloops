@@ -352,16 +352,31 @@ fn persist_checkpoint_provenance_rows(
         .sqlite
         .with_connection(|conn| {
             conn.execute(
-                "DELETE FROM checkpoint_artefact_lineage WHERE repo_id = ?1 AND checkpoint_id = ?2",
-                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+                "DELETE FROM checkpoint_artefact_lineage
+                 WHERE repo_id = ?1 AND checkpoint_id = ?2 AND session_id = ?3",
+                rusqlite::params![
+                    storage.repo_id,
+                    session_meta.checkpoint_id,
+                    session_meta.session_id
+                ],
             )?;
             conn.execute(
-                "DELETE FROM checkpoint_artefacts WHERE repo_id = ?1 AND checkpoint_id = ?2",
-                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+                "DELETE FROM checkpoint_artefacts
+                 WHERE repo_id = ?1 AND checkpoint_id = ?2 AND session_id = ?3",
+                rusqlite::params![
+                    storage.repo_id,
+                    session_meta.checkpoint_id,
+                    session_meta.session_id
+                ],
             )?;
             conn.execute(
-                "DELETE FROM checkpoint_files WHERE repo_id = ?1 AND checkpoint_id = ?2",
-                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+                "DELETE FROM checkpoint_files
+                 WHERE repo_id = ?1 AND checkpoint_id = ?2 AND session_id = ?3",
+                rusqlite::params![
+                    storage.repo_id,
+                    session_meta.checkpoint_id,
+                    session_meta.session_id
+                ],
             )?;
 
             let mut statements = Vec::with_capacity(

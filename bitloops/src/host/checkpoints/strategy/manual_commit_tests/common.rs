@@ -441,6 +441,34 @@ pub(crate) fn query_checkpoint_blob_row(
         .flatten()
 }
 
+pub(crate) fn query_checkpoint_file_session_ids(
+    repo_root: &Path,
+    checkpoint_id: &str,
+) -> Vec<String> {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_checkpoint_schema().unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .unwrap()
+        .repo_id;
+
+    sqlite
+        .with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT session_id
+                 FROM checkpoint_files
+                 WHERE checkpoint_id = ?1 AND repo_id = ?2
+                 ORDER BY session_id ASC",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![checkpoint_id, repo_id])?;
+            let mut session_ids = Vec::new();
+            while let Some(row) = rows.next()? {
+                session_ids.push(row.get::<_, String>(0)?);
+            }
+            Ok(session_ids)
+        })
+        .unwrap()
+}
+
 pub(crate) fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {
     let parent = tempfile::tempdir().unwrap();
     let main_repo = parent.path().join("main");
