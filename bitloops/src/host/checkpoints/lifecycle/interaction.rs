@@ -13,6 +13,7 @@ pub(super) fn resolve_interaction_event_store(
         )
         .ok()?;
     let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path).ok()?;
+    sqlite.initialise_checkpoint_schema().ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
         .repo_id;

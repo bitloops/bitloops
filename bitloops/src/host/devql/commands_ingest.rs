@@ -443,6 +443,9 @@ async fn ingest_interaction_events_from_checkpoint(
     }
     let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening checkpoint SQLite for interaction event ingestion")?;
+    sqlite
+        .initialise_checkpoint_schema()
+        .context("ensuring interaction tables exist for ingestion")?;
     let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(&cfg.repo_root);
     ingest_interaction_events(&sqlite, &duckdb_path, &cfg.repo.repo_id).await
 }
