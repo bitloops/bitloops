@@ -82,6 +82,18 @@ Team baseline recommendation:
 5. Keep assertions behaviour-focused and failure messages explicit.
 6. Gate heavy tests behind `slow-tests` in `bitloops/Cargo.toml` `[[test]]` entries.
 
+## Opt-in Postgres test-harness tests (`postgres-tests`)
+
+The `postgres-tests` Cargo feature is **not** enabled by `slow-tests`, `dev-test-slow`, or `dev-coverage`. It compiles and runs library tests that start a temporary Postgres cluster (`initdb` / `pg_ctl`); those stay opt-in so default and CI lanes stay lighter.
+
+- **When to use:** Local verification of the Postgres-backed test harness after changing SQL or repository code in `bitloops/src/capability_packs/test_harness/storage/postgres/`.
+- **Requirement:** Postgres client binaries on `PATH` (for example Homebrew `postgresql@16`). If they are missing, the tests skip and exit successfully.
+- **Command (from repository root):**
+
+```bash
+cargo test -p bitloops --lib --no-default-features --features postgres-tests
+```
+
 ## Checklist before opening a PR
 
 ```bash

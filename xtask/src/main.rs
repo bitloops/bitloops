@@ -882,7 +882,22 @@ fn is_gitignored(file: &Path, git_toplevel: Option<&Path>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_regression, parse_lcov_metrics};
+    use std::env;
+    use std::fs;
+    use std::io::Write;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    use tempfile::TempDir;
+
+    use super::{
+        BITLOOPS_MANIFEST, DEFAULT_LCOV_PATH, SLOW_TEST_TARGETS, collect_rs_files, count_lines,
+        env_u64, is_regression, is_test_file, parse_compare_options, parse_coverage_all_paths,
+        parse_f64_flag, parse_lcov_metrics, parse_lcov_path, parse_u64_value, percentage,
+        resolve_workspace_path, run_file_size_check, test_lane_args,
+    };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parses_lcov_metrics() {
@@ -903,5 +918,266 @@ mod tests {
         assert!(is_regression(79.94, 80.0, 0.05));
         assert!(!is_regression(74.95, 75.0, 0.05));
         assert!(is_regression(74.94, 75.0, 0.05));
+    }
+
+    #[test]
+    fn percentage_zero_total() {
+        assert_eq!(percentage(0, 0), 0.0);
+        assert_eq!(percentage(3, 10), 30.0);
+    }
+
+    #[test]
+    fn parse_u64_value_trims_and_rejects_invalid() {
+        assert_eq!(parse_u64_value("LF", " 42 ").unwrap(), 42);
+        assert!(
+            parse_u64_value("LF", "x")
+                .unwrap_err()
+                .contains("invalid LCOV")
+        );
+    }
+
+    #[test]
+    fn parse_f64_flag_accepts_decimals() {
+        assert_eq!(parse_f64_flag("--lines", "80.5").unwrap(), 80.5);
+        assert!(
+            parse_f64_flag("--lines", "nope")
+                .unwrap_err()
+                .contains("must be a decimal")
+        );
+    }
+
+    #[test]
+    fn parse_lcov_path_default_and_override() {
+        assert_eq!(parse_lcov_path(&[]).unwrap(), DEFAULT_LCOV_PATH.to_string());
+        assert_eq!(
+            parse_lcov_path(&["--lcov".into(), "out.lcov".into()]).unwrap(),
+            "out.lcov"
+        );
+        assert_eq!(
+            parse_lcov_path(&["--lcov".into(), "a".into(), "--lcov".into(), "b".into()]).unwrap(),
+            "b"
+        );
+        assert!(
+            parse_lcov_path(&["--lcov".into()])
+                .unwrap_err()
+                .contains("requires a value")
+        );
+        assert!(
+            parse_lcov_path(&["--what".into()])
+                .unwrap_err()
+                .contains("unknown coverage argument")
+        );
+    }
+
+    #[test]
+    fn parse_coverage_all_paths_defaults_and_flags() {
+        let (lcov, html) = parse_coverage_all_paths(&[]).unwrap();
+        assert_eq!(lcov, DEFAULT_LCOV_PATH);
+        assert_eq!(html, "bitloops/target/llvm-cov-html");
+        let (lcov, html) = parse_coverage_all_paths(&[
+            "--lcov".into(),
+            "c.lcov".into(),
+            "--html-dir".into(),
+            "html-out".into(),
+        ])
+        .unwrap();
+        assert_eq!(lcov, "c.lcov");
+        assert_eq!(html, "html-out");
+        assert!(
+            parse_coverage_all_paths(&["--html-dir".into()])
+                .unwrap_err()
+                .contains("requires a value")
+        );
+    }
+
+    #[test]
+    fn parse_compare_options_required_and_optional_flags() {
+        let opts = parse_compare_options(&[
+            "--lines".into(),
+            "80".into(),
+            "--functions".into(),
+            "75".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.lines_baseline, 80.0);
+        assert_eq!(opts.functions_baseline, 75.0);
+        assert_eq!(opts.epsilon, 0.05);
+        assert_eq!(opts.lcov_path, DEFAULT_LCOV_PATH);
+
+        let opts = parse_compare_options(&[
+            "--lines".into(),
+            "1".into(),
+            "--functions".into(),
+            "2".into(),
+            "--epsilon".into(),
+            "0.1".into(),
+            "--lcov".into(),
+            "m.lcov".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.epsilon, 0.1);
+        assert_eq!(opts.lcov_path, "m.lcov");
+
+        assert!(
+            parse_compare_options(&["--functions".into(), "75".into()])
+                .unwrap_err()
+                .contains("--lines is required")
+        );
+        assert!(
+            parse_compare_options(&["--lines".into(), "80".into()])
+                .unwrap_err()
+                .contains("--functions is required")
+        );
+        assert!(
+            parse_compare_options(&[
+                "--lines".into(),
+                "80".into(),
+                "--functions".into(),
+                "75".into(),
+                "--bad".into(),
+            ])
+            .unwrap_err()
+            .contains("unknown compare argument")
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_path_joins_relative_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let ws = std::fs::canonicalize(tmp.path()).expect("canonicalize");
+        let abs_other = std::fs::canonicalize(tmp.path().join(".")).expect("canonicalize");
+        assert_eq!(
+            resolve_workspace_path(&ws, "rel/out.info"),
+            ws.join("rel/out.info")
+        );
+        let abs_str = abs_other.to_str().expect("utf8 path");
+        assert_eq!(resolve_workspace_path(&ws, abs_str), abs_other);
+    }
+
+    #[test]
+    fn env_u64_reads_integer_or_default() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        let key = format!("XTASK_ENV_U64_TEST_{}", std::process::id());
+        unsafe {
+            env::remove_var(&key);
+        }
+        assert_eq!(env_u64(&key, 99).unwrap(), 99);
+        unsafe {
+            env::set_var(&key, "42");
+        }
+        assert_eq!(env_u64(&key, 99).unwrap(), 42);
+        unsafe {
+            env::set_var(&key, "not_int");
+        }
+        assert!(env_u64(&key, 0).unwrap_err().contains("must be an integer"));
+        unsafe {
+            env::remove_var(&key);
+        }
+    }
+
+    #[test]
+    fn test_lane_args_builds_expected_fragments() {
+        let base = || {
+            vec![
+                "test".to_string(),
+                "--manifest-path".to_string(),
+                BITLOOPS_MANIFEST.to_string(),
+                "--no-fail-fast".to_string(),
+                "--no-default-features".to_string(),
+            ]
+        };
+
+        for lane in ["lib", "core"] {
+            let mut expected = base();
+            expected.push("--lib".to_string());
+            assert_eq!(test_lane_args(lane).unwrap(), expected);
+        }
+
+        let mut expected = base();
+        expected.push("--bin".to_string());
+        expected.push("bitloops".to_string());
+        assert_eq!(test_lane_args("cli").unwrap(), expected);
+
+        assert_eq!(test_lane_args("fast").unwrap(), base());
+
+        let args = test_lane_args("slow").unwrap();
+        assert!(args.contains(&"slow-tests".to_string()));
+        assert_eq!(
+            args.iter().filter(|s| *s == "--test").count(),
+            SLOW_TEST_TARGETS.len()
+        );
+        for t in SLOW_TEST_TARGETS {
+            assert!(args.contains(&(*t).to_string()));
+        }
+
+        let args = test_lane_args("full").unwrap();
+        assert!(args.contains(&"slow-tests".to_string()));
+        assert!(!args.contains(&"--test".to_string()));
+
+        assert!(
+            test_lane_args("nope")
+                .unwrap_err()
+                .contains("unknown test lane")
+        );
+    }
+
+    #[test]
+    fn is_test_file_detects_tests_dir_and_suffixes() {
+        assert!(is_test_file(Path::new("tests/foo.rs")));
+        assert!(is_test_file(Path::new("crate/tests/integration/main.rs")));
+        assert!(is_test_file(Path::new("src/foo_test.rs")));
+        assert!(is_test_file(Path::new("src/tests.rs")));
+        assert!(is_test_file(Path::new("src/api_tests.rs")));
+        assert!(!is_test_file(Path::new("src/api/client.rs")));
+    }
+
+    #[test]
+    fn collect_rs_files_finds_nested_sources() {
+        let tmp = TempDir::new().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("nested")).expect("mkdir");
+        fs::write(tmp.path().join("a.rs"), "fn a() {}\n").expect("write");
+        fs::write(tmp.path().join("nested/b.rs"), "fn b() {}\n").expect("write");
+        let mut out = Vec::new();
+        collect_rs_files(tmp.path(), &mut out).expect("collect");
+        out.sort();
+        assert_eq!(out.len(), 2);
+        assert!(out[0].ends_with("a.rs"));
+        assert!(out[1].ends_with("b.rs"));
+    }
+
+    #[test]
+    fn count_lines_counts_newlines() {
+        let tmp = TempDir::new().expect("tempdir");
+        let p = tmp.path().join("x.rs");
+        fs::write(&p, "a\nb\nc\n").expect("write");
+        assert_eq!(count_lines(&p).unwrap(), 3);
+    }
+
+    #[test]
+    fn run_file_size_check_passes_for_small_tree() {
+        let tmp = TempDir::new().expect("tempdir");
+        fs::create_dir_all(tmp.path().join("pkg")).expect("mkdir");
+        let body: String = (0..50).map(|_| "//x\n").collect();
+        fs::write(tmp.path().join("pkg/lib.rs"), body).expect("write");
+        run_file_size_check(tmp.path()).expect("under default max");
+    }
+
+    #[test]
+    fn run_file_size_check_fails_when_file_exceeds_default_max() {
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("big.rs");
+        let mut f = fs::File::create(&path).expect("create");
+        for i in 0..1001 {
+            writeln!(f, "// line {i}").expect("write");
+        }
+        drop(f);
+        let err = run_file_size_check(tmp.path()).unwrap_err();
+        assert!(err.contains("file-size check failed"));
+    }
+
+    #[test]
+    fn run_file_size_check_empty_tree_prints_message() {
+        let tmp = TempDir::new().expect("tempdir");
+        run_file_size_check(tmp.path()).expect("no rust files ok");
     }
 }
