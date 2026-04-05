@@ -32,8 +32,12 @@ pub trait InteractionEventStore: Send + Sync {
     /// Load a session by ID.
     fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>>;
 
-    /// Load all turns for a session, ordered by turn_number ascending.
-    fn load_turns_for_session(&self, session_id: &str) -> Result<Vec<InteractionTurn>>;
+    /// Load turns for a session, ordered by turn_number ascending.
+    fn load_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>>;
 
     /// Load turns that have not yet been assigned to a checkpoint.
     fn pending_turns_for_session(&self, session_id: &str) -> Result<Vec<InteractionTurn>>;

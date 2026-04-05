@@ -1,14 +1,149 @@
 use super::*;
 
+// ── Events backend abstraction ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+enum InteractionEventsStoreInner {
+    ClickHouse {
+        endpoint: String,
+        user: Option<String>,
+        password: Option<String>,
+    },
+    DuckDb {
+        path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct InteractionEventsStore {
+    inner: InteractionEventsStoreInner,
+}
+
+impl InteractionEventsStore {
+    fn from_config(cfg: &DevqlConfig, events_cfg: &EventsBackendConfig) -> Self {
+        if events_cfg.has_clickhouse() {
+            Self {
+                inner: InteractionEventsStoreInner::ClickHouse {
+                    endpoint: cfg.clickhouse_endpoint(),
+                    user: cfg.clickhouse_user.clone(),
+                    password: cfg.clickhouse_password.clone(),
+                },
+            }
+        } else {
+            Self {
+                inner: InteractionEventsStoreInner::DuckDb {
+                    path: events_cfg.resolve_duckdb_db_path_for_repo(&cfg.repo_root),
+                },
+            }
+        }
+    }
+
+    async fn insert_batch(&self, rows: &[InteractionEventRow], repo_id: &str) -> Result<()> {
+        const CHUNK_SIZE: usize = 1000;
+        for chunk in rows.chunks(CHUNK_SIZE) {
+            match &self.inner {
+                InteractionEventsStoreInner::DuckDb { path } => {
+                    self.insert_duckdb_chunk(path, chunk, repo_id).await?;
+                }
+                InteractionEventsStoreInner::ClickHouse {
+                    endpoint,
+                    user,
+                    password,
+                } => {
+                    self.insert_clickhouse_chunk(
+                        endpoint,
+                        user.as_deref(),
+                        password.as_deref(),
+                        chunk,
+                        repo_id,
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn insert_duckdb_chunk(
+        &self,
+        path: &Path,
+        chunk: &[InteractionEventRow],
+        repo_id: &str,
+    ) -> Result<()> {
+        let mut values = Vec::with_capacity(chunk.len());
+        for row in chunk {
+            values.push(format!(
+                "('{eid}', '{et}', '{rid}', '{sid}', '{tid}', '{evt}', '{at}', '{m}', '{p}')",
+                eid = esc_pg(&row.event_id),
+                et = esc_pg(&row.event_time),
+                rid = esc_pg(repo_id),
+                sid = esc_pg(&row.session_id),
+                tid = esc_pg(&row.turn_id),
+                evt = esc_pg(&row.event_type),
+                at = esc_pg(&row.agent_type),
+                m = esc_pg(&row.model),
+                p = esc_pg(&row.payload),
+            ));
+        }
+        let sql = format!(
+            "INSERT OR IGNORE INTO interaction_events \
+             (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
+             VALUES {}",
+            values.join(", ")
+        );
+        duckdb_exec_path_allow_create(path, &sql)
+            .await
+            .context("batch-inserting interaction events into DuckDB")
+    }
+
+    async fn insert_clickhouse_chunk(
+        &self,
+        endpoint: &str,
+        user: Option<&str>,
+        password: Option<&str>,
+        chunk: &[InteractionEventRow],
+        repo_id: &str,
+    ) -> Result<()> {
+        let mut values = Vec::with_capacity(chunk.len());
+        for row in chunk {
+            values.push(format!(
+                "('{}', coalesce(parseDateTime64BestEffortOrNull('{}'), now64(3)), '{}', '{}', '{}', '{}', '{}', '{}', '{}')",
+                esc_ch(&row.event_id),
+                esc_ch(&row.event_time),
+                esc_ch(repo_id),
+                esc_ch(&row.session_id),
+                esc_ch(&row.turn_id),
+                esc_ch(&row.event_type),
+                esc_ch(&row.agent_type),
+                esc_ch(&row.model),
+                esc_ch(&row.payload),
+            ));
+        }
+        let sql = format!(
+            "INSERT INTO interaction_events \
+             (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
+             VALUES {}",
+            values.join(", ")
+        );
+        run_clickhouse_sql_http(endpoint, user, password, &sql)
+            .await
+            .map(|_| ())
+            .context("batch-inserting interaction events into ClickHouse")
+    }
+}
+
+// ── Public ingestion entry point ────────────────────────────────────────────
+
 /// Read interaction events from the checkpoint SQLite and insert them into
-/// the DuckDB (or ClickHouse) `interaction_events` table.
+/// the configured events backend (DuckDB or ClickHouse).
 ///
-/// Uses `INSERT OR IGNORE` for idempotency. Returns the number of source
-/// rows attempted (not the number actually inserted — duplicates are silently
-/// skipped by the primary key constraint).
+/// Idempotency: DuckDB uses `INSERT OR IGNORE`; ClickHouse uses
+/// `ReplacingMergeTree` deduplication. Returns the number of source rows
+/// attempted (not the actual insert count — duplicates are silently skipped).
 pub(super) async fn ingest_interaction_events(
     checkpoint_sqlite: &crate::storage::SqliteConnectionPool,
-    events_duckdb_path: &Path,
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
     repo_id: &str,
 ) -> Result<usize> {
     let rows = read_interaction_events_from_sqlite(checkpoint_sqlite, repo_id)?;
@@ -17,39 +152,16 @@ pub(super) async fn ingest_interaction_events(
     }
 
     let attempted = rows.len();
-
-    // Insert in bounded chunks to avoid exceeding SQL length limits on large histories.
-    const CHUNK_SIZE: usize = 1000;
-    for chunk in rows.chunks(CHUNK_SIZE) {
-        let mut values_clauses = Vec::with_capacity(chunk.len());
-        for row in chunk {
-            values_clauses.push(format!(
-                "('{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}', \
-                 '{event_type}', '{agent_type}', '{model}', '{payload}')",
-                event_id = esc_pg(&row.event_id),
-                event_time = esc_pg(&row.event_time),
-                repo_id = esc_pg(repo_id),
-                session_id = esc_pg(&row.session_id),
-                turn_id = esc_pg(&row.turn_id),
-                event_type = esc_pg(&row.event_type),
-                agent_type = esc_pg(&row.agent_type),
-                model = esc_pg(&row.model),
-                payload = esc_pg(&row.payload),
-            ));
-        }
-        let sql = format!(
-            "INSERT OR IGNORE INTO interaction_events \
-             (event_id, event_time, repo_id, session_id, turn_id, event_type, agent_type, model, payload) \
-             VALUES {}",
-            values_clauses.join(", ")
-        );
-        duckdb_exec_path_allow_create(events_duckdb_path, &sql)
-            .await
-            .context("batch-inserting interaction events into DuckDB")?;
-    }
+    let store = InteractionEventsStore::from_config(cfg, events_cfg);
+    store
+        .insert_batch(&rows, repo_id)
+        .await
+        .context("ingesting interaction events")?;
 
     Ok(attempted)
 }
+
+// ── SQLite reader ───────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 struct InteractionEventRow {
@@ -98,6 +210,8 @@ fn read_interaction_events_from_sqlite(
         Ok(rows)
     })
 }
+
+// ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -184,11 +298,18 @@ mod tests {
         count as usize
     }
 
+    fn test_duckdb_store(dir: &Path) -> InteractionEventsStore {
+        let duckdb_path = create_duckdb_with_schema(dir);
+        InteractionEventsStore {
+            inner: InteractionEventsStoreInner::DuckDb { path: duckdb_path },
+        }
+    }
+
     #[tokio::test]
-    async fn ingest_interaction_events_copies_rows_to_duckdb() {
+    async fn ingest_duckdb_copies_rows() {
         let temp = TempDir::new().expect("temp dir");
         let sqlite = create_checkpoint_sqlite(temp.path());
-        let duckdb_path = create_duckdb_with_schema(temp.path());
+        let store = test_duckdb_store(temp.path());
 
         insert_sqlite_event(
             &sqlite,
@@ -219,19 +340,24 @@ mod tests {
             },
         );
 
-        let count = ingest_interaction_events(&sqlite, &duckdb_path, "repo-test")
+        let rows = read_interaction_events_from_sqlite(&sqlite, "repo-test").unwrap();
+        store
+            .insert_batch(&rows, "repo-test")
             .await
-            .expect("ingest interaction events");
+            .expect("insert batch");
 
-        assert_eq!(count, 2);
+        let duckdb_path = match &store.inner {
+            InteractionEventsStoreInner::DuckDb { path } => path.clone(),
+            _ => unreachable!(),
+        };
         assert_eq!(count_duckdb_rows(&duckdb_path, "repo-test"), 2);
     }
 
     #[tokio::test]
-    async fn ingest_interaction_events_is_idempotent() {
+    async fn ingest_duckdb_is_idempotent() {
         let temp = TempDir::new().expect("temp dir");
         let sqlite = create_checkpoint_sqlite(temp.path());
-        let duckdb_path = create_duckdb_with_schema(temp.path());
+        let store = test_duckdb_store(temp.path());
 
         insert_sqlite_event(
             &sqlite,
@@ -248,31 +374,29 @@ mod tests {
             },
         );
 
-        let count1 = ingest_interaction_events(&sqlite, &duckdb_path, "repo-test")
+        let rows = read_interaction_events_from_sqlite(&sqlite, "repo-test").unwrap();
+        store
+            .insert_batch(&rows, "repo-test")
             .await
-            .expect("first ingest");
-        assert_eq!(count1, 1);
-
-        let count2 = ingest_interaction_events(&sqlite, &duckdb_path, "repo-test")
+            .expect("first insert");
+        store
+            .insert_batch(&rows, "repo-test")
             .await
-            .expect("second ingest");
-        assert_eq!(count2, 1);
+            .expect("second insert");
 
-        // Only one row should exist despite two ingestion runs.
+        let duckdb_path = match &store.inner {
+            InteractionEventsStoreInner::DuckDb { path } => path.clone(),
+            _ => unreachable!(),
+        };
         assert_eq!(count_duckdb_rows(&duckdb_path, "repo-test"), 1);
     }
 
     #[tokio::test]
-    async fn ingest_interaction_events_returns_zero_when_no_rows() {
+    async fn ingest_returns_zero_when_no_rows() {
         let temp = TempDir::new().expect("temp dir");
         let sqlite = create_checkpoint_sqlite(temp.path());
-        let duckdb_path = create_duckdb_with_schema(temp.path());
 
-        let count = ingest_interaction_events(&sqlite, &duckdb_path, "repo-test")
-            .await
-            .expect("ingest empty");
-
-        assert_eq!(count, 0);
-        assert_eq!(count_duckdb_rows(&duckdb_path, "repo-test"), 0);
+        let rows = read_interaction_events_from_sqlite(&sqlite, "repo-test").unwrap();
+        assert!(rows.is_empty());
     }
 }

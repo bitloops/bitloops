@@ -601,7 +601,7 @@ type Repository {
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
-	interactionTurns(sessionId: String!): [InteractionTurnObject!]!
+	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
 }
 
 enum SaveSelector {

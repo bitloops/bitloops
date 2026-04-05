@@ -38,17 +38,19 @@ impl DevqlGraphqlContext {
         &self,
         scope: &ResolverScope,
         session_id: &str,
+        limit: Option<i32>,
     ) -> Result<Vec<InteractionTurnObject>> {
         let repo_root = self.repo_root_for_scope(scope)?;
         let repo_id = self.repo_id_for_scope(scope)?;
         let session_id = session_id.to_string();
+        let limit = limit.unwrap_or(100).clamp(1, 1000) as usize;
 
         task::spawn_blocking(move || -> Result<Vec<InteractionTurnObject>> {
             let store = match resolve_interaction_store(&repo_root, &repo_id) {
                 Some(store) => store,
                 None => return Ok(Vec::new()),
             };
-            let turns = store.load_turns_for_session(&session_id)?;
+            let turns = store.load_turns_for_session(&session_id, limit)?;
             Ok(turns
                 .iter()
                 .map(InteractionTurnObject::from_domain)

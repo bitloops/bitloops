@@ -91,6 +91,10 @@ impl SqliteInteractionEventStore {
 
 impl InteractionEventStore for SqliteInteractionEventStore {
     fn record_session(&self, session: &InteractionSession) -> Result<()> {
+        debug_assert_eq!(
+            session.repo_id, self.repo_id,
+            "repo_id mismatch in record_session"
+        );
         self.sqlite.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO interaction_sessions
@@ -141,6 +145,10 @@ impl InteractionEventStore for SqliteInteractionEventStore {
     }
 
     fn record_turn_start(&self, turn: &InteractionTurn) -> Result<()> {
+        debug_assert_eq!(
+            turn.repo_id, self.repo_id,
+            "repo_id mismatch in record_turn_start"
+        );
         self.sqlite.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO interaction_turns
@@ -194,6 +202,10 @@ impl InteractionEventStore for SqliteInteractionEventStore {
     }
 
     fn record_event(&self, event: &InteractionEvent) -> Result<()> {
+        debug_assert_eq!(
+            event.repo_id, self.repo_id,
+            "repo_id mismatch in record_event"
+        );
         let payload_str =
             serde_json::to_string(&event.payload).context("serializing event payload")?;
         self.sqlite.with_connection(|conn| {
@@ -248,16 +260,23 @@ impl InteractionEventStore for SqliteInteractionEventStore {
         })
     }
 
-    fn load_turns_for_session(&self, session_id: &str) -> Result<Vec<InteractionTurn>> {
+    fn load_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        let limit = limit.max(1);
         self.sqlite.with_connection(|conn| {
-            let mut stmt = conn.prepare(
+            let sql = format!(
                 "SELECT turn_id, session_id, repo_id, turn_number, prompt,
                         agent_type, model, started_at, ended_at,
                         token_usage, files_modified, checkpoint_id
                  FROM interaction_turns
                  WHERE session_id = ?1
-                 ORDER BY turn_number ASC",
-            )?;
+                 ORDER BY turn_number ASC
+                 LIMIT {limit}"
+            );
+            let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params![session_id], |row| {
                 Ok(TurnRow {
                     turn_id: row.get(0)?,
@@ -509,7 +528,7 @@ mod tests {
             )
             .unwrap();
 
-        let turns = store.load_turns_for_session("s1").unwrap();
+        let turns = store.load_turns_for_session("s1", 1000).unwrap();
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].turn_id, "t1");
         assert_eq!(turns[0].ended_at.as_deref(), Some("2026-04-04T10:02:00Z"));
@@ -551,7 +570,7 @@ mod tests {
         assert_eq!(pending[0].turn_id, "t2");
         assert_eq!(pending[1].turn_id, "t3");
 
-        let all = store.load_turns_for_session("s1").unwrap();
+        let all = store.load_turns_for_session("s1", 1000).unwrap();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].checkpoint_id.as_deref(), Some("cp-1"));
         assert!(all[1].checkpoint_id.is_none());
@@ -601,7 +620,7 @@ mod tests {
                 .unwrap();
         }
 
-        let turns = store.load_turns_for_session("s1").unwrap();
+        let turns = store.load_turns_for_session("s1", 1000).unwrap();
         let numbers: Vec<u32> = turns.iter().map(|t| t.turn_number).collect();
         assert_eq!(numbers, vec![1, 2, 3]);
     }

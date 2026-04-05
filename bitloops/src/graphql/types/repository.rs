@@ -397,13 +397,14 @@ impl Repository {
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "sessionId")] session_id: String,
+        first: Option<i32>,
     ) -> Result<Vec<InteractionTurnObject>> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
             return Err(bad_user_input_error("sessionId must not be empty"));
         }
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_interaction_turns(&self.scope, session_id)
+            .list_interaction_turns(&self.scope, session_id, first)
             .await
             .map_err(|err| {
                 backend_error(format!(

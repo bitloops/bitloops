@@ -430,10 +430,6 @@ async fn ingest_interaction_events_from_checkpoint(
     cfg: &DevqlConfig,
     events_cfg: &crate::config::EventsBackendConfig,
 ) -> Result<usize> {
-    if events_cfg.has_clickhouse() {
-        // ClickHouse interaction event ingestion is not yet supported.
-        return Ok(0);
-    }
     let sqlite_path =
         crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
             &cfg.repo_root,
@@ -446,8 +442,7 @@ async fn ingest_interaction_events_from_checkpoint(
     sqlite
         .initialise_checkpoint_schema()
         .context("ensuring interaction tables exist for ingestion")?;
-    let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(&cfg.repo_root);
-    ingest_interaction_events(&sqlite, &duckdb_path, &cfg.repo.repo_id).await
+    ingest_interaction_events(&sqlite, cfg, events_cfg, &cfg.repo.repo_id).await
 }
 
 async fn promote_temporary_current_rows_for_head_commit(
