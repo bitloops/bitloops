@@ -64,11 +64,7 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
                 .to_string()
         }
     };
-    let edge_to_target_join_scope = if use_historical_tables {
-        " AND at.repo_id = e.repo_id".to_string()
-    } else {
-        " AND at.repo_id = e.repo_id".to_string()
-    };
+    let edge_to_target_join_scope = " AND at.repo_id = e.repo_id".to_string();
     let edge_to_from_join_scope = if use_historical_tables {
         " AND af.repo_id = e.repo_id AND af.blob_sha = e.blob_sha".to_string()
     } else {
