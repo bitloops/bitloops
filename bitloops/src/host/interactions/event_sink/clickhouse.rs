@@ -21,13 +21,15 @@ impl ClickHouseInteractionRepository {
     }
 
     pub(super) fn ensure_schema(&self) -> Result<()> {
-        blocking_exec(
-            &self.endpoint,
-            self.user.as_deref(),
-            self.password.as_deref(),
-            SCHEMA,
-        )
-        .context("ensuring ClickHouse interaction schema")?;
+        for (name, sql) in SCHEMA_STATEMENTS {
+            blocking_exec(
+                &self.endpoint,
+                self.user.as_deref(),
+                self.password.as_deref(),
+                sql,
+            )
+            .with_context(|| format!("ensuring ClickHouse interaction schema: {name}"))?;
+        }
         for sql in TURN_MIGRATIONS {
             blocking_exec(
                 &self.endpoint,
@@ -186,28 +188,28 @@ impl ClickHouseInteractionRepository {
         agent: Option<&str>,
         limit: usize,
     ) -> Result<Vec<InteractionSession>> {
-        let mut conditions = vec![format!("repo_id = '{}'", esc_ch(&self.repo_id))];
+        let mut conditions = vec![format!("sessions.repo_id = '{}'", esc_ch(&self.repo_id))];
         if let Some(agent) = agent.map(str::trim).filter(|value| !value.is_empty()) {
-            conditions.push(format!("agent_type = '{}'", esc_ch(agent)));
+            conditions.push(format!("sessions.agent_type = '{}'", esc_ch(agent)));
         }
         let sql = format!(
             "SELECT * FROM (
                 SELECT
-                    session_id,
-                    argMax(repo_id, updated_at) AS repo_id,
-                    argMax(agent_type, updated_at) AS agent_type,
-                    argMax(model, updated_at) AS model,
-                    argMax(first_prompt, updated_at) AS first_prompt,
-                    argMax(transcript_path, updated_at) AS transcript_path,
-                    argMax(worktree_path, updated_at) AS worktree_path,
-                    argMax(worktree_id, updated_at) AS worktree_id,
-                    argMax(started_at, updated_at) AS started_at,
-                    argMax(ended_at, updated_at) AS ended_at,
-                    argMax(last_event_at, updated_at) AS last_event_at,
-                    toString(max(updated_at)) AS updated_at
-                FROM interaction_sessions
+                    sessions.session_id AS session_id,
+                    argMax(sessions.repo_id, sessions.updated_at) AS repo_id,
+                    argMax(sessions.agent_type, sessions.updated_at) AS agent_type,
+                    argMax(sessions.model, sessions.updated_at) AS model,
+                    argMax(sessions.first_prompt, sessions.updated_at) AS first_prompt,
+                    argMax(sessions.transcript_path, sessions.updated_at) AS transcript_path,
+                    argMax(sessions.worktree_path, sessions.updated_at) AS worktree_path,
+                    argMax(sessions.worktree_id, sessions.updated_at) AS worktree_id,
+                    argMax(sessions.started_at, sessions.updated_at) AS started_at,
+                    argMax(sessions.ended_at, sessions.updated_at) AS ended_at,
+                    argMax(sessions.last_event_at, sessions.updated_at) AS last_event_at,
+                    toString(max(sessions.updated_at)) AS updated_at
+                FROM interaction_sessions AS sessions
                 WHERE {}
-                GROUP BY session_id
+                GROUP BY sessions.session_id
             )
             ORDER BY parseDateTime64BestEffortOrZero(if(last_event_at = '', started_at, last_event_at)) DESC,
                      session_id DESC
@@ -232,21 +234,21 @@ impl ClickHouseInteractionRepository {
             &format!(
                 "SELECT * FROM (
                     SELECT
-                        session_id,
-                        argMax(repo_id, updated_at) AS repo_id,
-                        argMax(agent_type, updated_at) AS agent_type,
-                        argMax(model, updated_at) AS model,
-                        argMax(first_prompt, updated_at) AS first_prompt,
-                        argMax(transcript_path, updated_at) AS transcript_path,
-                        argMax(worktree_path, updated_at) AS worktree_path,
-                        argMax(worktree_id, updated_at) AS worktree_id,
-                        argMax(started_at, updated_at) AS started_at,
-                        argMax(ended_at, updated_at) AS ended_at,
-                        argMax(last_event_at, updated_at) AS last_event_at,
-                        toString(max(updated_at)) AS updated_at
-                    FROM interaction_sessions
-                    WHERE repo_id = '{repo_id}' AND session_id = '{session_id}'
-                    GROUP BY session_id
+                        sessions.session_id AS session_id,
+                        argMax(sessions.repo_id, sessions.updated_at) AS repo_id,
+                        argMax(sessions.agent_type, sessions.updated_at) AS agent_type,
+                        argMax(sessions.model, sessions.updated_at) AS model,
+                        argMax(sessions.first_prompt, sessions.updated_at) AS first_prompt,
+                        argMax(sessions.transcript_path, sessions.updated_at) AS transcript_path,
+                        argMax(sessions.worktree_path, sessions.updated_at) AS worktree_path,
+                        argMax(sessions.worktree_id, sessions.updated_at) AS worktree_id,
+                        argMax(sessions.started_at, sessions.updated_at) AS started_at,
+                        argMax(sessions.ended_at, sessions.updated_at) AS ended_at,
+                        argMax(sessions.last_event_at, sessions.updated_at) AS last_event_at,
+                        toString(max(sessions.updated_at)) AS updated_at
+                    FROM interaction_sessions AS sessions
+                    WHERE sessions.repo_id = '{repo_id}' AND sessions.session_id = '{session_id}'
+                    GROUP BY sessions.session_id
                 )
                 LIMIT 1",
                 repo_id = esc_ch(&self.repo_id),
@@ -266,35 +268,33 @@ impl ClickHouseInteractionRepository {
             self.user.as_deref(),
             self.password.as_deref(),
             &format!(
-                "SELECT * FROM (
-                    SELECT
-                        turn_id,
-                        argMax(session_id, updated_at) AS session_id,
-                        argMax(repo_id, updated_at) AS repo_id,
-                        argMax(turn_number, updated_at) AS turn_number,
-                        argMax(prompt, updated_at) AS prompt,
-                        argMax(agent_type, updated_at) AS agent_type,
-                        argMax(model, updated_at) AS model,
-                        argMax(started_at, updated_at) AS started_at,
-                        argMax(ended_at, updated_at) AS ended_at,
-                        argMax(has_token_usage, updated_at) AS has_token_usage,
-                        argMax(input_tokens, updated_at) AS input_tokens,
-                        argMax(cache_creation_tokens, updated_at) AS cache_creation_tokens,
-                        argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
-                        argMax(output_tokens, updated_at) AS output_tokens,
-                        argMax(api_call_count, updated_at) AS api_call_count,
-                        argMax(summary, updated_at) AS summary,
-                        argMax(prompt_count, updated_at) AS prompt_count,
-                        argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
-                        argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
-                        argMax(transcript_fragment, updated_at) AS transcript_fragment,
-                        argMax(files_modified, updated_at) AS files_modified,
-                        argMax(checkpoint_id, updated_at) AS checkpoint_id,
-                        toString(max(updated_at)) AS updated_at
-                    FROM interaction_turns
-                    WHERE repo_id = '{repo_id}' AND session_id = '{session_id}'
-                    GROUP BY turn_id
-                )
+                "SELECT
+                        turns.turn_id AS turn_id,
+                        argMax(turns.session_id, turns.updated_at) AS session_id,
+                        argMax(turns.repo_id, turns.updated_at) AS repo_id,
+                        argMax(turns.turn_number, turns.updated_at) AS turn_number,
+                        argMax(turns.prompt, turns.updated_at) AS prompt,
+                        argMax(turns.agent_type, turns.updated_at) AS agent_type,
+                        argMax(turns.model, turns.updated_at) AS model,
+                        argMax(turns.started_at, turns.updated_at) AS started_at,
+                        argMax(turns.ended_at, turns.updated_at) AS ended_at,
+                        argMax(turns.has_token_usage, turns.updated_at) AS has_token_usage,
+                        argMax(turns.input_tokens, turns.updated_at) AS input_tokens,
+                        argMax(turns.cache_creation_tokens, turns.updated_at) AS cache_creation_tokens,
+                        argMax(turns.cache_read_tokens, turns.updated_at) AS cache_read_tokens,
+                        argMax(turns.output_tokens, turns.updated_at) AS output_tokens,
+                        argMax(turns.api_call_count, turns.updated_at) AS api_call_count,
+                        argMax(turns.summary, turns.updated_at) AS summary,
+                        argMax(turns.prompt_count, turns.updated_at) AS prompt_count,
+                        argMax(turns.transcript_offset_start, turns.updated_at) AS transcript_offset_start,
+                        argMax(turns.transcript_offset_end, turns.updated_at) AS transcript_offset_end,
+                        argMax(turns.transcript_fragment, turns.updated_at) AS transcript_fragment,
+                        argMax(turns.files_modified, turns.updated_at) AS files_modified,
+                        argMax(turns.checkpoint_id, turns.updated_at) AS checkpoint_id,
+                        toString(max(turns.updated_at)) AS updated_at
+                    FROM interaction_turns AS turns
+                    WHERE turns.repo_id = '{repo_id}' AND turns.session_id = '{session_id}'
+                    GROUP BY turns.turn_id
                 ORDER BY turn_number ASC, started_at ASC
                 LIMIT {limit}",
                 repo_id = esc_ch(&self.repo_id),
@@ -311,36 +311,34 @@ impl ClickHouseInteractionRepository {
             self.user.as_deref(),
             self.password.as_deref(),
             &format!(
-                "SELECT * FROM (
-                    SELECT
-                        turn_id,
-                        argMax(session_id, updated_at) AS session_id,
-                        argMax(repo_id, updated_at) AS repo_id,
-                        argMax(turn_number, updated_at) AS turn_number,
-                        argMax(prompt, updated_at) AS prompt,
-                        argMax(agent_type, updated_at) AS agent_type,
-                        argMax(model, updated_at) AS model,
-                        argMax(started_at, updated_at) AS started_at,
-                        argMax(ended_at, updated_at) AS ended_at,
-                        argMax(has_token_usage, updated_at) AS has_token_usage,
-                        argMax(input_tokens, updated_at) AS input_tokens,
-                        argMax(cache_creation_tokens, updated_at) AS cache_creation_tokens,
-                        argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
-                        argMax(output_tokens, updated_at) AS output_tokens,
-                        argMax(api_call_count, updated_at) AS api_call_count,
-                        argMax(summary, updated_at) AS summary,
-                        argMax(prompt_count, updated_at) AS prompt_count,
-                        argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
-                        argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
-                        argMax(transcript_fragment, updated_at) AS transcript_fragment,
-                        argMax(files_modified, updated_at) AS files_modified,
-                        argMax(checkpoint_id, updated_at) AS checkpoint_id,
-                        toString(max(updated_at)) AS updated_at
-                    FROM interaction_turns
-                    WHERE repo_id = '{repo_id}'
-                    GROUP BY turn_id
-                )
-                WHERE checkpoint_id = ''
+                "SELECT
+                    turns.turn_id AS turn_id,
+                    argMax(turns.session_id, turns.updated_at) AS session_id,
+                    argMax(turns.repo_id, turns.updated_at) AS repo_id,
+                    argMax(turns.turn_number, turns.updated_at) AS turn_number,
+                    argMax(turns.prompt, turns.updated_at) AS prompt,
+                    argMax(turns.agent_type, turns.updated_at) AS agent_type,
+                    argMax(turns.model, turns.updated_at) AS model,
+                    argMax(turns.started_at, turns.updated_at) AS started_at,
+                    argMax(turns.ended_at, turns.updated_at) AS ended_at,
+                    argMax(turns.has_token_usage, turns.updated_at) AS has_token_usage,
+                    argMax(turns.input_tokens, turns.updated_at) AS input_tokens,
+                    argMax(turns.cache_creation_tokens, turns.updated_at) AS cache_creation_tokens,
+                    argMax(turns.cache_read_tokens, turns.updated_at) AS cache_read_tokens,
+                    argMax(turns.output_tokens, turns.updated_at) AS output_tokens,
+                    argMax(turns.api_call_count, turns.updated_at) AS api_call_count,
+                    argMax(turns.summary, turns.updated_at) AS summary,
+                    argMax(turns.prompt_count, turns.updated_at) AS prompt_count,
+                    argMax(turns.transcript_offset_start, turns.updated_at) AS transcript_offset_start,
+                    argMax(turns.transcript_offset_end, turns.updated_at) AS transcript_offset_end,
+                    argMax(turns.transcript_fragment, turns.updated_at) AS transcript_fragment,
+                    argMax(turns.files_modified, turns.updated_at) AS files_modified,
+                    argMax(turns.checkpoint_id, turns.updated_at) AS checkpoint_id,
+                    toString(max(turns.updated_at)) AS updated_at
+                 FROM interaction_turns AS turns
+                 WHERE turns.repo_id = '{repo_id}'
+                 GROUP BY turns.turn_id
+                 HAVING argMax(turns.checkpoint_id, turns.updated_at) = ''
                 ORDER BY session_id ASC, turn_number ASC, started_at ASC",
                 repo_id = esc_ch(&self.repo_id),
             ),
@@ -404,32 +402,32 @@ impl ClickHouseInteractionRepository {
             &format!(
                 "SELECT * FROM (
                     SELECT
-                        turn_id,
-                        argMax(session_id, updated_at) AS session_id,
-                        argMax(repo_id, updated_at) AS repo_id,
-                        argMax(turn_number, updated_at) AS turn_number,
-                        argMax(prompt, updated_at) AS prompt,
-                        argMax(agent_type, updated_at) AS agent_type,
-                        argMax(model, updated_at) AS model,
-                        argMax(started_at, updated_at) AS started_at,
-                        argMax(ended_at, updated_at) AS ended_at,
-                        argMax(has_token_usage, updated_at) AS has_token_usage,
-                        argMax(input_tokens, updated_at) AS input_tokens,
-                        argMax(cache_creation_tokens, updated_at) AS cache_creation_tokens,
-                        argMax(cache_read_tokens, updated_at) AS cache_read_tokens,
-                        argMax(output_tokens, updated_at) AS output_tokens,
-                        argMax(api_call_count, updated_at) AS api_call_count,
-                        argMax(summary, updated_at) AS summary,
-                        argMax(prompt_count, updated_at) AS prompt_count,
-                        argMax(transcript_offset_start, updated_at) AS transcript_offset_start,
-                        argMax(transcript_offset_end, updated_at) AS transcript_offset_end,
-                        argMax(transcript_fragment, updated_at) AS transcript_fragment,
-                        argMax(files_modified, updated_at) AS files_modified,
-                        argMax(checkpoint_id, updated_at) AS checkpoint_id,
-                        toString(max(updated_at)) AS updated_at
-                    FROM interaction_turns
-                    WHERE repo_id = '{repo_id}' AND turn_id IN ({ids})
-                    GROUP BY turn_id
+                        turns.turn_id AS turn_id,
+                        argMax(turns.session_id, turns.updated_at) AS session_id,
+                        argMax(turns.repo_id, turns.updated_at) AS repo_id,
+                        argMax(turns.turn_number, turns.updated_at) AS turn_number,
+                        argMax(turns.prompt, turns.updated_at) AS prompt,
+                        argMax(turns.agent_type, turns.updated_at) AS agent_type,
+                        argMax(turns.model, turns.updated_at) AS model,
+                        argMax(turns.started_at, turns.updated_at) AS started_at,
+                        argMax(turns.ended_at, turns.updated_at) AS ended_at,
+                        argMax(turns.has_token_usage, turns.updated_at) AS has_token_usage,
+                        argMax(turns.input_tokens, turns.updated_at) AS input_tokens,
+                        argMax(turns.cache_creation_tokens, turns.updated_at) AS cache_creation_tokens,
+                        argMax(turns.cache_read_tokens, turns.updated_at) AS cache_read_tokens,
+                        argMax(turns.output_tokens, turns.updated_at) AS output_tokens,
+                        argMax(turns.api_call_count, turns.updated_at) AS api_call_count,
+                        argMax(turns.summary, turns.updated_at) AS summary,
+                        argMax(turns.prompt_count, turns.updated_at) AS prompt_count,
+                        argMax(turns.transcript_offset_start, turns.updated_at) AS transcript_offset_start,
+                        argMax(turns.transcript_offset_end, turns.updated_at) AS transcript_offset_end,
+                        argMax(turns.transcript_fragment, turns.updated_at) AS transcript_fragment,
+                        argMax(turns.files_modified, turns.updated_at) AS files_modified,
+                        argMax(turns.checkpoint_id, turns.updated_at) AS checkpoint_id,
+                        toString(max(turns.updated_at)) AS updated_at
+                    FROM interaction_turns AS turns
+                    WHERE turns.repo_id = '{repo_id}' AND turns.turn_id IN ({ids})
+                    GROUP BY turns.turn_id
                 )",
                 repo_id = esc_ch(&self.repo_id),
                 ids = ids,
@@ -439,7 +437,7 @@ impl ClickHouseInteractionRepository {
     }
 }
 
-const SCHEMA: &str = r#"
+const INTERACTION_SESSIONS_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id String,
     repo_id String,
@@ -455,8 +453,10 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     updated_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (repo_id, session_id);
+ORDER BY (repo_id, session_id)
+"#;
 
+const INTERACTION_TURNS_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_turns (
     turn_id String,
     session_id String,
@@ -483,8 +483,10 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     updated_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (repo_id, session_id, turn_id);
+ORDER BY (repo_id, session_id, turn_id)
+"#;
 
+const INTERACTION_EVENTS_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_events (
     event_id String,
     event_time DateTime64(3, 'UTC'),
@@ -499,6 +501,12 @@ CREATE TABLE IF NOT EXISTS interaction_events (
 ENGINE = ReplacingMergeTree(event_time)
 ORDER BY (repo_id, event_time, event_id);
 "#;
+
+const SCHEMA_STATEMENTS: &[(&str, &str)] = &[
+    ("interaction_sessions", INTERACTION_SESSIONS_SCHEMA),
+    ("interaction_turns", INTERACTION_TURNS_SCHEMA),
+    ("interaction_events", INTERACTION_EVENTS_SCHEMA),
+];
 
 const TURN_MIGRATIONS: &[&str] = &[
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS summary String AFTER api_call_count",

@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) async fn init_clickhouse_schema(cfg: &DevqlConfig) -> Result<()> {
-    let sql = r#"
+    let checkpoint_events_sql = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (
     event_id String,
     event_time DateTime64(3, 'UTC'),
@@ -20,11 +20,11 @@ ENGINE = ReplacingMergeTree(event_time)
 ORDER BY (repo_id, event_time, event_id)
 "#;
 
-    clickhouse_exec(cfg, sql)
+    clickhouse_exec(cfg, checkpoint_events_sql)
         .await
         .context("creating ClickHouse checkpoint_events table")?;
 
-    let interaction_sql = r#"
+    let interaction_sessions_sql = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id String,
     repo_id String,
@@ -40,8 +40,13 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     updated_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (repo_id, session_id);
+ORDER BY (repo_id, session_id)
+"#;
+    clickhouse_exec(cfg, interaction_sessions_sql)
+        .await
+        .context("creating ClickHouse interaction_sessions table")?;
 
+    let interaction_turns_sql = r#"
 CREATE TABLE IF NOT EXISTS interaction_turns (
     turn_id String,
     session_id String,
@@ -58,13 +63,23 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     cache_read_tokens UInt64,
     output_tokens UInt64,
     api_call_count UInt64,
+    summary String,
+    prompt_count UInt32,
+    transcript_offset_start Nullable(Int64),
+    transcript_offset_end Nullable(Int64),
+    transcript_fragment String,
     files_modified Array(String),
     checkpoint_id String,
     updated_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (repo_id, session_id, turn_id);
+ORDER BY (repo_id, session_id, turn_id)
+"#;
+    clickhouse_exec(cfg, interaction_turns_sql)
+        .await
+        .context("creating ClickHouse interaction_turns table")?;
 
+    let interaction_events_sql = r#"
 CREATE TABLE IF NOT EXISTS interaction_events (
     event_id String,
     event_time DateTime64(3, 'UTC'),
@@ -80,7 +95,7 @@ ENGINE = ReplacingMergeTree(event_time)
 ORDER BY (repo_id, event_time, event_id)
 "#;
 
-    clickhouse_exec(cfg, interaction_sql)
+    clickhouse_exec(cfg, interaction_events_sql)
         .await
         .context("creating ClickHouse interaction_events table")?;
     Ok(())
