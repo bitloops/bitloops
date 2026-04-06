@@ -582,6 +582,7 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(&app_dir).unwrap();
         fs::write(
             app_dir.join(".bitloops.toml"),
             "[capture]\nenabled = true\n",
@@ -618,6 +619,7 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(&app_dir).unwrap();
         fs::write(
             app_dir.join(".bitloops.toml"),
             "[capture]\nenabled = true\n",
@@ -645,6 +647,7 @@ mod tests {
         )
         .unwrap();
         let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(&app_dir).unwrap();
         fs::write(
             app_dir.join(".bitloops.toml"),
             "[capture]\nenabled = true\n",

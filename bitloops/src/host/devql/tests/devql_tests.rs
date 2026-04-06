@@ -2,7 +2,7 @@ use super::*;
 use crate::cli::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
 use crate::cli::{Cli, Commands};
 use crate::config::{BlobStorageConfig, StoreFileConfig};
-use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::env;
@@ -344,6 +344,7 @@ fn seed_git_repo() -> TempDir {
         "Bitloops Test",
         "bitloops-test@example.com",
     );
+    write_test_daemon_config(dir.path());
     git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
     dir
 }
