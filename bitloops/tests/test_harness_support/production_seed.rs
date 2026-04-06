@@ -370,10 +370,10 @@ fn persist_production_rows(
         .context("failed to open sqlite transaction")?;
 
     tx.execute(
-        "DELETE FROM test_artefact_edges_current WHERE commit_sha = ?1",
-        params![commit.commit_sha],
+        "DELETE FROM test_artefact_edges_current WHERE repo_id = ?1",
+        params![repository.repo_id],
     )
-    .context("failed clearing test_artefact_edges_current for commit")?;
+    .context("failed clearing test_artefact_edges_current for repo")?;
     tx.execute(
         r#"DELETE FROM coverage_hits WHERE capture_id IN (
             SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1
