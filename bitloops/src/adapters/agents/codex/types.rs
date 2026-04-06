@@ -8,6 +8,8 @@ pub struct CodexSessionInfoRaw {
     pub session_id: String,
     #[serde(default)]
     pub transcript_path: String,
+    #[serde(default)]
+    pub model: String,
 }
 
 pub fn parse_codex_session_info(raw: &str) -> Result<CodexSessionInfoRaw> {
@@ -44,6 +46,25 @@ pub fn parse_codex_session_info(raw: &str) -> Result<CodexSessionInfoRaw> {
                 "/session/transcriptPath",
                 "/session/transcript",
                 "/paths/transcript",
+            ],
+        )
+        .unwrap_or_default(),
+        model: first_non_empty_string(
+            &value,
+            &[
+                "/model",
+                "/modelName",
+                "/model_name",
+                "/modelSlug",
+                "/model_slug",
+                "/modelId",
+                "/model_id",
+                "/newModel",
+                "/new_model",
+                "/session/model",
+                "/session/modelName",
+                "/session/modelSlug",
+                "/session/modelId",
             ],
         )
         .unwrap_or_default(),

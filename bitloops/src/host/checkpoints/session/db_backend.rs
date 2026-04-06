@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 
 use super::backend::SessionBackend;
 use super::phase::SessionPhase;
-use super::state::{PrePromptState, PreTaskState, SessionState};
+use super::state::{PendingCheckpointState, PrePromptState, PreTaskState, SessionState};
 use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
 use crate::host::validation::validators::{validate_session_id, validate_tool_use_id};
 use crate::storage::SqliteConnectionPool;
@@ -76,21 +76,27 @@ impl DbSessionBackend {
                 "turn_checkpoint_ids",
             )?,
             last_interaction_time: row.get("last_interaction_time").unwrap_or(None),
-            step_count,
-            checkpoint_transcript_start: row
-                .get("checkpoint_transcript_start")
-                .context("reading checkpoint_transcript_start")?,
+            pending: PendingCheckpointState {
+                step_count,
+                checkpoint_transcript_start: row
+                    .get("checkpoint_transcript_start")
+                    .context("reading checkpoint_transcript_start")?,
+                files_touched: parse_json_column(
+                    &row.get::<_, String>("files_touched")
+                        .context("reading files_touched")?,
+                    "files_touched",
+                )?,
+                token_usage: parse_optional_json_column(token_usage_raw.as_deref(), "token_usage")?,
+                transcript_identifier_at_start: row
+                    .get("transcript_identifier_at_start")
+                    .context("reading transcript_identifier_at_start")?,
+            },
             condensed_transcript_lines: 0,
             transcript_lines_at_start: 0,
             untracked_files_at_start: parse_json_column(
                 &row.get::<_, String>("untracked_files_at_start")
                     .context("reading untracked_files_at_start")?,
                 "untracked_files_at_start",
-            )?,
-            files_touched: parse_json_column(
-                &row.get::<_, String>("files_touched")
-                    .context("reading files_touched")?,
-                "files_touched",
             )?,
             transcript_path: row
                 .get("transcript_path")
@@ -100,10 +106,6 @@ impl DbSessionBackend {
             last_checkpoint_id: row
                 .get("last_checkpoint_id")
                 .context("reading last_checkpoint_id")?,
-            token_usage: parse_optional_json_column(token_usage_raw.as_deref(), "token_usage")?,
-            transcript_identifier_at_start: row
-                .get("transcript_identifier_at_start")
-                .context("reading transcript_identifier_at_start")?,
             prompt_attributions: parse_json_column(
                 &row.get::<_, String>("prompt_attributions")
                     .context("reading prompt_attributions")?,
@@ -177,13 +179,13 @@ impl SessionBackend for DbSessionBackend {
 
     fn save_session(&self, state: &SessionState) -> Result<()> {
         validate_session_id(&state.session_id)?;
-        let files_touched = serde_json::to_string(&state.files_touched)
+        let files_touched = serde_json::to_string(&state.pending.files_touched)
             .context("serialising files_touched for session row")?;
         let untracked_files_at_start = serde_json::to_string(&state.untracked_files_at_start)
             .context("serialising untracked_files_at_start for session row")?;
         let turn_checkpoint_ids = serde_json::to_string(&state.turn_checkpoint_ids)
             .context("serialising turn_checkpoint_ids for session row")?;
-        let token_usage = serde_json::to_string(&state.token_usage)
+        let token_usage = serde_json::to_string(&state.pending.token_usage)
             .context("serialising token_usage for session row")?;
         let prompt_attributions = serde_json::to_string(&state.prompt_attributions)
             .context("serialising prompt_attributions for session row")?;
@@ -247,8 +249,8 @@ impl SessionBackend for DbSessionBackend {
                     state.ended_at.as_deref(),
                     state.phase.as_str(),
                     state.turn_id.as_str(),
-                    i64::from(state.step_count),
-                    state.checkpoint_transcript_start,
+                    i64::from(state.pending.step_count),
+                    state.pending.checkpoint_transcript_start,
                     state.transcript_path.as_str(),
                     state.first_prompt.as_str(),
                     state.agent_type.as_str(),
@@ -257,7 +259,7 @@ impl SessionBackend for DbSessionBackend {
                     files_touched,
                     untracked_files_at_start,
                     turn_checkpoint_ids,
-                    state.transcript_identifier_at_start.as_str(),
+                    state.pending.transcript_identifier_at_start.as_str(),
                     token_usage,
                     prompt_attributions,
                     pending_prompt_attribution

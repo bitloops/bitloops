@@ -1,47 +1,79 @@
 use anyhow::Result;
 
-use super::types::{InteractionEvent, InteractionSession, InteractionTurn};
-use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
+use super::types::{InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn};
 
-/// Persistence abstraction for interaction events.
-///
-/// Implementations write to the local checkpoint SQLite database.
-/// All methods are synchronous (SQLite is local and fast).
-pub trait InteractionEventStore: Send + Sync {
-    /// Create or update a session record.
-    fn record_session(&self, session: &InteractionSession) -> Result<()>;
+/// Canonical interaction repository backed by the Event DB.
+pub trait InteractionEventRepository: Send + Sync {
+    fn repo_id(&self) -> &str;
 
-    /// Update a session's ended_at timestamp.
-    fn end_session(&self, session_id: &str, ended_at: &str) -> Result<()>;
+    fn upsert_session(&self, session: &InteractionSession) -> Result<()>;
 
-    /// Insert a new turn at the start of an agent turn.
-    fn record_turn_start(&self, turn: &InteractionTurn) -> Result<()>;
+    fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()>;
 
-    /// Complete a turn with token usage and file change data.
-    fn record_turn_end(
+    fn append_event(&self, event: &InteractionEvent) -> Result<()>;
+
+    fn assign_checkpoint_to_turns(
         &self,
-        turn_id: &str,
-        ended_at: &str,
-        token_usage: Option<&TokenUsageMetadata>,
-        files_modified: &[String],
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
     ) -> Result<()>;
 
-    /// Record a fine-grained lifecycle event.
-    fn record_event(&self, event: &InteractionEvent) -> Result<()>;
+    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>>;
 
-    /// Load a session by ID.
     fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>>;
 
-    /// Load turns for a session, ordered by turn_number ascending.
-    fn load_turns_for_session(
+    fn list_turns_for_session(
         &self,
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<InteractionTurn>>;
 
-    /// Load turns that have not yet been assigned to a checkpoint.
-    fn pending_turns_for_session(&self, session_id: &str) -> Result<Vec<InteractionTurn>>;
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>>;
 
-    /// Link a set of turns to a derived checkpoint.
-    fn assign_checkpoint_to_turns(&self, turn_ids: &[&str], checkpoint_id: &str) -> Result<()>;
+    fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>>;
+}
+
+/// Durable local spool for interaction mutations.
+pub trait InteractionSpool: Send + Sync {
+    fn repo_id(&self) -> &str;
+
+    fn record_session(&self, session: &InteractionSession) -> Result<()>;
+
+    fn record_turn(&self, turn: &InteractionTurn) -> Result<()>;
+
+    fn record_event(&self, event: &InteractionEvent) -> Result<()>;
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()>;
+
+    fn has_pending_mutations(&self) -> Result<bool>;
+
+    fn flush(&self, repository: &dyn InteractionEventRepository) -> Result<usize>;
+
+    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>>;
+
+    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>>;
+
+    fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>>;
+
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>>;
+
+    fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>>;
 }

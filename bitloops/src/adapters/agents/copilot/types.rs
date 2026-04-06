@@ -54,6 +54,18 @@ pub struct CopilotUserPromptSubmittedRaw {
     pub session_id: String,
     #[serde(default)]
     pub prompt: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -68,6 +80,18 @@ pub struct CopilotSessionStartRaw {
     pub source: String,
     #[serde(default, rename = "initialPrompt")]
     pub initial_prompt: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -82,6 +106,18 @@ pub struct CopilotAgentStopRaw {
     pub transcript_path: String,
     #[serde(default, rename = "stopReason")]
     pub stop_reason: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -94,6 +130,18 @@ pub struct CopilotSessionEndRaw {
     pub session_id: String,
     #[serde(default)]
     pub reason: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -104,6 +152,18 @@ pub struct CopilotSubagentStopRaw {
     pub cwd: String,
     #[serde(default, rename = "sessionId")]
     pub session_id: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

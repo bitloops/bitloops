@@ -282,6 +282,7 @@ fn validate_tool_use_id(tool_use_id: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::host::checkpoints::session::phase::SessionPhase;
+    use crate::host::checkpoints::session::state::PendingCheckpointState;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, LocalFileBackend) {
@@ -297,7 +298,10 @@ mod tests {
             session_id: session_id.to_string(),
             phase: SessionPhase::Active,
             transcript_path: "/tmp/t.jsonl".to_string(),
-            step_count: 3,
+            pending: PendingCheckpointState {
+                step_count: 3,
+                ..Default::default()
+            },
             first_prompt: "Fix the bug".to_string(),
             ..Default::default()
         }
@@ -319,7 +323,7 @@ mod tests {
         let loaded = backend.load_session("sess-001").unwrap().unwrap();
         assert_eq!(loaded.session_id, "sess-001");
         assert_eq!(loaded.phase, SessionPhase::Active);
-        assert_eq!(loaded.step_count, 3);
+        assert_eq!(loaded.pending.step_count, 3);
         assert_eq!(loaded.first_prompt, "Fix the bug");
     }
 

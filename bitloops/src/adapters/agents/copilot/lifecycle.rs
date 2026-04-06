@@ -44,6 +44,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_id: raw.session_id.clone(),
                 session_ref: resolve_transcript_ref(&raw.session_id),
                 prompt: raw.prompt,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -54,6 +55,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_id: raw.session_id.clone(),
                 session_ref: resolve_transcript_ref(&raw.session_id),
                 prompt: raw.initial_prompt,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -64,7 +66,11 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             } else {
                 raw.transcript_path
             };
-            let model = read_model_from_transcript_path(&transcript_path);
+            let model = if raw.model.trim().is_empty() {
+                read_model_from_transcript_path(&transcript_path)
+            } else {
+                raw.model
+            };
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnEnd),
                 session_id: raw.session_id,
@@ -80,6 +86,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 event_type: Some(LifecycleEventType::SessionEnd),
                 session_id: raw.session_id,
                 session_ref,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -88,6 +95,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SubagentEnd),
                 session_id: raw.session_id,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -177,13 +185,14 @@ mod tests {
             Some("/tmp/copilot-session-state"),
             || {
                 let mut stdin = std::io::Cursor::new(
-                    br#"{"sessionId":"session-1","initialPrompt":"bootstrap"}"#.as_slice(),
+                    br#"{"sessionId":"session-1","initialPrompt":"bootstrap","modelSlug":"gpt-5.4"}"#.as_slice(),
                 );
                 let event = parse_hook_event(HOOK_NAME_SESSION_START, &mut stdin)
                     .expect("parse")
                     .expect("event");
                 assert_eq!(event.event_type, Some(LifecycleEventType::SessionStart));
                 assert_eq!(event.prompt, "bootstrap");
+                assert_eq!(event.model, "gpt-5.4");
                 assert_eq!(
                     event.session_ref,
                     "/tmp/copilot-session-state/session-1/events.jsonl"
