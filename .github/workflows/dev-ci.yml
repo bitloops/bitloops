@@ -5,17 +5,17 @@ on:
     branches:
       - develop
     paths:
-      - "bitloops/**"
-      - "xtask/**"
-      - ".cargo/config.toml"
-      - "bitloops/.cargo/config.toml"
-      - ".github/workflows/dev-ci.yml"
+      - 'bitloops/**'
+      - 'xtask/**'
+      - '.cargo/config.toml'
+      - 'bitloops/.cargo/config.toml'
+      - '.github/workflows/dev-ci.yml'
 
 permissions:
   contents: read
 
 env:
-  DUCKDB_DOWNLOAD_LIB: "1"
+  DUCKDB_DOWNLOAD_LIB: '1'
 
 jobs:
   rust-file-size:
@@ -102,3 +102,15 @@ jobs:
             --functions "${{ steps.baseline.outputs.functions }}" \
             --epsilon 0.5 \
             --lcov bitloops/target/llvm-cov.info
+
+  qat:
+    name: QAT
+    runs-on: self-hosted
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run QAT acceptance suites
+        run: cargo qat

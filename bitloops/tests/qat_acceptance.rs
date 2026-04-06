@@ -19,6 +19,18 @@ fn resolve_binary() -> PathBuf {
 }
 
 #[tokio::test]
+#[ignore = "slow E2E: runs QAT onboarding + DevQL sync suites; use `cargo qat`"]
+async fn qat() {
+    let binary = resolve_binary();
+    runner::run_suite(binary.clone(), Suite::Onboarding)
+        .await
+        .expect("QAT onboarding suite failed");
+    runner::run_suite(binary, Suite::DevqlSync)
+        .await
+        .expect("QAT DevQL sync suite failed");
+}
+
+#[tokio::test]
 #[ignore = "slow E2E: runs QAT smoke suite; use `cargo test --test qat_acceptance qat_smoke -- --ignored`"]
 async fn qat_smoke() {
     let binary = resolve_binary();

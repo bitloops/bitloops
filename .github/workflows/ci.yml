@@ -35,21 +35,6 @@ jobs:
       - name: Compile test targets
         run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
 
-  qat:
-    name: QAT
-    runs-on: self-hosted
-    needs: test
-    timeout-minutes: 180
-    env:
-      DUCKDB_DOWNLOAD_LIB: '1'
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Run QAT acceptance suites
-        run: cargo qat
-
   build-matrix:
     name: Build smoke ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
