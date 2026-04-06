@@ -432,7 +432,7 @@ fn test_handle_lifecycle_compaction_applies_phase_transition_and_persists_reset(
             .unwrap()
             .expect("session should still exist");
         assert_eq!(saved.phase, SessionPhase::Active);
-        assert_eq!(saved.checkpoint_transcript_start, 0);
+        assert_eq!(saved.pending.checkpoint_transcript_start, 0);
         assert!(saved.last_interaction_time.is_some());
     });
 }

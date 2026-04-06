@@ -272,7 +272,10 @@ impl ManualCommitStrategy {
                 token_usage_output: None,
                 token_usage_api_call_count: None,
                 turn_id: state.turn_id.clone(),
-                transcript_identifier_at_start: state.pending.transcript_identifier_at_start.clone(),
+                transcript_identifier_at_start: state
+                    .pending
+                    .transcript_identifier_at_start
+                    .clone(),
                 checkpoint_transcript_start: state.pending.checkpoint_transcript_start,
                 token_usage,
                 initial_attribution,
@@ -323,6 +326,7 @@ impl ManualCommitStrategy {
         new_head: &str,
         committed_files: &std::collections::HashSet<String>,
     ) -> Result<Vec<String>> {
+        let turn_ids: Vec<String> = turns.iter().map(|turn| turn.turn_id.clone()).collect();
         let session_files = aggregate_turn_files(turns);
         let committed_touched: Vec<String> = session_files
             .iter()
@@ -353,10 +357,20 @@ impl ManualCommitStrategy {
             .iter()
             .find(|turn| turn.transcript_fragment.trim().is_empty())
         {
+            let context = format_post_commit_derivation_context(
+                new_head,
+                Some(checkpoint_id),
+                Some(&session.session_id),
+                &turn_ids,
+                None,
+            );
+            eprintln!(
+                "[bitloops] Warning: missing transcript_fragment for overlapping interaction turn turn_id={} ({context})",
+                missing_turn.turn_id
+            );
             anyhow::bail!(
-                "interaction turn {} is missing transcript_fragment for session {}",
-                missing_turn.turn_id,
-                session.session_id
+                "missing transcript_fragment for overlapping interaction turn turn_id={} ({context})",
+                missing_turn.turn_id
             );
         }
 
@@ -529,12 +543,16 @@ impl ManualCommitStrategy {
             self.backend.save_session(&state)?;
         }
 
-        eprintln!(
-            "[bitloops] Condensed interaction session {}: checkpoint {checkpoint_id}",
-            &session.session_id[..session.session_id.len().min(8)]
+        let context = format_post_commit_derivation_context(
+            new_head,
+            Some(checkpoint_id),
+            Some(&session.session_id),
+            &turn_ids,
+            None,
         );
+        eprintln!("[bitloops] Condensed interaction session ({context})");
 
-        Ok(turns.iter().map(|turn| turn.turn_id.clone()).collect())
+        Ok(turn_ids)
     }
 
     /// Updates `base_commit` to HEAD for all active sessions.

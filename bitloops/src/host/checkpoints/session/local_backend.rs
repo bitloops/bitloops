@@ -323,7 +323,7 @@ mod tests {
         let loaded = backend.load_session("sess-001").unwrap().unwrap();
         assert_eq!(loaded.session_id, "sess-001");
         assert_eq!(loaded.phase, SessionPhase::Active);
-        assert_eq!(loaded.step_count, 3);
+        assert_eq!(loaded.pending.step_count, 3);
         assert_eq!(loaded.first_prompt, "Fix the bug");
     }
 

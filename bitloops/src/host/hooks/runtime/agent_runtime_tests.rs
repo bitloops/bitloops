@@ -1020,7 +1020,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
         .unwrap()
         .unwrap();
     assert!(
-        state_before_session_end.step_count > 0,
+        state_before_session_end.pending.step_count > 0,
         "manual strategy should record a step at stop"
     );
 
@@ -1039,7 +1039,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        state.step_count, state_before_session_end.step_count,
+        state.pending.step_count, state_before_session_end.pending.step_count,
         "session-end should not re-run turn-end when stop already completed the turn"
     );
     assert_eq!(state.phase, SessionPhase::Ended);
@@ -1202,7 +1202,10 @@ fn post_task_deletes_marker_without_mutating_step_count() {
     );
 
     let loaded = backend.load_session("s8").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 2, "step_count should be unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 2,
+        "step_count should be unchanged"
+    );
 }
 
 #[test]
@@ -1234,7 +1237,10 @@ fn post_todo_noop_when_no_changes_in_subagent() {
     handle_post_todo(input, &backend, &strat, None).unwrap();
 
     let loaded = backend.load_session("s9").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 0, "step_count should be unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 0,
+        "step_count should be unchanged"
+    );
 }
 
 #[test]
@@ -1263,7 +1269,10 @@ fn post_todo_noop_when_not_in_subagent() {
     handle_post_todo(input, &backend, &strat, None).unwrap();
 
     let loaded = backend.load_session("s10").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 5, "step_count should be unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 5,
+        "step_count should be unchanged"
+    );
 }
 
 #[test]
@@ -1501,7 +1510,7 @@ fn stop_preserves_strategy_checkpoint_count_updates() {
     let loaded = backend.load_session("stop-manual").unwrap().unwrap();
     assert_eq!(loaded.phase, SessionPhase::Idle);
     assert!(
-        loaded.step_count > 0,
+        loaded.pending.step_count > 0,
         "stop should preserve checkpoint_count updates from strategy.save_step"
     );
 }
@@ -1675,7 +1684,10 @@ fn post_task_saves_task_step_when_changes_exist() {
         call.new_files
     );
     let loaded = backend.load_session("post-task").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 7, "step_count should stay unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 7,
+        "step_count should stay unchanged"
+    );
 }
 
 #[test]

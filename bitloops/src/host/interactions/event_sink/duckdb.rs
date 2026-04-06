@@ -629,9 +629,7 @@ mod tests {
             1
         );
         assert!(
-            repository
-                .list_turns_for_session("sess-1", 10)
-                .unwrap()[0]
+            repository.list_turns_for_session("sess-1", 10).unwrap()[0]
                 .transcript_fragment
                 .contains("\"assistant\"")
         );

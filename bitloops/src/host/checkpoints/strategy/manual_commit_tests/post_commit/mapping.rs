@@ -203,11 +203,11 @@ pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head(
 
     let loaded = backend.load_session("pc-squash").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 0,
+        loaded.pending.step_count, 0,
         "squash commit should condense pending session state"
     );
     assert!(
-        loaded.files_touched.is_empty(),
+        loaded.pending.files_touched.is_empty(),
         "files_touched should be reset after squash condensation"
     );
 }
@@ -307,7 +307,7 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
 
     let loaded = backend.load_session("pc-skip-mapped").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 1,
+        loaded.pending.step_count, 1,
         "already-mapped HEAD should be ignored by post_commit"
     );
     assert_eq!(

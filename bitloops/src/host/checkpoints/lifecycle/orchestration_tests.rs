@@ -162,7 +162,8 @@ fn turn_end_includes_token_usage_in_step() {
 
         let state = state.expect("session state should exist after turn end");
         assert!(
-            state.token_usage.is_some() && state.token_usage.as_ref().unwrap().api_call_count > 0,
+            state.pending.token_usage.is_some()
+                && state.pending.token_usage.as_ref().unwrap().api_call_count > 0,
             "session state should include token usage from transcript after turn end"
         );
     });

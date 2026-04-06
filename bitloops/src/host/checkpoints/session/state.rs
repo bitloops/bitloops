@@ -2,7 +2,6 @@
 
 use crate::adapters::agents::TokenUsage;
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
 
 use super::phase::SessionPhase;
 
@@ -213,20 +212,6 @@ impl SessionState {
     }
 }
 
-impl Deref for SessionState {
-    type Target = PendingCheckpointState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.pending
-    }
-}
-
-impl DerefMut for SessionState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.pending
-    }
-}
-
 impl PrePromptState {
     pub fn normalize_after_load(&mut self) {
         if self.step_transcript_start == 0 && self.last_transcript_line_count > 0 {
@@ -279,9 +264,9 @@ pub fn find_most_recent_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        PendingCheckpointState, PrePromptState, SessionState, find_most_recent_session,
-    };
+    use crate::adapters::agents::TokenUsage;
+
+    use super::{PendingCheckpointState, PrePromptState, SessionState, find_most_recent_session};
 
     // CLI-257
     #[test]
@@ -472,8 +457,15 @@ mod tests {
                 step_count: 3,
                 checkpoint_transcript_start: 12,
                 files_touched: vec!["src/lib.rs".to_string()],
+                token_usage: Some(TokenUsage {
+                    input_tokens: 10,
+                    cache_creation_tokens: 1,
+                    cache_read_tokens: 2,
+                    output_tokens: 5,
+                    api_call_count: 3,
+                    subagent_tokens: None,
+                }),
                 transcript_identifier_at_start: "msg-1".to_string(),
-                ..Default::default()
             },
             ..Default::default()
         };
@@ -482,6 +474,7 @@ mod tests {
         assert!(json.contains("\"checkpoint_count\":3"));
         assert!(json.contains("\"checkpoint_transcript_start\":12"));
         assert!(json.contains("\"files_touched\":[\"src/lib.rs\"]"));
+        assert!(json.contains("\"token_usage\""));
 
         let mut restored: SessionState = serde_json::from_str(&json).expect("deserialize");
         restored.normalize_after_load();
@@ -489,6 +482,53 @@ mod tests {
         assert_eq!(restored.pending.checkpoint_transcript_start, 12);
         assert_eq!(restored.pending.files_touched, vec!["src/lib.rs"]);
         assert_eq!(restored.pending.transcript_identifier_at_start, "msg-1");
+        let token_usage = restored
+            .pending
+            .token_usage
+            .expect("pending token usage should round-trip through flattened JSON");
+        assert_eq!(token_usage.input_tokens, 10);
+        assert_eq!(token_usage.cache_creation_tokens, 1);
+        assert_eq!(token_usage.cache_read_tokens, 2);
+        assert_eq!(token_usage.output_tokens, 5);
+        assert_eq!(token_usage.api_call_count, 3);
+        assert!(token_usage.subagent_tokens.is_none());
+    }
+
+    #[test]
+    fn session_state_legacy_pending_json_deserializes_into_pending_state() {
+        let json = r#"{
+            "session_id":"legacy-pending",
+            "checkpoint_count":4,
+            "files_touched":["src/main.rs"],
+            "checkpoint_transcript_start":33,
+            "transcript_identifier_at_start":"msg-9",
+            "token_usage":{
+                "input_tokens":10,
+                "cache_creation_tokens":1,
+                "cache_read_tokens":2,
+                "output_tokens":5,
+                "api_call_count":3,
+                "subagent_tokens":null
+            }
+        }"#;
+
+        let mut restored: SessionState = serde_json::from_str(json).expect("deserialize");
+        restored.normalize_after_load();
+
+        assert_eq!(restored.pending.step_count, 4);
+        assert_eq!(restored.pending.files_touched, vec!["src/main.rs"]);
+        assert_eq!(restored.pending.checkpoint_transcript_start, 33);
+        assert_eq!(restored.pending.transcript_identifier_at_start, "msg-9");
+        let token_usage = restored
+            .pending
+            .token_usage
+            .expect("legacy pending token usage should deserialize");
+        assert_eq!(token_usage.input_tokens, 10);
+        assert_eq!(token_usage.cache_creation_tokens, 1);
+        assert_eq!(token_usage.cache_read_tokens, 2);
+        assert_eq!(token_usage.output_tokens, 5);
+        assert_eq!(token_usage.api_call_count, 3);
+        assert!(token_usage.subagent_tokens.is_none());
     }
 
     #[test]

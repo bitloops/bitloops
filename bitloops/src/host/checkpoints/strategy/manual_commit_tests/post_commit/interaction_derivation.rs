@@ -10,12 +10,7 @@ use crate::host::interactions::types::{
     InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
 };
 
-type ClickHouseTestEnv = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+type ClickHouseTestEnv = (String, Option<String>, Option<String>, Option<String>);
 
 #[derive(Default)]
 struct FakeInteractionRepository {
@@ -565,6 +560,18 @@ pub(crate) fn derive_post_commit_errors_when_overlapping_turn_is_missing_transcr
         "unexpected error: {err}"
     );
     assert!(
+        format!("{err:#}").contains(&format!("commit={head}")),
+        "error should include the commit context: {err:#}"
+    );
+    assert!(
+        format!("{err:#}").contains("session_id=sess-missing-fragment"),
+        "error should include the session context: {err:#}"
+    );
+    assert!(
+        format!("{err:#}").contains("turn-missing-fragment"),
+        "error should include the turn context: {err:#}"
+    );
+    assert!(
         !read_commit_checkpoint_mappings(dir.path())
             .expect("read mappings")
             .contains_key(&head),
@@ -658,6 +665,14 @@ pub(crate) fn derive_post_commit_returns_error_when_spool_flush_fails_with_pendi
     assert!(
         format!("{err:#}").contains("flushing interaction spool before post_commit derivation")
     );
+    assert!(
+        format!("{err:#}").contains("commit=deadbeef"),
+        "error should include the commit context: {err:#}"
+    );
+    assert!(
+        format!("{err:#}").contains("spool_pending_work=true"),
+        "error should include pending-work context: {err:#}"
+    );
 }
 
 #[test]
@@ -693,6 +708,18 @@ pub(crate) fn derive_post_commit_returns_error_when_overlapping_turn_session_is_
         )
         .expect_err("missing interaction session should error");
     assert!(format!("{err:#}").contains("missing interaction session"));
+    assert!(
+        format!("{err:#}").contains(&format!("commit={head}")),
+        "error should include the commit context: {err:#}"
+    );
+    assert!(
+        format!("{err:#}").contains("session_id=missing-session"),
+        "error should include the session context: {err:#}"
+    );
+    assert!(
+        format!("{err:#}").contains("turn-1"),
+        "error should include the overlapping turn context: {err:#}"
+    );
 }
 
 #[test]

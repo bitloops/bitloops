@@ -33,7 +33,10 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
         loaded.phase,
         crate::host::checkpoints::session::phase::SessionPhase::Active
     );
-    assert_eq!(loaded.step_count, 0, "active session should be condensed");
+    assert_eq!(
+        loaded.pending.step_count, 0,
+        "active session should be condensed"
+    );
     let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
         .expect("mappings")
         .get(&head_sha)
@@ -119,9 +122,9 @@ pub(crate) fn post_commit_idle_session_condenses() {
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let loaded = backend.load_session("pc-idle").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 0);
+    assert_eq!(loaded.pending.step_count, 0);
     assert!(
-        loaded.files_touched.is_empty(),
+        loaded.pending.files_touched.is_empty(),
         "files_touched should be reset"
     );
 }
@@ -154,7 +157,7 @@ pub(crate) fn post_commit_rebase_during_active_skips_transition() {
 
     let loaded = backend.load_session("pc-rebase").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 3,
+        loaded.pending.step_count, 3,
         "during rebase post-commit should be a no-op for session state"
     );
     assert!(
@@ -190,7 +193,7 @@ pub(crate) fn post_commit_files_touched_resets_after_condensation() {
     git_ok(dir.path(), &["commit", "-m", "test commit"]);
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
     let loaded = backend.load_session("pc-files").unwrap().unwrap();
-    assert!(loaded.files_touched.is_empty());
+    assert!(loaded.pending.files_touched.is_empty());
 }
 
 #[test]

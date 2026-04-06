@@ -86,10 +86,7 @@ impl DbSessionBackend {
                         .context("reading files_touched")?,
                     "files_touched",
                 )?,
-                token_usage: parse_optional_json_column(
-                    token_usage_raw.as_deref(),
-                    "token_usage",
-                )?,
+                token_usage: parse_optional_json_column(token_usage_raw.as_deref(), "token_usage")?,
                 transcript_identifier_at_start: row
                     .get("transcript_identifier_at_start")
                     .context("reading transcript_identifier_at_start")?,

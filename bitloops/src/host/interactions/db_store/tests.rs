@@ -209,9 +209,7 @@ fn record_and_flush_interactions() {
         1
     );
     assert!(
-        repository
-            .list_turns_for_session("session-1", 10)
-            .unwrap()[0]
+        repository.list_turns_for_session("session-1", 10).unwrap()[0]
             .transcript_fragment
             .contains("\"assistant\"")
     );

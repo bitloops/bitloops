@@ -171,11 +171,9 @@ impl Strategy for ManualCommitStrategy {
         state.pending_prompt_attribution = None;
         state.prompt_attributions.push(prompt_attr);
         // Record transcript identifier at the first step.
-        if state.pending.step_count == 1
-            && state.pending.transcript_identifier_at_start.is_empty()
+        if state.pending.step_count == 1 && state.pending.transcript_identifier_at_start.is_empty()
         {
-            state.pending.transcript_identifier_at_start =
-                ctx.step_transcript_identifier.clone();
+            state.pending.transcript_identifier_at_start = ctx.step_transcript_identifier.clone();
         }
         if let Some(usage) = &ctx.token_usage {
             state.pending.token_usage = Some(accumulate_token_usage(
@@ -367,18 +365,28 @@ impl Strategy for ManualCommitStrategy {
         let interaction_spool_ref = interaction_spool
             .as_ref()
             .map(|spool| spool as &dyn InteractionSpool);
+        let spool_pending_work = interaction_spool_ref.is_some_and(spool_has_pending_work);
         let interaction_repository = match resolve_event_repository_for_post_commit(&self.repo_root)
         {
             Ok(repository) => repository,
             Err(err) => {
-                if interaction_spool_ref.is_some_and(spool_has_pending_work) {
+                let context = format_post_commit_derivation_context(
+                    &head,
+                    None,
+                    None,
+                    &[],
+                    Some(spool_pending_work),
+                );
+                if spool_pending_work {
                     eprintln!(
-                        "[bitloops] Warning: failed to resolve interaction event repository for post_commit with pending interaction work: {err:#}"
+                        "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
                     );
-                    return Err(err).context("resolving interaction event repository");
+                    return Err(err).context(format!(
+                        "resolving interaction event repository ({context})"
+                    ));
                 }
                 eprintln!(
-                    "[bitloops] Warning: failed to resolve interaction event repository for post_commit without pending interaction work: {err:#}"
+                    "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
                 );
                 update_active_session_base_commits(
                     self.backend.as_ref(),
@@ -488,11 +496,16 @@ impl ManualCommitStrategy {
         interaction_repository: &dyn InteractionEventRepository,
         interaction_spool: Option<&dyn InteractionSpool>,
     ) -> Result<Option<String>> {
-        flush_interaction_spool_or_fail(interaction_spool, interaction_repository)?;
+        flush_interaction_spool_or_fail(head, interaction_spool, interaction_repository)?;
 
         let uncheckpointed_turns = interaction_repository
             .list_uncheckpointed_turns()
-            .context("listing uncheckpointed interaction turns from event repository")?;
+            .with_context(|| {
+                let context = format_post_commit_derivation_context(head, None, None, &[], None);
+                format!(
+                    "listing uncheckpointed interaction turns from event repository ({context})"
+                )
+            })?;
         let mut turns_by_session: std::collections::BTreeMap<
             String,
             Vec<crate::host::interactions::InteractionTurn>,
@@ -524,19 +537,31 @@ impl ManualCommitStrategy {
                 if !turns_overlap_committed_files(&session_turns, committed_files_set) {
                     continue;
                 }
+                let session_turn_ids: Vec<String> = session_turns
+                    .iter()
+                    .map(|turn| turn.turn_id.clone())
+                    .collect();
+                let session_context = format_post_commit_derivation_context(
+                    head,
+                    Some(&checkpoint_id),
+                    Some(&session_id),
+                    &session_turn_ids,
+                    interaction_spool.map(spool_has_pending_work),
+                );
 
                 let interaction_session = interaction_repository
                     .load_session(&session_id)
                     .with_context(|| {
-                        format!("loading interaction session `{session_id}` from event repository")
+                        format!(
+                            "loading interaction session `{session_id}` from event repository ({session_context})"
+                        )
                     })?
                     .ok_or_else(|| {
                         eprintln!(
-                            "[bitloops] Warning: missing interaction session for overlapping turns session_id={} checkpoint_id={} commit={}",
-                            session_id, checkpoint_id, head
+                            "[bitloops] Warning: missing interaction session for overlapping turns ({session_context})"
                         );
                         anyhow::anyhow!(
-                            "missing interaction session `{session_id}` for overlapping interaction turns"
+                            "missing interaction session for overlapping interaction turns ({session_context})"
                         )
                     })?;
 
@@ -555,7 +580,7 @@ impl ManualCommitStrategy {
                     )
                     .with_context(|| {
                         format!(
-                            "assigning checkpoint `{checkpoint_id}` to interaction turns for session `{session_id}`"
+                            "assigning checkpoint `{checkpoint_id}` to interaction turns for session `{session_id}` ({session_context})"
                         )
                     })?;
                 if let Some(spool) = interaction_spool {
@@ -582,8 +607,15 @@ impl ManualCommitStrategy {
             && let Some(spool) = interaction_spool
             && let Err(err) = spool.flush(interaction_repository)
         {
+            let context = format_post_commit_derivation_context(
+                head,
+                Some(&checkpoint_id),
+                None,
+                &[],
+                Some(spool_has_pending_work(spool)),
+            );
             eprintln!(
-                "[bitloops] Warning: failed to flush checkpoint assignments to the interaction event store: {err:#}"
+                "[bitloops] Warning: failed to flush checkpoint assignments to the interaction event store ({context}): {err:#}"
             );
         }
 
@@ -611,20 +643,28 @@ fn spool_has_pending_work(spool: &dyn InteractionSpool) -> bool {
 }
 
 fn flush_interaction_spool_or_fail(
+    head: &str,
     spool: Option<&dyn InteractionSpool>,
     repository: &dyn InteractionEventRepository,
 ) -> Result<()> {
     let Some(spool) = spool else {
         return Ok(());
     };
+    let pending_work = spool_has_pending_work(spool);
     if let Err(err) = spool.flush(repository) {
-        if spool_has_pending_work(spool) {
+        let context =
+            format_post_commit_derivation_context(head, None, None, &[], Some(pending_work));
+        if pending_work {
             eprintln!(
-                "[bitloops] Warning: failed to flush interaction spool before post_commit derivation with pending interaction work: {err:#}"
+                "[bitloops] Warning: failed to flush interaction spool before post_commit derivation ({context}): {err:#}"
             );
-            return Err(err).context("flushing interaction spool before post_commit derivation");
+            return Err(err).context(format!(
+                "flushing interaction spool before post_commit derivation ({context})"
+            ));
         }
-        eprintln!("[bitloops] Warning: failed to flush interaction spool: {err:#}");
+        eprintln!(
+            "[bitloops] Warning: failed to flush interaction spool before post_commit derivation ({context}): {err:#}"
+        );
     }
     Ok(())
 }
