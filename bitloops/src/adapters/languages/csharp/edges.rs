@@ -97,8 +97,8 @@ fn collect_csharp_edges_recursive(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'
         "using_directive" => collect_using_edge(node, ctx),
         "invocation_expression" => collect_call_edge(node, ctx),
         "base_list" => collect_inheritance_edges(node, ctx),
-        "identifier" | "identifier_name" | "qualified_name" | "generic_name" | "predefined_type"
-        | "nullable_type" => collect_type_reference_edge(node, ctx),
+        "identifier" | "identifier_name" | "qualified_name" | "generic_name"
+        | "predefined_type" | "nullable_type" => collect_type_reference_edge(node, ctx),
         _ => {}
     }
 

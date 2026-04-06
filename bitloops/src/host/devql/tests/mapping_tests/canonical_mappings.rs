@@ -899,10 +899,7 @@ public enum UserRole
 
     let artefacts = extract_csharp_artefacts(content, "src/UserService.cs").unwrap();
 
-    let import = artefact_by_language_kind(
-        &artefacts,
-        LanguageKind::csharp(CSharpKind::Using),
-    );
+    let import = artefact_by_language_kind(&artefacts, LanguageKind::csharp(CSharpKind::Using));
     assert_eq!(canonical_kind(import), Some("import"));
 
     let interface = artefact_by_name_and_language_kind(

@@ -15,10 +15,7 @@ struct CSharpArtefactDescriptor {
     parent_symbol_fqn: Option<String>,
 }
 
-pub(crate) fn extract_csharp_artefacts(
-    content: &str,
-    path: &str,
-) -> Result<Vec<LanguageArtefact>> {
+pub(crate) fn extract_csharp_artefacts(content: &str, path: &str) -> Result<Vec<LanguageArtefact>> {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
     parser
@@ -223,8 +220,7 @@ fn collect_csharp_nodes_recursive(
             }
         }
         "using_directive" => {
-            if let Some(name) = using_target_name(node, content)
-            {
+            if let Some(name) = using_target_name(node, content) {
                 let line_no = node.start_position().row as i32 + 1;
                 push_csharp_artefact(
                     out,
@@ -273,7 +269,9 @@ fn push_csharp_artefact(
         parent_symbol_fqn,
     } = descriptor;
 
-    if name.is_empty() || !is_supported_language_kind(CSHARP_SUPPORTED_LANGUAGE_KINDS, language_kind) {
+    if name.is_empty()
+        || !is_supported_language_kind(CSHARP_SUPPORTED_LANGUAGE_KINDS, language_kind)
+    {
         return;
     }
 

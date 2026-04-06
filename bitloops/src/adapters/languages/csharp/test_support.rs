@@ -143,10 +143,7 @@ fn collect_csharp_test_suites(
     suites
 }
 
-fn collect_csharp_test_methods(
-    type_node: Node<'_>,
-    source: &[u8],
-) -> Vec<DiscoveredTestScenario> {
+fn collect_csharp_test_methods(type_node: Node<'_>, source: &[u8]) -> Vec<DiscoveredTestScenario> {
     let mut scenarios = Vec::new();
     let mut cursor = type_node.walk();
     for child in type_node.named_children(&mut cursor) {

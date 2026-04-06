@@ -1,7 +1,5 @@
 use crate::host::devql::CanonicalKindProjection;
-use crate::host::language_adapter::{
-    CSharpKind, CanonicalMapping, LanguageKind, MappingCondition,
-};
+use crate::host::language_adapter::{CSharpKind, CanonicalMapping, LanguageKind, MappingCondition};
 
 pub(crate) static CSHARP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     CanonicalMapping {

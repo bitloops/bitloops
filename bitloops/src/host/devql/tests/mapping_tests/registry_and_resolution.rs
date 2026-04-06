@@ -142,9 +142,9 @@ public class User {}
         "csharp built-in registry pack should emit import edges"
     );
     assert!(
-        csharp_edges.iter().any(|edge| {
-            matches!(edge.edge_kind, EdgeKind::Extends | EdgeKind::Implements)
-        }),
+        csharp_edges
+            .iter()
+            .any(|edge| { matches!(edge.edge_kind, EdgeKind::Extends | EdgeKind::Implements) }),
         "csharp built-in registry pack should emit inheritance edges"
     );
 
