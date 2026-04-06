@@ -24,6 +24,7 @@ pub use repo_policy::{
     RepoPolicySnapshot, discover_repo_policy, discover_repo_policy_optional,
 };
 pub use resolve::{
+    resolve_daemon_config_root_for_repo,
     resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_dashboard_config,
     resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo,
     resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,

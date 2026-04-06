@@ -41,7 +41,7 @@ fn claude_settings_path(repo_root: &Path) -> PathBuf {
 
 /// Returns true if the command is a Bitloops-managed hook.
 fn is_bitloops_hook(command: &str) -> bool {
-    command.starts_with(BITLOOPS_HOOK_PREFIX)
+    crate::adapters::agents::is_managed_hook_command(command, &[BITLOOPS_HOOK_PREFIX])
 }
 
 /// Returns true if `command` appears in any hook of any matcher.
@@ -141,6 +141,14 @@ fn write_settings_file(path: &Path, settings: &Map<String, Value>) -> Result<()>
 ///
 pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
     let settings_path = claude_settings_path(repo_root);
+    let cmd_session_start = crate::adapters::agents::managed_hook_command(CMD_SESSION_START);
+    let cmd_session_end = crate::adapters::agents::managed_hook_command(CMD_SESSION_END);
+    let cmd_stop = crate::adapters::agents::managed_hook_command(CMD_STOP);
+    let cmd_user_prompt_submit =
+        crate::adapters::agents::managed_hook_command(CMD_USER_PROMPT_SUBMIT);
+    let cmd_pre_task = crate::adapters::agents::managed_hook_command(CMD_PRE_TASK);
+    let cmd_post_task = crate::adapters::agents::managed_hook_command(CMD_POST_TASK);
+    let cmd_post_todo = crate::adapters::agents::managed_hook_command(CMD_POST_TODO);
 
     // Parse existing settings as a raw map — preserves ALL unknown fields and hook types.
     let mut raw_settings: Map<String, Value> = match fs::read(&settings_path) {
@@ -175,32 +183,32 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
     let mut count = 0usize;
 
     // Session hooks use empty matcher; tool-use hooks use named matcher.
-    if !hook_command_exists(&session_start, CMD_SESSION_START) {
-        session_start = add_hook_to_matcher(session_start, "", CMD_SESSION_START);
+    if !hook_command_exists(&session_start, &cmd_session_start) {
+        session_start = add_hook_to_matcher(session_start, "", &cmd_session_start);
         count += 1;
     }
-    if !hook_command_exists(&session_end, CMD_SESSION_END) {
-        session_end = add_hook_to_matcher(session_end, "", CMD_SESSION_END);
+    if !hook_command_exists(&session_end, &cmd_session_end) {
+        session_end = add_hook_to_matcher(session_end, "", &cmd_session_end);
         count += 1;
     }
-    if !hook_command_exists(&stop, CMD_STOP) {
-        stop = add_hook_to_matcher(stop, "", CMD_STOP);
+    if !hook_command_exists(&stop, &cmd_stop) {
+        stop = add_hook_to_matcher(stop, "", &cmd_stop);
         count += 1;
     }
-    if !hook_command_exists(&user_prompt_submit, CMD_USER_PROMPT_SUBMIT) {
-        user_prompt_submit = add_hook_to_matcher(user_prompt_submit, "", CMD_USER_PROMPT_SUBMIT);
+    if !hook_command_exists(&user_prompt_submit, &cmd_user_prompt_submit) {
+        user_prompt_submit = add_hook_to_matcher(user_prompt_submit, "", &cmd_user_prompt_submit);
         count += 1;
     }
-    if !hook_command_exists_with_matcher(&pre_tool_use, "Task", CMD_PRE_TASK) {
-        pre_tool_use = add_hook_to_matcher(pre_tool_use, "Task", CMD_PRE_TASK);
+    if !hook_command_exists_with_matcher(&pre_tool_use, "Task", &cmd_pre_task) {
+        pre_tool_use = add_hook_to_matcher(pre_tool_use, "Task", &cmd_pre_task);
         count += 1;
     }
-    if !hook_command_exists_with_matcher(&post_tool_use, "Task", CMD_POST_TASK) {
-        post_tool_use = add_hook_to_matcher(post_tool_use, "Task", CMD_POST_TASK);
+    if !hook_command_exists_with_matcher(&post_tool_use, "Task", &cmd_post_task) {
+        post_tool_use = add_hook_to_matcher(post_tool_use, "Task", &cmd_post_task);
         count += 1;
     }
-    if !hook_command_exists_with_matcher(&post_tool_use, "TodoWrite", CMD_POST_TODO) {
-        post_tool_use = add_hook_to_matcher(post_tool_use, "TodoWrite", CMD_POST_TODO);
+    if !hook_command_exists_with_matcher(&post_tool_use, "TodoWrite", &cmd_post_todo) {
+        post_tool_use = add_hook_to_matcher(post_tool_use, "TodoWrite", &cmd_post_todo);
         count += 1;
     }
 

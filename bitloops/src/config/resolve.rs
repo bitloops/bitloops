@@ -8,7 +8,7 @@ use crate::utils::paths;
 use super::constants::*;
 #[cfg(not(test))]
 use super::daemon_config::default_daemon_config_exists;
-use super::daemon_config::load_daemon_settings;
+use super::daemon_config::{LoadedDaemonSettings, load_daemon_settings};
 use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
@@ -37,22 +37,19 @@ fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSetting
     Ok(Some((loaded.root, loaded.settings)))
 }
 
-fn required_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
+fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
     if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
-        let loaded = load_daemon_settings(Some(Path::new(&explicit_path)))?;
-        return Ok(loaded.root);
+        return load_daemon_settings(Some(Path::new(&explicit_path)));
     }
 
     let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
     if repo_toml.is_file() {
-        let loaded = load_daemon_settings(Some(&repo_toml))?;
-        return Ok(loaded.root);
+        return load_daemon_settings(Some(&repo_toml));
     }
 
     #[cfg(not(test))]
     if default_daemon_config_exists().unwrap_or(false) {
-        let loaded = load_daemon_settings(None)?;
-        return Ok(loaded.root);
+        return load_daemon_settings(None);
     }
 
     bail!(
@@ -60,6 +57,10 @@ fn required_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
         ENV_DAEMON_CONFIG_PATH_OVERRIDE,
         BITLOOPS_CONFIG_RELATIVE_PATH
     )
+}
+
+pub fn resolve_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    required_daemon_settings_for_repo(repo_root).map(|loaded| loaded.root)
 }
 
 #[cfg(test)]
@@ -128,7 +129,7 @@ pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBa
 }
 
 pub fn resolve_repo_runtime_db_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
-    let config_root = required_daemon_config_root_for_repo(repo_root)?;
+    let config_root = resolve_daemon_config_root_for_repo(repo_root)?;
     Ok(config_root
         .join("stores")
         .join("runtime")
