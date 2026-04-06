@@ -115,6 +115,10 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
         "python language pack should be resolvable"
     );
     assert!(
+        host.language_packs().resolve_for_language("csharp").is_some(),
+        "csharp language pack should be resolvable"
+    );
+    assert!(
         host.language_packs().resolve_for_language("go").is_some(),
         "go language pack should be resolvable"
     );

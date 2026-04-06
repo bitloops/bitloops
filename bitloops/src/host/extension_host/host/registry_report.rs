@@ -511,8 +511,9 @@ mod tests {
         let host = CoreExtensionHost::with_builtins().expect("builtins");
         let r = build(&host);
         assert_eq!(r.subsystem, "core_extension_host");
-        assert_eq!(r.language_packs.len(), 5);
+        assert_eq!(r.language_packs.len(), 6);
         let lang_ids: Vec<_> = r.language_packs.iter().map(|p| p.id.as_str()).collect();
+        assert!(lang_ids.contains(&"csharp-language-pack"));
         assert!(lang_ids.contains(&"go-language-pack"));
         assert!(lang_ids.contains(&"java-language-pack"));
         assert!(lang_ids.contains(&"rust-language-pack"));

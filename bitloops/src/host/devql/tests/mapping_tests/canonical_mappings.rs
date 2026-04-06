@@ -759,3 +759,202 @@ class Greeter extends Base implements Runner {
         Some("src/com/acme/Greeter.java::Greeter")
     );
 }
+
+#[test]
+fn csharp_canonical_mapping_covers_supported_kind_table() {
+    let expected = [
+        (
+            LanguageKind::csharp(CSharpKind::Class),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Struct),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Record),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Delegate),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Interface),
+            false,
+            true,
+            Some("interface"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Enum),
+            false,
+            true,
+            Some("enum"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Method),
+            false,
+            true,
+            Some("function"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Constructor),
+            false,
+            true,
+            Some("method"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Property),
+            false,
+            true,
+            Some("variable"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Field),
+            false,
+            true,
+            Some("variable"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Using),
+            false,
+            true,
+            Some("import"),
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Namespace),
+            false,
+            true,
+            None,
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::FileScopedNamespace),
+            false,
+            true,
+            None,
+        ),
+        (
+            LanguageKind::csharp(CSharpKind::Method),
+            true,
+            true,
+            Some("method"),
+        ),
+    ];
+
+    for (language_kind, inside_parent, supported, canonical_kind) in expected {
+        assert_eq!(
+            is_supported_language_kind(CSHARP_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(CSHARP_CANONICAL_MAPPINGS, language_kind, inside_parent)
+                .map(CanonicalKindProjection::as_str),
+            canonical_kind
+        );
+    }
+}
+
+#[test]
+fn csharp_canonical_mapping_preserves_csharp_specific_structure() {
+    let content = r#"using System.Collections.Generic;
+
+namespace MyApp.Services;
+
+public interface IUserService
+{
+    Task<User> GetUserAsync(int id);
+}
+
+public class UserService : IUserService
+{
+    private readonly IRepository _repo;
+
+    public UserService(IRepository repo)
+    {
+        _repo = repo;
+    }
+
+    public string Name { get; }
+
+    public Task<User> GetUserAsync(int id)
+    {
+        return _repo.FindByIdAsync(id);
+    }
+}
+
+public enum UserRole
+{
+    Admin,
+    Member
+}
+"#;
+
+    let artefacts = extract_csharp_artefacts(content, "src/UserService.cs").unwrap();
+
+    let import = artefact_by_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Using),
+    );
+    assert_eq!(canonical_kind(import), Some("import"));
+
+    let interface = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Interface),
+        "IUserService",
+    );
+    assert_eq!(canonical_kind(interface), Some("interface"));
+
+    let class = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Class),
+        "UserService",
+    );
+    assert_eq!(canonical_kind(class), Some("type"));
+
+    let constructor = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Constructor),
+        "UserService",
+    );
+    assert_eq!(canonical_kind(constructor), Some("method"));
+
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Method),
+        "GetUserAsync",
+    );
+    assert_eq!(canonical_kind(method), Some("method"));
+
+    let property = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Property),
+        "Name",
+    );
+    assert_eq!(canonical_kind(property), Some("variable"));
+
+    let field = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Field),
+        "_repo",
+    );
+    assert_eq!(canonical_kind(field), Some("variable"));
+    assert_eq!(
+        field.parent_symbol_fqn.as_deref(),
+        Some("src/UserService.cs::UserService")
+    );
+
+    let enum_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::Enum),
+        "UserRole",
+    );
+    assert_eq!(canonical_kind(enum_item), Some("enum"));
+}

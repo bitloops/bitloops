@@ -1,4 +1,8 @@
 use super::*;
+use crate::adapters::languages::csharp::canonical::{
+    CSHARP_CANONICAL_MAPPINGS, CSHARP_SUPPORTED_LANGUAGE_KINDS,
+};
+use crate::adapters::languages::csharp::extraction::extract_csharp_artefacts;
 use crate::adapters::languages::go::canonical::{
     GO_CANONICAL_MAPPINGS, GO_SUPPORTED_LANGUAGE_KINDS,
 };
@@ -20,7 +24,7 @@ use crate::adapters::languages::ts_js::canonical::{
 };
 use crate::adapters::languages::ts_js::extraction::extract_js_ts_artefacts;
 use crate::host::language_adapter::{
-    GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
+    CSharpKind, GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
 };
 use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
 use std::path::PathBuf;
