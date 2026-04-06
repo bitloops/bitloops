@@ -9,11 +9,15 @@ use serde_json::Value;
 use crate::capability_packs as capabilities;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::storage::SqliteConnectionPool;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
 use super::events::{EventHandlerContext, HostEventHandler};
-use super::gateways::{DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway};
+use super::gateways::{
+    DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway,
+    SqliteRelationalGateway,
+};
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::lifecycle;
 use super::migrations::CapabilityMigration;
@@ -166,17 +170,20 @@ impl DevqlCapabilityHost {
             .backends
             .relational
             .resolve_sqlite_db_path_for_repo(self.repo_root())?;
+        let sqlite_pool = SqliteConnectionPool::connect(sqlite_path.clone())?;
 
         let language_services: Arc<dyn LanguageServicesGateway> =
             Arc::new(RuntimeLanguageServicesGateway {
                 inner: self.runtime.languages,
             });
+        let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
         );
 
         Ok(EventHandlerContext {
             storage: Arc::new(RelationalStorage::local_only(sqlite_path)),
+            relational,
             language_services,
             host_services,
         })

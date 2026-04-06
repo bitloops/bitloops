@@ -3166,8 +3166,7 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
                 artefact_id: suite_artefact_id.clone(),
                 symbol_id: suite_symbol_id.clone(),
                 repo_id: repo_id.to_string(),
-                commit_sha: commit_sha.to_string(),
-                blob_sha: format!("blob:{commit_sha}:{path}"),
+                content_id: format!("blob:{commit_sha}:{path}"),
                 path: path.clone(),
                 language: "rust".to_string(),
                 canonical_kind: "test_suite".to_string(),
@@ -3183,10 +3182,7 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
                 signature: None,
                 modifiers: "[]".to_string(),
                 docstring: None,
-                content_hash: None,
                 discovery_source: "source".to_string(),
-                revision_kind: "commit".to_string(),
-                revision_id: commit_sha.to_string(),
             });
 
             for scenario in &suite.scenarios {
@@ -3198,8 +3194,7 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
                     artefact_id: format!("test_artefact:{scenario_symbol_id}"),
                     symbol_id: scenario_symbol_id,
                     repo_id: repo_id.to_string(),
-                    commit_sha: commit_sha.to_string(),
-                    blob_sha: format!("blob:{commit_sha}:{path}"),
+                    content_id: format!("blob:{commit_sha}:{path}"),
                     path: path.clone(),
                     language: "rust".to_string(),
                     canonical_kind: "test_scenario".to_string(),
@@ -3215,10 +3210,7 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
                     signature: None,
                     modifiers: "[]".to_string(),
                     docstring: None,
-                    content_hash: None,
                     discovery_source: scenario.discovery_source.as_str().to_string(),
-                    revision_kind: "commit".to_string(),
-                    revision_id: commit_sha.to_string(),
                 });
             }
         }
@@ -3281,9 +3273,10 @@ fn run_linkage_resolution(world: &mut DevqlBddWorld) {
         });
     }
 
+    let content_ids = HashMap::new();
     let mut materialization = MaterializationContext {
         repo_id: "test-repo",
-        commit_sha: "test-commit",
+        content_ids: &content_ids,
         production: &production_artefacts,
         production_index: &production_index,
         test_artefacts: &mut test_artefacts,
@@ -3353,9 +3346,7 @@ fn rewrite_test_artefact(
 ) -> TestArtefactCurrentRecord {
     let mut rewritten = artefact.clone();
     rewritten.repo_id = repo_id.to_string();
-    rewritten.commit_sha = commit_sha.to_string();
-    rewritten.blob_sha = format!("blob:{commit_sha}:{}", rewritten.path);
-    rewritten.revision_id = commit_sha.to_string();
+    rewritten.content_id = format!("blob:{commit_sha}:{}", rewritten.path);
     rewritten
 }
 
@@ -3369,9 +3360,7 @@ fn rewrite_test_edge(
 ) -> TestArtefactEdgeCurrentRecord {
     let mut rewritten = edge.clone();
     rewritten.repo_id = repo_id.to_string();
-    rewritten.commit_sha = commit_sha.to_string();
-    rewritten.blob_sha = format!("blob:{commit_sha}:{}", rewritten.path);
-    rewritten.revision_id = commit_sha.to_string();
+    rewritten.content_id = format!("blob:{commit_sha}:{}", rewritten.path);
     if edge_targets_artefact(edge, artefact_name) {
         rewritten.to_symbol_id = Some(symbol_id.to_string());
         rewritten.to_artefact_id = Some(current_artefact_id.to_string());
@@ -3393,7 +3382,7 @@ fn discovery_run_record(repo_id: &str, commit_sha: &str) -> TestDiscoveryRunReco
     TestDiscoveryRunRecord {
         discovery_run_id: format!("discovery:{commit_sha}:bdd"),
         repo_id: repo_id.to_string(),
-        commit_sha: commit_sha.to_string(),
+        sync_mode: "full".to_string(),
         language: Some("rust".to_string()),
         started_at: "2026-03-24T00:00:00Z".to_string(),
         finished_at: Some("2026-03-24T00:00:01Z".to_string()),

@@ -49,7 +49,7 @@ pub fn execute(
     let discovery_run = TestDiscoveryRunRecord {
         discovery_run_id: discovery_run_id.clone(),
         repo_id: repo_id.clone(),
-        commit_sha: commit_sha.to_string(),
+        sync_mode: "manual_ingest".to_string(),
         language: None,
         started_at,
         finished_at: Some(finished_at),
@@ -66,7 +66,6 @@ pub fn execute(
             diagnostic_id: format!("diagnostic:{commit_sha}:{idx}"),
             discovery_run_id: discovery_run_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
             path: Some(issue.path.clone()),
             line: None,
             severity: "warning".to_string(),
