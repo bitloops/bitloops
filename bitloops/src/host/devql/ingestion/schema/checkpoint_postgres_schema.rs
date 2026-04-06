@@ -167,7 +167,7 @@ pub(crate) fn checkpoint_relational_schema_sql_postgres() -> &'static str {
 pub(crate) fn checkpoint_schema_sql_postgres() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     cli_version TEXT DEFAULT '',
     base_commit TEXT DEFAULT '',
@@ -193,7 +193,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     prompt_attributions TEXT DEFAULT '[]',
     pending_prompt_attribution TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS sessions_repo_idx
@@ -221,10 +222,10 @@ CREATE TABLE IF NOT EXISTS temporary_checkpoints (
 );
 
 CREATE INDEX IF NOT EXISTS temporary_checkpoints_session_step_idx
-ON temporary_checkpoints (session_id, step_number);
+ON temporary_checkpoints (repo_id, session_id, step_number);
 
 CREATE INDEX IF NOT EXISTS temporary_checkpoints_session_tree_idx
-ON temporary_checkpoints (session_id, tree_hash);
+ON temporary_checkpoints (repo_id, session_id, tree_hash);
 
 CREATE TABLE IF NOT EXISTS checkpoints (
     checkpoint_id TEXT PRIMARY KEY,
@@ -371,25 +372,27 @@ CREATE INDEX IF NOT EXISTS commit_checkpoints_repo_commit_idx
 ON commit_checkpoints (repo_id, commit_sha);
 
 CREATE TABLE IF NOT EXISTS pre_prompt_states (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS pre_prompt_states_repo_idx
 ON pre_prompt_states (repo_id);
 
 CREATE TABLE IF NOT EXISTS pre_task_markers (
-    tool_use_id TEXT PRIMARY KEY,
+    tool_use_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (repo_id, tool_use_id)
 );
 
 CREATE INDEX IF NOT EXISTS pre_task_markers_session_idx
-ON pre_task_markers (session_id);
+ON pre_task_markers (repo_id, session_id);
 
 CREATE TABLE IF NOT EXISTS checkpoint_blobs (
     blob_id TEXT PRIMARY KEY,

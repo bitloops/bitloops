@@ -6,6 +6,9 @@ use super::types::{RepoSqliteRuntimeStore, RuntimeMetadataBlobType, TaskCheckpoi
 impl RepoSqliteRuntimeStore {
     pub fn save_task_checkpoint_artefact(&self, artefact: &TaskCheckpointArtefact) -> Result<()> {
         let sqlite = self.connect_repo_sqlite()?;
+        sqlite
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime schema for task checkpoint save")?;
         let (storage_backend, storage_path, content_hash, size_bytes) = self.write_runtime_blob(
             &task_artefact_blob_key(&self.repo_id, artefact),
             &artefact.payload,
@@ -56,6 +59,9 @@ impl RepoSqliteRuntimeStore {
         tool_use_id: &str,
     ) -> Result<Vec<TaskCheckpointArtefact>> {
         let sqlite = self.connect_repo_sqlite()?;
+        sqlite
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime schema for task checkpoint load")?;
         let blob_store = self.open_repo_blob_store()?;
         let rows = sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
@@ -129,6 +135,9 @@ impl RepoSqliteRuntimeStore {
         tool_use_id: &str,
     ) -> Result<u32> {
         let sqlite = self.connect_repo_sqlite()?;
+        sqlite
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime schema for task checkpoint sequencing")?;
         let max_sequence = sqlite.with_connection(|conn| {
             conn.query_row(
                 "SELECT MAX(incremental_sequence)

@@ -1,9 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE};
+use crate::host::checkpoints::session::backend::SessionBackend;
+use crate::host::checkpoints::session::state::SessionState;
 use crate::host::interactions::db_store::legacy_interaction_spool_db_path;
 use crate::host::interactions::store::InteractionSpool;
-use crate::host::interactions::types::InteractionSession;
+use crate::host::interactions::types::{InteractionSession, InteractionTurn};
 use crate::storage::SqliteConnectionPool;
 use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::process_state::with_env_var;
@@ -11,21 +14,286 @@ use tempfile::TempDir;
 
 use super::*;
 
+fn write_test_daemon_config(config_root: &Path) -> PathBuf {
+    let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    fs::write(
+        &config_path,
+        r#"[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write test daemon config");
+    config_path
+}
+
 #[test]
-fn repo_runtime_store_uses_repo_scoped_runtime_sqlite_path() {
+fn repo_runtime_store_uses_config_root_runtime_sqlite_path() {
     let dir = TempDir::new().expect("tempdir");
-    init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
+    let repo_root = dir.path().join("bitloops");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
     let expected = dir
         .path()
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let actual = RepoSqliteRuntimeStore::open(&repo_root)
+                .expect("open runtime store")
+                .db_path
+                .clone();
+            assert_eq!(actual, expected);
+        },
+    );
+}
+
+#[test]
+fn repo_runtime_store_fails_without_daemon_config() {
+    let dir = TempDir::new().expect("tempdir");
+    init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
+
+    with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+        let err = RepoSqliteRuntimeStore::open(dir.path()).expect_err("runtime store should fail");
+        let message = format!("{err:#}");
+        assert!(
+            message
+                .contains("Bitloops daemon config is required to resolve the repo runtime store"),
+            "expected missing-config runtime store failure, got: {message}"
+        );
+    });
+}
+
+#[test]
+fn repo_runtime_store_shares_runtime_sqlite_and_fences_rows_by_repo() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    fs::create_dir_all(&repo_a).expect("create repo-a");
+    fs::create_dir_all(&repo_b).expect("create repo-b");
+    init_test_repo(&repo_a, "main", "Bitloops Test", "bitloops@example.com");
+    init_test_repo(&repo_b, "main", "Bitloops Test", "bitloops@example.com");
+
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
+    let expected_db_path = dir
+        .path()
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let store_a = RepoSqliteRuntimeStore::open(&repo_a).expect("open runtime store a");
+            let store_b = RepoSqliteRuntimeStore::open(&repo_b).expect("open runtime store b");
+            assert_eq!(store_a.db_path(), expected_db_path.as_path());
+            assert_eq!(store_b.db_path(), expected_db_path.as_path());
+            assert_ne!(store_a.repo_id(), store_b.repo_id());
+
+            let shared_session_id = "shared-session";
+            let session_backend_a = store_a.session_backend().expect("session backend a");
+            let session_backend_b = store_b.session_backend().expect("session backend b");
+            session_backend_a
+                .save_session(&SessionState {
+                    session_id: shared_session_id.to_string(),
+                    worktree_path: repo_a.to_string_lossy().to_string(),
+                    first_prompt: "repo a prompt".to_string(),
+                    agent_type: "codex".to_string(),
+                    ..SessionState::default()
+                })
+                .expect("save session for repo a");
+            session_backend_b
+                .save_session(&SessionState {
+                    session_id: shared_session_id.to_string(),
+                    worktree_path: repo_b.to_string_lossy().to_string(),
+                    first_prompt: "repo b prompt".to_string(),
+                    agent_type: "codex".to_string(),
+                    ..SessionState::default()
+                })
+                .expect("save session for repo b");
+
+            let loaded_a = session_backend_a
+                .load_session(shared_session_id)
+                .expect("load session for repo a")
+                .expect("session for repo a should exist");
+            let loaded_b = session_backend_b
+                .load_session(shared_session_id)
+                .expect("load session for repo b")
+                .expect("session for repo b should exist");
+            assert_eq!(loaded_a.worktree_path, repo_a.to_string_lossy());
+            assert_eq!(loaded_b.worktree_path, repo_b.to_string_lossy());
+            assert_eq!(loaded_a.first_prompt, "repo a prompt");
+            assert_eq!(loaded_b.first_prompt, "repo b prompt");
+
+            let spool_a = store_a.interaction_spool().expect("interaction spool a");
+            let spool_b = store_b.interaction_spool().expect("interaction spool b");
+            spool_a
+                .record_session(&InteractionSession {
+                    session_id: shared_session_id.to_string(),
+                    repo_id: store_a.repo_id().to_string(),
+                    agent_type: "codex".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    first_prompt: "repo a prompt".to_string(),
+                    transcript_path: repo_a
+                        .join("transcript.jsonl")
+                        .to_string_lossy()
+                        .to_string(),
+                    worktree_path: repo_a.to_string_lossy().to_string(),
+                    worktree_id: "main".to_string(),
+                    started_at: "2026-04-06T10:00:00Z".to_string(),
+                    last_event_at: "2026-04-06T10:00:01Z".to_string(),
+                    updated_at: "2026-04-06T10:00:01Z".to_string(),
+                    ..InteractionSession::default()
+                })
+                .expect("record interaction session for repo a");
+            spool_b
+                .record_session(&InteractionSession {
+                    session_id: shared_session_id.to_string(),
+                    repo_id: store_b.repo_id().to_string(),
+                    agent_type: "codex".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    first_prompt: "repo b prompt".to_string(),
+                    transcript_path: repo_b
+                        .join("transcript.jsonl")
+                        .to_string_lossy()
+                        .to_string(),
+                    worktree_path: repo_b.to_string_lossy().to_string(),
+                    worktree_id: "main".to_string(),
+                    started_at: "2026-04-06T10:00:00Z".to_string(),
+                    last_event_at: "2026-04-06T10:00:02Z".to_string(),
+                    updated_at: "2026-04-06T10:00:02Z".to_string(),
+                    ..InteractionSession::default()
+                })
+                .expect("record interaction session for repo b");
+            spool_a
+                .record_turn(&InteractionTurn {
+                    turn_id: "shared-turn".to_string(),
+                    session_id: shared_session_id.to_string(),
+                    repo_id: store_a.repo_id().to_string(),
+                    turn_number: 1,
+                    prompt: "repo a turn".to_string(),
+                    agent_type: "codex".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    started_at: "2026-04-06T10:00:01Z".to_string(),
+                    updated_at: "2026-04-06T10:00:02Z".to_string(),
+                    ..InteractionTurn::default()
+                })
+                .expect("record interaction turn for repo a");
+            spool_b
+                .record_turn(&InteractionTurn {
+                    turn_id: "shared-turn".to_string(),
+                    session_id: shared_session_id.to_string(),
+                    repo_id: store_b.repo_id().to_string(),
+                    turn_number: 1,
+                    prompt: "repo b turn".to_string(),
+                    agent_type: "codex".to_string(),
+                    model: "gpt-5.4".to_string(),
+                    started_at: "2026-04-06T10:00:01Z".to_string(),
+                    updated_at: "2026-04-06T10:00:03Z".to_string(),
+                    ..InteractionTurn::default()
+                })
+                .expect("record interaction turn for repo b");
+
+            let sessions_a = spool_a.list_sessions(None, 10).expect("list sessions a");
+            let sessions_b = spool_b.list_sessions(None, 10).expect("list sessions b");
+            assert_eq!(sessions_a.len(), 1);
+            assert_eq!(sessions_b.len(), 1);
+            assert_eq!(sessions_a[0].worktree_path, repo_a.to_string_lossy());
+            assert_eq!(sessions_b[0].worktree_path, repo_b.to_string_lossy());
+
+            let turns_a = spool_a
+                .list_turns_for_session(shared_session_id, 10)
+                .expect("list turns a");
+            let turns_b = spool_b
+                .list_turns_for_session(shared_session_id, 10)
+                .expect("list turns b");
+            assert_eq!(turns_a.len(), 1);
+            assert_eq!(turns_b.len(), 1);
+            assert_eq!(turns_a[0].prompt, "repo a turn");
+            assert_eq!(turns_b[0].prompt, "repo b turn");
+        },
+    );
+}
+
+#[test]
+fn repo_runtime_store_imports_legacy_repo_local_runtime_into_config_root() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("bitloops");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let legacy_runtime_path = repo_root
         .join(".bitloops")
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");
-    let actual = RepoSqliteRuntimeStore::open(dir.path())
-        .expect("open runtime store")
-        .db_path
-        .clone();
-    assert_eq!(actual, expected);
+    let legacy_sqlite = SqliteConnectionPool::connect(legacy_runtime_path)
+        .expect("open legacy repo-local runtime sqlite");
+    legacy_sqlite
+        .execute_batch(crate::host::devql::checkpoint_runtime_schema_sql_sqlite())
+        .expect("initialise legacy runtime schema");
+    let repo_id = crate::host::devql::resolve_repo_identity(&repo_root)
+        .expect("resolve repo identity")
+        .repo_id;
+    let legacy_spool =
+        crate::host::interactions::db_store::SqliteInteractionSpool::new(legacy_sqlite, repo_id)
+            .expect("open legacy interaction spool");
+    legacy_spool
+        .record_session(&InteractionSession {
+            session_id: "legacy-session".into(),
+            repo_id: legacy_spool.repo_id().to_string(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            first_prompt: "legacy".into(),
+            transcript_path: repo_root.join("legacy.jsonl").to_string_lossy().to_string(),
+            worktree_path: repo_root.to_string_lossy().to_string(),
+            worktree_id: "main".into(),
+            started_at: "2026-04-06T10:00:00Z".into(),
+            last_event_at: "2026-04-06T10:00:00Z".into(),
+            updated_at: "2026-04-06T10:00:00Z".into(),
+            ..InteractionSession::default()
+        })
+        .expect("record legacy interaction session");
+
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
+    let expected_runtime_path = dir
+        .path()
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let store = RepoSqliteRuntimeStore::open(&repo_root).expect("open migrated runtime");
+            assert_eq!(store.db_path(), expected_runtime_path.as_path());
+
+            let sessions = store
+                .interaction_spool()
+                .expect("open migrated interaction spool")
+                .list_sessions(None, 10)
+                .expect("list migrated sessions");
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].session_id, "legacy-session");
+        },
+    );
 }
 
 #[test]
@@ -82,51 +350,63 @@ fn daemon_runtime_store_uses_legacy_sync_defaults_when_state_is_missing() {
 fn repo_runtime_store_imports_legacy_interaction_spool_from_standalone_sqlite() {
     let dir = TempDir::new().expect("tempdir");
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
-    let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
 
-    let legacy_path =
-        legacy_interaction_spool_db_path(dir.path()).expect("resolve legacy spool path");
-    fs::create_dir_all(legacy_path.parent().expect("legacy spool parent"))
-        .expect("create legacy spool directory");
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
 
-    let sqlite = SqliteConnectionPool::connect(legacy_path).expect("open legacy spool sqlite");
-    let legacy_spool = crate::host::interactions::db_store::SqliteInteractionSpool::new(
-        sqlite,
-        repo.repo_id.clone(),
-    )
-    .expect("open legacy spool");
-    legacy_spool
-        .record_session(&InteractionSession {
-            session_id: "session-1".into(),
-            repo_id: repo.repo_id,
-            agent_type: "codex".into(),
-            model: "gpt-5.4".into(),
-            first_prompt: "hello".into(),
-            transcript_path: "/tmp/transcript.jsonl".into(),
-            worktree_path: dir.path().display().to_string(),
-            worktree_id: "main".into(),
-            started_at: "2026-04-06T10:00:00Z".into(),
-            last_event_at: "2026-04-06T10:00:00Z".into(),
-            updated_at: "2026-04-06T10:00:00Z".into(),
-            ..InteractionSession::default()
-        })
-        .expect("record session in legacy spool");
+            let legacy_path =
+                legacy_interaction_spool_db_path(dir.path()).expect("resolve legacy spool path");
+            fs::create_dir_all(legacy_path.parent().expect("legacy spool parent"))
+                .expect("create legacy spool directory");
 
-    let store = RepoSqliteRuntimeStore::open(dir.path()).expect("open repo runtime store");
-    let sessions = store
-        .interaction_spool()
-        .expect("open runtime interaction spool")
-        .list_sessions(None, 10)
-        .expect("list imported sessions");
+            let sqlite =
+                SqliteConnectionPool::connect(legacy_path).expect("open legacy spool sqlite");
+            let legacy_spool = crate::host::interactions::db_store::SqliteInteractionSpool::new(
+                sqlite,
+                repo.repo_id.clone(),
+            )
+            .expect("open legacy spool");
+            legacy_spool
+                .record_session(&InteractionSession {
+                    session_id: "session-1".into(),
+                    repo_id: repo.repo_id,
+                    agent_type: "codex".into(),
+                    model: "gpt-5.4".into(),
+                    first_prompt: "hello".into(),
+                    transcript_path: "/tmp/transcript.jsonl".into(),
+                    worktree_path: dir.path().display().to_string(),
+                    worktree_id: "main".into(),
+                    started_at: "2026-04-06T10:00:00Z".into(),
+                    last_event_at: "2026-04-06T10:00:00Z".into(),
+                    updated_at: "2026-04-06T10:00:00Z".into(),
+                    ..InteractionSession::default()
+                })
+                .expect("record session in legacy spool");
 
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].session_id, "session-1");
+            let store = RepoSqliteRuntimeStore::open(dir.path()).expect("open repo runtime store");
+            let sessions = store
+                .interaction_spool()
+                .expect("open runtime interaction spool")
+                .list_sessions(None, 10)
+                .expect("list imported sessions");
+
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].session_id, "session-1");
+        },
+    );
 }
 
 #[test]
 fn repo_runtime_store_imports_legacy_checkpoint_metadata_and_removes_files() {
     let dir = TempDir::new().expect("tempdir");
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
 
     let session_dir = dir
         .path()
@@ -174,44 +454,50 @@ fn repo_runtime_store_imports_legacy_checkpoint_metadata_and_removes_files() {
     )
     .expect("write legacy incremental checkpoint");
 
-    let store = RepoSqliteRuntimeStore::open(dir.path()).expect("open repo runtime store");
-    let snapshot = store
-        .load_latest_session_metadata_snapshot("session-legacy")
-        .expect("load imported metadata snapshot")
-        .expect("legacy metadata snapshot should be imported");
-    assert_eq!(snapshot.bundle.prompts, vec!["Create foo".to_string()]);
-    assert_eq!(snapshot.bundle.summary, "Done");
-    assert!(
-        String::from_utf8_lossy(&snapshot.bundle.context).contains("Legacy context"),
-        "legacy context should be preserved during import"
-    );
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let store = RepoSqliteRuntimeStore::open(dir.path()).expect("open repo runtime store");
+            let snapshot = store
+                .load_latest_session_metadata_snapshot("session-legacy")
+                .expect("load imported metadata snapshot")
+                .expect("legacy metadata snapshot should be imported");
+            assert_eq!(snapshot.bundle.prompts, vec!["Create foo".to_string()]);
+            assert_eq!(snapshot.bundle.summary, "Done");
+            assert!(
+                String::from_utf8_lossy(&snapshot.bundle.context).contains("Legacy context"),
+                "legacy context should be preserved during import"
+            );
 
-    let artefacts = store
-        .load_task_checkpoint_artefacts("session-legacy", "toolu_legacy")
-        .expect("load imported task artefacts");
-    assert!(
-        artefacts
-            .iter()
-            .any(|artefact| artefact.kind == RuntimeMetadataBlobType::TaskCheckpoint),
-        "task checkpoint artefact should be imported"
-    );
-    assert!(
-        artefacts
-            .iter()
-            .any(|artefact| artefact.kind == RuntimeMetadataBlobType::SubagentTranscript),
-        "subagent transcript artefact should be imported"
-    );
-    assert!(
-        artefacts.iter().any(|artefact| {
-            artefact.kind == RuntimeMetadataBlobType::IncrementalCheckpoint
-                && artefact.incremental_sequence == Some(3)
-        }),
-        "incremental checkpoint artefact should be imported with its sequence"
-    );
+            let artefacts = store
+                .load_task_checkpoint_artefacts("session-legacy", "toolu_legacy")
+                .expect("load imported task artefacts");
+            assert!(
+                artefacts
+                    .iter()
+                    .any(|artefact| artefact.kind == RuntimeMetadataBlobType::TaskCheckpoint),
+                "task checkpoint artefact should be imported"
+            );
+            assert!(
+                artefacts
+                    .iter()
+                    .any(|artefact| artefact.kind == RuntimeMetadataBlobType::SubagentTranscript),
+                "subagent transcript artefact should be imported"
+            );
+            assert!(
+                artefacts.iter().any(|artefact| {
+                    artefact.kind == RuntimeMetadataBlobType::IncrementalCheckpoint
+                        && artefact.incremental_sequence == Some(3)
+                }),
+                "incremental checkpoint artefact should be imported with its sequence"
+            );
 
-    assert!(
-        !session_dir.exists(),
-        "legacy metadata directory should be removed after successful import"
+            assert!(
+                !session_dir.exists(),
+                "legacy metadata directory should be removed after successful import"
+            );
+        },
     );
 }
 

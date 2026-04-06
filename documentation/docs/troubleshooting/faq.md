@@ -18,7 +18,7 @@ In platform app directories by default:
 - cache directory for embedding downloads and dashboard bundle assets
 - state directory for daemon runtime metadata and the daemon runtime SQLite
 
-Bitloops also keeps repo-scoped workflow runtime state in a derived local runtime SQLite for the repository.
+Bitloops also keeps repo-scoped workflow runtime state in `<config root>/stores/runtime/runtime.sqlite`.
 
 ### How do I remove Bitloops completely?
 

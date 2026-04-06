@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,31 @@ fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSetting
     };
     let loaded = load_daemon_settings(Some(Path::new(&explicit_path)))?;
     Ok(Some((loaded.root, loaded.settings)))
+}
+
+fn required_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        let loaded = load_daemon_settings(Some(Path::new(&explicit_path)))?;
+        return Ok(loaded.root);
+    }
+
+    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if repo_toml.is_file() {
+        let loaded = load_daemon_settings(Some(&repo_toml))?;
+        return Ok(loaded.root);
+    }
+
+    #[cfg(not(test))]
+    if default_daemon_config_exists().unwrap_or(false) {
+        let loaded = load_daemon_settings(None)?;
+        return Ok(loaded.root);
+    }
+
+    bail!(
+        "Bitloops daemon config is required to resolve the repo runtime store. Set `{}` to an explicit config path, add `{}` next to the repository, or create the default daemon config.",
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        BITLOOPS_CONFIG_RELATIVE_PATH
+    )
 }
 
 #[cfg(test)]
@@ -100,6 +125,14 @@ pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
 pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBackendConfig> {
     let (config_root, settings) = daemon_settings_for_repo(repo_root)?;
     resolve_store_backend_from_unified(&settings, &config_root)
+}
+
+pub fn resolve_repo_runtime_db_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    let config_root = required_daemon_config_root_for_repo(repo_root)?;
+    Ok(config_root
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite"))
 }
 
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {

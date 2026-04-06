@@ -7,6 +7,9 @@ use super::types::{RepoSqliteRuntimeStore, RuntimeMetadataBlobType, SessionMetad
 impl RepoSqliteRuntimeStore {
     pub fn save_session_metadata_snapshot(&self, snapshot: &SessionMetadataSnapshot) -> Result<()> {
         let sqlite = self.connect_repo_sqlite()?;
+        sqlite
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime schema for session metadata snapshot save")?;
         let prompt_text = snapshot.bundle.prompt_text();
         let entries = [
             (
@@ -88,6 +91,9 @@ impl RepoSqliteRuntimeStore {
         session_id: &str,
     ) -> Result<Option<SessionMetadataSnapshot>> {
         let sqlite = self.connect_repo_sqlite()?;
+        sqlite
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime schema for session metadata snapshot load")?;
         let header = sqlite.with_connection(|conn| {
             conn.query_row(
                 "SELECT snapshot_id,
