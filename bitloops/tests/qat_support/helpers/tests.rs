@@ -137,12 +137,14 @@ fn build_git_command_prepends_qat_binary_dir_to_path() {
     let suite_root = temp.path().join("suite");
     fs::create_dir_all(&suite_root).expect("create suite root");
 
-    let mut world = QatWorld::default();
-    world.repo_dir = Some(repo_dir.clone());
-    world.run_config = Some(Arc::new(QatRunConfig {
-        binary_path: bin_dir.join("bitloops"),
-        suite_root,
-    }));
+    let world = QatWorld {
+        repo_dir: Some(repo_dir.clone()),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
 
     let command = build_git_command(&world, &["status"], &[]);
     let path_value = command
