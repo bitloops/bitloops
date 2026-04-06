@@ -11,11 +11,23 @@ mod spool;
 #[cfg(test)]
 mod tests;
 
-const INTERACTION_SPOOL_FILE_NAME: &str = "interaction_spool.sqlite";
+const LEGACY_INTERACTION_SPOOL_FILE_NAME: &str = "interaction_spool.sqlite";
 
 pub fn interaction_spool_db_path(repo_root: &Path) -> Result<PathBuf> {
-    let _ = INTERACTION_SPOOL_FILE_NAME;
     Ok(crate::utils::paths::default_repo_runtime_db_path(repo_root))
+}
+
+pub fn legacy_interaction_spool_db_path(repo_root: &Path) -> Result<PathBuf> {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving backend config for interaction spool")?;
+    let events_db_path = backends.events.resolve_duckdb_db_path_for_repo(repo_root);
+    let parent = events_db_path.parent().with_context(|| {
+        format!(
+            "resolving interaction spool directory from event db path {}",
+            events_db_path.display()
+        )
+    })?;
+    Ok(parent.join(LEGACY_INTERACTION_SPOOL_FILE_NAME))
 }
 
 pub struct SqliteInteractionSpool {

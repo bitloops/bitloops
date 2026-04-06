@@ -13,7 +13,7 @@ use crate::daemon::{
 use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::host::checkpoints::session::DbSessionBackend;
 use crate::host::interactions::db_store::{
-    SqliteInteractionSpool, interaction_spool_db_path as legacy_interaction_spool_db_path,
+    SqliteInteractionSpool, legacy_interaction_spool_db_path,
 };
 use crate::storage::SqliteConnectionPool;
 use crate::utils::paths::{default_global_runtime_db_path, default_repo_runtime_db_path};
@@ -49,12 +49,23 @@ pub struct DaemonSqliteRuntimeStore {
     db_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSyncQueueState {
     pub version: u8,
     pub tasks: Vec<SyncTaskRecord>,
     pub last_action: Option<String>,
     pub updated_at_unix: u64,
+}
+
+impl Default for PersistedSyncQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            tasks: Vec::new(),
+            last_action: Some("initialized".to_string()),
+            updated_at_unix: 0,
+        }
+    }
 }
 
 impl SqliteRuntimeStore {
@@ -213,7 +224,7 @@ impl RepoSqliteRuntimeStore {
 
         let legacy_path = legacy_interaction_spool_db_path(&self.repo_root)
             .context("resolving legacy interaction spool path")?;
-        if !legacy_path.is_file() {
+        if !legacy_path.is_file() || legacy_path == self.db_path {
             return Ok(());
         }
 
@@ -697,6 +708,10 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use crate::host::interactions::db_store::legacy_interaction_spool_db_path;
+    use crate::host::interactions::store::InteractionSpool;
+    use crate::host::interactions::types::InteractionSession;
+    use crate::storage::SqliteConnectionPool;
     use crate::test_support::git_fixtures::init_test_repo;
     use crate::test_support::process_state::with_env_var;
     use tempfile::TempDir;
@@ -742,6 +757,74 @@ mod tests {
                 assert_eq!(loaded.version, 7);
             },
         );
+    }
+
+    #[test]
+    fn persisted_sync_queue_state_default_preserves_legacy_values() {
+        let default = PersistedSyncQueueState::default();
+        assert_eq!(default.version, 1);
+        assert!(default.tasks.is_empty());
+        assert_eq!(default.last_action.as_deref(), Some("initialized"));
+        assert_eq!(default.updated_at_unix, 0);
+    }
+
+    #[test]
+    fn daemon_runtime_store_uses_legacy_sync_defaults_when_state_is_missing() {
+        let state_dir = TempDir::new().expect("tempdir");
+        with_env_var(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir.path().to_string_lossy().as_ref()),
+            || {
+                let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+                let observed = store
+                    .mutate_sync_queue_state(|state| Ok((state.version, state.last_action.clone())))
+                    .expect("load default sync queue state");
+                assert_eq!(observed.0, 1);
+                assert_eq!(observed.1.as_deref(), Some("initialized"));
+            },
+        );
+    }
+
+    #[test]
+    fn repo_runtime_store_imports_legacy_interaction_spool_from_standalone_sqlite() {
+        let dir = TempDir::new().expect("tempdir");
+        init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
+        let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+
+        let legacy_path =
+            legacy_interaction_spool_db_path(dir.path()).expect("resolve legacy spool path");
+        fs::create_dir_all(legacy_path.parent().expect("legacy spool parent"))
+            .expect("create legacy spool directory");
+
+        let sqlite = SqliteConnectionPool::connect(legacy_path).expect("open legacy spool sqlite");
+        let legacy_spool =
+            SqliteInteractionSpool::new(sqlite, repo.repo_id.clone()).expect("open legacy spool");
+        legacy_spool
+            .record_session(&InteractionSession {
+                session_id: "session-1".into(),
+                repo_id: repo.repo_id,
+                agent_type: "codex".into(),
+                model: "gpt-5.4".into(),
+                first_prompt: "hello".into(),
+                transcript_path: "/tmp/transcript.jsonl".into(),
+                worktree_path: dir.path().display().to_string(),
+                worktree_id: "main".into(),
+                started_at: "2026-04-06T10:00:00Z".into(),
+                last_event_at: "2026-04-06T10:00:00Z".into(),
+                updated_at: "2026-04-06T10:00:00Z".into(),
+                ..InteractionSession::default()
+            })
+            .expect("record session in legacy spool");
+
+        let store = RepoSqliteRuntimeStore::open(dir.path()).expect("open repo runtime store");
+        let sessions = store
+            .interaction_spool()
+            .expect("open runtime interaction spool")
+            .list_sessions(None, 10)
+            .expect("list imported sessions");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "session-1");
     }
 
     fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
