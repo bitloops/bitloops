@@ -714,6 +714,18 @@ fn build_git_command(world: &QatWorld, args: &[&str], env: &[(&str, OsString)]) 
     let mut command = Command::new("git");
     command.args(args).current_dir(world.repo_dir());
 
+    // Set HOME and XDG dirs so that git hooks (post-commit, post-checkout,
+    // post-merge) invoked by this git process resolve daemon state paths to
+    // the scenario-isolated directory instead of the system HOME.  Without
+    // this, hook-triggered sync tasks are routed to the system daemon and
+    // can race against the scenario daemon on the same SQLite database.
+    let run_dir = world.run_dir();
+    let home_dir = run_dir.join("home");
+    command
+        .env("HOME", &home_dir)
+        .env("USERPROFILE", &home_dir)
+        .env("XDG_STATE_HOME", home_dir.join("xdg-state"));
+
     if let Some(binary_dir) = world.run_config().binary_path.parent() {
         let mut paths = Vec::new();
         paths.push(binary_dir.to_path_buf());
