@@ -49,6 +49,51 @@ CREATE TABLE IF NOT EXISTS symbol_features (
 
 CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
 ON symbol_features (repo_id, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_semantics_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    source_model TEXT,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_current_repo_path_idx
+ON symbol_semantics_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_semantics_current_repo_artefact_idx
+ON symbol_semantics_current (repo_id, artefact_id);
+
+CREATE TABLE IF NOT EXISTS symbol_features_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    identifier_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    normalized_body_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    parent_kind TEXT,
+    context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbol_features_current_repo_path_idx
+ON symbol_features_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_features_current_repo_artefact_idx
+ON symbol_features_current (repo_id, artefact_id);
 "#
 }
 
@@ -88,6 +133,51 @@ CREATE TABLE IF NOT EXISTS symbol_features (
 
 CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
 ON symbol_features (repo_id, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_semantics_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_current_repo_path_idx
+ON symbol_semantics_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_semantics_current_repo_artefact_idx
+ON symbol_semantics_current (repo_id, artefact_id);
+
+CREATE TABLE IF NOT EXISTS symbol_features_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
+    parent_kind TEXT,
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_features_current_repo_path_idx
+ON symbol_features_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_features_current_repo_artefact_idx
+ON symbol_features_current (repo_id, artefact_id);
 "#
 }
 
@@ -123,6 +213,14 @@ pub(crate) async fn init_postgres_semantic_features_schema(
 pub(crate) async fn init_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, semantic_features_sqlite_schema_sql()).await?;
     upgrade_sqlite_semantic_features_schema(sqlite_path).await
+}
+
+pub(crate) async fn ensure_semantic_features_schema(relational: &RelationalStorage) -> Result<()> {
+    init_sqlite_semantic_features_schema(&relational.local.path).await?;
+    if let Some(remote) = relational.remote.as_ref() {
+        init_postgres_semantic_features_schema(&remote.client).await?;
+    }
+    Ok(())
 }
 
 async fn upgrade_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
@@ -247,6 +345,58 @@ pub(crate) async fn upsert_semantic_feature_rows(
     }
 
     Ok(stats)
+}
+
+pub(crate) async fn upsert_current_semantic_feature_rows(
+    relational: &RelationalStorage,
+    path: &str,
+    content_id: &str,
+    inputs: &[semantic::SemanticFeatureInput],
+    summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
+) -> Result<semantic::SemanticFeatureIngestionStats> {
+    ensure_semantic_features_schema(relational).await?;
+    let Some(first) = inputs.first() else {
+        return Ok(semantic::SemanticFeatureIngestionStats::default());
+    };
+
+    clear_current_semantic_feature_rows_for_path(relational, &first.repo_id, path).await?;
+
+    let mut stats = semantic::SemanticFeatureIngestionStats::default();
+    for input in inputs {
+        let symbol_id = input.symbol_id.clone();
+        let input = input.clone();
+        let summary_provider = Arc::clone(&summary_provider);
+        let rows = tokio::task::spawn_blocking(move || {
+            semantic::build_semantic_feature_rows(&input, summary_provider.as_ref())
+        })
+        .await
+        .context("building current semantic feature rows on blocking worker")?;
+        persist_current_semantic_feature_rows(
+            relational,
+            symbol_id.as_deref(),
+            path,
+            content_id,
+            &rows,
+        )
+        .await?;
+        stats.upserted += 1;
+    }
+
+    Ok(stats)
+}
+
+pub(crate) async fn clear_current_semantic_feature_rows_for_path(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_semantic_features_schema(relational).await?;
+    relational
+        .exec_batch_transactional(&[
+            build_delete_current_symbol_features_sql(repo_id, path),
+            build_delete_current_symbol_semantics_sql(repo_id, path),
+        ])
+        .await
 }
 
 pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
@@ -403,6 +553,24 @@ async fn persist_semantic_feature_rows(
         .await
 }
 
+async fn persist_current_semantic_feature_rows(
+    relational: &RelationalStorage,
+    symbol_id: Option<&str>,
+    path: &str,
+    content_id: &str,
+    rows: &semantic::SemanticFeatureRows,
+) -> Result<()> {
+    relational
+        .exec(&build_current_semantic_persist_rows_sql(
+            rows,
+            symbol_id,
+            path,
+            content_id,
+            relational.dialect(),
+        )?)
+        .await
+}
+
 fn build_semantic_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -> String {
     format!(
         "SELECT artefact_id, symbol_id, repo_id, blob_sha, path, language, \
@@ -501,6 +669,22 @@ WHERE artefact_id = '{artefact_id}'",
     )
 }
 
+fn build_delete_current_symbol_semantics_sql(repo_id: &str, path: &str) -> String {
+    format!(
+        "DELETE FROM symbol_semantics_current WHERE repo_id = '{}' AND path = '{}'",
+        esc_pg(repo_id),
+        esc_pg(path),
+    )
+}
+
+fn build_delete_current_symbol_features_sql(repo_id: &str, path: &str) -> String {
+    format!(
+        "DELETE FROM symbol_features_current WHERE repo_id = '{}' AND path = '{}'",
+        esc_pg(repo_id),
+        esc_pg(path),
+    )
+}
+
 fn parse_semantic_index_state_rows(rows: &[Value]) -> semantic::SemanticFeatureIndexState {
     let Some(row) = rows.first() else {
         return semantic::SemanticFeatureIndexState::default();
@@ -565,6 +749,54 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
     ))
 }
 
+fn build_current_semantic_persist_rows_sql(
+    rows: &semantic::SemanticFeatureRows,
+    symbol_id: Option<&str>,
+    path: &str,
+    content_id: &str,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let semantics = &rows.semantics;
+    let features = &rows.features;
+    let symbol_id_expr = sql_optional_string(symbol_id);
+    let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
+    let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
+    let modifiers_expr = sql_json_string_for_dialect(&features.modifiers, dialect)?;
+    let identifier_tokens_expr = sql_json_string_for_dialect(&features.identifier_tokens, dialect)?;
+    let body_tokens_expr = sql_json_string_for_dialect(&features.normalized_body_tokens, dialect)?;
+    let context_tokens_expr = sql_json_string_for_dialect(&features.context_tokens, dialect)?;
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+
+    Ok(format!(
+        "{persist_summary_sql}; \
+INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, modifiers, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
+VALUES ('{features_artefact_id}', '{features_repo_id}', '{path}', '{content_id}', {symbol_id}, '{features_input_hash}', '{normalized_name}', {normalized_signature}, {modifiers}, {identifier_tokens}, {body_tokens}, {parent_kind}, {context_tokens}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}",
+        persist_summary_sql = build_current_semantic_persist_summary_sql(
+            semantics,
+            &rows.semantic_features_input_hash,
+            symbol_id,
+            path,
+            content_id,
+            dialect,
+        )?,
+        features_artefact_id = esc_pg(&features.artefact_id),
+        features_repo_id = esc_pg(&features.repo_id),
+        path = esc_pg(path),
+        content_id = esc_pg(content_id),
+        symbol_id = symbol_id_expr,
+        features_input_hash = esc_pg(&rows.semantic_features_input_hash),
+        normalized_name = esc_pg(&features.normalized_name),
+        normalized_signature = normalized_signature_expr,
+        modifiers = modifiers_expr,
+        identifier_tokens = identifier_tokens_expr,
+        body_tokens = body_tokens_expr,
+        parent_kind = parent_kind_expr,
+        context_tokens = context_tokens_expr,
+        generated_at = generated_at_sql,
+    ))
+}
+
 fn build_semantic_persist_summary_sql(
     semantics: &semantic::SymbolSemanticsRow,
     semantic_features_input_hash: &str,
@@ -582,6 +814,40 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
+        input_hash = esc_pg(semantic_features_input_hash),
+        docstring_summary = docstring_summary_expr,
+        llm_summary = llm_summary_expr,
+        template_summary = esc_pg(&semantics.template_summary),
+        summary = esc_pg(&semantics.summary),
+        confidence = semantics.confidence,
+        source_model = source_model_expr,
+        generated_at = generated_at_sql,
+    ))
+}
+
+fn build_current_semantic_persist_summary_sql(
+    semantics: &semantic::SymbolSemanticsRow,
+    semantic_features_input_hash: &str,
+    symbol_id: Option<&str>,
+    path: &str,
+    content_id: &str,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let symbol_id_expr = sql_optional_string(symbol_id);
+    let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
+    let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+
+    Ok(format!(
+        "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
+VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
+        artefact_id = esc_pg(&semantics.artefact_id),
+        repo_id = esc_pg(&semantics.repo_id),
+        path = esc_pg(path),
+        content_id = esc_pg(content_id),
+        symbol_id = symbol_id_expr,
         input_hash = esc_pg(semantic_features_input_hash),
         docstring_summary = docstring_summary_expr,
         llm_summary = llm_summary_expr,

@@ -442,14 +442,6 @@ impl SlimQueryRoot {
 
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let scope = context.slim_root_scope();
-        if scope
-            .temporal_scope()
-            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
-        {
-            return Err(bad_user_input_error(
-                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
-            ));
-        }
         let pagination = ConnectionPagination::from_graphql(
             50,
             first,

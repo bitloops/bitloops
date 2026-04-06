@@ -79,10 +79,6 @@ pub(super) fn validate_graphql_compiler_support(
         bail!("clones() cannot be combined with chatHistory() stage");
     }
 
-    if parsed.has_clones_stage && parsed.as_of.is_some() {
-        bail!("clones() does not yet support asOf(...) queries");
-    }
-
     let has_tests_stage = matches!(registered_stage, Some(RegisteredStageKind::Tests(_)));
     let has_coverage_stage = matches!(registered_stage, Some(RegisteredStageKind::Coverage));
     let has_tests_summary_stage =

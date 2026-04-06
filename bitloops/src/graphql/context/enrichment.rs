@@ -1,4 +1,5 @@
 use super::{DevqlGraphqlContext, GRAPHQL_GIT_SCAN_LIMIT};
+use crate::artefact_query_planner::{ArtefactQuerySpec, plan_graphql_artefact_query};
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     ChatEntry, ChatRole, ClonesFilterInput, DateTimeScalar, SemanticClone,
@@ -6,6 +7,7 @@ use crate::graphql::types::{
 use crate::host::checkpoints::strategy::manual_commit::{
     SessionContentView, list_committed, read_session_content_by_id,
 };
+use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
 use crate::host::devql::{esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape};
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
@@ -24,13 +26,16 @@ impl DevqlGraphqlContext {
             return Ok(Vec::new());
         };
         let repo_id = self.repo_id_for_scope(scope)?;
-
-        let sql = build_project_clones_sql(
+        let spec = plan_graphql_artefact_query(
             &repo_id,
             &self.current_branch_name(scope),
-            project_path,
-            filter,
+            None,
+            None,
+            scope,
+            None,
         );
+
+        let sql = build_project_clones_sql(&spec, project_path, filter);
         let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
@@ -45,13 +50,15 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
     ) -> Result<Vec<SemanticClone>> {
         let repo_id = self.repo_id_for_scope(scope)?;
-        let sql = build_artefact_clones_sql(
+        let spec = plan_graphql_artefact_query(
             &repo_id,
             &self.current_branch_name(scope),
-            artefact_id,
-            scope.project_path(),
-            filter,
+            None,
+            None,
+            scope,
+            None,
         );
+        let sql = build_artefact_clones_sql(&spec, artefact_id, filter);
         let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
@@ -214,53 +221,66 @@ struct SessionMessageRecord {
 }
 
 fn build_project_clones_sql(
-    repo_id: &str,
-    _branch: &str,
+    spec: &ArtefactQuerySpec,
     project_path: &str,
     filter: Option<&ClonesFilterInput>,
 ) -> String {
-    let mut clauses = build_clone_filters(repo_id, filter);
-    clauses.push(repo_path_prefix_clause("src.path", project_path));
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let (clone_edges_table, target_artefacts_table) = clone_projection_tables(spec);
+    let mut clauses = build_clone_filters(spec.repo_id.as_str(), filter);
+    let project_clause = repo_path_prefix_clause("src.path", project_path);
+    clauses.push(project_clause);
 
     format!(
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
+        "{filtered_cte} \
+         SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
                 ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
+           FROM {clone_edges_table} ce \
+           JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
+           JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
+                                            AND tgt.artefact_id = ce.target_artefact_id \
           WHERE {} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
         clauses.join(" AND "),
+        filtered_cte = filtered_cte,
+        clone_edges_table = clone_edges_table,
+        target_artefacts_table = target_artefacts_table,
     )
 }
 
 fn build_artefact_clones_sql(
-    repo_id: &str,
-    _branch: &str,
+    spec: &ArtefactQuerySpec,
     artefact_id: &str,
-    project_path: Option<&str>,
     filter: Option<&ClonesFilterInput>,
 ) -> String {
-    let mut clauses = build_clone_filters(repo_id, filter);
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let (clone_edges_table, target_artefacts_table) = clone_projection_tables(spec);
+    let mut clauses = build_clone_filters(spec.repo_id.as_str(), filter);
     clauses.push(format!("ce.source_artefact_id = '{}'", esc_pg(artefact_id)));
-    if let Some(project_path) = project_path {
-        clauses.push(repo_path_prefix_clause("src.path", project_path));
-    }
 
     format!(
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
+        "{filtered_cte} \
+         SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
                 ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
+           FROM {clone_edges_table} ce \
+           JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
+           JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
+                                            AND tgt.artefact_id = ce.target_artefact_id \
           WHERE {} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
         clauses.join(" AND "),
+        filtered_cte = filtered_cte,
+        clone_edges_table = clone_edges_table,
+        target_artefacts_table = target_artefacts_table,
     )
+}
+
+fn clone_projection_tables(spec: &ArtefactQuerySpec) -> (&'static str, &'static str) {
+    if spec.temporal_scope.use_historical_tables() {
+        ("symbol_clone_edges", "artefacts")
+    } else {
+        ("symbol_clone_edges_current", "artefacts_current")
+    }
 }
 
 fn build_clone_filters(repo_id: &str, filter: Option<&ClonesFilterInput>) -> Vec<String> {

@@ -5,6 +5,7 @@ pub(crate) mod gc;
 pub(crate) mod lock;
 pub(crate) mod materializer;
 pub(crate) mod schema;
+pub(crate) mod semantic_projector;
 pub(crate) mod types;
 pub(crate) mod workspace_state;
 

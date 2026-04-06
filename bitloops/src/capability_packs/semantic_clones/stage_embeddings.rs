@@ -35,6 +35,26 @@ ON symbol_embeddings (repo_id, artefact_id);
 
 CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
 ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding vector NOT NULL,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_current_repo_path_idx
+ON symbol_embeddings_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_embeddings_current_repo_artefact_idx
+ON symbol_embeddings_current (repo_id, artefact_id);
 "#
 }
 
@@ -57,6 +77,26 @@ ON symbol_embeddings (repo_id, artefact_id);
 
 CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
 ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_current_repo_path_idx
+ON symbol_embeddings_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_embeddings_current_repo_artefact_idx
+ON symbol_embeddings_current (repo_id, artefact_id);
 "#
 }
 
@@ -119,6 +159,56 @@ pub(crate) async fn upsert_symbol_embedding_rows(
     Ok(stats)
 }
 
+pub(crate) async fn upsert_current_symbol_embedding_rows(
+    relational: &RelationalStorage,
+    path: &str,
+    content_id: &str,
+    inputs: &[semantic::SemanticFeatureInput],
+    embedding_provider: Arc<dyn EmbeddingProvider>,
+) -> Result<embeddings::SymbolEmbeddingIngestionStats> {
+    let mut stats = embeddings::SymbolEmbeddingIngestionStats::default();
+    let Some(first) = inputs.first() else {
+        return Ok(stats);
+    };
+
+    ensure_semantic_embeddings_schema(relational).await?;
+    clear_current_symbol_embedding_rows_for_path(relational, &first.repo_id, path).await?;
+
+    let artefact_ids = inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    let summary_by_artefact_id =
+        load_current_semantic_summary_map(relational, &artefact_ids).await?;
+    let input_by_artefact_id = inputs
+        .iter()
+        .map(|input| (input.artefact_id.clone(), input))
+        .collect::<HashMap<_, _>>();
+    let embedding_inputs =
+        embeddings::build_symbol_embedding_inputs(inputs, &summary_by_artefact_id);
+
+    for input in embedding_inputs {
+        let input_metadata = input_by_artefact_id
+            .get(&input.artefact_id)
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!("missing current semantic input for `{}`", input.artefact_id)
+            })?;
+        let input = input.clone();
+        let embedding_provider = Arc::clone(&embedding_provider);
+        let row = tokio::task::spawn_blocking(move || {
+            embeddings::build_symbol_embedding_row(&input, embedding_provider.as_ref())
+        })
+        .await
+        .context("building current semantic embedding row on blocking worker")??;
+        persist_current_symbol_embedding_row(relational, input_metadata, path, content_id, &row)
+            .await?;
+        stats.upserted += 1;
+    }
+
+    Ok(stats)
+}
+
 pub(crate) async fn ensure_semantic_embeddings_schema(
     relational: &RelationalStorage,
 ) -> Result<()> {
@@ -141,6 +231,20 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
     relational.exec(&sql).await
 }
 
+pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let sql = format!(
+        "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}' AND path = '{}'",
+        esc_pg(repo_id),
+        esc_pg(path),
+    );
+    relational.exec(&sql).await
+}
+
 async fn load_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -155,12 +259,27 @@ async fn load_semantic_summary_map(
     relational: &RelationalStorage,
     artefact_ids: &[String],
 ) -> Result<HashMap<String, String>> {
+    load_semantic_summary_map_from_table(relational, artefact_ids, "symbol_semantics").await
+}
+
+async fn load_current_semantic_summary_map(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+) -> Result<HashMap<String, String>> {
+    load_semantic_summary_map_from_table(relational, artefact_ids, "symbol_semantics_current").await
+}
+
+async fn load_semantic_summary_map_from_table(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+    table: &str,
+) -> Result<HashMap<String, String>> {
     if artefact_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
     let rows = relational
-        .query_rows(&build_semantic_summary_lookup_sql(artefact_ids))
+        .query_rows(&build_semantic_summary_lookup_sql(artefact_ids, table))
         .await?;
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
@@ -182,6 +301,17 @@ async fn persist_symbol_embedding_row(
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
     let sql = build_sqlite_symbol_embedding_persist_sql(row)?;
+    relational.exec(&sql).await
+}
+
+async fn persist_current_symbol_embedding_row(
+    relational: &RelationalStorage,
+    input: &semantic::SemanticFeatureInput,
+    path: &str,
+    content_id: &str,
+    row: &embeddings::SymbolEmbeddingRow,
+) -> Result<()> {
+    let sql = build_current_symbol_embedding_persist_sql(input, path, content_id, row)?;
     relational.exec(&sql).await
 }
 
@@ -209,12 +339,13 @@ fn parse_symbol_embedding_index_state_rows(
     }
 }
 
-fn build_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
+fn build_semantic_summary_lookup_sql(artefact_ids: &[String], table: &str) -> String {
     format!(
         "SELECT artefact_id, summary \
-FROM symbol_semantics \
+FROM {table} \
 WHERE artefact_id IN ({})",
-        sql_string_list_pg(artefact_ids)
+        sql_string_list_pg(artefact_ids),
+        table = table,
     )
 }
 
@@ -249,6 +380,35 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = e
         artefact_id = esc_pg(&row.artefact_id),
         repo_id = esc_pg(&row.repo_id),
         blob_sha = esc_pg(&row.blob_sha),
+        provider = esc_pg(&row.provider),
+        model = esc_pg(&row.model),
+        dimension = row.dimension,
+        embedding_input_hash = esc_pg(&row.embedding_input_hash),
+        embedding = embedding_json,
+    ))
+}
+
+fn build_current_symbol_embedding_persist_sql(
+    input: &semantic::SemanticFeatureInput,
+    path: &str,
+    content_id: &str,
+    row: &embeddings::SymbolEmbeddingRow,
+) -> Result<String> {
+    let embedding_json = sql_json_string(&row.embedding)?;
+    let symbol_id_sql = input
+        .symbol_id
+        .as_deref()
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .unwrap_or_else(|| "NULL".to_string());
+    Ok(format!(
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding) \
+VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{provider}', '{model}', {dimension}, '{embedding_input_hash}', '{embedding}') \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = excluded.repo_id, path = excluded.path, content_id = excluded.content_id, symbol_id = excluded.symbol_id, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, embedding_input_hash = excluded.embedding_input_hash, embedding = excluded.embedding, generated_at = CURRENT_TIMESTAMP",
+        artefact_id = esc_pg(&row.artefact_id),
+        repo_id = esc_pg(&row.repo_id),
+        path = esc_pg(path),
+        content_id = esc_pg(content_id),
+        symbol_id = symbol_id_sql,
         provider = esc_pg(&row.provider),
         model = esc_pg(&row.model),
         dimension = row.dimension,
@@ -397,11 +557,11 @@ mod semantic_embedding_persistence_tests {
 
     #[test]
     fn semantic_embedding_summary_lookup_sql_uses_all_ids() {
-        let sql = build_semantic_summary_lookup_sql(&[
-            "artefact-1".to_string(),
-            "artefact-2".to_string(),
-        ]);
-        assert!(sql.contains("FROM symbol_semantics"));
+        let sql = build_semantic_summary_lookup_sql(
+            &["artefact-1".to_string(), "artefact-2".to_string()],
+            "symbol_semantics_current",
+        );
+        assert!(sql.contains("FROM symbol_semantics_current"));
         assert!(sql.contains("'artefact-1'"));
         assert!(sql.contains("'artefact-2'"));
     }

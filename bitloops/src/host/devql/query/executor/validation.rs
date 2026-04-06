@@ -75,15 +75,6 @@ pub(crate) async fn execute_devql_query(
         bail!("clones() cannot be combined with chatHistory() stage");
     }
 
-    if parsed.has_clones_stage && parsed.as_of.is_some() {
-        log_devql_validation_failure(
-            parsed,
-            "clones_with_asof",
-            "clones() does not yet support asOf(...) queries",
-        );
-        bail!("clones() does not yet support asOf(...) queries");
-    }
-
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
 
