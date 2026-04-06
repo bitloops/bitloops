@@ -100,3 +100,24 @@ fn text_has_claude_auth_failure_detects_auth_prompts() {
     assert!(text_has_claude_auth_failure("Authentication required"));
     assert!(!text_has_claude_auth_failure("all good"));
 }
+
+#[test]
+fn build_init_bitloops_args_supports_no_sync_choice() {
+    let args = build_init_bitloops_args("claude-code", false, None);
+    assert_eq!(args, vec!["init", "--agent", "claude-code"]);
+}
+
+#[test]
+fn build_init_bitloops_args_supports_sync_false_choice() {
+    let args = build_init_bitloops_args("claude-code", false, Some(false));
+    assert_eq!(
+        args,
+        vec!["init", "--agent", "claude-code", "--sync=false"]
+    );
+}
+
+#[test]
+fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
+    let args = build_init_bitloops_args("codex", true, Some(true));
+    assert_eq!(args, vec!["init", "--agent", "codex", "--sync=true", "--force"]);
+}

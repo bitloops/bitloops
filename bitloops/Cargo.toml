@@ -71,6 +71,10 @@ name = "performance"
 path = "tests/performance.rs"
 required-features = ["slow-tests"]
 
+[[test]]
+name = "qat_acceptance"
+path = "tests/qat_acceptance.rs"
+
 [dependencies]
 anyhow = "1"
 async-graphql = { version = "7", features = ["dataloader"] }

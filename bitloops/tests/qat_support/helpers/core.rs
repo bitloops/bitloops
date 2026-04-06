@@ -252,7 +252,7 @@ pub fn run_create_vite_app_project_for_repo(world: &mut QatWorld, repo_name: &st
 }
 
 pub fn run_init_bitloops_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    run_init_bitloops_with_agent(world, repo_name, "claude-code", false)
+    run_init_bitloops_with_agent(world, repo_name, "claude-code", false, None)
 }
 
 fn normalise_onboarding_agent_name(agent_name: &str) -> &str {
@@ -268,19 +268,18 @@ pub fn run_init_bitloops_with_agent(
     repo_name: &str,
     agent_name: &str,
     force: bool,
+    sync: Option<bool>,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
     world.agent_name = Some(normalised_agent_name.to_string());
 
-    let mut args = vec!["init", "--agent", normalised_agent_name];
-    if force {
-        args.push("--force");
-    }
-    let label = format!("bitloops {}", args.join(" "));
+    let args_owned = build_init_bitloops_args(normalised_agent_name, force, sync);
+    let label = format!("bitloops {}", args_owned.join(" "));
     let mut attempts = 0_u8;
 
     loop {
+        let args: Vec<&str> = args_owned.iter().map(String::as_str).collect();
         let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)
             .with_context(|| format!("running {label}"))?;
         if output.status.success() {
@@ -311,6 +310,24 @@ pub fn run_init_bitloops_with_agent(
 
         return ensure_success(&output, &label);
     }
+}
+
+fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -> Vec<String> {
+    let mut args = vec![
+        "init".to_string(),
+        "--agent".to_string(),
+        agent_name.to_string(),
+    ];
+
+    if let Some(sync_choice) = sync {
+        args.push(format!("--sync={sync_choice}"));
+    }
+
+    if force {
+        args.push("--force".to_string());
+    }
+
+    args
 }
 
 fn run_init_fallback_without_daemon(world: &QatWorld, agent_name: &str, force: bool) -> Result<()> {
@@ -919,19 +936,22 @@ pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
         world,
-        "bitloops devql sync",
-        build_bitloops_command(world, &["devql", "sync"])?,
+        "bitloops devql sync --status",
+        build_bitloops_command(world, &["devql", "sync", "--status"])?,
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout);
-    ensure_success(&output, "bitloops devql sync")
+    ensure_success(&output, "bitloops devql sync --status")
 }
 
 pub fn run_devql_sync_with_flags(world: &mut QatWorld, repo_name: &str, flags: &[&str]) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let mut args = vec!["devql", "sync"];
     args.extend_from_slice(flags);
+    if !args.contains(&"--status") {
+        args.push("--status");
+    }
     let label = format!("bitloops {}", args.join(" "));
     let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
@@ -1046,13 +1066,13 @@ pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
         world,
-        "bitloops devql sync --validate",
-        build_bitloops_command(world, &["devql", "sync", "--validate"])?,
+        "bitloops devql sync --validate --status",
+        build_bitloops_command(world, &["devql", "sync", "--validate", "--status"])?,
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout);
-    ensure_success(&output, "bitloops devql sync --validate")
+    ensure_success(&output, "bitloops devql sync --validate --status")
 }
 
 /// Parse a numeric field from the sync summary output.

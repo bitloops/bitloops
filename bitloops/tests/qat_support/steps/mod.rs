@@ -48,6 +48,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops init --agent (\S+) --sync=false in (\S+)$"),
+            step_fn(given_init_bitloops_with_agent_sync_false),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops init --agent (\S+) --sync=true in (\S+)$"),
+            step_fn(given_init_bitloops_with_agent_sync_true),
+        )
+        .given(
+            None,
             regex(r"^I run EnableCLI for (\S+)$"),
             step_fn(given_enable_cli),
         )
@@ -163,17 +173,17 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run DevQL sync in (\S+)$"),
+            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync validate in (\S+)$"),
+            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_validate),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync repair in (\S+)$"),
+            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_repair),
         )
         .given(

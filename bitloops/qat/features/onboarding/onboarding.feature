@@ -24,7 +24,7 @@ Feature: Activation and Onboarding
         Given I run CleanStart for flow "enable-repo"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent claude-code in bitloops
+        And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops enable in bitloops
         Then  the repo-local .bitloops exists in bitloops
         And   the repo-local .bitloops.local.toml exists in bitloops
@@ -36,42 +36,42 @@ Feature: Activation and Onboarding
         Given I run CleanStart for flow "agent-hooks-claude"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent claude-code in bitloops
+        And   I run bitloops init --agent claude-code --sync=false in bitloops
         Then  git hooks exist for the claude-code agent in bitloops
 
     Scenario: Agent hooks are installed after init with codex agent
         Given I run CleanStart for flow "agent-hooks-codex"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent codex in bitloops
+        And   I run bitloops init --agent codex --sync=false in bitloops
         Then  git hooks exist for the codex agent in bitloops
 
     Scenario: Agent hooks are installed after init with cursor agent
         Given I run CleanStart for flow "agent-hooks-cursor"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent cursor in bitloops
+        And   I run bitloops init --agent cursor --sync=false in bitloops
         Then  git hooks exist for the cursor agent in bitloops
 
     Scenario: Agent hooks are installed after init with gemini agent
         Given I run CleanStart for flow "agent-hooks-gemini"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent gemini in bitloops
+        And   I run bitloops init --agent gemini --sync=false in bitloops
         Then  git hooks exist for the gemini agent in bitloops
 
     Scenario: Agent hooks are installed after init with copilot agent
         Given I run CleanStart for flow "agent-hooks-copilot"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent copilot in bitloops
+        And   I run bitloops init --agent copilot --sync=false in bitloops
         Then  git hooks exist for the copilot agent in bitloops
 
     Scenario: Agent hooks are installed after init with open-code agent
         Given I run CleanStart for flow "agent-hooks-open-code"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent open-code in bitloops
+        And   I run bitloops init --agent open-code --sync=false in bitloops
         Then  git hooks exist for the open-code agent in bitloops
 
     # ── Disable Bitloops in a repository ─────────────────────
@@ -79,7 +79,7 @@ Feature: Activation and Onboarding
         Given I run CleanStart for flow "disable-repo"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent claude-code in bitloops
+        And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops enable in bitloops
         And   I run bitloops disable in bitloops
         Then  bitloops status shows disabled in bitloops
@@ -89,7 +89,7 @@ Feature: Activation and Onboarding
         Given I run CleanStart for flow "uninstall-repo"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent claude-code in bitloops
+        And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops enable in bitloops
         Then  git hooks exist for the claude-code agent in bitloops
         Given I run bitloops uninstall hooks in bitloops
@@ -100,7 +100,7 @@ Feature: Activation and Onboarding
         Given I run CleanStart for flow "uninstall-full"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
-        And   I run bitloops init --agent claude-code in bitloops
+        And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops enable in bitloops
         Then  the repo-local .claude exists in bitloops
         And   git hooks exist for the claude-code agent in bitloops
