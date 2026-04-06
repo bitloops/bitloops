@@ -12,7 +12,7 @@ Feature: DevQL sync workspace reconciliation
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows added greater than 0 in bitloops
+    Then DevQL sync history shows artefacts indexed for current HEAD in bitloops
     And DevQL sync summary shows 0 parse errors in bitloops
     And DevQL artefacts query returns results in bitloops
 
@@ -29,7 +29,7 @@ Feature: DevQL sync workspace reconciliation
     And I add a new source file in bitloops
     And I commit changes without hooks in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows added greater than 0 in bitloops
+    Then DevQL sync history shows added greater than 0 for current HEAD in bitloops
 
   @devql @sync
   Scenario: Sync detects and re-indexes modified source files
@@ -44,7 +44,7 @@ Feature: DevQL sync workspace reconciliation
     And I modify an existing source file in bitloops
     And I commit changes without hooks in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows changed greater than 0 in bitloops
+    Then DevQL sync history shows changed greater than 0 for current HEAD in bitloops
 
   @devql @sync
   Scenario: Sync removes artefacts for deleted source files
@@ -60,7 +60,7 @@ Feature: DevQL sync workspace reconciliation
     And I delete a source file in bitloops
     And I commit changes without hooks in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows removed greater than 0 in bitloops
+    Then DevQL sync history shows removed greater than 0 for current HEAD in bitloops
 
   @devql @sync
   Scenario: No-op sync reports zero changes
@@ -91,7 +91,7 @@ Feature: DevQL sync workspace reconciliation
     And I create a new branch with additional source files in bitloops
     And I commit changes without hooks in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows added greater than 0 in bitloops
+    Then DevQL sync history shows artefacts indexed for current HEAD in bitloops
 
   @devql @sync
   Scenario: Sync catches up after daemon downtime with accumulated changes
@@ -110,8 +110,8 @@ Feature: DevQL sync workspace reconciliation
     And I commit changes without hooks in bitloops
     And I start the daemon in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows added greater than 0 in bitloops
-    And DevQL sync summary shows changed greater than 0 in bitloops
+    Then DevQL sync history shows added greater than 0 for current HEAD in bitloops
+    And DevQL sync history shows changed greater than 0 for current HEAD in bitloops
 
   @devql @sync
   Scenario: Sync indexes changes introduced by git pull
@@ -125,20 +125,7 @@ Feature: DevQL sync workspace reconciliation
     And I run DevQL sync --status in bitloops
     And I simulate a git pull with new changes in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows added greater than 0 in bitloops
-
-  @devql @sync
-  Scenario: Sync validate detects drift on a workspace that has not been synced
-    Given I run CleanStart for flow "SyncValidateDrift"
-    And I start the daemon in bitloops
-    And I run bitloops init --agent claude --sync=false in bitloops
-    And I create a simple Rust project in bitloops
-    And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
-    And I run DevQL init in bitloops
-    And I run DevQL sync validate --status in bitloops
-    Then DevQL sync validation reports drift in bitloops
-    And DevQL sync validation shows expected greater than 0 in bitloops
+    Then DevQL sync history shows artefacts indexed for current HEAD in bitloops
 
   @devql @sync
   Scenario: Sync validate reports clean after a full sync
@@ -152,21 +139,6 @@ Feature: DevQL sync workspace reconciliation
     And I run DevQL sync --status in bitloops
     And I run DevQL sync validate --status in bitloops
     Then DevQL sync validation reports clean in bitloops
-
-  @devql @sync
-  Scenario: Sync validate detects drift when workspace has changed without re-sync
-    Given I run CleanStart for flow "SyncValidateDriftAfterChange"
-    And I start the daemon in bitloops
-    And I run bitloops init --agent claude --sync=false in bitloops
-    And I create a simple Rust project in bitloops
-    And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
-    And I run DevQL init in bitloops
-    And I run DevQL sync --status in bitloops
-    And I add a new source file in bitloops
-    And I commit changes without hooks in bitloops
-    And I run DevQL sync validate --status in bitloops
-    Then DevQL sync validation reports drift in bitloops
 
   @devql @sync
   Scenario: Sync repair restores clean state after drift

@@ -493,6 +493,21 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^DevQL sync history shows changed greater than 0 for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_changed_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync history shows removed greater than 0 for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_removed_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync history shows artefacts indexed for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_artefacts_for_current_head),
+        )
+        .then(
+            None,
             regex(r"^DevQL sync summary shows (added|changed|removed|unchanged|cache hits|cache misses|parse errors) greater than (\d+) in (\S+)$"),
             step_fn(then_sync_summary_field_greater_than),
         )

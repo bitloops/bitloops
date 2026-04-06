@@ -81,23 +81,6 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let daemon_timeout = stderr.contains("did not become ready within")
-            || stdout.contains("did not become ready within");
-        let daemon_permission = stderr.contains("Operation not permitted")
-            || stdout.contains("Operation not permitted");
-
-        if daemon_timeout || daemon_permission {
-            append_world_log(
-                world,
-                &format!(
-                    "Daemon startup fallback activated for this environment.\nstdout:\n{}\nstderr:\n{}\n",
-                    stdout, stderr
-                ),
-            )?;
-            world.daemon_url = None;
-            return Ok(());
-        }
-
         bail!(
             "failed to bootstrap and start daemon for QAT scenario (port {port})\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
@@ -300,19 +283,6 @@ pub fn run_init_bitloops_with_agent(
             continue;
         }
 
-        let daemon_not_running = stdout.contains("Bitloops daemon is not running")
-            || stderr.contains("Bitloops daemon is not running");
-        if daemon_not_running {
-            append_world_log(
-                world,
-                &format!(
-                    "Init fallback activated because daemon is unavailable.\nstdout:\n{}\nstderr:\n{}\n",
-                    stdout, stderr
-                ),
-            )?;
-            return run_init_fallback_without_daemon(world, normalised_agent_name, force);
-        }
-
         return ensure_success(&output, &label);
     }
 }
@@ -335,29 +305,9 @@ fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -
     args
 }
 
-fn run_init_fallback_without_daemon(world: &QatWorld, agent_name: &str, force: bool) -> Result<()> {
-    let project_root = world.repo_dir();
-    let registry = AgentAdapterRegistry::builtin();
-    let agent = registry.normalise_agent_name(agent_name)?;
-    let selected_agents = vec![agent.clone()];
-
-    let strategy = load_settings(project_root)
-        .map(|settings| settings.strategy)
-        .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
-    let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
-    write_project_bootstrap_settings(&local_policy_path, &strategy, &selected_agents)?;
-
-    let local_dev = load_settings(project_root)
-        .map(|settings| settings.local_dev)
-        .unwrap_or(false);
-    let _ = git_hooks::install_git_hooks(project_root, local_dev)?;
-    let _ = registry.install_agent_hooks(project_root, &agent, local_dev, force)?;
-    Ok(())
-}
-
 pub fn run_enable_cli_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_enable_with_fallback(world, &["enable"], "bitloops enable")
+    run_enable(world, &["enable"], "bitloops enable")
 }
 
 pub fn run_bitloops_enable_with_flags(
@@ -369,42 +319,13 @@ pub fn run_bitloops_enable_with_flags(
     let mut args = vec!["enable"];
     args.extend_from_slice(flags);
     let label = format!("bitloops {}", args.join(" "));
-    run_enable_with_fallback(world, &args, &label)
+    run_enable(world, &args, &label)
 }
 
-fn run_enable_with_fallback(world: &mut QatWorld, args: &[&str], label: &str) -> Result<()> {
+fn run_enable(world: &mut QatWorld, args: &[&str], label: &str) -> Result<()> {
     let output = run_command_capture(world, label, build_bitloops_command(world, args)?)
         .with_context(|| format!("running {label}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let daemon_not_running = stdout.contains("Bitloops daemon is not running")
-        || stderr.contains("Bitloops daemon is not running");
-    if daemon_not_running {
-        append_world_log(
-            world,
-            &format!(
-                "Enable fallback activated because daemon is unavailable.\nstdout:\n{}\nstderr:\n{}\n",
-                stdout, stderr
-            ),
-        )?;
-        return run_enable_fallback_without_daemon(world);
-    }
-
     ensure_success(&output, label)
-}
-
-fn run_enable_fallback_without_daemon(world: &QatWorld) -> Result<()> {
-    let policy = discover_repo_policy(world.repo_dir())?;
-    let target_path = policy
-        .local_path
-        .or(policy.shared_path)
-        .context("resolving editable project policy for enable fallback")?;
-    set_capture_enabled(&target_path, true)?;
-    Ok(())
 }
 
 pub fn run_bitloops_disable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
@@ -1154,6 +1075,10 @@ struct QatSyncTaskSummarySnapshot {
     #[serde(default)]
     paths_added: usize,
     #[serde(default)]
+    paths_changed: usize,
+    #[serde(default)]
+    paths_removed: usize,
+    #[serde(default)]
     paths_unchanged: usize,
 }
 
@@ -1178,7 +1103,10 @@ fn resolve_qat_sync_state_path(world: &QatWorld) -> Result<std::path::PathBuf> {
     )
 }
 
-pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+fn completed_tasks_for_current_head(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<(String, std::path::PathBuf, Vec<(String, QatSyncTaskSummarySnapshot)>)> {
     ensure_bitloops_repo_name(repo_name)?;
     let head_output = run_command_capture(
         world,
@@ -1199,11 +1127,14 @@ pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_nam
     let snapshot: QatSyncStateSnapshot = serde_json::from_str(&raw)
         .with_context(|| format!("parsing {}", sync_state_path.display()))?;
 
-    let head_tasks: Vec<(&QatSyncTaskSnapshot, &QatSyncTaskSummarySnapshot)> = snapshot
+    let head_tasks: Vec<(String, QatSyncTaskSummarySnapshot)> = snapshot
         .tasks
-        .iter()
+        .into_iter()
         .filter(|task| task.status == "completed")
-        .filter_map(|task| task.summary.as_ref().map(|summary| (task, summary)))
+        .filter_map(|task| {
+            let source = task.source.clone();
+            task.summary.map(|summary| (source, summary))
+        })
         .filter(|(_, summary)| summary.head_commit_sha == head_sha)
         .collect();
 
@@ -1213,25 +1144,67 @@ pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_nam
         sync_state_path.display()
     );
 
-    if head_tasks
-        .iter()
-        .any(|(_, summary)| summary.paths_added > 0)
-    {
-        return Ok(());
-    }
+    Ok((head_sha, sync_state_path, head_tasks))
+}
 
-    let task_summary = head_tasks
+fn format_task_diagnostics(head_tasks: &[(String, QatSyncTaskSummarySnapshot)]) -> String {
+    head_tasks
         .iter()
-        .map(|(task, summary)| {
+        .map(|(source, summary)| {
             format!(
-                "source={} mode={} added={} unchanged={}",
-                task.source, summary.mode, summary.paths_added, summary.paths_unchanged
+                "source={} mode={} added={} changed={} removed={} unchanged={}",
+                source, summary.mode, summary.paths_added, summary.paths_changed, summary.paths_removed, summary.paths_unchanged
             )
         })
         .collect::<Vec<_>>()
-        .join("; ");
+        .join("; ")
+}
+
+pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+    let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
+
+    if head_tasks.iter().any(|(_, summary)| summary.paths_added > 0) {
+        return Ok(());
+    }
     bail!(
-        "expected at least one completed sync task with pathsAdded > 0 for HEAD `{head_sha}`; observed: {task_summary}"
+        "expected at least one completed sync task with pathsAdded > 0 for HEAD `{head_sha}`; observed: {}",
+        format_task_diagnostics(&head_tasks)
+    )
+}
+
+pub fn assert_sync_history_has_changed_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+    let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
+
+    if head_tasks.iter().any(|(_, summary)| summary.paths_changed > 0) {
+        return Ok(());
+    }
+    bail!(
+        "expected at least one completed sync task with pathsChanged > 0 for HEAD `{head_sha}`; observed: {}",
+        format_task_diagnostics(&head_tasks)
+    )
+}
+
+pub fn assert_sync_history_has_removed_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+    let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
+
+    if head_tasks.iter().any(|(_, summary)| summary.paths_removed > 0) {
+        return Ok(());
+    }
+    bail!(
+        "expected at least one completed sync task with pathsRemoved > 0 for HEAD `{head_sha}`; observed: {}",
+        format_task_diagnostics(&head_tasks)
+    )
+}
+
+pub fn assert_sync_history_has_artefacts_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+    let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
+
+    if head_tasks.iter().any(|(_, summary)| summary.paths_added + summary.paths_unchanged > 0) {
+        return Ok(());
+    }
+    bail!(
+        "expected at least one completed sync task with artefacts indexed (pathsAdded + pathsUnchanged > 0) for HEAD `{head_sha}`; observed: {}",
+        format_task_diagnostics(&head_tasks)
     )
 }
 

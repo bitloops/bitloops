@@ -738,6 +738,45 @@ pub(super) fn then_sync_history_added_for_current_head(
     })
 }
 
+pub(super) fn then_sync_history_changed_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows changed > 0 for current HEAD",
+            helpers::assert_sync_history_has_changed_for_current_head(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_sync_history_removed_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows removed > 0 for current HEAD",
+            helpers::assert_sync_history_has_removed_for_current_head(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_sync_history_artefacts_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows artefacts indexed for current HEAD",
+            helpers::assert_sync_history_has_artefacts_for_current_head(world, &repo_name),
+        );
+    })
+}
+
 // ── DevQL sync/ingest summary assertions ─────────────────────
 
 pub(super) fn then_sync_summary_field_greater_than(
