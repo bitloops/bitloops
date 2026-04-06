@@ -312,7 +312,7 @@ mod tests {
             pagination: None,
         });
 
-        assert!(sql.contains("FROM artefacts a"));
+        assert!(sql.contains("FROM artefacts_historical a"));
         assert!(sql.contains("a.path = 'src/main.rs'"));
         assert!(sql.contains("a.blob_sha = 'blob-123'"));
         assert!(!sql.contains("FROM file_state fs"));

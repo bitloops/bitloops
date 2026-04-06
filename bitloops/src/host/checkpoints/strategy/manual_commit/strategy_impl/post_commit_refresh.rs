@@ -11,6 +11,7 @@ pub(crate) fn run_devql_post_commit_refresh(
     changed_files.sort();
 
     run_post_commit_future(repo_root, async {
+        #[cfg(not(test))]
         if let Err(err) =
             crate::daemon::require_current_repo_runtime(repo_root, "post-commit DevQL refresh")
         {

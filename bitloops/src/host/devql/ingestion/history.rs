@@ -6,6 +6,7 @@ const COMMIT_CHECKPOINT_STATUS_COMPLETED: &str = "completed";
 const COMMIT_CHECKPOINT_STATUS_FAILED: &str = "failed";
 const COMMIT_CHECKPOINT_STATUS_NOT_APPLICABLE: &str = "not_applicable";
 const HISTORICAL_BRANCH_WATERMARK_PREFIX: &str = "historical_ingest.branch.";
+const DEFAULT_REBASE_RECOVERY_BACKFILL: usize = 200;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct CommitIngestLedgerEntry {
@@ -47,9 +48,22 @@ pub(super) async fn select_missing_branch_commit_segment(
             load_sync_state_value_for_repo(relational, repo_id, &watermark_key).await?;
         if let Some(branch_watermark) = branch_watermark.as_deref()
             && !branch_watermark.is_empty()
-            && commit_is_ancestor_of(repo_root, branch_watermark, head_sha)
         {
-            return list_commit_range(repo_root, &format!("{branch_watermark}..{head_sha}"));
+            if commit_is_ancestor_of(repo_root, branch_watermark, head_sha) {
+                return list_commit_range(repo_root, &format!("{branch_watermark}..{head_sha}"));
+            }
+
+            log::info!(
+                "historical ingest watermark `{branch_watermark}` is not an ancestor of HEAD `{head_sha}`; using bounded rebase recovery"
+            );
+            return select_recent_branch_commit_backfill_window(
+                repo_root,
+                relational,
+                repo_id,
+                head_sha,
+                DEFAULT_REBASE_RECOVERY_BACKFILL,
+            )
+            .await;
         }
     }
 
@@ -59,7 +73,12 @@ pub(super) async fn select_missing_branch_commit_segment(
         return list_commit_range(repo_root, &format!("{ancestor_sha}..{head_sha}"));
     }
 
-    list_commit_range(repo_root, head_sha)
+    let mut commits = list_commit_range(repo_root, head_sha)?;
+    if commits.len() > DEFAULT_REBASE_RECOVERY_BACKFILL {
+        let start = commits.len() - DEFAULT_REBASE_RECOVERY_BACKFILL;
+        commits = commits.split_off(start);
+    }
+    Ok(commits)
 }
 
 pub(super) async fn select_recent_branch_commit_backfill_window(
@@ -100,30 +119,6 @@ pub(super) async fn select_recent_branch_commit_backfill_window(
     }
     selected.reverse();
     Ok(selected)
-}
-
-pub(super) async fn repo_has_historical_ingest_state(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    branch_name: Option<&str>,
-) -> Result<bool> {
-    if uses_local_ingest_watermarks(relational)
-        && let Some(branch_name) = branch_name.map(str::trim).filter(|value| !value.is_empty())
-    {
-        let watermark_key = historical_branch_watermark_key(branch_name);
-        let branch_watermark =
-            load_sync_state_value_for_repo(relational, repo_id, &watermark_key).await?;
-        if branch_watermark
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
-            return Ok(true);
-        }
-    }
-
-    Ok(!load_fully_ingested_commits(relational, repo_id)
-        .await?
-        .is_empty())
 }
 
 pub(super) fn uses_local_ingest_watermarks(relational: &RelationalStorage) -> bool {

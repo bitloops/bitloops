@@ -173,7 +173,9 @@ fn init_args_reject_zero_backfill() {
         .expect("expected clap parsing error");
     let rendered = err.to_string();
     assert!(
-        rendered.contains("1..") || rendered.contains("greater than or equal to 1"),
+        rendered.contains("1..")
+            || rendered.contains("greater than or equal to 1")
+            || rendered.contains("greater than zero"),
         "unexpected clap error: {rendered}"
     );
 }
