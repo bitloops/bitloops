@@ -25,6 +25,7 @@ Bitloops stores daemon configuration at:
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
+- `bitloops start --config /path/to/config.toml --bootstrap-local-stores` keeps that explicit config path and creates the matching local SQLite, DuckDB, and blob-store artefacts before startup.
 - `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
 
 The daemon config owns:
@@ -127,11 +128,31 @@ Bitloops uses platform app directories by default:
 | Config | `${XDG_CONFIG_HOME:-~/.config}/bitloops/` | `config.toml` |
 | Data | `${XDG_DATA_HOME:-~/.local/share}/bitloops/` | SQLite, DuckDB, blob store |
 | Cache | `${XDG_CACHE_HOME:-~/.cache}/bitloops/` | Embedding model downloads, dashboard bundle |
-| State | `${XDG_STATE_HOME:-~/.local/state}/bitloops/` | Daemon runtime metadata, supervisor state, hook scratch |
+| State | `${XDG_STATE_HOME:-~/.local/state}/bitloops/` | Daemon runtime metadata, supervisor state, daemon runtime SQLite, hook scratch |
 
-The default repo footprint is now limited to optional policy files at the repo root. Bitloops no longer uses repo-local runtime storage by default.
+Bitloops also keeps repo-scoped workflow runtime state in a dedicated local SQLite database at `<repo>/.bitloops/stores/runtime/runtime.sqlite`.
 
 If you want to remove these platform directories again, use `bitloops uninstall` with explicit targets or `bitloops uninstall --full`.
+
+## RuntimeStore And RelationalStore
+
+Bitloops now uses two internal storage boundaries:
+
+- `RuntimeStore`: local-only SQLite for workflow and daemon runtime state
+- `RelationalStore`: the approved relational boundary for queryable checkpoint and DevQL relational state
+
+The runtime store paths are derived by the host and are not configured under `[stores]`:
+
+| Runtime surface | Default path | Purpose |
+| --- | --- | --- |
+| Daemon runtime store | `<state dir>/daemon/runtime.sqlite` | daemon runtime state, service metadata, supervisor metadata, sync queue state, enrichment queue state |
+| Repo runtime store | `<repo>/.bitloops/stores/runtime/runtime.sqlite` | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
+
+Configured relational, events, and blob stores still come from the daemon config:
+
+- `[stores.relational]` selects the `RelationalStore` backend, using SQLite or Postgres
+- `[stores.events]` selects the event backend, using DuckDB or ClickHouse
+- `[stores.blob]` selects the blob backend, using local disk or a remote object store
 
 ## Project Policy
 

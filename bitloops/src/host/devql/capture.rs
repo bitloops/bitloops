@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
+use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
+
 #[cfg(test)]
 pub(crate) fn capture_temporary_checkpoint_batch(
     cfg: &crate::host::devql::DevqlConfig,
@@ -67,15 +69,10 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         return Ok(());
     }
 
-    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving store config for watcher capture")?;
-    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
-        repo_root,
-        backend_cfg.relational.sqlite_path.as_deref(),
-    )
-    .context("resolving SQLite path for watcher capture")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.clone())?;
-    sqlite.initialise_devql_schema()?;
+    let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
+        .context("opening local relational store for watcher capture")?;
+    relational.initialise_local_devql_schema()?;
+    let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for watch capture")?

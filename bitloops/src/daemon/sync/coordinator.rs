@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -15,7 +14,6 @@ use crate::host::devql::{
     SyncSummary,
 };
 
-use super::super::state_store::{read_json, write_json};
 use super::super::types::{
     SyncQueueStatus, SyncTaskRecord, SyncTaskSource, SyncTaskStatus, unix_timestamp_now,
 };
@@ -24,8 +22,7 @@ use super::queue::{
     project_status, prune_terminal_tasks, recompute_queue_positions, sync_task_mode_from_host,
     sync_task_mode_to_host,
 };
-use super::state::{PersistedSyncQueueState, sync_state_lock_path, sync_state_path};
-use super::state_lock::acquire_state_file_lock;
+use crate::host::runtime_store::{DaemonSqliteRuntimeStore, PersistedSyncQueueState};
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_secs(1);
@@ -38,8 +35,7 @@ pub struct SyncEnqueueResult {
 
 #[derive(Debug)]
 pub struct SyncCoordinator {
-    pub(super) state_path: PathBuf,
-    pub(super) state_lock_path: PathBuf,
+    pub(super) runtime_store: DaemonSqliteRuntimeStore,
     pub(super) lock: Mutex<()>,
     pub(super) notify: Notify,
     pub(super) worker_started: AtomicBool,
@@ -105,39 +101,32 @@ impl SyncObserver for CoordinatorObserver {
 
 impl SyncCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
-        let state_path = sync_state_path();
-        let state_lock_path = sync_state_lock_path();
+        let runtime_store =
+            DaemonSqliteRuntimeStore::open().expect("opening daemon runtime store for sync queue");
         static INSTANCE: OnceLock<Mutex<Arc<SyncCoordinator>>> = OnceLock::new();
-        let slot = INSTANCE.get_or_init(|| {
-            Mutex::new(Self::new_shared_instance(
-                state_path.clone(),
-                state_lock_path.clone(),
-            ))
-        });
+        let slot =
+            INSTANCE.get_or_init(|| Mutex::new(Self::new_shared_instance(runtime_store.clone())));
         let coordinator = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         #[cfg(test)]
         let mut coordinator = coordinator;
 
         #[cfg(test)]
-        if coordinator.state_path != state_path || coordinator.state_lock_path != state_lock_path {
-            *coordinator = Self::new_shared_instance(state_path, state_lock_path);
+        if coordinator.runtime_store.db_path() != runtime_store.db_path() {
+            *coordinator = Self::new_shared_instance(runtime_store);
         }
 
         Arc::clone(&coordinator)
     }
 
-    fn new_shared_instance(state_path: PathBuf, state_lock_path: PathBuf) -> Arc<Self> {
-        let coordinator = Arc::new(Self {
-            state_path,
-            state_lock_path,
+    fn new_shared_instance(runtime_store: DaemonSqliteRuntimeStore) -> Arc<Self> {
+        Arc::new(Self {
+            runtime_store,
             lock: Mutex::new(()),
             notify: Notify::new(),
             worker_started: AtomicBool::new(false),
             subscription_hub: Mutex::new(None),
-        });
-        coordinator.ensure_state_file();
-        coordinator
+        })
     }
 
     pub(crate) fn activate_worker(self: &Arc<Self>, hub: Option<Arc<SubscriptionHub>>) {
@@ -215,7 +204,7 @@ impl SyncCoordinator {
     }
 
     pub(crate) fn snapshot(&self, repo_id: Option<&str>) -> Result<SyncQueueStatus> {
-        let persisted = self.state_path.exists();
+        let persisted = self.runtime_store.sync_state_exists()?;
         let state = self.load_state()?;
         Ok(project_status(&state, repo_id, persisted))
     }
@@ -246,13 +235,6 @@ impl SyncCoordinator {
             tasks.truncate(limit);
         }
         Ok(tasks)
-    }
-
-    pub(super) fn ensure_state_file(&self) {
-        if self.state_path.exists() {
-            return;
-        }
-        let _ = write_json(&self.state_path, &PersistedSyncQueueState::default());
     }
 
     async fn run_loop(self: Arc<Self>) {
@@ -494,7 +476,9 @@ impl SyncCoordinator {
     }
 
     fn load_state(&self) -> Result<PersistedSyncQueueState> {
-        Ok(read_json::<PersistedSyncQueueState>(&self.state_path)?
+        Ok(self
+            .runtime_store
+            .load_sync_queue_state()?
             .unwrap_or_else(PersistedSyncQueueState::default))
     }
 
@@ -506,12 +490,12 @@ impl SyncCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow::anyhow!("sync coordinator lock poisoned"))?;
-        let file_lock = acquire_state_file_lock(&self.state_lock_path)?;
-        let mut state = self.load_state()?;
-        let previous_tasks = state.tasks.clone();
-        let result = mutate(&mut state)?;
-        let tasks_to_publish = self.save_state(&mut state, &previous_tasks)?;
-        drop(file_lock);
+        let (result, tasks_to_publish) = self.runtime_store.mutate_sync_queue_state(|state| {
+            let previous_tasks = state.tasks.clone();
+            let result = mutate(state)?;
+            let tasks_to_publish = Self::save_state(state, &previous_tasks)?;
+            Ok((result, tasks_to_publish))
+        })?;
         drop(guard);
         self.publish_tasks(tasks_to_publish);
         self.notify.notify_waiters();
@@ -519,7 +503,6 @@ impl SyncCoordinator {
     }
 
     fn save_state(
-        &self,
         state: &mut PersistedSyncQueueState,
         previous_tasks: &[SyncTaskRecord],
     ) -> Result<Vec<SyncTaskRecord>> {
@@ -527,7 +510,6 @@ impl SyncCoordinator {
         state.updated_at_unix = unix_timestamp_now();
         recompute_queue_positions(&mut state.tasks);
         prune_terminal_tasks(&mut state.tasks);
-        write_json(&self.state_path, state)?;
         Ok(changed_tasks(previous_tasks, &state.tasks))
     }
 
@@ -579,16 +561,14 @@ mod tests {
     use tempfile::TempDir;
 
     fn test_coordinator(root: &Path) -> SyncCoordinator {
-        let coordinator = SyncCoordinator {
-            state_path: root.join("sync.json"),
-            state_lock_path: root.join("sync.lock"),
+        SyncCoordinator {
+            runtime_store: DaemonSqliteRuntimeStore::open_at(root.join("runtime.sqlite"))
+                .expect("open test runtime store"),
             lock: Mutex::new(()),
             notify: Notify::new(),
             worker_started: AtomicBool::new(false),
             subscription_hub: Mutex::new(None),
-        };
-        coordinator.ensure_state_file();
-        coordinator
+        }
     }
 
     fn seeded_cfg() -> (TempDir, DevqlConfig) {
@@ -714,16 +694,18 @@ mod tests {
             error: Some("boom".to_string()),
             summary: None,
         };
-        write_json(
-            &coordinator.state_path,
-            &PersistedSyncQueueState {
-                version: 1,
-                tasks: vec![task],
-                last_action: Some("running".to_string()),
-                updated_at_unix: 3,
-            },
-        )
-        .expect("seed queue state");
+        coordinator
+            .runtime_store
+            .mutate_sync_queue_state(|state| {
+                *state = PersistedSyncQueueState {
+                    version: 1,
+                    tasks: vec![task],
+                    last_action: Some("running".to_string()),
+                    updated_at_unix: 3,
+                };
+                Ok(())
+            })
+            .expect("seed queue state");
 
         coordinator
             .recover_running_tasks()
@@ -744,16 +726,18 @@ mod tests {
         let coordinator = test_coordinator(dir.path());
         let mut task = sample_task(&cfg, "sync-task-1");
         task.status = SyncTaskStatus::Running;
-        write_json(
-            &coordinator.state_path,
-            &PersistedSyncQueueState {
-                version: 1,
-                tasks: vec![task],
-                last_action: Some("running".to_string()),
-                updated_at_unix: 1,
-            },
-        )
-        .expect("seed queue state");
+        coordinator
+            .runtime_store
+            .mutate_sync_queue_state(|state| {
+                *state = PersistedSyncQueueState {
+                    version: 1,
+                    tasks: vec![task],
+                    last_action: Some("running".to_string()),
+                    updated_at_unix: 1,
+                };
+                Ok(())
+            })
+            .expect("seed queue state");
 
         coordinator
             .update_task_mode("sync-task-1", SyncTaskMode::Repair)
