@@ -6,6 +6,7 @@ use crate::host::checkpoints::lifecycle::interaction::{
 };
 use crate::host::checkpoints::session::state::SessionState;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
+use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
 use crate::host::interactions::types::{
@@ -85,6 +86,7 @@ pub(super) fn record_session_start_interaction(
     repo_root: Option<&Path>,
     state: &SessionState,
     profile: Option<HookAgentProfile>,
+    model_hint: &str,
 ) {
     let event_time = state
         .last_interaction_time
@@ -95,10 +97,12 @@ pub(super) fn record_session_start_interaction(
         let Some(repo_root) = repo_root else {
             return;
         };
+        let model = resolve_interaction_model(model_hint, &state.transcript_path);
         let session = InteractionSession {
             session_id: state.session_id.clone(),
             repo_id: spool.repo_id().to_string(),
             agent_type: interaction_agent_type(Some(state), profile),
+            model: model.clone(),
             first_prompt: state.first_prompt.clone(),
             transcript_path: state.transcript_path.clone(),
             worktree_path: interaction_worktree_path(repo_root, Some(state)),
@@ -107,7 +111,6 @@ pub(super) fn record_session_start_interaction(
             ended_at: state.ended_at.clone(),
             last_event_at: event_time.clone(),
             updated_at: event_time.clone(),
-            ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -120,7 +123,7 @@ pub(super) fn record_session_start_interaction(
             event_type: InteractionEventType::SessionStart,
             event_time,
             agent_type: session.agent_type.clone(),
-            model: String::new(),
+            model,
             payload: serde_json::json!({
                 "first_prompt": session.first_prompt,
                 "transcript_path": session.transcript_path,
@@ -138,6 +141,7 @@ pub(super) fn record_turn_start_interaction(
     state: &SessionState,
     prompt: &str,
     profile: HookAgentProfile,
+    model_hint: &str,
 ) {
     let event_time = state
         .last_interaction_time
@@ -149,10 +153,12 @@ pub(super) fn record_turn_start_interaction(
         let Some(repo_root) = repo_root else {
             return;
         };
+        let model = resolve_interaction_model(model_hint, &state.transcript_path);
         let session = InteractionSession {
             session_id: state.session_id.clone(),
             repo_id: spool.repo_id().to_string(),
             agent_type: interaction_agent_type(Some(state), Some(profile)),
+            model: model.clone(),
             first_prompt: state.first_prompt.clone(),
             transcript_path: state.transcript_path.clone(),
             worktree_path: interaction_worktree_path(repo_root, Some(state)),
@@ -161,7 +167,6 @@ pub(super) fn record_turn_start_interaction(
             ended_at: state.ended_at.clone(),
             last_event_at: event_time.clone(),
             updated_at: event_time.clone(),
-            ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -174,6 +179,7 @@ pub(super) fn record_turn_start_interaction(
             turn_number,
             prompt: prompt.clone(),
             agent_type: session.agent_type.clone(),
+            model: model.clone(),
             started_at: event_time.clone(),
             prompt_count: 1,
             updated_at: event_time.clone(),
@@ -190,7 +196,7 @@ pub(super) fn record_turn_start_interaction(
             event_type: InteractionEventType::TurnStart,
             event_time,
             agent_type: session.agent_type.clone(),
-            model: String::new(),
+            model,
             payload: serde_json::json!({
                 "prompt": turn.prompt,
                 "turn_number": turn_number,
@@ -210,6 +216,7 @@ pub(super) struct TurnEndInteraction<'a> {
     pub(super) prompt: &'a str,
     pub(super) turn_started_at: Option<&'a str>,
     pub(super) profile: HookAgentProfile,
+    pub(super) model_hint: &'a str,
     pub(super) files_modified: &'a [String],
     pub(super) token_usage: Option<&'a TokenUsage>,
 }
@@ -224,6 +231,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         prompt,
         turn_started_at,
         profile,
+        model_hint,
         files_modified,
         token_usage,
     } = ctx;
@@ -237,10 +245,17 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             return;
         };
         let agent_type = interaction_agent_type(state, Some(profile));
+        let transcript_path = if transcript_path.trim().is_empty() {
+            state.map(|state| state.transcript_path.as_str()).unwrap_or_default()
+        } else {
+            transcript_path
+        };
+        let model = resolve_interaction_model(model_hint, transcript_path);
         let session = InteractionSession {
             session_id: session_id.to_string(),
             repo_id: spool.repo_id().to_string(),
             agent_type: agent_type.clone(),
+            model: model.clone(),
             first_prompt: state
                 .map(|state| state.first_prompt.clone())
                 .filter(|value| !value.trim().is_empty())
@@ -258,7 +273,6 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             ended_at: state.and_then(|state| state.ended_at.clone()),
             last_event_at: event_time.clone(),
             updated_at: event_time.clone(),
-            ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -275,6 +289,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             turn_number: state.map_or(1, |state| state.pending.step_count + 1),
             prompt: prompt.clone(),
             agent_type: agent_type.clone(),
+            model: model.clone(),
             started_at: turn_started_at
                 .filter(|value| !value.trim().is_empty())
                 .map(str::to_string)
@@ -309,7 +324,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             event_type: InteractionEventType::TurnEnd,
             event_time,
             agent_type,
-            model: String::new(),
+            model,
             payload: serde_json::json!({
                 "files_modified": files_modified,
                 "files_count": files_modified.len(),
@@ -330,6 +345,7 @@ pub(super) fn record_session_end_interaction(
     transcript_path: &str,
     state: Option<&SessionState>,
     profile: Option<HookAgentProfile>,
+    model_hint: &str,
 ) {
     let ended_at = state
         .and_then(|state| state.ended_at.clone())
@@ -339,10 +355,19 @@ pub(super) fn record_session_end_interaction(
         let Some(repo_root) = repo_root else {
             return;
         };
+        let transcript_path = if transcript_path.trim().is_empty() {
+            state
+                .map(|state| state.transcript_path.as_str())
+                .unwrap_or_default()
+        } else {
+            transcript_path
+        };
+        let model = resolve_interaction_model(model_hint, transcript_path);
         let session = InteractionSession {
             session_id: session_id.to_string(),
             repo_id: spool.repo_id().to_string(),
             agent_type: interaction_agent_type(state, profile),
+            model: model.clone(),
             first_prompt: state
                 .map(|state| state.first_prompt.clone())
                 .unwrap_or_default(),
@@ -359,7 +384,6 @@ pub(super) fn record_session_end_interaction(
             ended_at: Some(ended_at.clone()),
             last_event_at: ended_at.clone(),
             updated_at: ended_at.clone(),
-            ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session end: {err}");
@@ -372,7 +396,7 @@ pub(super) fn record_session_end_interaction(
             event_type: InteractionEventType::SessionEnd,
             event_time: ended_at,
             agent_type: session.agent_type.clone(),
-            model: String::new(),
+            model,
             payload: serde_json::Value::Object(Default::default()),
         }) {
             eprintln!("[bitloops] Warning: failed to spool session_end event: {err}");
@@ -386,10 +410,15 @@ pub(super) fn record_subagent_interaction_event(
     state: Option<&SessionState>,
     profile: HookAgentProfile,
     event_type: InteractionEventType,
+    model_hint: &str,
     payload: serde_json::Value,
 ) {
     let event_time = now_rfc3339();
     with_interaction_spool(repo_root, |spool| {
+        let transcript_path = state
+            .map(|state| state.transcript_path.as_str())
+            .unwrap_or_default();
+        let model = resolve_interaction_model(model_hint, transcript_path);
         if let Err(err) = spool.record_event(&InteractionEvent {
             event_id: interaction_event_id(),
             session_id: session_id.to_string(),
@@ -400,7 +429,7 @@ pub(super) fn record_subagent_interaction_event(
             event_type,
             event_time,
             agent_type: interaction_agent_type(state, Some(profile)),
-            model: String::new(),
+            model,
             payload,
         }) {
             eprintln!("[bitloops] Warning: failed to spool {event_type} event: {err}");

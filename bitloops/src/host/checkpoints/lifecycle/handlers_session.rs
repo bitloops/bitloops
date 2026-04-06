@@ -15,6 +15,7 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
@@ -68,11 +69,12 @@ pub fn handle_lifecycle_session_start(
     backend.save_session(&state)?;
 
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
+        let model = resolve_interaction_model(&event.model, &state.transcript_path);
         let session = InteractionSession {
             session_id: session_id.clone(),
             repo_id: spool.repo_id().to_string(),
             agent_type: state.agent_type.clone(),
-            model: event.model.clone(),
+            model: model.clone(),
             first_prompt: state.first_prompt.clone(),
             transcript_path: state.transcript_path.clone(),
             worktree_path: state.worktree_path.clone(),
@@ -93,7 +95,7 @@ pub fn handle_lifecycle_session_start(
             event_type: InteractionEventType::SessionStart,
             event_time: now.clone(),
             agent_type: state.agent_type.clone(),
-            model: event.model.clone(),
+            model,
             payload: serde_json::json!({
                 "first_prompt": state.first_prompt,
                 "transcript_path": state.transcript_path,
@@ -204,11 +206,12 @@ pub fn handle_lifecycle_turn_start(
         truncate_prompt_for_storage(canonical_request.prompt.as_deref().unwrap_or(&event.prompt));
     let turn_number = state.pending.step_count + 1;
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
+        let model = resolve_interaction_model(&event.model, &state.transcript_path);
         let session = InteractionSession {
             session_id: session_id.clone(),
             repo_id: spool.repo_id().to_string(),
             agent_type: state.agent_type.clone(),
-            model: event.model.clone(),
+            model: model.clone(),
             first_prompt: state.first_prompt.clone(),
             transcript_path: state.transcript_path.clone(),
             worktree_path: state.worktree_path.clone(),
@@ -228,7 +231,7 @@ pub fn handle_lifecycle_turn_start(
             turn_number,
             prompt: prompt_text.clone(),
             agent_type: state.agent_type.clone(),
-            model: event.model.clone(),
+            model: model.clone(),
             started_at: now.clone(),
             prompt_count: 1,
             updated_at: now.clone(),
@@ -245,7 +248,7 @@ pub fn handle_lifecycle_turn_start(
             event_type: InteractionEventType::TurnStart,
             event_time: now.clone(),
             agent_type: state.agent_type.clone(),
-            model: event.model.clone(),
+            model,
             payload: serde_json::json!({
                 "prompt": prompt_text,
                 "turn_number": turn_number,

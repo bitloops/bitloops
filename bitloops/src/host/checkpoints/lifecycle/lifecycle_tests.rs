@@ -67,6 +67,26 @@ fn latest_turn_fragment(repo_root: &Path) -> String {
     .expect("read interaction turn transcript_fragment")
 }
 
+fn latest_session_model(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_sessions ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction session model")
+}
+
+fn latest_turn_model(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_turns ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn model")
+}
+
 fn latest_turn_end_payload(repo_root: &Path) -> serde_json::Value {
     let conn = open_events_duckdb(repo_root);
     let payload: String = conn
@@ -361,7 +381,7 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
     let transcript_path = dir.path().join("transcript.jsonl");
     std::fs::write(
         &transcript_path,
-        "{\"messages\":[{\"type\":\"user\",\"content\":\"Update tracked file\"},{\"type\":\"gemini\",\"content\":\"Implemented the change\"}]}",
+        "{\"model\":\"gemini-2.5-pro\",\"messages\":[{\"type\":\"user\",\"content\":\"Update tracked file\"},{\"type\":\"gemini\",\"content\":\"Implemented the change\"}]}",
     )
     .unwrap();
     std::fs::write(dir.path().join("tracked.txt"), "changed\n").unwrap();
@@ -387,6 +407,8 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
             fragment,
             "turn_end event payload should mirror the persisted transcript fragment"
         );
+        assert_eq!(latest_session_model(dir.path()), "gemini-2.5-pro");
+        assert_eq!(latest_turn_model(dir.path()), "gemini-2.5-pro");
     });
 }
 

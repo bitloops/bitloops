@@ -73,7 +73,7 @@ pub fn handle_session_start_with_profile(
     }
 
     backend.save_session(&state)?;
-    record_session_start_interaction(repo_root, &state, profile);
+    record_session_start_interaction(repo_root, &state, profile, "");
     Ok(())
 }
 
@@ -192,7 +192,7 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     }
 
     backend.save_session(&state)?;
-    record_turn_start_interaction(repo_root, &state, &input.prompt, profile);
+    record_turn_start_interaction(repo_root, &state, &input.prompt, profile, "");
     Ok(())
 }
 
@@ -297,6 +297,7 @@ pub fn handle_stop_with_profile(
         prompt,
         turn_started_at,
         profile,
+        model_hint: "",
         files_modified: &all_files,
         token_usage: token_usage.as_ref(),
     });
@@ -385,6 +386,7 @@ pub fn handle_session_end_with_profile(
         &input.transcript_path,
         state.as_ref(),
         profile,
+        "",
     );
     Ok(())
 }
@@ -441,6 +443,7 @@ pub fn handle_pre_task_with_profile(
         session_state.as_ref(),
         profile,
         InteractionEventType::SubagentStart,
+        "",
         serde_json::json!({
             "tool_use_id": marker.tool_use_id,
         }),
@@ -494,6 +497,7 @@ pub fn handle_post_task_with_profile(
         session_state.as_ref(),
         profile,
         InteractionEventType::SubagentEnd,
+        "",
         serde_json::json!({
             "subagent_id": input.tool_response.agent_id.clone(),
             "tool_use_id": input.tool_use_id.clone(),

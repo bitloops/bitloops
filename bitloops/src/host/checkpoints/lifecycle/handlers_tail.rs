@@ -10,6 +10,7 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession,
@@ -57,6 +58,25 @@ pub fn handle_lifecycle_compaction(
                     "[bitloops] Warning: failed to save session state after compaction: {err}"
                 );
             }
+            let model = resolve_interaction_model(&event.model, &state.transcript_path);
+            if let Some(spool) = resolve_interaction_spool(&repo_root)
+                && let Err(err) = spool.record_event(&InteractionEvent {
+                    event_id: generate_interaction_event_id(),
+                    session_id: session_id.clone(),
+                    turn_id: None,
+                    repo_id: spool.repo_id().to_string(),
+                    event_type: InteractionEventType::Compaction,
+                    event_time: now_rfc3339(),
+                    agent_type: state.agent_type.clone(),
+                    model,
+                    payload: serde_json::Value::Object(Default::default()),
+                })
+            {
+                eprintln!("[bitloops] Warning: failed to spool compaction event: {err}");
+            }
+            flush_interaction_spool_best_effort(&repo_root);
+            eprintln!("Context compaction: transcript offset reset");
+            return Ok(());
         }
         Ok(None) => {}
         Err(err) => {
@@ -74,7 +94,7 @@ pub fn handle_lifecycle_compaction(
             event_type: InteractionEventType::Compaction,
             event_time: now_rfc3339(),
             agent_type: String::new(),
-            model: event.model.clone(),
+            model: resolve_interaction_model(&event.model, &event.session_ref),
             payload: serde_json::Value::Object(Default::default()),
         })
     {
@@ -111,13 +131,19 @@ pub fn handle_lifecycle_session_end(
         state.last_interaction_time = Some(ended_at.clone());
         backend.save_session(&state)?;
     }
+    let transcript_path = maybe_state
+        .as_ref()
+        .map(|state| state.transcript_path.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(event.session_ref.as_str());
+    let model = resolve_interaction_model(&event.model, transcript_path);
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
         let session = maybe_state
             .map(|state| InteractionSession {
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
                 agent_type: state.agent_type.clone(),
-                model: event.model.clone(),
+                model: model.clone(),
                 first_prompt: state.first_prompt.clone(),
                 transcript_path: state.transcript_path.clone(),
                 worktree_path: state.worktree_path.clone(),
@@ -130,7 +156,7 @@ pub fn handle_lifecycle_session_end(
             .unwrap_or(InteractionSession {
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
-                model: event.model.clone(),
+                model: model.clone(),
                 ended_at: Some(ended_at.clone()),
                 last_event_at: ended_at.clone(),
                 updated_at: ended_at.clone(),
@@ -147,7 +173,7 @@ pub fn handle_lifecycle_session_end(
             event_type: InteractionEventType::SessionEnd,
             event_time: ended_at.clone(),
             agent_type: session.agent_type.clone(),
-            model: event.model.clone(),
+            model,
             payload: serde_json::Value::Object(Default::default()),
         }) {
             eprintln!("[bitloops] Warning: failed to spool session_end event: {err}");
@@ -172,7 +198,7 @@ pub fn handle_lifecycle_subagent_start(
             event_type: InteractionEventType::SubagentStart,
             event_time: now_rfc3339(),
             agent_type: String::new(),
-            model: event.model.clone(),
+            model: resolve_interaction_model(&event.model, &event.session_ref),
             payload: serde_json::json!({
                 "subagent_id": event.subagent_id,
                 "tool_use_id": event.tool_use_id,
@@ -200,7 +226,7 @@ pub fn handle_lifecycle_subagent_end(
             event_type: InteractionEventType::SubagentEnd,
             event_time: now_rfc3339(),
             agent_type: String::new(),
-            model: event.model.clone(),
+            model: resolve_interaction_model(&event.model, &event.session_ref),
             payload: serde_json::json!({
                 "subagent_id": event.subagent_id,
                 "tool_use_id": event.tool_use_id,

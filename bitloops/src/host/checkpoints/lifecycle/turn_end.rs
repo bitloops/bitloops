@@ -17,6 +17,7 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::interactions::model::resolve_interaction_model_from_bytes;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::transcript_fragment::{
     transcript_fragment_from_bytes, transcript_position_from_bytes,
@@ -249,6 +250,7 @@ pub fn handle_lifecycle_turn_end(
         transcript_offset,
         new_transcript_position,
     );
+    let model = resolve_interaction_model_from_bytes(&event.model, &transcript_data);
 
     if let Some(spool) = resolve_interaction_spool(&repo_root) {
         let session = session_before_capture
@@ -257,7 +259,7 @@ pub fn handle_lifecycle_turn_end(
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
                 agent_type: state.agent_type.clone(),
-                model: event.model.clone(),
+                model: model.clone(),
                 first_prompt: state.first_prompt.clone(),
                 transcript_path: state.transcript_path.clone(),
                 worktree_path: state.worktree_path.clone(),
@@ -275,7 +277,7 @@ pub fn handle_lifecycle_turn_end(
                 session_id: session_id.clone(),
                 repo_id: spool.repo_id().to_string(),
                 agent_type: ctx.agent_type.clone(),
-                model: event.model.clone(),
+                model: model.clone(),
                 first_prompt: last_prompt.clone(),
                 transcript_path: event.session_ref.clone(),
                 worktree_path: repo_root.to_string_lossy().to_string(),
@@ -299,7 +301,7 @@ pub fn handle_lifecycle_turn_end(
                 .cloned()
                 .unwrap_or_else(|| last_prompt.clone()),
             agent_type: ctx.agent_type.clone(),
-            model: event.model.clone(),
+            model: model.clone(),
             started_at: session_before_capture
                 .as_ref()
                 .and_then(|state| {
@@ -333,7 +335,7 @@ pub fn handle_lifecycle_turn_end(
             event_type: InteractionEventType::TurnEnd,
             event_time: interaction_now.clone(),
             agent_type: ctx.agent_type.clone(),
-            model: event.model.clone(),
+            model,
             payload: serde_json::json!({
                 "files_modified": all_files,
                 "files_count": all_files.len(),

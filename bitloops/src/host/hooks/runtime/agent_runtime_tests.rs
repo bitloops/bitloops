@@ -115,6 +115,26 @@ fn interaction_turn_fragment(repo_root: &Path) -> String {
     .expect("read interaction turn transcript_fragment")
 }
 
+fn interaction_session_model(repo_root: &Path, session_id: &str) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_sessions WHERE session_id = ?1 ORDER BY updated_at DESC LIMIT 1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .expect("read interaction session model")
+}
+
+fn interaction_turn_model(repo_root: &Path, session_id: &str) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_turns WHERE session_id = ?1 ORDER BY updated_at DESC LIMIT 1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn model")
+}
+
 fn interaction_turn_end_payload(repo_root: &Path) -> serde_json::Value {
     let conn = open_events_duckdb(repo_root);
     let payload: String = conn
@@ -132,6 +152,7 @@ fn write_claude_write_transcript(path: &Path, file_path: &str) {
         "type":"assistant",
         "uuid":"a1",
         "message":{
+            "model":"claude-opus-4-1",
             "content":[
                 {
                     "type":"tool_use",
@@ -489,7 +510,7 @@ fn claude_stop_persists_transcript_fragment_in_event_store() {
     fs::write(
         &transcript_path,
         "{\"type\":\"user\",\"message\":{\"content\":\"Update tracked file\"}}\n\
-{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Implemented the change\"}]}}\n",
+{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-1\",\"content\":[{\"type\":\"text\",\"text\":\"Implemented the change\"}]}}\n",
     )
     .unwrap();
 
@@ -516,6 +537,14 @@ fn claude_stop_persists_transcript_fragment_in_event_store() {
         payload["transcript_fragment"].as_str().unwrap_or_default(),
         transcript_fragment,
         "turn_end event payload should mirror the persisted transcript fragment"
+    );
+    assert_eq!(
+        interaction_session_model(dir.path(), "claude-fragment"),
+        "claude-opus-4-1"
+    );
+    assert_eq!(
+        interaction_turn_model(dir.path(), "claude-fragment"),
+        "claude-opus-4-1"
     );
 }
 
