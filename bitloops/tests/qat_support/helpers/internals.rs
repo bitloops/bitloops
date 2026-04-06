@@ -317,7 +317,7 @@ fn repo_has_head(world: &QatWorld) -> Result<bool> {
     let output = run_command_capture(
         world,
         "git rev-parse HEAD",
-        build_git_command(world.repo_dir(), &["rev-parse", "--verify", "HEAD"], &[]),
+        build_git_command(world, &["rev-parse", "--verify", "HEAD"], &[]),
     )?;
     Ok(output.status.success())
 }
@@ -667,7 +667,7 @@ fn run_git_success(
     env: &[(&str, OsString)],
     label: &str,
 ) -> Result<()> {
-    let output = run_command_capture(world, label, build_git_command(world.repo_dir(), args, env))?;
+    let output = run_command_capture(world, label, build_git_command(world, args, env))?;
     ensure_success(&output, label)
 }
 
@@ -710,9 +710,21 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
     Ok(command)
 }
 
-fn build_git_command(repo_dir: &Path, args: &[&str], env: &[(&str, OsString)]) -> Command {
+fn build_git_command(world: &QatWorld, args: &[&str], env: &[(&str, OsString)]) -> Command {
     let mut command = Command::new("git");
-    command.args(args).current_dir(repo_dir);
+    command.args(args).current_dir(world.repo_dir());
+
+    if let Some(binary_dir) = world.run_config().binary_path.parent() {
+        let mut paths = Vec::new();
+        paths.push(binary_dir.to_path_buf());
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+            command.env("PATH", joined);
+        }
+    }
+
     for (key, value) in env {
         command.env(key, value);
     }

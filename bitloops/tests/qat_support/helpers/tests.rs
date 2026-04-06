@@ -1,4 +1,9 @@
 use super::*;
+use std::ffi::OsStr;
+use std::fs;
+use std::sync::Arc;
+
+use crate::qat_support::world::QatRunConfig;
 
 #[test]
 fn sanitize_name_normalizes_user_input() {
@@ -120,4 +125,38 @@ fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
         args,
         vec!["init", "--agent", "codex", "--sync=true", "--force"]
     );
+}
+
+#[test]
+fn build_git_command_prepends_qat_binary_dir_to_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let mut world = QatWorld::default();
+    world.repo_dir = Some(repo_dir.clone());
+    world.run_config = Some(Arc::new(QatRunConfig {
+        binary_path: bin_dir.join("bitloops"),
+        suite_root,
+    }));
+
+    let command = build_git_command(&world, &["status"], &[]);
+    let path_value = command
+        .get_envs()
+        .find_map(|(key, value)| {
+            if key == OsStr::new("PATH") {
+                value.map(|v| v.to_os_string())
+            } else {
+                None
+            }
+        })
+        .expect("build_git_command should set PATH");
+
+    let mut paths = std::env::split_paths(&path_value);
+    let first = paths.next().expect("PATH should have at least one entry");
+    assert_eq!(first, bin_dir);
 }

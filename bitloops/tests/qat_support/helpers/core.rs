@@ -176,7 +176,7 @@ pub fn run_clean_start(world: &mut QatWorld, flow_name: &str) -> Result<()> {
     let init_output = run_command_capture(
         world,
         "git init",
-        build_git_command(world.repo_dir(), &["init", "-q"], &[]),
+        build_git_command(world, &["init", "-q"], &[]),
     )?;
     ensure_success(&init_output, "git init")?;
     configure_git_identity(world)?;
@@ -443,7 +443,13 @@ pub fn run_bitloops_uninstall_hooks(world: &mut QatWorld, repo_name: &str) -> Re
     ensure_bitloops_repo_name(repo_name)?;
     run_bitloops_success(
         world,
-        &["uninstall", "--agent-hooks", "--git-hooks", "--only-current-project", "-f"],
+        &[
+            "uninstall",
+            "--agent-hooks",
+            "--git-hooks",
+            "--only-current-project",
+            "-f",
+        ],
         "bitloops uninstall --agent-hooks --git-hooks",
     )
 }
@@ -689,11 +695,19 @@ pub fn assert_agent_hooks_installed(
             );
         }
         "copilot" => {
-            let path = world.repo_dir().join(".github").join("hooks").join("bitloops.json");
+            let path = world
+                .repo_dir()
+                .join(".github")
+                .join("hooks")
+                .join("bitloops.json");
             ensure!(path.exists(), "expected {}", path.display());
         }
         "open-code" => {
-            let path = world.repo_dir().join(".opencode").join("plugins").join("bitloops.ts");
+            let path = world
+                .repo_dir()
+                .join(".opencode")
+                .join("plugins")
+                .join("bitloops.ts");
             ensure!(path.exists(), "expected {}", path.display());
         }
         other => bail!("unsupported agent for hook assertion: {other}"),
@@ -815,7 +829,7 @@ pub fn resolve_head_sha(world: &QatWorld) -> Result<String> {
     let output = run_command_capture(
         world,
         "git rev-parse HEAD",
-        build_git_command(world.repo_dir(), &["rev-parse", "HEAD"], &[]),
+        build_git_command(world, &["rev-parse", "HEAD"], &[]),
     )?;
     ensure_success(&output, "git rev-parse HEAD")?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -950,7 +964,11 @@ pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<
     ensure_success(&output, "bitloops devql sync --status")
 }
 
-pub fn run_devql_sync_with_flags(world: &mut QatWorld, repo_name: &str, flags: &[&str]) -> Result<()> {
+pub fn run_devql_sync_with_flags(
+    world: &mut QatWorld,
+    repo_name: &str,
+    flags: &[&str],
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let mut args = vec!["devql", "sync"];
     args.extend_from_slice(flags);
@@ -1006,8 +1024,7 @@ pub fn delete_rust_source_file(world: &QatWorld) -> Result<()> {
     ];
     for path in &candidates {
         if path.exists() {
-            fs::remove_file(path)
-                .with_context(|| format!("deleting {}", path.display()))?;
+            fs::remove_file(path).with_context(|| format!("deleting {}", path.display()))?;
             return Ok(());
         }
     }
@@ -1019,7 +1036,7 @@ pub fn commit_without_hooks(world: &mut QatWorld) -> Result<()> {
     let diff_output = run_command_capture(
         world,
         "git diff --cached --quiet",
-        build_git_command(world.repo_dir(), &["diff", "--cached", "--quiet"], &[]),
+        build_git_command(world, &["diff", "--cached", "--quiet"], &[]),
     )?;
     let diff_code = diff_output.status.code().unwrap_or_default();
     let mut args = vec!["commit", "-m", "QAT change (no hooks)"];
@@ -1035,13 +1052,18 @@ pub fn stage_changes_without_committing(world: &QatWorld) -> Result<()> {
     let output = run_command_capture(
         world,
         "git add -A (stage only)",
-        build_git_command(world.repo_dir(), &["add", "-A"], &[]),
+        build_git_command(world, &["add", "-A"], &[]),
     )?;
     ensure_success(&output, "git add -A (stage only)")
 }
 
 pub fn simulate_git_pull_with_changes(world: &mut QatWorld) -> Result<()> {
-    run_git_success(world, &["checkout", "-b", "qat-remote-changes"], &[], "git checkout -b qat-remote-changes")?;
+    run_git_success(
+        world,
+        &["checkout", "-b", "qat-remote-changes"],
+        &[],
+        "git checkout -b qat-remote-changes",
+    )?;
     let file_path = world.repo_dir().join("src").join("utils.rs");
     fs::write(
         &file_path,
@@ -1049,15 +1071,41 @@ pub fn simulate_git_pull_with_changes(world: &mut QatWorld) -> Result<()> {
     )
     .with_context(|| format!("writing {}", file_path.display()))?;
     run_git_success(world, &["add", "-A"], &[], "git add -A")?;
-    run_git_success(world, &["commit", "-m", "feat: add utils module from remote"], &[], "git commit utils")?;
-    run_git_success(world, &["checkout", "-"], &[], "git checkout previous branch")?;
-    run_git_success(world, &["merge", "qat-remote-changes", "--no-ff", "-m", "Merge remote changes"], &[], "git merge remote changes")?;
+    run_git_success(
+        world,
+        &["commit", "-m", "feat: add utils module from remote"],
+        &[],
+        "git commit utils",
+    )?;
+    run_git_success(
+        world,
+        &["checkout", "-"],
+        &[],
+        "git checkout previous branch",
+    )?;
+    run_git_success(
+        world,
+        &[
+            "merge",
+            "qat-remote-changes",
+            "--no-ff",
+            "-m",
+            "Merge remote changes",
+        ],
+        &[],
+        "git merge remote changes",
+    )?;
     capture_head_sha(world)?;
     Ok(())
 }
 
 pub fn create_branch_with_additional_files(world: &mut QatWorld) -> Result<()> {
-    run_git_success(world, &["checkout", "-b", "qat-feature-branch"], &[], "git checkout -b qat-feature-branch")?;
+    run_git_success(
+        world,
+        &["checkout", "-b", "qat-feature-branch"],
+        &[],
+        "git checkout -b qat-feature-branch",
+    )?;
     let file_path = world.repo_dir().join("src").join("config.rs");
     fs::write(
         &file_path,
@@ -1086,7 +1134,12 @@ pub fn parse_sync_summary_field(stdout: &str, field: &str) -> Option<usize> {
     for segment in stdout.split([',', '(', ')']) {
         let trimmed = segment.trim();
         if let Some(rest) = trimmed.strip_suffix(field) {
-            let number_str = rest.trim().rsplit(' ').next().unwrap_or("").trim_end_matches(':');
+            let number_str = rest
+                .trim()
+                .rsplit(' ')
+                .next()
+                .unwrap_or("")
+                .trim_end_matches(':');
             if let Ok(value) = number_str.parse::<usize>() {
                 return Some(value);
             }
@@ -1113,7 +1166,7 @@ pub fn commit_for_relative_day_for_repo(
     let diff_output = run_command_capture(
         world,
         "git diff --cached --quiet",
-        build_git_command(world.repo_dir(), &["diff", "--cached", "--quiet"], &env),
+        build_git_command(world, &["diff", "--cached", "--quiet"], &env),
     )?;
 
     let diff_code = diff_output.status.code().unwrap_or_default();
@@ -1265,11 +1318,7 @@ pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
     let output = run_command_capture(
         world,
         "git log timeline",
-        build_git_command(
-            world.repo_dir(),
-            &["log", "--pretty=format:%s|%aI", "-n", "30"],
-            &[],
-        ),
+        build_git_command(world, &["log", "--pretty=format:%s|%aI", "-n", "30"], &[]),
     )?;
     ensure_success(&output, "git log timeline")?;
     let log = String::from_utf8_lossy(&output.stdout);
