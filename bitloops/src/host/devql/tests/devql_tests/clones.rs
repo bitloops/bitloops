@@ -450,6 +450,7 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_clone_candidate_fixture(
     conn: &rusqlite::Connection,
     repo_id: &str,

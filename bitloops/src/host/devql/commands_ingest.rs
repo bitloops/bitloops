@@ -377,14 +377,14 @@ pub(crate) async fn execute_ingest_with_observer(
         log::warn!("semantic_clones embeddings degraded; skipping embedding and clone stages: {warning}");
     }
 
-    if enrichment.is_none() && embedding_provider.is_some() {
+    if let (None, Some(embedding_provider)) = (enrichment.as_ref(), embedding_provider.as_ref()) {
         match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
             RepoEmbeddingSyncAction::RefreshCurrentRepo => {
                 let refresh = refresh_current_repo_symbol_embeddings_and_clone_edges(
                     &relational,
                     &cfg.repo_root,
                     &cfg.repo.repo_id,
-                    embedding_provider.expect("embedding provider exists for refresh"),
+                    Arc::clone(embedding_provider),
                 )
                 .await?;
                 counters.symbol_embedding_rows_upserted += refresh.embedding_stats.upserted;
@@ -396,11 +396,9 @@ pub(crate) async fn execute_ingest_with_observer(
                 if matches!(
                     direct_embedding_sync_action,
                     Some(RepoEmbeddingSyncAction::AdoptExisting)
-                ) {
-                    if let Some(setup) = resolved_embedding_setup.as_ref() {
-                        persist_active_embedding_setup(&relational, &cfg.repo.repo_id, setup)
-                            .await?;
-                    }
+                ) && let Some(setup) = resolved_embedding_setup.as_ref()
+                {
+                    persist_active_embedding_setup(&relational, &cfg.repo.repo_id, setup).await?;
                 }
 
                 let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;

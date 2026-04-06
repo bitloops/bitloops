@@ -481,7 +481,6 @@ fn hash_by_symbol(rows: &[CurrentEmbeddingRow]) -> BTreeMap<String, String> {
 
 async fn run_direct_ingest_with_env(
     repo_root: &Path,
-    init: bool,
     max_checkpoints: usize,
     profile_name: &str,
     provider_name: &str,
@@ -513,14 +512,14 @@ async fn run_direct_ingest_with_env(
         ],
     );
     let cfg = semantic_ingest_test_cfg_for_repo(repo_root);
+    execute_init_schema(&cfg, "direct ingest test")
+        .await
+        .expect("initialise devql schema for direct ingest test");
     let backends = resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config for direct ingest test");
     let relational = RelationalStorage::connect(&cfg, &backends.relational, "direct ingest test")
         .await
         .expect("connect relational storage for direct ingest test");
-    init_relational_schema(&cfg, &relational)
-        .await
-        .expect("initialise relational schema for direct ingest test");
     execute_sync(
         &cfg,
         &relational,
@@ -545,7 +544,7 @@ async fn run_direct_ingest_with_env(
         dimension.parse::<usize>().expect("parse dimension")
     );
 
-    execute_ingest_with_observer(&cfg, init, max_checkpoints, None, None)
+    execute_ingest_with_observer(&cfg, max_checkpoints, None, None)
         .await
         .expect("execute direct ingest")
 }
@@ -556,7 +555,6 @@ async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
 
     let summary = run_direct_ingest_with_env(
         repo.path(),
-        true,
         10,
         "alpha",
         "local_fastembed",
@@ -603,21 +601,12 @@ async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
     let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
 
-    run_direct_ingest_with_env(
-        repo.path(),
-        true,
-        10,
-        "alpha",
-        "local_fastembed",
-        "model-a",
-        "3",
-    )
-    .await;
+    run_direct_ingest_with_env(repo.path(), 10, "alpha", "local_fastembed", "model-a", "3").await;
     let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let first_hashes = hash_by_symbol(&first_rows);
 
     let second =
-        run_direct_ingest_with_env(repo.path(), false, 1, "alpha", "voyage", "model-b", "3").await;
+        run_direct_ingest_with_env(repo.path(), 1, "alpha", "voyage", "model-b", "3").await;
     let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let second_hashes = hash_by_symbol(&second_rows);
     let active_setup =
@@ -659,7 +648,6 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
 
     run_direct_ingest_with_env(
         repo.path(),
-        true,
         10,
         "alpha",
         "local_fastembed",
@@ -672,7 +660,6 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
 
     let second = run_direct_ingest_with_env(
         repo.path(),
-        false,
         1,
         "beta",
         "local_fastembed",
@@ -741,7 +728,6 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
 
     run_direct_ingest_with_env(
         repo.path(),
-        true,
         10,
         "alpha",
         "local_fastembed",
@@ -754,7 +740,6 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
 
     let second = run_direct_ingest_with_env(
         repo.path(),
-        false,
         1,
         "alpha",
         "local_fastembed",
