@@ -82,7 +82,6 @@ async-graphql-axum = "7"
 axum = "0.8"
 env_logger = "0.11"
 figlet-rs = "1.0.0"
-cucumber = "0.22.1"
 log = "0.4"
 notify = "8.2.0"
 clap = { version = "4", features = ["derive"] }
@@ -115,7 +114,6 @@ duckdb = { version = "1", default-features = false }
 object_store = { version = "0.13.2", features = ["aws", "gcp"] }
 walkdir = "2.5"
 chrono = { version = "0.4", default-features = true, features = ["clock"] }
-time = { version = "0.3", features = ["formatting", "macros"] }
 rustls = "0.23"
 tokio-rustls = "0.26"
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
@@ -133,6 +131,7 @@ libc = "0.2"
 cucumber = "0.22.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

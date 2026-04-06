@@ -39,16 +39,21 @@ fn find_available_port() -> Result<u16> {
         && let Ok(port) = raw.trim().parse::<u16>()
         && port > 1024
     {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).with_context(|| {
+            format!("configured BITLOOPS_QAT_DAEMON_PORT {port} is not available on 127.0.0.1")
+        })?;
+        drop(listener);
         return Ok(port);
     }
 
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("reading unix timestamp for qat daemon port")?
-        .as_nanos();
-    let pid = u128::from(std::process::id());
-    let offset = ((nanos + pid) % 20_000) as u16;
-    Ok(30_000 + offset)
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("binding ephemeral localhost port for qat daemon")?;
+    let port = listener
+        .local_addr()
+        .context("reading ephemeral localhost port for qat daemon")?
+        .port();
+    drop(listener);
+    Ok(port)
 }
 
 pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {

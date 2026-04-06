@@ -32,6 +32,19 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     )
     .with_context(|| format!("writing latest qat pointer in {}", runs_root.display()))?;
 
+    let suite_binary = suite_root.join(
+        binary_path
+            .file_name()
+            .context("binary path has no file name")?,
+    );
+    fs::copy(&binary_path, &suite_binary).with_context(|| {
+        format!(
+            "copying binary {} -> {}",
+            binary_path.display(),
+            suite_binary.display()
+        )
+    })?;
+
     println!(
         "Running Bitloops QAT features from {}",
         feature_path.display()
@@ -39,7 +52,7 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     println!("Artifacts will be written to {}", suite_root.display());
 
     let config = Arc::new(QatRunConfig {
-        binary_path,
+        binary_path: suite_binary,
         suite_root: suite_root.clone(),
     });
 
