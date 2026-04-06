@@ -53,15 +53,13 @@ pub(crate) fn aggregate_turn_transcript_bounds(
     }
 }
 
-pub(crate) fn turns_overlap_committed_files(
-    turns: &[InteractionTurn],
+pub(crate) fn turn_overlaps_committed_files(
+    turn: &InteractionTurn,
     committed_files: &std::collections::HashSet<String>,
 ) -> bool {
-    turns.iter().any(|turn| {
-        turn.files_modified
-            .iter()
-            .any(|file| committed_files.contains(file))
-    })
+    turn.files_modified
+        .iter()
+        .any(|file| committed_files.contains(file))
 }
 
 #[cfg(test)]

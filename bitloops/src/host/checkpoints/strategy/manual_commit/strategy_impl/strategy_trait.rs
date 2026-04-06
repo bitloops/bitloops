@@ -534,10 +534,15 @@ impl ManualCommitStrategy {
                         .then_with(|| left.started_at.cmp(&right.started_at))
                         .then_with(|| left.turn_id.cmp(&right.turn_id))
                 });
-                if !turns_overlap_committed_files(&session_turns, committed_files_set) {
+                let contributing_turns = session_turns
+                    .iter()
+                    .filter(|turn| turn_overlaps_committed_files(turn, committed_files_set))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if contributing_turns.is_empty() {
                     continue;
                 }
-                let session_turn_ids: Vec<String> = session_turns
+                let session_turn_ids: Vec<String> = contributing_turns
                     .iter()
                     .map(|turn| turn.turn_id.clone())
                     .collect();
@@ -564,31 +569,51 @@ impl ManualCommitStrategy {
                             "missing interaction session for overlapping interaction turns ({session_context})"
                         )
                     })?;
+                let latest_session_tree_hash =
+                    latest_temporary_checkpoint_tree_hash(&self.repo_root, &session_id);
 
-                let turn_ids = self.condense_interaction_session(
+                self.condense_interaction_session(
                     &interaction_session,
-                    &session_turns,
+                    &contributing_turns,
                     &checkpoint_id,
                     head,
                     committed_files_set,
                 )?;
-                interaction_repository
-                    .assign_checkpoint_to_turns(
-                        &turn_ids,
-                        &checkpoint_id,
-                        &checkpoint_assigned_at,
-                    )
-                    .with_context(|| {
-                        format!(
-                            "assigning checkpoint `{checkpoint_id}` to interaction turns for session `{session_id}` ({session_context})"
-                        )
-                    })?;
-                if let Some(spool) = interaction_spool {
-                    spool.assign_checkpoint_to_turns(
-                        &turn_ids,
-                        &checkpoint_id,
-                        &checkpoint_assigned_at,
-                    )?;
+
+                for turn in contributing_turns {
+                    let remaining_files = files_with_remaining_agent_changes_from_tree(
+                        &self.repo_root,
+                        latest_session_tree_hash.as_deref(),
+                        head,
+                        &turn.files_modified,
+                        committed_files_set,
+                    );
+                    let mut updated_turn = turn.clone();
+                    updated_turn.updated_at = checkpoint_assigned_at.clone();
+
+                    if remaining_files.is_empty() {
+                        updated_turn.checkpoint_id = Some(checkpoint_id.clone());
+                    } else {
+                        updated_turn.files_modified = remaining_files;
+                        updated_turn.checkpoint_id = None;
+                    }
+
+                    interaction_repository
+                        .upsert_turn(&updated_turn)
+                        .with_context(|| {
+                            format!(
+                                "updating checkpoint progress for interaction turn `{}` in session `{session_id}` ({session_context})",
+                                updated_turn.turn_id
+                            )
+                        })?;
+                    if let Some(spool) = interaction_spool {
+                        spool.record_turn(&updated_turn).with_context(|| {
+                            format!(
+                                "mirroring checkpoint progress for interaction turn `{}` into the local spool ({session_context})",
+                                updated_turn.turn_id
+                            )
+                        })?;
+                    }
                 }
 
                 condensed_any_session = true;

@@ -292,12 +292,7 @@ pub fn handle_lifecycle_subagent_end(
         }
 
         if total_changes > 0 {
-            let registry =
-                crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
-            let strategy = registry.get(
-                crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
-                &repo_root,
-            )?;
+            let strategy = super::resolve_configured_strategy(&repo_root)?;
             strategy.save_task_step(&TaskStepContext {
                 session_id: event.session_id.clone(),
                 tool_use_id: event.tool_use_id.clone(),
@@ -365,11 +360,7 @@ pub fn handle_lifecycle_todo_checkpoint(
         }
     }
 
-    let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
-    let strategy = registry.get(
-        crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
-        &repo_root,
-    )?;
+    let strategy = super::resolve_configured_strategy(&repo_root)?;
     strategy.save_task_step(&TaskStepContext {
         session_id: event.session_id.clone(),
         tool_use_id: task_tool_use_id.clone(),

@@ -325,7 +325,7 @@ impl ManualCommitStrategy {
         checkpoint_id: &str,
         new_head: &str,
         committed_files: &std::collections::HashSet<String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<()> {
         let turn_ids: Vec<String> = turns.iter().map(|turn| turn.turn_id.clone()).collect();
         let session_files = aggregate_turn_files(turns);
         let committed_touched: Vec<String> = session_files
@@ -552,7 +552,7 @@ impl ManualCommitStrategy {
         );
         eprintln!("[bitloops] Condensed interaction session ({context})");
 
-        Ok(turn_ids)
+        Ok(())
     }
 
     /// Updates `base_commit` to HEAD for all active sessions.

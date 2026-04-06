@@ -1,6 +1,10 @@
 //! Checkpoint session hook lifecycle: parsing hook stdin, dispatching events, and persisting
 //! session / interaction state across agent families.
 
+use std::path::Path;
+
+use anyhow::Result;
+
 mod adapter;
 pub(crate) mod canonical;
 mod capture;
@@ -30,6 +34,18 @@ pub use types::{
     LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy, UNKNOWN_SESSION_ID,
     apply_session_id_policy,
 };
+
+pub(crate) fn resolve_configured_strategy(
+    repo_root: &Path,
+) -> Result<Box<dyn crate::host::checkpoints::strategy::Strategy>> {
+    let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
+    let strategy_name = crate::config::settings::load_settings(repo_root)
+        .map(|settings| settings.strategy)
+        .unwrap_or_else(|_| {
+            crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT.to_string()
+        });
+    registry.get(&strategy_name, repo_root)
+}
 
 #[cfg(test)]
 mod lifecycle_tests;

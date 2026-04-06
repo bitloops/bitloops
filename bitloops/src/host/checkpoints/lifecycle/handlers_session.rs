@@ -172,11 +172,7 @@ pub fn handle_lifecycle_turn_start(
     };
     backend.save_pre_prompt(&pre_prompt)?;
 
-    let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
-    let strategy = registry.get(
-        crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
-        &repo_root,
-    )?;
+    let strategy = super::resolve_configured_strategy(&repo_root)?;
     if let Err(err) = strategy.initialize_session(
         &session_id,
         agent.agent_name(),

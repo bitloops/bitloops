@@ -242,6 +242,7 @@ pub fn handle_lifecycle_turn_end(
         .chain(ctx.deleted_files.iter())
         .cloned()
         .collect();
+    let total_changes = all_files.len();
     let token_meta = ctx.token_usage.as_ref().map(|t| {
         crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
             input_tokens: t.input_tokens.max(0) as u64,
@@ -359,12 +360,10 @@ pub fn handle_lifecycle_turn_end(
     }
     flush_interaction_spool_best_effort(&repo_root);
 
-    let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
-    let strategy = registry.get(
-        crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
-        &repo_root,
-    )?;
-    strategy.save_step(&ctx)?;
+    if total_changes > 0 {
+        let strategy = super::resolve_configured_strategy(&repo_root)?;
+        strategy.save_step(&ctx)?;
+    }
 
     if let Ok(Some(mut state)) = backend.load_session(&session_id) {
         let context = SessionTransitionContext {
