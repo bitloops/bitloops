@@ -223,8 +223,8 @@ fn map_runtime_state(state: &RuntimeSessionState) -> SessionState {
             RuntimeSessionPhase::Ended => SessionPhase::Ended,
             RuntimeSessionPhase::Idle => SessionPhase::Idle,
         },
-        step_count: state.step_count as i32,
-        files_touched_count: state.files_touched.len() as i32,
+        step_count: state.pending.step_count as i32,
+        files_touched_count: state.pending.files_touched.len() as i32,
         last_interaction_time: state
             .last_interaction_time
             .as_deref()
@@ -468,7 +468,7 @@ fn can_delete_shadow_branch(
         if state.session_id == exclude_session_id {
             continue;
         }
-        if state.step_count == 0 {
+        if state.pending.step_count == 0 {
             continue;
         }
         let expected = shadow_branch_name_for_commit(&state.base_commit, &state.worktree_id);

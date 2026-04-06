@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
+use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
+
+use super::diff_collector::SyncDiffCollector;
 use super::progress::{SyncObserver, SyncProgressPhase, emit_progress};
 use super::shared::{
     is_missing_sync_schema_error, load_stored_manifest_for_paths, requested_paths,
@@ -34,12 +37,22 @@ pub async fn run_sync_with_summary_and_observer(
     mode: sync::types::SyncMode,
     observer: Option<&dyn SyncObserver>,
 ) -> Result<SyncSummary> {
+    let (summary, _file_diff, _artefact_diff) =
+        run_sync_with_summary_and_observer_and_diffs(cfg, mode, observer).await?;
+    Ok(summary)
+}
+
+pub async fn run_sync_with_summary_and_observer_and_diffs(
+    cfg: &DevqlConfig,
+    mode: sync::types::SyncMode,
+    observer: Option<&dyn SyncObserver>,
+) -> Result<(SyncSummary, SyncFileDiff, SyncArtefactDiff)> {
     let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for `devql sync`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql sync").await?;
     if matches!(mode, sync::types::SyncMode::Validate) {
         return match execute_sync_validation(cfg, &relational).await {
-            Ok(summary) => Ok(summary),
+            Ok(summary) => Ok((summary, SyncFileDiff::default(), SyncArtefactDiff::default())),
             Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
                 "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync --validate`.",
             ),
@@ -47,8 +60,11 @@ pub async fn run_sync_with_summary_and_observer(
         };
     }
 
-    match execute_sync_with_observer(cfg, &relational, mode, observer).await {
-        Ok(summary) => Ok(summary),
+    match execute_sync_with_observer_and_stats_and_diffs(cfg, &relational, mode, observer).await {
+        Ok((summary, stats, file_diff, artefact_diff)) => {
+            stats.log(&cfg.repo.repo_id, &summary.mode);
+            Ok((summary, file_diff, artefact_diff))
+        }
         Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
             "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync`.",
         ),
@@ -91,6 +107,22 @@ async fn execute_sync_with_observer_and_stats(
     mode: sync::types::SyncMode,
     observer: Option<&dyn SyncObserver>,
 ) -> Result<(SyncSummary, SyncExecutionStats)> {
+    let (summary, stats, _file_diff, _artefact_diff) =
+        execute_sync_with_observer_and_stats_and_diffs(cfg, relational, mode, observer).await?;
+    Ok((summary, stats))
+}
+
+pub(crate) async fn execute_sync_with_observer_and_stats_and_diffs(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    mode: sync::types::SyncMode,
+    observer: Option<&dyn SyncObserver>,
+) -> Result<(
+    SyncSummary,
+    SyncExecutionStats,
+    SyncFileDiff,
+    SyncArtefactDiff,
+)> {
     let (parser_version, extractor_version) = resolve_pack_versions()?;
     let _lock =
         sync::lock::SyncLock::acquire(&cfg.config_root).context("acquiring DevQL sync lock")?;
@@ -119,7 +151,7 @@ async fn execute_sync_with_observer_and_stats(
     )
     .await
     {
-        Ok((summary, stats)) => {
+        Ok((summary, stats, file_diff, artefact_diff)) => {
             sync::lock::write_sync_completed(
                 relational,
                 &cfg.repo.repo_id,
@@ -130,7 +162,7 @@ async fn execute_sync_with_observer_and_stats(
                 &summary.extractor_version,
             )
             .await?;
-            Ok((summary, stats))
+            Ok((summary, stats, file_diff, artefact_diff))
         }
         Err(err) => {
             if let Err(write_err) =
@@ -153,9 +185,15 @@ async fn execute_sync_inner(
     parser_version: &str,
     extractor_version: &str,
     observer: Option<&dyn SyncObserver>,
-) -> Result<(SyncSummary, SyncExecutionStats)> {
+) -> Result<(
+    SyncSummary,
+    SyncExecutionStats,
+    SyncFileDiff,
+    SyncArtefactDiff,
+)> {
     let mut counters = sync::types::SyncCounters::default();
     let mut stats = SyncExecutionStats::default();
+    let mut diff_collector = SyncDiffCollector::new();
     let requested_paths = requested_paths(mode);
 
     emit_progress(
@@ -217,10 +255,33 @@ async fn execute_sync_inner(
 
     for path in &classified {
         match path.action {
-            sync::types::PathAction::Unchanged => counters.paths_unchanged += 1,
-            sync::types::PathAction::Added => counters.paths_added += 1,
-            sync::types::PathAction::Changed => counters.paths_changed += 1,
-            sync::types::PathAction::Removed => counters.paths_removed += 1,
+            sync::types::PathAction::Unchanged => {
+                counters.paths_unchanged += 1;
+            }
+            sync::types::PathAction::Added => {
+                counters.paths_added += 1;
+                if let Some(desired) = &path.desired {
+                    diff_collector.record_file_added(
+                        path.path.clone(),
+                        desired.language.clone(),
+                        desired.effective_content_id.clone(),
+                    );
+                }
+            }
+            sync::types::PathAction::Changed => {
+                counters.paths_changed += 1;
+                if let Some(desired) = &path.desired {
+                    diff_collector.record_file_changed(
+                        path.path.clone(),
+                        desired.language.clone(),
+                        desired.effective_content_id.clone(),
+                    );
+                }
+            }
+            sync::types::PathAction::Removed => {
+                counters.paths_removed += 1;
+                diff_collector.record_file_removed(path.path.clone());
+            }
         }
     }
 
@@ -271,6 +332,9 @@ async fn execute_sync_inner(
             .remove_paths(&cfg.repo.repo_id, &removals)
             .await
             .context("removing stale paths in SQLite sync writer")?;
+        for artefact in outcome.pre_artefacts.clone() {
+            diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
+        }
         stats.materialisation_total += remove_started.elapsed();
         stats.add_writer_commit(outcome.sqlite_commits, outcome.sqlite_rows_written);
         for path in outcome.removed_paths {
@@ -371,6 +435,7 @@ async fn execute_sync_inner(
                                 &cfg.repo.repo_id,
                                 parser_version.as_str(),
                                 extractor_version.as_str(),
+                                &mut diff_collector,
                                 &mut stats,
                                 observer,
                                 &counters,
@@ -391,6 +456,7 @@ async fn execute_sync_inner(
                             &cfg.repo.repo_id,
                             parser_version.as_str(),
                             extractor_version.as_str(),
+                            &mut diff_collector,
                             &mut stats,
                             observer,
                             &counters,
@@ -440,6 +506,7 @@ async fn execute_sync_inner(
                         &cfg.repo.repo_id,
                         parser_version.as_str(),
                         extractor_version.as_str(),
+                        &mut diff_collector,
                         &mut stats,
                         observer,
                         &counters,
@@ -462,6 +529,7 @@ async fn execute_sync_inner(
         &cfg.repo.repo_id,
         parser_version,
         extractor_version,
+        &mut diff_collector,
         &mut stats,
         observer,
         &counters,
@@ -540,7 +608,8 @@ async fn execute_sync_inner(
         paths_total,
         paths_total,
     );
-    Ok((summary, stats))
+    let (file_diff, artefact_diff) = diff_collector.into_diffs();
+    Ok((summary, stats, file_diff, artefact_diff))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -601,6 +670,7 @@ async fn flush_pending_materialisations(
     repo_id: &str,
     parser_version: &str,
     extractor_version: &str,
+    diff_collector: &mut SyncDiffCollector,
     stats: &mut SyncExecutionStats,
     observer: Option<&dyn SyncObserver>,
     counters: &sync::types::SyncCounters,
@@ -621,6 +691,12 @@ async fn flush_pending_materialisations(
         .flush(repo_id, parser_version, extractor_version)
         .await
         .context("flushing pending SQLite sync materialisations")?;
+    for artefact in outcome.pre_artefacts.clone() {
+        diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
+    }
+    for artefact in outcome.post_artefacts.clone() {
+        diff_collector.record_post_artefacts(artefact.path.clone(), vec![artefact]);
+    }
     let flush_duration = flush_started.elapsed();
     stats.add_writer_commit(outcome.sqlite_commits, outcome.sqlite_rows_written);
     apply_writer_duration(stats, flush_duration, &outcome);

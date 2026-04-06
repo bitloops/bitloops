@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 pub(crate) fn write_session_transcript(
     repo_root: &Path,
@@ -22,8 +23,11 @@ pub(crate) fn idle_state(
         session_id: session_id.to_string(),
         phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
         base_commit: base_commit.to_string(),
-        files_touched,
-        step_count,
+        pending: PendingCheckpointState {
+            files_touched,
+            step_count,
+            ..Default::default()
+        },
         agent_type: "claude-code".to_string(),
         ..Default::default()
     }

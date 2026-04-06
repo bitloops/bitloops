@@ -1,12 +1,26 @@
-use super::*;
+use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command;
+
+#[cfg(test)]
+use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use crate::adapters::agents::claude_code::transcript as claude_transcript;
+use crate::host::checkpoints::transcript::commit_message;
+use crate::utils::{paths, strings};
+
+use super::types::*;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
-pub(super) struct FileChanges {
-    pub(super) modified: Vec<String>,
-    pub(super) new_files: Vec<String>,
-    pub(super) deleted: Vec<String>,
+pub(crate) struct FileChanges {
+    pub(crate) modified: Vec<String>,
+    pub(crate) new_files: Vec<String>,
+    pub(crate) deleted: Vec<String>,
 }
 
 pub(super) fn detect_transcript_modified_files(
@@ -44,7 +58,7 @@ pub(super) fn detect_transcript_modified_files(
 }
 
 /// Change detection from `git status --porcelain`.
-pub(super) fn detect_file_changes(
+pub(crate) fn detect_file_changes(
     repo_root: Option<&Path>,
     previously_untracked: Option<&[String]>,
 ) -> FileChanges {
@@ -269,21 +283,21 @@ pub(super) fn extract_todo_content_from_tool_input(tool_input: Option<&Value>) -
     crate::host::checkpoints::strategy::messages::extract_in_progress_todo(&todos_json)
 }
 
-pub(super) fn count_todos_from_tool_input(tool_input: Option<&Value>) -> usize {
+pub(crate) fn count_todos_from_tool_input(tool_input: Option<&Value>) -> usize {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return 0;
     };
     crate::host::checkpoints::strategy::messages::count_todos(&todos_json)
 }
 
-pub(super) fn extract_last_completed_todo_from_tool_input(tool_input: Option<&Value>) -> String {
+pub(crate) fn extract_last_completed_todo_from_tool_input(tool_input: Option<&Value>) -> String {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return String::new();
     };
     crate::host::checkpoints::strategy::messages::extract_last_completed_todo(&todos_json)
 }
 
-pub(super) fn parse_subagent_type_and_description(tool_input: Option<&Value>) -> (String, String) {
+pub(crate) fn parse_subagent_type_and_description(tool_input: Option<&Value>) -> (String, String) {
     let Some(input) = tool_input else {
         return (String::new(), String::new());
     };
@@ -300,7 +314,7 @@ pub(super) fn parse_subagent_type_and_description(tool_input: Option<&Value>) ->
     (subagent_type, task_description)
 }
 
-pub(super) fn resolve_subagent_transcript_path(
+pub(crate) fn resolve_subagent_transcript_path(
     transcript_path: &str,
     session_id: &str,
     agent_id: &str,
@@ -323,7 +337,7 @@ pub(super) fn resolve_subagent_transcript_path(
     }
 }
 
-pub(super) fn next_incremental_sequence(
+pub(crate) fn next_incremental_sequence(
     repo_root: Option<&Path>,
     session_id: &str,
     task_tool_use_id: &str,
@@ -350,7 +364,7 @@ pub(super) fn truncate_prompt_for_storage(prompt: &str) -> String {
     strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
 }
 
-pub(super) fn generate_commit_message(prompt: &str) -> String {
+pub(crate) fn generate_commit_message(prompt: &str) -> String {
     commit_message::generate_commit_message(prompt)
 }
 
@@ -409,7 +423,7 @@ pub(super) fn is_leap(y: u64) -> bool {
 }
 
 /// Best-effort list of untracked files from `git status --porcelain`.
-pub(super) fn detect_untracked_files(repo_root: Option<&Path>) -> Vec<String> {
+pub(crate) fn detect_untracked_files(repo_root: Option<&Path>) -> Vec<String> {
     let Some(root) = repo_root else {
         return vec![];
     };

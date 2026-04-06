@@ -28,10 +28,7 @@ use crate::adapters::agents::{
 #[cfg(test)]
 use crate::host::checkpoints::checkpoint_id::CHECKPOINT_KEY;
 use crate::host::checkpoints::checkpoint_id::is_valid_checkpoint_id;
-use crate::host::checkpoints::session::phase::{
-    Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,
-    transition_with_context,
-};
+use crate::host::checkpoints::session::phase::SessionPhase;
 use crate::host::checkpoints::session::state::{
     PromptAttribution as SessionPromptAttribution, SessionState,
 };
@@ -90,6 +87,38 @@ impl ManualCommitStrategy {
         let checkpoint_id = generate_checkpoint_id();
         self.condense_session(&mut state, &checkpoint_id, &head)
     }
+}
+
+pub(crate) fn format_post_commit_derivation_context(
+    commit: &str,
+    checkpoint_id: Option<&str>,
+    session_id: Option<&str>,
+    turn_ids: &[String],
+    spool_pending_work: Option<bool>,
+) -> String {
+    let checkpoint_id = checkpoint_id.unwrap_or("-");
+    let session_id = session_id.unwrap_or("-");
+    let spool_pending_work = spool_pending_work
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let turn_ids = if turn_ids.is_empty() {
+        "-".to_string()
+    } else {
+        turn_ids.join(",")
+    };
+
+    format!(
+        "commit={} checkpoint_id={} session_id={} turn_count={} turn_ids={} spool_pending_work={}",
+        commit,
+        checkpoint_id,
+        session_id,
+        turn_ids
+            .split(',')
+            .filter(|id| !id.is_empty() && *id != "-")
+            .count(),
+        turn_ids,
+        spool_pending_work
+    )
 }
 
 #[path = "manual_commit/strategy_helpers.rs"]

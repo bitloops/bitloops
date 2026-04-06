@@ -126,9 +126,10 @@ pub(crate) struct CheckpointArtefactProvenanceRow {
 impl CheckpointArtefactProvenanceRow {
     fn deterministic_id(&self) -> String {
         deterministic_uuid(&format!(
-            "{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}",
             self.repo_id,
             self.checkpoint_id,
+            self.session_id,
             self.change_kind.as_str(),
             self.before_symbol_id.as_deref().unwrap_or(""),
             self.after_symbol_id.as_deref().unwrap_or(""),
@@ -172,9 +173,10 @@ pub(crate) struct CheckpointArtefactLineageRow {
 impl CheckpointArtefactLineageRow {
     fn deterministic_id(&self) -> String {
         deterministic_uuid(&format!(
-            "{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}",
             self.repo_id,
             self.checkpoint_id,
+            self.session_id,
             self.lineage_kind.as_str(),
             self.source_symbol_id,
             self.source_artefact_id,

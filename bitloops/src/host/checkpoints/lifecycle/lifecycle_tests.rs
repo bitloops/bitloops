@@ -30,23 +30,77 @@ use crate::adapters::agents::canonical::{
 
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::phase::SessionPhase;
-use crate::host::checkpoints::session::state::SessionState;
+use crate::host::checkpoints::session::state::{PendingCheckpointState, SessionState};
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Cursor;
+use std::path::Path;
 
 fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
     LifecycleEvent {
         event_type: Some(event_type),
         session_id: String::from("session-123"),
         session_ref: String::from("/tmp/transcript.jsonl"),
+        source: String::new(),
         prompt: String::from("hello"),
+        tool_name: String::new(),
         tool_use_id: String::from("toolu_123"),
+        tool_input: None,
         subagent_id: String::from("subagent-1"),
         model: String::new(),
+        finalize_open_turn: false,
     }
+}
+
+fn open_events_duckdb(repo_root: &Path) -> duckdb::Connection {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve store backends");
+    let path = backends.events.resolve_duckdb_db_path_for_repo(repo_root);
+    duckdb::Connection::open(path).expect("open events duckdb")
+}
+
+fn latest_turn_fragment(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT transcript_fragment FROM interaction_turns ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn transcript_fragment")
+}
+
+fn latest_session_model(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_sessions ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction session model")
+}
+
+fn latest_turn_model(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_turns ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn model")
+}
+
+fn latest_turn_end_payload(repo_root: &Path) -> serde_json::Value {
+    let conn = open_events_duckdb(repo_root);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM interaction_events WHERE event_type = 'turn_end' ORDER BY event_time DESC, event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read turn_end payload");
+    serde_json::from_str(&payload).expect("parse turn_end payload")
 }
 
 #[test]
@@ -116,9 +170,10 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    ensure_test_store_backends(dir.path());
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
-    ensure_test_store_backends(dir.path());
 }
 
 // CLI-866
@@ -324,14 +379,57 @@ fn test_handle_lifecycle_turn_end_empty_repository() {
     });
 }
 
+#[test]
+fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("transcript.jsonl");
+    std::fs::write(
+        &transcript_path,
+        "{\"model\":\"gemini-2.5-pro\",\"messages\":[{\"type\":\"user\",\"content\":\"Update tracked file\"},{\"type\":\"gemini\",\"content\":\"Implemented the change\"}]}",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("tracked.txt"), "changed\n").unwrap();
+
+    let adapter = GeminiCliLifecycleAdapter;
+    let mut event = sample_event(LifecycleEventType::TurnEnd);
+    event.session_id = "fragment-session".to_string();
+    event.session_ref = transcript_path.to_string_lossy().to_string();
+    event.prompt = "Update tracked file".to_string();
+
+    with_cwd(dir.path(), || {
+        handle_lifecycle_turn_end(&adapter, &event).expect("turn end should persist fragment");
+
+        let fragment = latest_turn_fragment(dir.path());
+        assert!(
+            fragment.contains("Implemented the change"),
+            "turn row should persist the completed transcript fragment"
+        );
+
+        let payload = latest_turn_end_payload(dir.path());
+        assert_eq!(
+            payload["transcript_fragment"].as_str().unwrap_or_default(),
+            fragment,
+            "turn_end event payload should mirror the persisted transcript fragment"
+        );
+        assert_eq!(latest_session_model(dir.path()), "gemini-2.5-pro");
+        assert_eq!(latest_turn_model(dir.path()), "gemini-2.5-pro");
+    });
+}
+
 // CLI-869
 #[test]
 fn test_handle_lifecycle_compaction_resets_transcript_offset() {
-    let adapter = ClaudeCodeLifecycleAdapter;
-    let event = sample_event(LifecycleEventType::Compaction);
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
 
-    handle_lifecycle_compaction(&adapter, &event)
-        .expect("compaction should reset transcript offset and succeed");
+    with_cwd(dir.path(), || {
+        let adapter = ClaudeCodeLifecycleAdapter;
+        let event = sample_event(LifecycleEventType::Compaction);
+
+        handle_lifecycle_compaction(&adapter, &event)
+            .expect("compaction should reset transcript offset and succeed");
+    });
 }
 
 #[test]
@@ -345,8 +443,11 @@ fn test_handle_lifecycle_compaction_applies_phase_transition_and_persists_reset(
             .save_session(&SessionState {
                 session_id: "session-compaction".to_string(),
                 phase: SessionPhase::Active,
-                files_touched: vec!["tracked.txt".to_string()],
-                checkpoint_transcript_start: 77,
+                pending: PendingCheckpointState {
+                    files_touched: vec!["tracked.txt".to_string()],
+                    checkpoint_transcript_start: 77,
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .unwrap();
@@ -363,7 +464,7 @@ fn test_handle_lifecycle_compaction_applies_phase_transition_and_persists_reset(
             .unwrap()
             .expect("session should still exist");
         assert_eq!(saved.phase, SessionPhase::Active);
-        assert_eq!(saved.checkpoint_transcript_start, 0);
+        assert_eq!(saved.pending.checkpoint_transcript_start, 0);
         assert!(saved.last_interaction_time.is_some());
     });
 }
@@ -389,7 +490,10 @@ fn test_handle_lifecycle_session_end_marks_session_ended() {
             .save_session(&SessionState {
                 session_id: "copilot-session-end".to_string(),
                 phase: SessionPhase::Active,
-                files_touched: vec!["file.txt".to_string()],
+                pending: PendingCheckpointState {
+                    files_touched: vec!["file.txt".to_string()],
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .unwrap();
@@ -484,68 +588,73 @@ fn test_create_context_file_empty_prompts() {
 // CLI-872
 #[test]
 fn test_dispatch_lifecycle_event_routes_to_correct_handler() {
-    let adapter = ClaudeCodeLifecycleAdapter;
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
 
-    let cases = vec![
-        (
-            "session start empty id",
-            LifecycleEvent {
-                event_type: Some(LifecycleEventType::SessionStart),
-                session_id: String::new(),
-                ..sample_event(LifecycleEventType::SessionStart)
-            },
-            "session_id is required",
-            true,
-        ),
-        (
-            "turn end empty transcript",
-            LifecycleEvent {
-                event_type: Some(LifecycleEventType::TurnEnd),
-                session_ref: String::new(),
-                ..sample_event(LifecycleEventType::TurnEnd)
-            },
-            "transcript file not specified",
-            true,
-        ),
-        (
-            "compaction no-op",
-            sample_event(LifecycleEventType::Compaction),
-            "",
-            false,
-        ),
-        (
-            "session end empty id no-op",
-            LifecycleEvent {
-                event_type: Some(LifecycleEventType::SessionEnd),
-                session_id: String::new(),
-                ..sample_event(LifecycleEventType::SessionEnd)
-            },
-            "",
-            false,
-        ),
-        (
-            "subagent start",
-            sample_event(LifecycleEventType::SubagentStart),
-            "",
-            false,
-        ),
-        (
-            "subagent end",
-            sample_event(LifecycleEventType::SubagentEnd),
-            "",
-            false,
-        ),
-    ];
+    with_cwd(dir.path(), || {
+        let adapter = ClaudeCodeLifecycleAdapter;
 
-    for (name, event, message, should_error) in cases {
-        let result = dispatch_lifecycle_event(Some(&adapter), Some(&event));
-        if should_error {
-            let err = result.expect_err(name);
-            assert!(err.to_string().contains(message), "{name}: {err}");
-        } else {
-            result.expect(name);
+        let cases = vec![
+            (
+                "session start empty id",
+                LifecycleEvent {
+                    event_type: Some(LifecycleEventType::SessionStart),
+                    session_id: String::new(),
+                    ..sample_event(LifecycleEventType::SessionStart)
+                },
+                "session_id is required",
+                true,
+            ),
+            (
+                "turn end empty transcript",
+                LifecycleEvent {
+                    event_type: Some(LifecycleEventType::TurnEnd),
+                    session_ref: String::new(),
+                    ..sample_event(LifecycleEventType::TurnEnd)
+                },
+                "transcript file not specified",
+                true,
+            ),
+            (
+                "compaction no-op",
+                sample_event(LifecycleEventType::Compaction),
+                "",
+                false,
+            ),
+            (
+                "session end empty id no-op",
+                LifecycleEvent {
+                    event_type: Some(LifecycleEventType::SessionEnd),
+                    session_id: String::new(),
+                    ..sample_event(LifecycleEventType::SessionEnd)
+                },
+                "",
+                false,
+            ),
+            (
+                "subagent start",
+                sample_event(LifecycleEventType::SubagentStart),
+                "",
+                false,
+            ),
+            (
+                "subagent end",
+                sample_event(LifecycleEventType::SubagentEnd),
+                "",
+                false,
+            ),
+        ];
+
+        for (name, event, message, should_error) in cases {
+            let result = dispatch_lifecycle_event(Some(&adapter), Some(&event));
+            if should_error {
+                let err = result.expect_err(name);
+                assert!(err.to_string().contains(message), "{name}: {err}");
+            } else {
+                result.expect(name);
+            }
         }
-    }
+    });
 }
 
 // CLI-873
@@ -553,7 +662,7 @@ fn test_dispatch_lifecycle_event_routes_to_correct_handler() {
 fn test_parse_hook_event_session_start_claude() {
     let adapter = ClaudeCodeLifecycleAdapter;
     let mut stdin = Cursor::new(
-        r#"{"session_id":"test-session-123","transcript_path":"/tmp/transcript.jsonl"}"#,
+        r#"{"session_id":"test-session-123","transcript_path":"/tmp/transcript.jsonl","model":"claude-opus-4-1"}"#,
     );
 
     let event = adapter
@@ -564,6 +673,7 @@ fn test_parse_hook_event_session_start_claude() {
     assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
     assert_eq!("test-session-123", event.session_id);
     assert_eq!("/tmp/transcript.jsonl", event.session_ref);
+    assert_eq!("claude-opus-4-1", event.model);
 }
 
 #[test]
@@ -665,16 +775,28 @@ fn test_parse_hook_event_subagent_end_no_agent_id_claude() {
 
 // CLI-875
 #[test]
-fn test_parse_hook_event_post_todo_returns_nil_claude() {
+fn test_parse_hook_event_post_todo_maps_todo_checkpoint_claude() {
     let adapter = ClaudeCodeLifecycleAdapter;
-    let mut stdin =
-        Cursor::new(r#"{"session_id":"todo-session","transcript_path":"/tmp/todo.jsonl"}"#);
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"todo-session","transcript_path":"/tmp/todo.jsonl","tool_use_id":"toolu_todo","tool_name":"TodoWrite","tool_input":{"todos":[{"content":"Ship feature","status":"completed"}]}}"#,
+    );
 
     let event = adapter
         .parse_hook_event(CLAUDE_HOOK_POST_TODO, &mut stdin)
-        .unwrap();
+        .unwrap()
+        .expect("event should exist");
 
-    assert!(event.is_none());
+    assert_eq!(Some(LifecycleEventType::TodoCheckpoint), event.event_type);
+    assert_eq!("todo-session", event.session_id);
+    assert_eq!("/tmp/todo.jsonl", event.session_ref);
+    assert_eq!("toolu_todo", event.tool_use_id);
+    assert_eq!("TodoWrite", event.tool_name);
+    assert_eq!(
+        Some(serde_json::json!({
+            "todos": [{"content": "Ship feature", "status": "completed"}]
+        })),
+        event.tool_input
+    );
 }
 
 #[test]
@@ -758,9 +880,9 @@ fn test_parse_hook_event_all_hook_types_claude() {
         ),
         (
             CLAUDE_HOOK_POST_TODO,
-            None,
-            true,
-            r#"{"session_id":"s7","transcript_path":"/t"}"#,
+            Some(LifecycleEventType::TodoCheckpoint),
+            false,
+            r#"{"session_id":"s7","transcript_path":"/t","tool_name":"TodoWrite","tool_use_id":"todo-7","tool_input":{"todos":[]}}"#,
         ),
     ];
 
@@ -1450,17 +1572,76 @@ fn test_parse_hook_event_subagent_stop_no_task_cursor() {
 }
 
 #[test]
-fn test_subagent_start_handler_safe_noop() {
-    let adapter = ClaudeCodeLifecycleAdapter;
-    let event = sample_event(LifecycleEventType::SubagentStart);
-    handle_lifecycle_subagent_start(&adapter, &event)
-        .expect("subagent start should be a safe no-op in compatibility scaffold");
+fn test_subagent_start_handler_creates_marker_and_updates_session() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "session-123".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = ClaudeCodeLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::SubagentStart);
+        event.session_id = "session-123".to_string();
+        event.tool_use_id = "toolu_123".to_string();
+        event.subagent_id = "subagent-1".to_string();
+
+        handle_lifecycle_subagent_start(&adapter, &event)
+            .expect("subagent start should persist runtime marker state");
+
+        assert!(backend.load_pre_task_marker("toolu_123").unwrap().is_some());
+        let state = backend
+            .load_session("session-123")
+            .unwrap()
+            .expect("session should exist");
+        assert!(state.last_interaction_time.is_some());
+    });
 }
 
 #[test]
-fn test_subagent_end_handler_safe_noop() {
-    let adapter = ClaudeCodeLifecycleAdapter;
-    let event = sample_event(LifecycleEventType::SubagentEnd);
-    handle_lifecycle_subagent_end(&adapter, &event)
-        .expect("subagent end should be a safe no-op in compatibility scaffold");
+fn test_subagent_end_handler_clears_marker_and_updates_session_without_repo_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "session-123".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = ClaudeCodeLifecycleAdapter;
+        let mut start_event = sample_event(LifecycleEventType::SubagentStart);
+        start_event.session_id = "session-123".to_string();
+        start_event.tool_use_id = "toolu_123".to_string();
+        start_event.subagent_id = "subagent-1".to_string();
+        start_event.tool_input = Some(serde_json::json!({"prompt":"task start"}));
+        handle_lifecycle_subagent_start(&adapter, &start_event)
+            .expect("subagent start should create marker");
+
+        let mut end_event = sample_event(LifecycleEventType::SubagentEnd);
+        end_event.session_id = "session-123".to_string();
+        end_event.tool_use_id = "toolu_123".to_string();
+        end_event.subagent_id = "subagent-1".to_string();
+        end_event.tool_input = Some(serde_json::json!({"prompt":"task done"}));
+
+        handle_lifecycle_subagent_end(&adapter, &end_event)
+            .expect("subagent end should complete cleanly without repository changes");
+
+        assert!(backend.load_pre_task_marker("toolu_123").unwrap().is_none());
+        let state = backend
+            .load_session("session-123")
+            .unwrap()
+            .expect("session should exist");
+        assert!(state.last_interaction_time.is_some());
+    });
 }

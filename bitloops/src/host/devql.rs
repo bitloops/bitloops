@@ -78,6 +78,7 @@ pub use self::commands_refresh::{
 pub use self::commands_sync::{
     SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
     SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
+    run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
@@ -90,6 +91,8 @@ pub mod watch;
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync_validation;
+#[allow(unused_imports)]
+pub(crate) use self::commands_sync::execute_sync_with_observer_and_stats_and_diffs;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::execute_sync_with_stats;
@@ -112,6 +115,8 @@ const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 #[cfg(test)]
 const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
+#[cfg(test)]
+const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -135,7 +140,7 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}, interaction_events_attempted={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
         summary.checkpoints_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
@@ -147,7 +152,6 @@ pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
         summary.symbol_clone_sources_scored,
-        summary.interaction_events_attempted
     )
 }
 
@@ -757,9 +761,6 @@ mod ingestion_artefact_persistence_edges;
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
 #[path = "devql/ingestion/artefact_persistence.rs"]
 mod ingestion_artefact_persistence;
-// ingestion: interaction event propagation from checkpoint SQLite to events store
-#[path = "devql/ingestion/interaction_events.rs"]
-mod ingestion_interaction_events;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
 // ingestion: Rust dependency edge orchestration
@@ -795,7 +796,6 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
-use self::ingestion_interaction_events::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;

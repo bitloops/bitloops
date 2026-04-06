@@ -4,6 +4,7 @@ pub mod relational;
 pub mod sqlite_relational;
 
 use anyhow::Result;
+use regex::Regex;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -45,3 +46,155 @@ pub trait LanguageServicesGateway: Send + Sync {
 pub struct EmptyLanguageServicesGateway;
 
 impl LanguageServicesGateway for EmptyLanguageServicesGateway {}
+
+pub struct SymbolIdentityInput<'a> {
+    pub path: &'a str,
+    pub canonical_kind: &'a str,
+    pub language_kind: &'a str,
+    pub name: &'a str,
+    pub parent_symbol_id: Option<&'a str>,
+    pub signature: &'a str,
+    pub modifiers: &'a [String],
+}
+
+pub trait HostServicesGateway: Send + Sync {
+    fn derive_symbol_id(&self, input: &SymbolIdentityInput<'_>) -> String;
+
+    fn derive_artefact_id(&self, content_id: &str, symbol_id: &str) -> String;
+
+    fn derive_edge_id(
+        &self,
+        repo_id: &str,
+        from_symbol_id: &str,
+        edge_kind: &str,
+        to_symbol_id_or_ref: &str,
+    ) -> String;
+}
+
+pub struct DefaultHostServicesGateway {
+    repo_id: String,
+}
+
+impl DefaultHostServicesGateway {
+    pub fn new(repo_id: impl Into<String>) -> Self {
+        Self {
+            repo_id: repo_id.into(),
+        }
+    }
+}
+
+impl HostServicesGateway for DefaultHostServicesGateway {
+    fn derive_symbol_id(&self, input: &SymbolIdentityInput<'_>) -> String {
+        let normalized_signature =
+            normalize_identity_fragment(&identity_signature(input.signature, input.modifiers));
+        let semantic_name = if has_positional_identity_name(input.name) {
+            normalized_signature.clone()
+        } else {
+            normalize_identity_fragment(input.name)
+        };
+        let canonical_kind = if input.canonical_kind.trim().is_empty() {
+            "<null>"
+        } else {
+            input.canonical_kind
+        };
+
+        crate::host::devql::deterministic_uuid(&format!(
+            "{}|{}|{}|{}|{}|{}",
+            input.path,
+            canonical_kind,
+            input.language_kind,
+            input.parent_symbol_id.unwrap_or(""),
+            semantic_name,
+            normalized_signature,
+        ))
+    }
+
+    fn derive_artefact_id(&self, content_id: &str, symbol_id: &str) -> String {
+        crate::host::devql::deterministic_uuid(&format!(
+            "{}|{}|{}",
+            self.repo_id, content_id, symbol_id
+        ))
+    }
+
+    fn derive_edge_id(
+        &self,
+        repo_id: &str,
+        from_symbol_id: &str,
+        edge_kind: &str,
+        to_symbol_id_or_ref: &str,
+    ) -> String {
+        crate::host::devql::deterministic_uuid(&format!(
+            "{}|{}|{}|{}",
+            repo_id, from_symbol_id, edge_kind, to_symbol_id_or_ref
+        ))
+    }
+}
+
+fn has_positional_identity_name(name: &str) -> bool {
+    name.rsplit_once('@')
+        .map(|(_, suffix)| !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
+fn normalize_identity_fragment(input: &str) -> String {
+    let normalized = input
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if normalized.is_empty() {
+        input.trim().to_string()
+    } else {
+        normalized
+    }
+}
+
+fn identity_signature(signature: &str, modifiers: &[String]) -> String {
+    let mut normalized_signature = signature.to_string();
+    let mut filtered_modifiers = modifiers
+        .iter()
+        .filter(|modifier| !matches!(modifier.as_str(), "get" | "set"))
+        .collect::<Vec<_>>();
+    filtered_modifiers.sort_by_key(|modifier| std::cmp::Reverse(modifier.len()));
+
+    for modifier in filtered_modifiers {
+        let escaped = regex::escape(modifier);
+        let pattern = Regex::new(&format!(r"(^|[\s(]){}($|[\s(])", escaped))
+            .expect("modifier regex should compile");
+        normalized_signature = pattern
+            .replace_all(&normalized_signature, "$1$2")
+            .to_string();
+    }
+
+    normalized_signature
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DefaultHostServicesGateway, HostServicesGateway, SymbolIdentityInput};
+
+    #[test]
+    fn derive_symbol_id_is_stable_for_identical_inputs() {
+        let gateway = DefaultHostServicesGateway::new("repo-1");
+        let modifiers = vec!["async".to_string(), "pub".to_string()];
+        let input = SymbolIdentityInput {
+            path: "src/user/service.rs",
+            canonical_kind: "function",
+            language_kind: "function_item",
+            name: "create_user",
+            parent_symbol_id: None,
+            signature: "pub async fn create_user(name: &str) -> User",
+            modifiers: &modifiers,
+        };
+        let first = gateway.derive_symbol_id(&input);
+        let second = gateway.derive_symbol_id(&input);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn derive_artefact_id_depends_on_repo_content_and_symbol() {
+        let gateway = DefaultHostServicesGateway::new("repo-1");
+        let a = gateway.derive_artefact_id("blob-a", "symbol-1");
+        let b = gateway.derive_artefact_id("blob-b", "symbol-1");
+        assert_ne!(a, b);
+    }
+}

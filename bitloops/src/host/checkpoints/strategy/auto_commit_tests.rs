@@ -425,8 +425,8 @@ fn auto_commit_initialize_session_creates_session_state() {
 
     assert_eq!(state.session_id, session_id);
     assert_eq!(state.cli_version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(state.step_count, 0);
-    assert_eq!(state.checkpoint_transcript_start, 0);
+    assert_eq!(state.pending.step_count, 0);
+    assert_eq!(state.pending.checkpoint_transcript_start, 0);
 }
 
 #[test]

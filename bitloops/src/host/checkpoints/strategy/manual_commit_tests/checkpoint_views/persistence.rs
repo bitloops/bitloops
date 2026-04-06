@@ -321,6 +321,15 @@ pub(crate) fn write_committed_three_sessions() {
         top_metadata["token_usage"]["input_tokens"], 600,
         "expected aggregated input tokens across sessions"
     );
+    assert_eq!(
+        query_checkpoint_file_session_ids(dir.path(), checkpoint_id),
+        vec![
+            "three-session-0".to_string(),
+            "three-session-1".to_string(),
+            "three-session-2".to_string()
+        ],
+        "expected checkpoint provenance rows for all sessions"
+    );
 
     for i in 0..3 {
         let content = read_session_content(dir.path(), checkpoint_id, i).unwrap();

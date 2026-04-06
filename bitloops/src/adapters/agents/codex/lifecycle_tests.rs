@@ -11,7 +11,7 @@ fn parse_unknown_hook_returns_none() {
 #[test]
 fn parse_session_start_maps_session_start_event() {
     let mut input = std::io::Cursor::new(
-        br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-1.jsonl"}"#.as_slice(),
+        br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-1.jsonl","modelSlug":"gpt-5.4-codex"}"#.as_slice(),
     );
     let parsed = parse_hook_event(HOOK_NAME_SESSION_START, &mut input)
         .expect("parse")
@@ -19,6 +19,7 @@ fn parse_session_start_maps_session_start_event() {
     assert_eq!(parsed.event_type, Some(LifecycleEventType::SessionStart));
     assert_eq!(parsed.session_id, "codex-session-1");
     assert_eq!(parsed.session_ref, "/tmp/codex-1.jsonl");
+    assert_eq!(parsed.model, "gpt-5.4-codex");
 }
 
 #[test]
