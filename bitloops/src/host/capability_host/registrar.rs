@@ -49,6 +49,14 @@ pub trait CapabilityRegistrar {
     fn register_schema_module(&mut self, module: SchemaModule) -> Result<()>;
 
     fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()>;
+
+    fn register_event_handler(
+        &mut self,
+        handler: Arc<dyn crate::host::capability_host::events::HostEventHandler>,
+    ) -> Result<()> {
+        let _ = handler;
+        Ok(())
+    }
 }
 
 pub trait StageHandler: Send + Sync {

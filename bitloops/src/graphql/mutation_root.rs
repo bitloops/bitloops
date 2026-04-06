@@ -2,6 +2,7 @@ use async_graphql::{Context, Error, ErrorExtensions, InputObject, Object, Result
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 
 use super::{
     DevqlGraphqlContext,
@@ -415,10 +416,41 @@ impl MutationRoot {
         .map_err(|err| operation_error("BACKEND_ERROR", "initialisation", "sync", err))?;
         let mode =
             crate::host::devql::effective_sync_mode_after_schema_preparation(mode, schema_outcome);
+        let host = context.capability_host_arc().ok();
+        let (summary, file_diff, artefact_diff) =
+            crate::host::devql::run_sync_with_summary_and_observer_and_diffs(&cfg, mode, None)
+                .await
+                .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
 
-        let summary = crate::host::devql::run_sync_with_summary(&cfg, mode)
-            .await
-            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
+        if summary.success
+            && summary.mode != "validate"
+            && let Some(host) = host
+        {
+            match host.build_event_handler_context() {
+                Ok(handler_context) => {
+                    let payload = crate::host::capability_host::SyncCompletedPayload {
+                        repo_id: cfg.repo.repo_id.clone(),
+                        repo_root: cfg.repo_root.clone(),
+                        active_branch: summary.active_branch.clone(),
+                        head_commit_sha: summary.head_commit_sha.clone(),
+                        sync_mode: summary.mode.clone(),
+                        sync_completed_at: Utc::now().to_rfc3339(),
+                        files: file_diff,
+                        artefacts: artefact_diff,
+                    };
+                    crate::host::capability_host::dispatch_event(
+                        crate::host::capability_host::HostEvent::SyncCompleted(payload),
+                        host.event_handlers(),
+                        Arc::new(handler_context),
+                    );
+                }
+                Err(err) => {
+                    log::warn!(
+                        "failed to build sync event handler context for GraphQL sync: {err:#}"
+                    );
+                }
+            }
+        }
         Ok(summary.into())
     }
 
