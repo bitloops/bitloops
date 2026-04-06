@@ -828,9 +828,12 @@ mod tests {
     }
 
     fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
-        let entries = fs::read_dir(root).expect("read source directory");
+        let mut entries = fs::read_dir(root)
+            .expect("read source directory")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read source directory entries");
+        entries.sort_by_key(|entry| entry.path());
         for entry in entries {
-            let entry = entry.expect("read source directory entry");
             let path = entry.path();
             if path.is_dir() {
                 collect_rust_files(&path, out);
@@ -865,6 +868,7 @@ mod tests {
         let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         collect_rust_files(&src_root, &mut files);
+        files.sort();
 
         let allowed_temporary_path_shims =
             ["host/checkpoints/strategy/manual_commit/checkpoint_io/temporary.rs"];
@@ -903,6 +907,7 @@ mod tests {
         let allowed_relational_internal_modules =
             ["host/relational_store.rs", "host/devql/types.rs"];
         let banned_relational_internal_patterns = [".local.path", "RelationalStorage::local_only("];
+        let mut violations = Vec::new();
 
         for file in files {
             let relative = file
@@ -925,48 +930,59 @@ mod tests {
             let production_contents = strip_inline_test_module(&contents);
 
             for banned_import in banned_daemon_json_imports {
-                assert!(
-                    !production_contents.contains(banned_import),
-                    "legacy daemon JSON helpers are forbidden outside the runtime store: {}",
-                    relative
-                );
+                if production_contents.contains(banned_import) {
+                    violations.push(format!(
+                        "legacy daemon JSON helpers are forbidden outside the runtime store: {}",
+                        relative
+                    ));
+                }
             }
 
             if production_contents.contains("resolve_temporary_checkpoint_sqlite_path(")
                 && !allowed_temporary_path_shims.contains(&relative.as_str())
             {
-                panic!(
+                violations.push(format!(
                     "runtime checkpoint path shim must stay local to the runtime-store compatibility layer: {}",
                     relative
-                );
+                ));
             }
 
             if production_contents.contains("interaction_spool_db_path(")
                 && !allowed_spool_path_shims.contains(&relative.as_str())
             {
-                panic!(
+                violations.push(format!(
                     "interaction spool path shim must stay local to the runtime-store compatibility layer: {}",
                     relative
-                );
+                ));
             }
 
             for banned_pattern in banned_direct_sqlite_patterns {
-                assert!(
-                    !production_contents.contains(banned_pattern),
-                    "direct SQLite access must flow through RuntimeStore or RelationalStore: {}",
-                    relative
-                );
+                if production_contents.contains(banned_pattern) {
+                    violations.push(format!(
+                        "direct SQLite access must flow through RuntimeStore or RelationalStore: {} (matched `{}`)",
+                        relative, banned_pattern
+                    ));
+                }
             }
 
             if !allowed_relational_internal_modules.contains(&relative.as_str()) {
                 for banned_pattern in banned_relational_internal_patterns {
-                    assert!(
-                        !production_contents.contains(banned_pattern),
-                        "RelationalStorage internals must stay local to store implementation layers: {}",
-                        relative
-                    );
+                    if production_contents.contains(banned_pattern) {
+                        violations.push(format!(
+                            "RelationalStorage internals must stay local to store implementation layers: {} (matched `{}`)",
+                            relative, banned_pattern
+                        ));
+                    }
                 }
             }
+        }
+
+        if !violations.is_empty() {
+            violations.sort();
+            panic!(
+                "Runtime/Relational store boundary violations:\n{}",
+                violations.join("\n")
+            );
         }
     }
 }
