@@ -46,7 +46,8 @@ pub(super) fn install_or_update_supervisor_service() -> Result<SupervisorService
         },
     };
 
-    write_json(&service_metadata_path, &metadata)?;
+    let _ = service_metadata_path;
+    write_supervisor_service_metadata(&metadata)?;
     Ok(metadata)
 }
 

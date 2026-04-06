@@ -29,8 +29,20 @@ use super::unified_config::{
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 
+fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSettings)>> {
+    let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) else {
+        return Ok(None);
+    };
+    let loaded = load_daemon_settings(Some(Path::new(&explicit_path)))?;
+    Ok(Some((loaded.root, loaded.settings)))
+}
+
 #[cfg(test)]
 fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
+    if let Some(override_settings) = explicit_daemon_settings_override()? {
+        return Ok(override_settings);
+    }
+
     let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
     if repo_toml.is_file() {
         let loaded = load_daemon_settings(Some(&repo_toml))?;
@@ -42,6 +54,10 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
 
 #[cfg(not(test))]
 fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
+    if let Some(override_settings) = explicit_daemon_settings_override()? {
+        return Ok(override_settings);
+    }
+
     let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
     if repo_toml.is_file() {
         let loaded = load_daemon_settings(Some(&repo_toml))?;

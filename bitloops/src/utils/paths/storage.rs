@@ -8,7 +8,9 @@ use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
 #[cfg(not(test))]
 use sha2::{Digest, Sha256};
 
-use super::constants::{BITLOOPS_METADATA_DIR, EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME};
+use super::constants::{
+    BITLOOPS_METADATA_DIR, EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME,
+};
 
 fn platform_path_fallback(category: &str) -> PathBuf {
     std::env::temp_dir().join("bitloops").join(category)
@@ -118,6 +120,18 @@ pub fn default_runtime_state_dir(_repo_root: &Path) -> PathBuf {
     bitloops_state_dir()
         .unwrap_or_else(|_| platform_path_fallback("state"))
         .join("daemon")
+}
+
+pub fn default_repo_runtime_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("runtime")
+        .join(RUNTIME_DB_FILE_NAME)
+}
+
+pub fn default_global_runtime_db_path() -> PathBuf {
+    default_runtime_state_dir(Path::new(".")).join(RUNTIME_DB_FILE_NAME)
 }
 
 #[cfg(test)]

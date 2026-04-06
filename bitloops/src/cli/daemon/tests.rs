@@ -66,6 +66,7 @@ fn daemon_start_cli_parses_lifecycle_and_server_flags() {
         "daemon",
         "start",
         "--create-default-config",
+        "--bootstrap-local-stores",
         "-d",
         "--host",
         "127.0.0.1",
@@ -86,6 +87,7 @@ fn daemon_start_cli_parses_lifecycle_and_server_flags() {
     };
 
     assert!(start.create_default_config);
+    assert!(start.bootstrap_local_stores);
     assert!(start.detached);
     assert!(!start.until_stopped);
     assert_eq!(start.host.as_deref(), Some("127.0.0.1"));
@@ -143,6 +145,33 @@ fn daemon_start_rejects_create_default_config_with_explicit_config() {
     .expect("daemon start should reject conflicting config bootstrap flags");
 
     assert!(err.to_string().contains("--create-default-config"));
+}
+
+#[test]
+fn daemon_start_accepts_bootstrap_local_stores_with_explicit_config() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "daemon",
+        "start",
+        "--config",
+        "/tmp/bitloops.toml",
+        "--bootstrap-local-stores",
+    ])
+    .expect("daemon start should accept explicit config store bootstrap");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Start(start)) = daemon.command else {
+        panic!("expected daemon start command");
+    };
+
+    assert_eq!(
+        start.config,
+        Some(std::path::PathBuf::from("/tmp/bitloops.toml"))
+    );
+    assert!(start.bootstrap_local_stores);
+    assert!(!start.create_default_config);
 }
 
 #[test]
@@ -218,6 +247,7 @@ async fn run_start_requires_explicit_bootstrap_when_default_config_is_missing() 
     let err = run_start(DaemonStartArgs {
         config: None,
         create_default_config: false,
+        bootstrap_local_stores: false,
         detached: false,
         until_stopped: false,
         host: None,
@@ -273,6 +303,7 @@ fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemet
         &DaemonStartArgs {
             config: None,
             create_default_config: false,
+            bootstrap_local_stores: false,
             detached: false,
             until_stopped: false,
             host: None,
@@ -337,6 +368,7 @@ fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
         &DaemonStartArgs {
             config: None,
             create_default_config: false,
+            bootstrap_local_stores: false,
             detached: false,
             until_stopped: false,
             host: None,
@@ -399,6 +431,7 @@ fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
         &DaemonStartArgs {
             config: None,
             create_default_config: true,
+            bootstrap_local_stores: false,
             detached: false,
             until_stopped: false,
             host: None,

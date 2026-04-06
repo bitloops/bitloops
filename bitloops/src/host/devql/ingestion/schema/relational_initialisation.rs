@@ -49,7 +49,7 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, edge_model_cleanup_sqlite_sql())
         .await
         .context("normalising SQLite DevQL edge model values")?;
-    sqlite_exec_path_allow_create(sqlite_path, checkpoint_schema_sql_sqlite())
+    sqlite_exec_path_allow_create(sqlite_path, checkpoint_relational_schema_sql_sqlite())
         .await
         .context("creating SQLite checkpoint migration tables")?;
     crate::capability_packs::semantic_clones::init_sqlite_semantic_features_schema(sqlite_path)
@@ -340,7 +340,7 @@ async fn init_postgres_schema_with_policy(
     )
     .await
     .context("creating Postgres semantic clone tables")?;
-    let checkpoint_schema_sql = checkpoint_schema_sql_postgres();
+    let checkpoint_schema_sql = checkpoint_relational_schema_sql_postgres();
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await
         .context("creating Postgres checkpoint migration tables")?;

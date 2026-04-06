@@ -307,7 +307,7 @@ async fn execute_sync_inner(
         paths_completed,
     );
 
-    let mut writer = SqliteSyncWriter::open(&relational.local.path)
+    let mut writer = SqliteSyncWriter::open(relational.sqlite_path())
         .await
         .context("opening persistent SQLite sync writer")?;
 
@@ -377,7 +377,7 @@ async fn execute_sync_inner(
     if !prepare_inputs.is_empty() {
         let worker_count = sync_prepare_worker_count().min(prepare_inputs.len().max(1));
         stats.prepare_worker_count = worker_count;
-        let pool = SqliteReadConnectionPool::open(&relational.local.path, worker_count)
+        let pool = SqliteReadConnectionPool::open(relational.sqlite_path(), worker_count)
             .await
             .context("opening SQLite read connection pool for sync prepare stage")?;
         let cfg = Arc::new(cfg.clone());

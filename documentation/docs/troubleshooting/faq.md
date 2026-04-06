@@ -16,7 +16,9 @@ In platform app directories by default:
 - config directory for `config.toml`
 - data directory for relational, event, and blob stores
 - cache directory for embedding downloads and dashboard bundle assets
-- state directory for daemon runtime metadata and hook scratch files
+- state directory for daemon runtime metadata and the daemon runtime SQLite
+
+Bitloops also keeps repo-scoped workflow runtime state in `.bitloops/stores/runtime/runtime.sqlite`.
 
 ### How do I remove Bitloops completely?
 
@@ -58,6 +60,8 @@ No. It launches the browser and ensures the daemon is running.
 ### What creates the daemon config now?
 
 Interactive `bitloops start` prompts to create the default daemon config when it is missing. For scripted or non-interactive setups, use `bitloops start --create-default-config` together with an explicit telemetry flag. `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+
+If you already have a custom config file and only need the matching local file-backed stores, use `bitloops start --config /path/to/config.toml --bootstrap-local-stores`.
 
 ### When does Bitloops ask about telemetry?
 

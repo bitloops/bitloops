@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use super::backend::SessionBackend;
 use super::phase::SessionPhase;
 use super::state::{PendingCheckpointState, PrePromptState, PreTaskState, SessionState};
-use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::host::validation::validators::{validate_session_id, validate_tool_use_id};
 use crate::storage::SqliteConnectionPool;
 
@@ -19,8 +19,8 @@ pub struct DbSessionBackend {
 impl DbSessionBackend {
     pub fn new(repo_id: impl Into<String>, sqlite: SqliteConnectionPool) -> Result<Self> {
         sqlite
-            .initialise_checkpoint_schema()
-            .context("initialising checkpoint schema for DbSessionBackend")?;
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime checkpoint schema for DbSessionBackend")?;
         let backend = Self {
             repo_id: repo_id.into(),
             sqlite,
@@ -34,10 +34,12 @@ impl DbSessionBackend {
     }
 
     pub fn for_repo_root(repo_root: &Path) -> Result<Self> {
-        let sqlite_path = resolve_repo_scoped_sqlite_path(repo_root)?;
-        let repo_identity = crate::host::devql::resolve_repo_identity(repo_root)
-            .context("resolving repo identity for DbSessionBackend")?;
-        Self::from_sqlite_path(repo_identity.repo_id, sqlite_path)
+        let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
+            .context("opening repo runtime store for DbSessionBackend")?;
+        Self::from_sqlite_path(
+            runtime_store.repo_id().to_string(),
+            runtime_store.db_path().to_path_buf(),
+        )
     }
 
     #[cfg(test)]
@@ -408,17 +410,6 @@ impl SessionBackend for DbSessionBackend {
             .context("querying latest pre-task marker")
         })
     }
-}
-
-fn resolve_repo_scoped_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg = resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving backend config for session DB")?;
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .context("resolving configured SQLite path for session DB");
-    }
-
-    Ok(crate::utils::paths::default_relational_db_path(repo_root))
 }
 
 fn parse_json_column<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T> {
