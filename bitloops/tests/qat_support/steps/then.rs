@@ -725,6 +725,19 @@ pub(super) fn then_sync_validation_expected_greater_than(
     })
 }
 
+pub(super) fn then_sync_history_added_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows added > 0 for current HEAD",
+            helpers::assert_sync_history_has_added_for_current_head(world, &repo_name),
+        );
+    })
+}
+
 // ── DevQL sync/ingest summary assertions ─────────────────────
 
 pub(super) fn then_sync_summary_field_greater_than(

@@ -488,6 +488,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^DevQL sync history shows added greater than 0 for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_added_for_current_head),
+        )
+        .then(
+            None,
             regex(r"^DevQL sync summary shows (added|changed|removed|unchanged|cache hits|cache misses|parse errors) greater than (\d+) in (\S+)$"),
             step_fn(then_sync_summary_field_greater_than),
         )

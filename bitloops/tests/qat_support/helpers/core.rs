@@ -1128,6 +1128,113 @@ pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -
     ensure_success(&output, "bitloops devql sync --validate --status")
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct QatSyncStateSnapshot {
+    #[serde(default)]
+    tasks: Vec<QatSyncTaskSnapshot>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct QatSyncTaskSnapshot {
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    summary: Option<QatSyncTaskSummarySnapshot>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QatSyncTaskSummarySnapshot {
+    #[serde(default)]
+    head_commit_sha: String,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    paths_added: usize,
+    #[serde(default)]
+    paths_unchanged: usize,
+}
+
+fn resolve_qat_sync_state_path(world: &QatWorld) -> Result<std::path::PathBuf> {
+    let home_dir = world.run_dir().join("home");
+    let candidates = [
+        home_dir.join(".local/state/bitloops/daemon/sync.json"),
+        home_dir.join("xdg-state/bitloops/daemon/sync.json"),
+    ];
+
+    if let Some(path) = candidates.iter().find(|path| path.exists()) {
+        return Ok(path.clone());
+    }
+
+    bail!(
+        "could not find daemon sync state file; looked in: {}",
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let head_output = run_command_capture(
+        world,
+        "git rev-parse HEAD (sync history assertion)",
+        build_git_command(world, &["rev-parse", "HEAD"], &[]),
+    )?;
+    ensure_success(&head_output, "git rev-parse HEAD (sync history assertion)")?;
+
+    let head_sha = String::from_utf8_lossy(&head_output.stdout).trim().to_string();
+    ensure!(
+        !head_sha.is_empty(),
+        "expected non-empty HEAD SHA for sync history assertion"
+    );
+
+    let sync_state_path = resolve_qat_sync_state_path(world)?;
+    let raw = fs::read_to_string(&sync_state_path)
+        .with_context(|| format!("reading {}", sync_state_path.display()))?;
+    let snapshot: QatSyncStateSnapshot = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing {}", sync_state_path.display()))?;
+
+    let head_tasks: Vec<(&QatSyncTaskSnapshot, &QatSyncTaskSummarySnapshot)> = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.status == "completed")
+        .filter_map(|task| task.summary.as_ref().map(|summary| (task, summary)))
+        .filter(|(_, summary)| summary.head_commit_sha == head_sha)
+        .collect();
+
+    ensure!(
+        !head_tasks.is_empty(),
+        "expected at least one completed sync task for HEAD `{head_sha}` in {}; found none",
+        sync_state_path.display()
+    );
+
+    if head_tasks
+        .iter()
+        .any(|(_, summary)| summary.paths_added > 0)
+    {
+        return Ok(());
+    }
+
+    let task_summary = head_tasks
+        .iter()
+        .map(|(task, summary)| {
+            format!(
+                "source={} mode={} added={} unchanged={}",
+                task.source, summary.mode, summary.paths_added, summary.paths_unchanged
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    bail!(
+        "expected at least one completed sync task with pathsAdded > 0 for HEAD `{head_sha}`; observed: {task_summary}"
+    )
+}
+
 /// Parse a numeric field from the sync summary output.
 /// Format: "sync complete: 5 added, 0 changed, 0 removed, 3 unchanged, 3 cache hits (1 cache misses, 0 parse errors)"
 pub fn parse_sync_summary_field(stdout: &str, field: &str) -> Option<usize> {

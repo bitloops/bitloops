@@ -211,7 +211,7 @@ Feature: DevQL sync workspace reconciliation
     And I add a new source file in bitloops
     And I commit changes without hooks in bitloops
     And I run DevQL sync --status in bitloops
-    Then DevQL sync summary shows added greater than 0 in bitloops
+    Then DevQL sync history shows added greater than 0 for current HEAD in bitloops
 
   @devql @sync
   Scenario: Init with sync=true keeps sync validation clean without workspace changes
