@@ -110,14 +110,14 @@ fn build_init_bitloops_args_supports_no_sync_choice() {
 #[test]
 fn build_init_bitloops_args_supports_sync_false_choice() {
     let args = build_init_bitloops_args("claude-code", false, Some(false));
-    assert_eq!(
-        args,
-        vec!["init", "--agent", "claude-code", "--sync=false"]
-    );
+    assert_eq!(args, vec!["init", "--agent", "claude-code", "--sync=false"]);
 }
 
 #[test]
 fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
     let args = build_init_bitloops_args("codex", true, Some(true));
-    assert_eq!(args, vec!["init", "--agent", "codex", "--sync=true", "--force"]);
+    assert_eq!(
+        args,
+        vec!["init", "--agent", "codex", "--sync=true", "--force"]
+    );
 }

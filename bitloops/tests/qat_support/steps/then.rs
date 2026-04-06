@@ -22,7 +22,10 @@ pub(super) fn then_version_output(
     _ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-        run_step("bitloops --version exits 0 and prints a semver version", helpers::assert_version_output(world));
+        run_step(
+            "bitloops --version exits 0 and prints a semver version",
+            helpers::assert_version_output(world),
+        );
     })
 }
 
@@ -31,7 +34,10 @@ pub(super) fn then_daemon_config_exists(
     _ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-        run_step("the global daemon config file exists", helpers::assert_daemon_config_exists(world));
+        run_step(
+            "the global daemon config file exists",
+            helpers::assert_daemon_config_exists(world),
+        );
     })
 }
 
