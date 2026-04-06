@@ -5,7 +5,10 @@ use serde_json::json;
 
 use super::{
     DevqlGraphqlContext,
-    types::{Checkpoint, DateTimeScalar, IngestionProgressEvent, KnowledgeItem, KnowledgeRelation},
+    types::{
+        Checkpoint, DateTimeScalar, IngestionProgressEvent, KnowledgeItem, KnowledgeRelation,
+        SyncTaskObject,
+    },
 };
 
 #[derive(Default)]
@@ -26,6 +29,36 @@ pub struct AssociateKnowledgeInput {
 #[derive(Debug, Clone, InputObject)]
 pub struct RefreshKnowledgeInput {
     pub knowledge_ref: String,
+}
+
+#[derive(Debug, Clone, InputObject)]
+pub struct SyncInput {
+    /// Run a full workspace reconciliation.
+    #[graphql(default = false)]
+    pub full: bool,
+    /// Reconcile only the specified workspace paths (comma-delimited values accepted).
+    #[graphql(default)]
+    pub paths: Option<Vec<String>>,
+    /// Rebuild sync state from the current workspace, ignoring stored manifest trust.
+    #[graphql(default = false)]
+    pub repair: bool,
+    /// Validate current-state tables against a full read-only workspace reconciliation.
+    #[graphql(default = false)]
+    pub validate: bool,
+}
+
+#[derive(Debug, Clone, InputObject)]
+pub struct EnqueueSyncInput {
+    #[graphql(default = false)]
+    pub full: bool,
+    #[graphql(default)]
+    pub paths: Option<Vec<String>>,
+    #[graphql(default = false)]
+    pub repair: bool,
+    #[graphql(default = false)]
+    pub validate: bool,
+    #[graphql(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -86,6 +119,105 @@ impl From<crate::host::devql::IngestionCounters> for IngestResult {
             symbol_embedding_rows_skipped: to_graphql_count(value.symbol_embedding_rows_skipped),
             symbol_clone_edges_upserted: to_graphql_count(value.symbol_clone_edges_upserted),
             symbol_clone_sources_scored: to_graphql_count(value.symbol_clone_sources_scored),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct SyncResult {
+    pub success: bool,
+    pub mode: String,
+    pub parser_version: String,
+    pub extractor_version: String,
+    pub active_branch: Option<String>,
+    pub head_commit_sha: Option<String>,
+    pub head_tree_sha: Option<String>,
+    pub paths_unchanged: i32,
+    pub paths_added: i32,
+    pub paths_changed: i32,
+    pub paths_removed: i32,
+    pub cache_hits: i32,
+    pub cache_misses: i32,
+    pub parse_errors: i32,
+    pub validation: Option<SyncValidationResult>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct EnqueueSyncResult {
+    pub task: SyncTaskObject,
+    pub merged: bool,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct SyncValidationResult {
+    pub valid: bool,
+    pub expected_artefacts: i32,
+    pub actual_artefacts: i32,
+    pub expected_edges: i32,
+    pub actual_edges: i32,
+    pub missing_artefacts: i32,
+    pub stale_artefacts: i32,
+    pub mismatched_artefacts: i32,
+    pub missing_edges: i32,
+    pub stale_edges: i32,
+    pub mismatched_edges: i32,
+    pub files_with_drift: Vec<SyncValidationFileDriftResult>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct SyncValidationFileDriftResult {
+    pub path: String,
+    pub missing_artefacts: i32,
+    pub stale_artefacts: i32,
+    pub mismatched_artefacts: i32,
+    pub missing_edges: i32,
+    pub stale_edges: i32,
+    pub mismatched_edges: i32,
+}
+
+impl From<crate::host::devql::SyncSummary> for SyncResult {
+    fn from(value: crate::host::devql::SyncSummary) -> Self {
+        Self {
+            success: value.success,
+            mode: value.mode,
+            parser_version: value.parser_version,
+            extractor_version: value.extractor_version,
+            active_branch: value.active_branch,
+            head_commit_sha: value.head_commit_sha,
+            head_tree_sha: value.head_tree_sha,
+            paths_unchanged: to_graphql_count(value.paths_unchanged),
+            paths_added: to_graphql_count(value.paths_added),
+            paths_changed: to_graphql_count(value.paths_changed),
+            paths_removed: to_graphql_count(value.paths_removed),
+            cache_hits: to_graphql_count(value.cache_hits),
+            cache_misses: to_graphql_count(value.cache_misses),
+            parse_errors: to_graphql_count(value.parse_errors),
+            validation: value.validation.map(|validation| SyncValidationResult {
+                valid: validation.valid,
+                expected_artefacts: to_graphql_count(validation.expected_artefacts),
+                actual_artefacts: to_graphql_count(validation.actual_artefacts),
+                expected_edges: to_graphql_count(validation.expected_edges),
+                actual_edges: to_graphql_count(validation.actual_edges),
+                missing_artefacts: to_graphql_count(validation.missing_artefacts),
+                stale_artefacts: to_graphql_count(validation.stale_artefacts),
+                mismatched_artefacts: to_graphql_count(validation.mismatched_artefacts),
+                missing_edges: to_graphql_count(validation.missing_edges),
+                stale_edges: to_graphql_count(validation.stale_edges),
+                mismatched_edges: to_graphql_count(validation.mismatched_edges),
+                files_with_drift: validation
+                    .files_with_drift
+                    .into_iter()
+                    .map(|file| SyncValidationFileDriftResult {
+                        path: file.path,
+                        missing_artefacts: to_graphql_count(file.missing_artefacts),
+                        stale_artefacts: to_graphql_count(file.stale_artefacts),
+                        mismatched_artefacts: to_graphql_count(file.mismatched_artefacts),
+                        missing_edges: to_graphql_count(file.missing_edges),
+                        stale_edges: to_graphql_count(file.stale_edges),
+                        mismatched_edges: to_graphql_count(file.mismatched_edges),
+                    })
+                    .collect(),
+            }),
         }
     }
 }
@@ -244,6 +376,72 @@ impl MutationRoot {
         .await
         .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
         Ok(summary.into())
+    }
+
+    async fn sync(&self, ctx: &Context<'_>, input: SyncInput) -> Result<SyncResult> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_repo_write_scope()
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "sync", err))?;
+        let cfg = context
+            .devql_config()
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "sync", err))?;
+
+        let mode = resolve_sync_mode_input(
+            input.full,
+            input.paths,
+            input.repair,
+            input.validate,
+            "sync",
+        )?;
+        let schema_outcome = crate::host::devql::prepare_sync_execution_schema(
+            &cfg,
+            "GraphQL mutation `sync`",
+            &mode,
+        )
+        .await
+        .map_err(|err| operation_error("BACKEND_ERROR", "initialisation", "sync", err))?;
+        let mode =
+            crate::host::devql::effective_sync_mode_after_schema_preparation(mode, schema_outcome);
+
+        let summary = crate::host::devql::run_sync_with_summary(&cfg, mode)
+            .await
+            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
+        Ok(summary.into())
+    }
+
+    #[graphql(name = "enqueueSync")]
+    async fn enqueue_sync(
+        &self,
+        ctx: &Context<'_>,
+        input: EnqueueSyncInput,
+    ) -> Result<EnqueueSyncResult> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_repo_write_scope()
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
+        let cfg = context
+            .devql_config()
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "enqueueSync", err))?;
+
+        let EnqueueSyncInput {
+            full,
+            paths,
+            repair,
+            validate,
+            source,
+        } = input;
+        let mode = resolve_sync_mode_input(full, paths, repair, validate, "enqueueSync")?;
+        let source = parse_sync_source(source.as_deref())
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
+
+        crate::daemon::shared_sync_coordinator().register_subscription_hub(context.subscriptions());
+        let queued = crate::daemon::enqueue_sync_for_config(&cfg, source, mode)
+            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "enqueueSync", err))?;
+        Ok(EnqueueSyncResult {
+            task: queued.task.into(),
+            merged: queued.merged,
+        })
     }
 
     async fn bootstrap_project(
@@ -428,6 +626,60 @@ impl MutationRoot {
     }
 }
 
+fn parse_sync_source(
+    raw: Option<&str>,
+) -> std::result::Result<crate::daemon::SyncTaskSource, String> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(crate::daemon::SyncTaskSource::ManualCli),
+        Some("init") => Ok(crate::daemon::SyncTaskSource::Init),
+        Some("manual_cli") | Some("manual-cli") | Some("manual") => {
+            Ok(crate::daemon::SyncTaskSource::ManualCli)
+        }
+        Some("watcher") => Ok(crate::daemon::SyncTaskSource::Watcher),
+        Some("post_commit") | Some("post-commit") => Ok(crate::daemon::SyncTaskSource::PostCommit),
+        Some("post_merge") | Some("post-merge") => Ok(crate::daemon::SyncTaskSource::PostMerge),
+        Some("post_checkout") | Some("post-checkout") => {
+            Ok(crate::daemon::SyncTaskSource::PostCheckout)
+        }
+        Some(other) => Err(format!(
+            "unsupported sync source `{other}`; expected one of: init, manual_cli, watcher, post_commit, post_merge, post_checkout"
+        )),
+    }
+}
+
+fn resolve_sync_mode_input(
+    full: bool,
+    paths: Option<Vec<String>>,
+    repair: bool,
+    validate: bool,
+    operation: &'static str,
+) -> Result<crate::host::devql::SyncMode> {
+    let selected_modes = usize::from(full)
+        + usize::from(paths.is_some())
+        + usize::from(repair)
+        + usize::from(validate);
+    if selected_modes > 1 {
+        return Err(operation_error(
+            "BAD_USER_INPUT",
+            "validation",
+            operation,
+            "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
+        ));
+    }
+
+    Ok(if validate {
+        crate::host::devql::SyncMode::Validate
+    } else if repair {
+        crate::host::devql::SyncMode::Repair
+    } else if let Some(paths) = paths {
+        crate::host::devql::SyncMode::Paths(paths)
+    } else if full {
+        crate::host::devql::SyncMode::Full
+    } else {
+        crate::host::devql::SyncMode::Auto
+    })
+}
+
 async fn execute_knowledge_ingester<T: for<'de> Deserialize<'de>>(
     ctx: &Context<'_>,
     operation: &'static str,
@@ -597,5 +849,104 @@ impl crate::host::devql::IngestionObserver for GraphqlIngestionObserver {
             self.repo_name.clone(),
             Checkpoint::from_ingested(&checkpoint.checkpoint, checkpoint.commit_sha.as_deref()),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sync_source_accepts_default_and_aliases() {
+        assert_eq!(
+            parse_sync_source(None).expect("default source"),
+            crate::daemon::SyncTaskSource::ManualCli
+        );
+        assert_eq!(
+            parse_sync_source(Some("   ")).expect("blank source"),
+            crate::daemon::SyncTaskSource::ManualCli
+        );
+        assert_eq!(
+            parse_sync_source(Some("manual")).expect("manual alias"),
+            crate::daemon::SyncTaskSource::ManualCli
+        );
+        assert_eq!(
+            parse_sync_source(Some("manual-cli")).expect("manual-cli alias"),
+            crate::daemon::SyncTaskSource::ManualCli
+        );
+        assert_eq!(
+            parse_sync_source(Some("init")).expect("init source"),
+            crate::daemon::SyncTaskSource::Init
+        );
+        assert_eq!(
+            parse_sync_source(Some("watcher")).expect("watcher source"),
+            crate::daemon::SyncTaskSource::Watcher
+        );
+        assert_eq!(
+            parse_sync_source(Some("post-commit")).expect("post-commit source"),
+            crate::daemon::SyncTaskSource::PostCommit
+        );
+        assert_eq!(
+            parse_sync_source(Some("post_merge")).expect("post_merge source"),
+            crate::daemon::SyncTaskSource::PostMerge
+        );
+        assert_eq!(
+            parse_sync_source(Some("post_checkout")).expect("post_checkout source"),
+            crate::daemon::SyncTaskSource::PostCheckout
+        );
+    }
+
+    #[test]
+    fn parse_sync_source_rejects_unknown_values() {
+        let err = parse_sync_source(Some("cronjob")).expect_err("unknown source should fail");
+        assert!(err.contains("unsupported sync source `cronjob`"));
+        assert!(err.contains("manual_cli"));
+    }
+
+    #[test]
+    fn resolve_sync_mode_input_defaults_to_auto_when_no_selector_is_set() {
+        let mode =
+            resolve_sync_mode_input(false, None, false, false, "sync").expect("default mode");
+        assert_eq!(mode, crate::host::devql::SyncMode::Auto);
+    }
+
+    #[test]
+    fn resolve_sync_mode_input_rejects_conflicting_selectors() {
+        let err = resolve_sync_mode_input(
+            true,
+            Some(vec!["src/lib.rs".to_string()]),
+            false,
+            false,
+            "enqueueSync",
+        )
+        .expect_err("conflicting selectors should fail");
+        assert!(
+            err.message.contains(
+                "at most one of `full`, `paths`, `repair`, or `validate` may be specified"
+            )
+        );
+    }
+
+    #[test]
+    fn to_graphql_count_clamps_large_values() {
+        assert_eq!(to_graphql_count(0), 0);
+        assert_eq!(to_graphql_count(42), 42);
+        assert_eq!(
+            to_graphql_count((i32::MAX as usize) + 10),
+            i32::MAX,
+            "values larger than i32::MAX should clamp"
+        );
+    }
+
+    #[test]
+    fn require_non_empty_input_trims_and_rejects_blank_values() {
+        let value =
+            require_non_empty_input("  hello  ".to_string(), "field", "operation").expect("trim");
+        assert_eq!(value, "hello");
+
+        let err = require_non_empty_input("   ".to_string(), "field", "operation")
+            .expect_err("blank input should fail");
+        let message = err.message.clone();
+        assert!(message.contains("field must not be empty"));
     }
 }

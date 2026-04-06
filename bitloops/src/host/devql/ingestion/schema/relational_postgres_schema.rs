@@ -329,7 +329,8 @@ CREATE TABLE IF NOT EXISTS repo_sync_state (
     last_sync_started_at TEXT,
     last_sync_completed_at TEXT,
     last_sync_status TEXT,
-    last_sync_reason TEXT
+    last_sync_reason TEXT,
+    FOREIGN KEY (repo_id) REFERENCES repositories(repo_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS commit_ingest_ledger (

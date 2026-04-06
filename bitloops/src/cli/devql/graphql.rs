@@ -1,181 +1,19 @@
-use anyhow::Result;
-use serde::de::DeserializeOwned;
-use serde_json::json;
-use std::path::Path;
+mod client;
+mod documents;
+mod progress;
+mod subscription;
+#[cfg(test)]
+mod tests;
+mod types;
 
-use crate::devql_transport::SlimCliRepoScope;
-use crate::host::devql::{
-    IngestionCounters, InitSchemaSummary, format_ingestion_summary, format_init_schema_summary,
+#[cfg(test)]
+pub(crate) use self::client::with_graphql_executor_hook;
+#[cfg(test)]
+pub(crate) use self::client::with_ingest_daemon_bootstrap_hook;
+#[cfg(test)]
+pub(crate) use self::client::with_ingest_daemon_bootstrap_hook as with_ingest_daemon_runtime_hook;
+pub(crate) use self::client::{enqueue_sync_via_graphql, watch_sync_task_via_graphql};
+pub(crate) use self::client::{
+    execute_devql_graphql, run_ingest_via_graphql, run_init_via_graphql,
 };
-use crate::daemon;
-
-#[cfg(test)]
-type IngestDaemonRuntimeHook = dyn Fn(&Path) -> Result<()> + 'static;
-
-#[cfg(test)]
-type IngestDaemonRuntimeHookCell =
-    std::cell::RefCell<Option<std::rc::Rc<IngestDaemonRuntimeHook>>>;
-
-#[cfg(test)]
-thread_local! {
-    static INGEST_DAEMON_RUNTIME_HOOK: IngestDaemonRuntimeHookCell =
-        std::cell::RefCell::new(None);
-}
-
-const INIT_SCHEMA_MUTATION: &str = r#"
-    mutation InitSchema {
-      initSchema {
-        success
-        repoIdentity
-        repoId
-        relationalBackend
-        eventsBackend
-      }
-    }
-"#;
-
-const INGEST_MUTATION: &str = r#"
-    mutation Ingest {
-      ingest {
-        success
-        commitsProcessed
-        checkpointCompanionsProcessed
-        eventsInserted
-        artefactsUpserted
-        semanticFeatureRowsUpserted
-        semanticFeatureRowsSkipped
-        symbolEmbeddingRowsUpserted
-        symbolEmbeddingRowsSkipped
-        symbolCloneEdgesUpserted
-        symbolCloneSourcesScored
-      }
-    }
-"#;
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InitSchemaMutationData {
-    init_schema: InitSchemaSummary,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct IngestMutationData {
-    ingest: IngestionCounters,
-}
-
-#[cfg(test)]
-thread_local! {
-    static GRAPHQL_EXECUTOR_HOOK: std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>> =
-        std::cell::RefCell::new(None);
-}
-
-#[cfg(test)]
-type GraphqlExecutorHook =
-    dyn Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static;
-
-pub(super) async fn execute_devql_graphql<T: DeserializeOwned>(
-    scope: &SlimCliRepoScope,
-    query: &str,
-    variables: serde_json::Value,
-) -> Result<T> {
-    #[cfg(test)]
-    if let Some(data) =
-        maybe_execute_devql_graphql_via_hook(scope.repo_root.as_path(), query, &variables)
-    {
-        return Ok(serde_json::from_value(data?)?);
-    }
-
-    crate::daemon::execute_slim_graphql(scope.repo_root.as_path(), scope, query, variables).await
-}
-
-pub(super) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()> {
-    let response: InitSchemaMutationData =
-        execute_devql_graphql(scope, INIT_SCHEMA_MUTATION, json!({})).await?;
-    println!("{}", format_init_schema_summary(&response.init_schema));
-    Ok(())
-}
-
-pub(super) async fn run_ingest_via_graphql(
-    scope: &SlimCliRepoScope,
-) -> Result<()> {
-    ensure_daemon_current_for_ingest(scope.repo_root.as_path())?;
-    let response: IngestMutationData =
-        execute_devql_graphql(scope, INGEST_MUTATION, json!({})).await?;
-    println!("{}", format_ingestion_summary(&response.ingest));
-    Ok(())
-}
-
-fn ensure_daemon_current_for_ingest(repo_root: &Path) -> Result<()> {
-    #[cfg(test)]
-    if let Some(result) = maybe_check_daemon_runtime_via_hook(repo_root) {
-        return result;
-    }
-
-    daemon::require_current_repo_runtime(repo_root, "`devql ingest`")?;
-    Ok(())
-}
-
-#[cfg(test)]
-pub(super) fn with_ingest_daemon_runtime_hook<T>(
-    hook: impl Fn(&Path) -> Result<()> + 'static,
-    f: impl FnOnce() -> T,
-) -> T {
-    INGEST_DAEMON_RUNTIME_HOOK.with(|cell: &IngestDaemonRuntimeHookCell| {
-        assert!(
-            cell.borrow().is_none(),
-            "ingest daemon hook already installed"
-        );
-        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
-    });
-    let result = f();
-    INGEST_DAEMON_RUNTIME_HOOK.with(|cell: &IngestDaemonRuntimeHookCell| {
-        *cell.borrow_mut() = None;
-    });
-    result
-}
-
-#[cfg(test)]
-fn maybe_check_daemon_runtime_via_hook(repo_root: &Path) -> Option<Result<()>> {
-    INGEST_DAEMON_RUNTIME_HOOK.with(|hook: &IngestDaemonRuntimeHookCell| {
-        hook.borrow().as_ref().map(|hook| hook(repo_root))
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn with_graphql_executor_hook<T>(
-    hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
-    f: impl FnOnce() -> T,
-) -> T {
-    GRAPHQL_EXECUTOR_HOOK.with(
-        |cell: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
-            assert!(
-                cell.borrow().is_none(),
-                "graphql executor hook already installed"
-            );
-            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
-        },
-    );
-    let result = f();
-    GRAPHQL_EXECUTOR_HOOK.with(
-        |cell: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
-            *cell.borrow_mut() = None;
-        },
-    );
-    result
-}
-
-#[cfg(test)]
-fn maybe_execute_devql_graphql_via_hook(
-    repo_root: &Path,
-    query: &str,
-    variables: &serde_json::Value,
-) -> Option<Result<serde_json::Value>> {
-    GRAPHQL_EXECUTOR_HOOK.with(
-        |hook: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
-            hook.borrow()
-                .as_ref()
-                .map(|hook| hook(repo_root, query, variables))
-        },
-    )
-}
+pub(crate) use self::types::SyncTaskGraphqlRecord;

@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS current_file_state (
     exists_in_index INTEGER NOT NULL,
     exists_in_worktree INTEGER NOT NULL,
     last_synced_at TEXT NOT NULL,
-    PRIMARY KEY (repo_id, path)
+    PRIMARY KEY (repo_id, path),
+    FOREIGN KEY (repo_id) REFERENCES repositories(repo_id) ON DELETE CASCADE
 );
 
 -- Exact checkpoint-to-file snapshot projection for event-backed artefact filters.
@@ -210,7 +211,8 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     docstring TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (repo_id, path, symbol_id),
-    UNIQUE (repo_id, artefact_id)
+    UNIQUE (repo_id, artefact_id),
+    FOREIGN KEY (repo_id) REFERENCES repositories(repo_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
@@ -290,7 +292,8 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
         (start_line IS NULL AND end_line IS NULL)
         OR (start_line IS NOT NULL AND end_line IS NOT NULL AND start_line > 0 AND end_line >= start_line)
     ),
-    PRIMARY KEY (repo_id, edge_id)
+    PRIMARY KEY (repo_id, edge_id),
+    FOREIGN KEY (repo_id) REFERENCES repositories(repo_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
@@ -323,7 +326,8 @@ CREATE TABLE IF NOT EXISTS repo_sync_state (
     last_sync_started_at TEXT,
     last_sync_completed_at TEXT,
     last_sync_status TEXT,
-    last_sync_reason TEXT
+    last_sync_reason TEXT,
+    FOREIGN KEY (repo_id) REFERENCES repositories(repo_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS commit_ingest_ledger (

@@ -2,9 +2,9 @@ use super::agent_hooks::{
     AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI, DEFAULT_AGENT,
 };
 use super::*;
+use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
-    with_repo_graphql_executor_hook,
 };
 use crate::cli::{Cli, Commands};
 use crate::config::ensure_daemon_config_exists;
@@ -117,6 +117,39 @@ fn init_args_supports_skip_baseline_flag() {
 }
 
 #[test]
+fn init_args_support_sync_flag_variants() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--sync"]).expect("parse init --sync");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.sync, Some(true));
+
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--sync=false"]).expect("parse init --sync=false");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.sync, Some(false));
+}
+
+#[test]
+fn init_args_support_ingest_flag_variants() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--ingest"]).expect("parse init --ingest");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.ingest, Some(true));
+
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--ingest=false"])
+        .expect("parse init --ingest=false");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.ingest, Some(false));
+}
+
+#[test]
 fn init_cmd_agent_flag_no_value_errors() {
     let err = Cli::try_parse_from(["bitloops", "init", "--agent"])
         .err()
@@ -148,6 +181,8 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: false,
+                    sync: Some(false),
+                    ingest: Some(false),
                 },
                 &mut out,
                 None,
@@ -188,6 +223,8 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: true,
+                    sync: Some(false),
+                    ingest: Some(false),
                 },
                 &mut out,
                 None,
@@ -424,6 +461,8 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                                 telemetry: None,
                                 no_telemetry: false,
                                 skip_baseline: false,
+                                sync: Some(false),
+                                ingest: Some(false),
                             },
                             &mut out,
                             &mut input,
@@ -479,6 +518,8 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                                 telemetry: None,
                                 no_telemetry: false,
                                 skip_baseline: false,
+                                sync: Some(false),
+                                ingest: Some(false),
                             },
                             &mut out,
                             &mut input,
@@ -517,6 +558,8 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                         telemetry: None,
                         no_telemetry: false,
                         skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
                     },
                     &mut out,
                     &mut input,
@@ -568,6 +611,8 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                                 telemetry: Some(false),
                                 no_telemetry: false,
                                 skip_baseline: false,
+                                sync: Some(false),
+                                ingest: Some(false),
                             },
                             &mut out,
                             &mut input,
@@ -584,8 +629,51 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
 }
 
 #[test]
-fn run_init_triggers_project_bootstrap_mutation_for_recovery() {
-    let saw_bootstrap = std::rc::Rc::new(std::cell::RefCell::new(false));
+fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            let err = runtime
+                .block_on(run_with_io_async(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        agent: None,
+                        telemetry: Some(false),
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: None,
+                        ingest: Some(false),
+                    },
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect_err("init should require explicit init actions");
+
+            assert_eq!(
+                err.to_string(),
+                "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
+            );
+        },
+    );
+}
+
+#[test]
+fn run_init_triggers_repo_scoped_ingest_when_enabled() {
+    let saw_ingest = std::rc::Rc::new(std::cell::RefCell::new(false));
     let repo = tempfile::tempdir().unwrap();
     let repo_root = repo.path().to_path_buf();
     let app_dirs = tempfile::tempdir().unwrap();
@@ -601,7 +689,6 @@ fn run_init_triggers_project_bootstrap_mutation_for_recovery() {
 
             with_global_graphql_executor_hook(
                 |_runtime_root, query, variables| {
-                    assert!(!query.contains("bootstrapProject"));
                     assert!(query.contains("updateCliTelemetryConsent"));
                     assert_eq!(variables["telemetry"], serde_json::json!(false));
                     Ok(serde_json::json!({
@@ -612,52 +699,78 @@ fn run_init_triggers_project_bootstrap_mutation_for_recovery() {
                     }))
                 },
                 || {
-                    with_repo_graphql_executor_hook(
-                        {
-                            let saw_bootstrap = std::rc::Rc::clone(&saw_bootstrap);
-                            let repo_root = repo_root.clone();
-                            move |scope, query, variables| {
-                                *saw_bootstrap.borrow_mut() = true;
+                    with_ingest_daemon_bootstrap_hook(
+                        |_repo_root| Ok(()),
+                        || {
+                            with_graphql_executor_hook(
+                                {
+                                    let saw_ingest = std::rc::Rc::clone(&saw_ingest);
+                                    let repo_root = repo_root.clone();
+                                    move |actual_repo_root: &std::path::Path,
+                                  query: &str,
+                                  variables: &serde_json::Value| {
                                 let expected_repo_root =
                                     repo_root.canonicalize().unwrap_or_else(|_| repo_root.clone());
-                                let actual_repo_root = scope
-                                    .repo_root
+                                let actual_repo_root = actual_repo_root
                                     .canonicalize()
-                                    .unwrap_or_else(|_| scope.repo_root.clone());
+                                    .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                 assert_eq!(actual_repo_root, expected_repo_root);
-                                assert!(query.contains("bootstrapProject"));
-                                assert_eq!(variables["skipBaseline"], serde_json::json!(false));
-                                Ok(serde_json::json!({
-                                    "bootstrapProject": {
-                                        "success": true
-                                    }
-                                }))
+
+                                if query.contains("enqueueSync") {
+                                    panic!("init should not enqueue sync when sync=false");
+                                }
+
+                                if query.contains("ingest") {
+                                    *saw_ingest.borrow_mut() = true;
+                                    assert_eq!(variables, &serde_json::json!({}));
+                                    return Ok(serde_json::json!({
+                                        "ingest": {
+                                            "success": true,
+                                            "commitsProcessed": 1,
+                                            "checkpointCompanionsProcessed": 0,
+                                            "eventsInserted": 0,
+                                            "artefactsUpserted": 1,
+                                            "semanticFeatureRowsUpserted": 0,
+                                            "semanticFeatureRowsSkipped": 0,
+                                            "symbolEmbeddingRowsUpserted": 0,
+                                            "symbolEmbeddingRowsSkipped": 0,
+                                            "symbolCloneEdgesUpserted": 0,
+                                            "symbolCloneSourcesScored": 0
+                                        }
+                                    }));
+                                }
+
+                                panic!("unexpected repo-scoped query: {query}");
                             }
-                        },
-                        || {
-                            let mut out = Vec::new();
-                            let mut input = Cursor::new("");
-                            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-                            runtime
-                                .block_on(run_with_io_async(
-                                    InitArgs {
-                                        install_default_daemon: false,
-                                        force: false,
-                                        agent: None,
-                                        telemetry: Some(false),
-                                        no_telemetry: false,
-                                        skip_baseline: false,
-                                    },
-                                    &mut out,
-                                    &mut input,
-                                    None,
-                                ))
-                                .expect("run init");
+                                },
+                                || {
+                                    let mut out = Vec::new();
+                                    let mut input = Cursor::new("");
+                                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                                    runtime
+                                        .block_on(run_with_io_async(
+                                            InitArgs {
+                                                install_default_daemon: false,
+                                                force: false,
+                                                agent: None,
+                                                telemetry: Some(false),
+                                                no_telemetry: false,
+                                                skip_baseline: false,
+                                                sync: Some(false),
+                                                ingest: Some(true),
+                                            },
+                                            &mut out,
+                                            &mut input,
+                                            None,
+                                        ))
+                                        .expect("run init");
+                                },
+                            )
                         },
                     );
                     assert!(
-                        *saw_bootstrap.borrow(),
-                        "init should invoke bootstrapProject after telemetry setup"
+                        *saw_ingest.borrow(),
+                        "init should invoke repo-scoped ingest"
                     );
                 },
             );

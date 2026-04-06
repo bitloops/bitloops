@@ -298,6 +298,10 @@ pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Opti
     dashboard_paths::resolve_bundle_file(bundle_dir, request_path)
 }
 
+pub(super) fn request_path_looks_like_asset(request_path: &str) -> bool {
+    dashboard_paths::request_path_looks_like_asset(request_path)
+}
+
 #[cfg(test)]
 fn select_startup_mode(
     config: &DashboardServerConfig,

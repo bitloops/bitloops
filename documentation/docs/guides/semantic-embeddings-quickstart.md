@@ -1,10 +1,16 @@
+---
+title: Semantic + Embeddings Quickstart
+---
+
 # Semantic + Embeddings Quickstart
 
 This guide shows the quickest way to try:
 
-- semantic summaries through an OpenAI-compatible provider
+- semantic summaries through a configured LLM provider
 - local embeddings through the standalone `bitloops-embeddings` runtime
 - the daemon-owned enrichment queue and health checks
+
+Run the repo-scoped commands below from inside a Git repository or Bitloops project, typically after `bitloops init`.
 
 ## What You Need
 
@@ -24,7 +30,7 @@ cargo install --path bitloops-embeddings --force
 
 Semantic and embeddings runtime settings live in the Bitloops daemon config.
 
-Typical macOS path:
+Typical macOS location, for example:
 
 ```text
 ~/Library/Application Support/bitloops/config.toml
@@ -33,10 +39,10 @@ Typical macOS path:
 If you have not bootstrapped the daemon config yet:
 
 ```bash
-bitloops daemon start --create-default-config
+bitloops start --create-default-config
 ```
 
-## Local Embeddings + OpenAI Semantic
+## Local Embeddings + Semantic Summaries
 
 Add this to the daemon config:
 
@@ -57,6 +63,7 @@ Notes:
 
 - `embedding_profile` is just a profile name. `local` is a convention, not a reserved keyword.
 - `kind = "local_fastembed"` uses the local embeddings runtime with the Jina model by default.
+- For platform-specific config paths, use the configuration reference alongside your OS defaults.
 
 ## Warm The Local Model
 
@@ -119,7 +126,7 @@ On a healthy path, pending jobs should go down over time and failed jobs should 
 The easiest user-facing proof that embeddings were written and used is a clone query:
 
 ```bash
-bitloops devql query 'artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6)->limit(5)'
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.6)->limit(5)'
 ```
 
 ## Useful Commands

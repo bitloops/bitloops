@@ -1,41 +1,59 @@
-# Website
+# Bitloops Documentation
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+This directory contains the Bitloops Docusaurus app.
 
-## Installation
+## Structure
+
+- `docs/` contains the main user-facing product documentation
+- `contributors/` contains contributor and architecture documentation
+- `sidebars.ts` defines the main docs navigation
+- `sidebarsContributors.ts` defines the contributors navigation
+
+## Tooling
+
+- Package manager: `pnpm`
+- Node.js: `>=20`
+
+Install dependencies from this directory with:
 
 ```bash
-yarn
+pnpm install
 ```
 
 ## Local Development
 
-```bash
-yarn start
-```
+Start the docs app with hot reload:
 
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
+```bash
+pnpm start
+```
 
 ## Build
 
-```bash
-yarn build
-```
-
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
-
-## Deployment
-
-Using SSH:
+Create the production build:
 
 ```bash
-USE_SSH=true yarn deploy
+pnpm build
 ```
 
-Not using SSH:
+Serve the built site locally:
 
 ```bash
-GIT_USER=<Your GitHub username> yarn deploy
+pnpm serve
 ```
 
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+## Maintenance
+
+Type-check the Docusaurus app:
+
+```bash
+pnpm typecheck
+```
+
+Useful helper scripts:
+
+```bash
+pnpm clear
+pnpm write-heading-ids
+pnpm write-translations
+```

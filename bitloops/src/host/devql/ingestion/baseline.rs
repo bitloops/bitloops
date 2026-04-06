@@ -95,6 +95,9 @@ pub(super) async fn run_baseline_ingestion(
     }
 
     println!("Indexing codebase ({} files)...", files.len());
+    prepare_sync_execution_schema(cfg, "baseline sync", &sync::types::SyncMode::Full)
+        .await
+        .context("preparing schema for baseline sync reconciliation")?;
     super::commands_sync::execute_sync(cfg, relational, sync::types::SyncMode::Full)
         .await
         .context("running baseline sync reconciliation")?;

@@ -7,7 +7,7 @@ title: FAQ
 
 ### Do I still run `bitloops init` inside every repo?
 
-Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and runs the initial baseline sync through the daemon.
+Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and prepares local repo policy for capture. It can also queue an initial current-state sync after hook setup. Use DevQL commands separately for ingest and for any later explicit sync or validation runs.
 
 ### Where does Bitloops keep its data now?
 
@@ -72,7 +72,9 @@ After that:
 
 ### What replaced `bitloops status` for repo capture status?
 
-Use `bitloops checkpoints status`.
+Use `bitloops checkpoints status` for detailed capture and repo-policy status.
+
+`bitloops status` now focuses on daemon health, sync queue totals, and the active or most recent sync task for the current repo when you run it inside a repository.
 
 ### Is there an automatic migration from the older JSON config?
 

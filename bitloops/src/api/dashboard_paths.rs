@@ -32,6 +32,11 @@ pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Opti
     Some(candidate)
 }
 
+pub(super) fn request_path_looks_like_asset(request_path: &str) -> bool {
+    let trimmed = request_path.trim_start_matches('/');
+    Path::new(trimmed).extension().is_some()
+}
+
 pub(super) fn content_type_for_path(path: &Path) -> &'static str {
     let Some(extension) = path.extension().and_then(OsStr::to_str) else {
         return "application/octet-stream";

@@ -114,6 +114,25 @@ fn apply_legacy_current_state_compat_schema(_path: &Path) {
     // Legacy compat schema no longer needed — init schema and sync schema are aligned.
 }
 
+async fn seed_test_repository_catalog_row(relational: &RelationalStorage, cfg: &DevqlConfig) {
+    relational
+        .exec(&format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+             VALUES ('{}', '{}', '{}', '{}', 'main') \
+             ON CONFLICT(repo_id) DO UPDATE SET \
+               provider = excluded.provider, \
+               organization = excluded.organization, \
+               name = excluded.name, \
+               default_branch = excluded.default_branch",
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.provider),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.organization),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.name),
+        ))
+        .await
+        .expect("seed test repository catalog row");
+}
+
 async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     init_sqlite_schema(path)
         .await
@@ -131,7 +150,9 @@ async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     })
     .await
     .expect("join blocking clone DDL");
-    RelationalStorage::local_only(path_buf)
+    let relational = RelationalStorage::local_only(path_buf);
+    seed_test_repository_catalog_row(&relational, &test_cfg()).await;
+    relational
 }
 
 #[tokio::test]

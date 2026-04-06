@@ -9,9 +9,9 @@ use crate::config::{
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
-    SyncMode, SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document,
-    format_query_output, parse_devql_query, run_capability_packs_report,
-    run_checkpoint_file_snapshot_backfill, run_sync_with_summary, use_raw_graphql_mode,
+    SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
+    parse_devql_query, run_capability_packs_report, run_checkpoint_file_snapshot_backfill,
+    use_raw_graphql_mode,
 };
 
 mod args;
@@ -91,19 +91,24 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             }
         }
         DevqlCommand::Sync(args) => {
-            let mode = if args.validate {
-                SyncMode::Validate
-            } else if args.repair {
-                SyncMode::Repair
-            } else if let Some(paths) = args.paths {
-                SyncMode::Paths(paths)
-            } else if args.full {
-                SyncMode::Full
+            let (task, merged) = graphql::enqueue_sync_via_graphql(
+                &scope,
+                args.full,
+                args.paths,
+                args.repair,
+                args.validate,
+                "manual_cli",
+            )
+            .await?;
+            if args.status {
+                if let Some(summary) =
+                    graphql::watch_sync_task_via_graphql(&scope, task.clone()).await?
+                {
+                    println!("{}", format_sync_completion_summary(&summary));
+                }
             } else {
-                SyncMode::Auto
-            };
-            let summary = run_sync_with_summary(&cfg, mode).await?;
-            println!("{}", format_sync_completion_summary(&summary));
+                println!("{}", format_sync_queue_submission(&task, merged));
+            }
             Ok(())
         }
         DevqlCommand::Projection(args) => match args.command {
@@ -221,7 +226,21 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     }
 }
 
-fn format_sync_completion_summary(summary: &SyncSummary) -> String {
+pub(crate) fn format_sync_queue_submission(
+    task: &graphql::SyncTaskGraphqlRecord,
+    merged: bool,
+) -> String {
+    let mut line = format!(
+        "sync queued: task={} repo={} mode={}",
+        task.task_id, task.repo_name, task.mode
+    );
+    if merged {
+        line.push_str(" (merged into existing task)");
+    }
+    line
+}
+
+pub(crate) fn format_sync_completion_summary(summary: &SyncSummary) -> String {
     if summary.mode == "validate" {
         return format_sync_validation_summary(summary);
     }

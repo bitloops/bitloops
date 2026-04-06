@@ -35,7 +35,7 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -
                 .await
                 .context("refreshing DevQL artefacts for post-merge files")?;
 
-        if stats.files_failed > 0 {
+        if stats.completed_with_failures() {
             eprintln!(
                 "[bitloops] Warning: DevQL post-merge artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
                 head_sha,

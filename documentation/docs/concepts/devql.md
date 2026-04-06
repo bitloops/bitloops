@@ -48,13 +48,13 @@ Most list fields use cursor-based GraphQL connections, so pagination, field sele
 
 ## Query Modes
 
-`bitloops devql query` now runs against the GraphQL schema in-process:
+`bitloops devql query` is daemon-backed:
 
 - If the query contains `->`, the CLI treats it as DevQL DSL and compiles it to GraphQL first
 - Otherwise, the CLI treats the input as raw GraphQL
 - `--graphql` is available as an explicit raw-GraphQL override
 
-The result is one execution engine for CLI, dashboard, and external GraphQL clients.
+The CLI parses or compiles locally, then executes against the local Bitloops daemon GraphQL surface. The result is one execution engine for CLI, dashboard, and external GraphQL clients.
 
 ## Capability Packs
 

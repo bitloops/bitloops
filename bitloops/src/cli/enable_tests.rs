@@ -52,8 +52,28 @@ fn run_enable_command(args: EnableArgs) -> Result<()> {
     runtime.block_on(run(args))
 }
 
+fn with_isolated_daemon_config_process_state<T>(
+    cwd: Option<&Path>,
+    extra_env: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_dir_value = config_dir.path().to_string_lossy().into_owned();
+    let mut env = Vec::with_capacity(extra_env.len() + 1);
+    env.push((
+        "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+        Some(config_dir_value.as_str()),
+    ));
+    env.extend_from_slice(extra_env);
+    with_process_state(cwd, &env, f)
+}
+
+fn with_isolated_daemon_config<T>(f: impl FnOnce() -> T) -> T {
+    with_isolated_daemon_config_process_state(None, &[], f)
+}
+
 fn with_ready_daemon_and_repo_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
-    with_process_state(
+    with_isolated_daemon_config_process_state(
         Some(path),
         &[
             ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
@@ -80,7 +100,7 @@ fn with_enable_test_process_state<T>(
     telemetry_response: serde_json::Value,
     f: impl FnOnce() -> T,
 ) -> T {
-    with_process_state(
+    with_isolated_daemon_config_process_state(
         Some(path),
         &[
             ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
@@ -107,85 +127,91 @@ fn run_enable(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
 
 #[test]
 fn run_enable_sets_enabled_true() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = false
 "#,
-    );
+        );
 
-    let mut out = Vec::new();
-    run_enable(dir.path(), &mut out).unwrap();
+        let mut out = Vec::new();
+        run_enable(dir.path(), &mut out).unwrap();
 
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("enabled"),
-        "output should mention 'enabled': {output}"
-    );
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("enabled"),
+            "output should mention 'enabled': {output}"
+        );
 
-    let settings = load_settings(dir.path()).unwrap();
-    assert!(
-        settings.enabled,
-        "Bitloops should be enabled after run_enable"
-    );
+        let settings = load_settings(dir.path()).unwrap();
+        assert!(
+            settings.enabled,
+            "Bitloops should be enabled after run_enable"
+        );
+    });
 }
 
 #[test]
 fn run_enable_already_enabled() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 "#,
-    );
+        );
 
-    let mut out = Vec::new();
-    run_enable(dir.path(), &mut out).unwrap();
+        let mut out = Vec::new();
+        run_enable(dir.path(), &mut out).unwrap();
 
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("enabled"),
-        "output should mention 'enabled': {output}"
-    );
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("enabled"),
+            "output should mention 'enabled': {output}"
+        );
+    });
 }
 
 #[test]
 fn run_disable_removes_installed_hooks_without_editing_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 "#,
-    );
-    git_hooks::install_git_hooks(dir.path(), false).unwrap();
-    codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+        );
+        git_hooks::install_git_hooks(dir.path(), false).unwrap();
+        codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
 
-    let mut out = Vec::new();
-    run_disable(dir.path(), &mut out, false).unwrap();
+        let mut out = Vec::new();
+        run_disable(dir.path(), &mut out, false).unwrap();
 
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("disabled"),
-        "output should mention 'disabled': {output}"
-    );
-    assert!(
-        git_command()
-            .arg("rev-parse")
-            .current_dir(dir.path())
-            .status()
-            .is_ok(),
-        "sanity check git command should still work"
-    );
-    assert!(git_hooks::is_git_hook_installed(dir.path()));
-    assert!(codex_hooks::are_hooks_installed_at(dir.path()));
-    assert!(!settings::is_enabled(dir.path()).unwrap());
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("disabled"),
+            "output should mention 'disabled': {output}"
+        );
+        assert!(
+            git_command()
+                .arg("rev-parse")
+                .current_dir(dir.path())
+                .status()
+                .is_ok(),
+            "sanity check git command should still work"
+        );
+        assert!(git_hooks::is_git_hook_installed(dir.path()));
+        assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+        assert!(!settings::is_enabled(dir.path()).unwrap());
+    });
 }
 
 #[test]
@@ -212,53 +238,55 @@ enabled = false
 
 #[test]
 fn check_disabled_guard_test() {
-    let dir = tempfile::tempdir().unwrap();
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
 
-    // No settings file → not disabled (defaults to enabled)
-    let mut out = Vec::new();
-    assert!(
-        !check_disabled_guard(dir.path(), &mut out),
-        "should return false when no settings file"
-    );
-    assert!(
-        String::from_utf8(out).unwrap().is_empty(),
-        "should print nothing when enabled"
-    );
+        // No settings file → not disabled (defaults to enabled)
+        let mut out = Vec::new();
+        assert!(
+            !check_disabled_guard(dir.path(), &mut out),
+            "should return false when no settings file"
+        );
+        assert!(
+            String::from_utf8(out).unwrap().is_empty(),
+            "should print nothing when enabled"
+        );
 
-    // Settings with enabled: true → not disabled
-    setup_settings(
-        &dir,
-        r#"[capture]
+        // Settings with enabled: true → not disabled
+        setup_settings(
+            &dir,
+            r#"[capture]
 enabled = true
 "#,
-    );
-    let mut out = Vec::new();
-    assert!(
-        !check_disabled_guard(dir.path(), &mut out),
-        "should return false when enabled"
-    );
+        );
+        let mut out = Vec::new();
+        assert!(
+            !check_disabled_guard(dir.path(), &mut out),
+            "should return false when enabled"
+        );
 
-    // Settings with enabled: false → disabled
-    setup_settings(
-        &dir,
-        r#"[capture]
+        // Settings with enabled: false → disabled
+        setup_settings(
+            &dir,
+            r#"[capture]
 enabled = false
 "#,
-    );
-    let mut out = Vec::new();
-    assert!(
-        check_disabled_guard(dir.path(), &mut out),
-        "should return true when disabled"
-    );
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("Bitloops is disabled"),
-        "should print disabled message: {output}"
-    );
-    assert!(
-        output.contains("bitloops enable"),
-        "should mention 'bitloops enable': {output}"
-    );
+        );
+        let mut out = Vec::new();
+        assert!(
+            check_disabled_guard(dir.path(), &mut out),
+            "should return true when disabled"
+        );
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("Bitloops is disabled"),
+            "should print disabled message: {output}"
+        );
+        assert!(
+            output.contains("bitloops enable"),
+            "should mention 'bitloops enable': {output}"
+        );
+    });
 }
 
 #[test]
@@ -387,37 +415,39 @@ fn determine_settings_target_settings_not_exists_no_flags() {
 
 #[test]
 fn run_enable_with_strategy_rewrites_repo_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 push = true
 some_other_option = "value"
 "#,
-    );
+        );
 
-    run_enable_with_strategy(dir.path(), "auto-commit", false, false).unwrap();
+        run_enable_with_strategy(dir.path(), "auto-commit", false, false).unwrap();
 
-    let merged = load_settings(dir.path()).unwrap();
-    assert_eq!(merged.strategy, "auto-commit");
-    assert!(merged.enabled);
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("push")
-            .and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("some_other_option")
-            .and_then(serde_json::Value::as_str),
-        Some("value")
-    );
+        let merged = load_settings(dir.path()).unwrap();
+        assert_eq!(merged.strategy, "auto-commit");
+        assert!(merged.enabled);
+        assert_eq!(
+            merged
+                .strategy_options
+                .get("push")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            merged
+                .strategy_options
+                .get("some_other_option")
+                .and_then(serde_json::Value::as_str),
+            Some("value")
+        );
+    });
 }
 
 #[test]
@@ -446,34 +476,36 @@ fn setup_bitloops_dir_preserves_existing_files() {
 
 #[test]
 fn run_enable_with_strategy_preserves_local_settings() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 "#,
-    );
-    setup_local_settings(
-        &dir,
-        r#"[capture]
+        );
+        setup_local_settings(
+            &dir,
+            r#"[capture]
 push = true
 "#,
-    );
+        );
 
-    run_enable_with_strategy(dir.path(), "auto-commit", true, false).unwrap();
+        run_enable_with_strategy(dir.path(), "auto-commit", true, false).unwrap();
 
-    let merged = load_settings(dir.path()).unwrap();
-    assert_eq!(merged.strategy, "auto-commit");
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("push")
-            .and_then(|v| v.as_bool()),
-        Some(true),
-        "local strategy options should be preserved"
-    );
+        let merged = load_settings(dir.path()).unwrap();
+        assert_eq!(merged.strategy, "auto-commit");
+        assert_eq!(
+            merged
+                .strategy_options
+                .get("push")
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "local strategy options should be preserved"
+        );
+    });
 }
 
 #[test]
@@ -486,22 +518,26 @@ fn test_check_bitloops_dir_exists() {
 
 #[test]
 fn is_fully_enabled_not_enabled() {
-    let dir = tempfile::tempdir().unwrap();
-    let (enabled, _, _) = is_fully_enabled(dir.path());
-    assert!(!enabled, "should not be fully enabled");
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let (enabled, _, _) = is_fully_enabled(dir.path());
+        assert!(!enabled, "should not be fully enabled");
+    });
 }
 
 #[test]
 fn is_fully_enabled_settings_disabled() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_settings(
+            &dir,
+            r#"[capture]
 enabled = false
 "#,
-    );
-    let (enabled, _, _) = is_fully_enabled(dir.path());
-    assert!(!enabled, "disabled settings should not be fully enabled");
+        );
+        let (enabled, _, _) = is_fully_enabled(dir.path());
+        assert!(!enabled, "disabled settings should not be fully enabled");
+    });
 }
 
 #[test]
@@ -1040,7 +1076,7 @@ enabled = false
 "#,
     );
 
-    with_process_state(
+    with_isolated_daemon_config_process_state(
         Some(dir.path()),
         &[
             ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),

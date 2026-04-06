@@ -13,6 +13,28 @@ async fn sqlite_relational_store_with_sync_schema(
     crate::host::devql::RelationalStorage::local_only(path.to_path_buf())
 }
 
+async fn seed_sync_repository_catalog_row(
+    relational: &crate::host::devql::RelationalStorage,
+    cfg: &crate::host::devql::DevqlConfig,
+) {
+    relational
+        .exec(&format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+             VALUES ('{}', '{}', '{}', '{}', 'main') \
+             ON CONFLICT(repo_id) DO UPDATE SET \
+               provider = excluded.provider, \
+               organization = excluded.organization, \
+               name = excluded.name, \
+               default_branch = excluded.default_branch",
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.provider),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.organization),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.name),
+        ))
+        .await
+        .expect("seed sync repository catalog row");
+}
+
 fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
     crate::host::devql::DevqlConfig {
         config_root: std::path::PathBuf::from("/tmp/repo"),
@@ -185,6 +207,7 @@ async fn repo_sync_state_write_helpers_track_lifecycle() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     crate::host::devql::sync::lock::write_sync_started(
         &relational,
@@ -312,6 +335,7 @@ async fn repo_sync_state_write_failed_marks_repo_as_failed() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     crate::host::devql::sync::lock::write_sync_started(
         &relational,
@@ -361,6 +385,7 @@ async fn repo_sync_state_write_completed_errors_without_started_row() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     let err = crate::host::devql::sync::lock::write_sync_completed(
         &relational,
@@ -386,6 +411,7 @@ async fn repo_sync_state_write_failed_errors_without_started_row() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     let err = crate::host::devql::sync::lock::write_sync_failed(&relational, &cfg.repo.repo_id)
         .await
@@ -427,6 +453,8 @@ CREATE TABLE current_file_state (
     for table in &[
         "repo_sync_state",
         "current_file_state",
+        "artefacts_current",
+        "artefact_edges_current",
         "content_cache",
         "content_cache_artefacts",
         "content_cache_edges",
@@ -480,6 +508,40 @@ CREATE TABLE current_file_state (
         assert_eq!(
             column_count, 1,
             "column {column} should exist on current_file_state"
+        );
+    }
+
+    for table in &[
+        "repo_sync_state",
+        "current_file_state",
+        "artefacts_current",
+        "artefact_edges_current",
+    ] {
+        let mut stmt = db
+            .prepare(&format!("PRAGMA foreign_key_list({table})"))
+            .expect("prepare foreign_key_list");
+        let fk_rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .expect("query foreign_key_list")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect foreign keys");
+        assert!(
+            fk_rows
+                .iter()
+                .any(|(referenced_table, from_column, to_column, on_delete)| {
+                    referenced_table == "repositories"
+                        && from_column == "repo_id"
+                        && to_column == "repo_id"
+                        && on_delete.eq_ignore_ascii_case("CASCADE")
+                }),
+            "table {table} should reference repositories(repo_id) with ON DELETE CASCADE"
         );
     }
 }
@@ -731,6 +793,36 @@ fn workspace_state_reports_untracked_files() {
 }
 
 #[test]
+fn workspace_state_filter_limits_results_to_requested_paths() {
+    let repo = seed_full_sync_repo();
+    let requested_paths = std::collections::HashSet::from(["src/lib.rs".to_string()]);
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace_for_paths(
+        repo.path(),
+        Some(&requested_paths),
+    )
+    .expect("inspect filtered workspace");
+
+    assert_eq!(state.head_tree.len(), 1);
+    assert!(state.head_tree.contains_key("src/lib.rs"));
+    assert!(
+        state.staged_changes.keys().all(|path| path == "src/lib.rs"),
+        "filtered staged changes should only include requested paths"
+    );
+    assert!(
+        state.dirty_files.iter().all(|path| path == "src/lib.rs"),
+        "filtered dirty files should only include requested paths"
+    );
+    assert!(
+        state
+            .untracked_files
+            .iter()
+            .all(|path| path == "src/lib.rs"),
+        "filtered untracked files should only include requested paths"
+    );
+}
+
+#[test]
 fn workspace_state_unborn_head_reports_raw_workspace_state() {
     let repo = tempdir().expect("temp dir");
     crate::test_support::git_fixtures::init_test_repo(
@@ -807,7 +899,7 @@ async fn content_cache_store_then_lookup_roundtrips_payload() {
         language: "rust".to_string(),
         parser_version: "parser-v1".to_string(),
         extractor_version: "extractor-v1".to_string(),
-        parse_status: "parsed".to_string(),
+        parse_status: "ok".to_string(),
         artefacts: vec![crate::host::devql::sync::content_cache::CachedArtefact {
             artifact_key: "file::src/lib.rs".to_string(),
             canonical_kind: Some("file".to_string()),
@@ -867,7 +959,7 @@ async fn content_cache_lookup_respects_parser_and_extractor_versions() {
         language: "rust".to_string(),
         parser_version: "parser-a".to_string(),
         extractor_version: "extractor-a".to_string(),
-        parse_status: "parsed".to_string(),
+        parse_status: "ok".to_string(),
         artefacts: vec![crate::host::devql::sync::content_cache::CachedArtefact {
             artifact_key: "fn::demo".to_string(),
             canonical_kind: Some("function".to_string()),
@@ -948,7 +1040,7 @@ function localHelper(): number {
     assert_eq!(extraction.language, "typescript");
     assert_eq!(extraction.parser_version, "tree-sitter-ts@1");
     assert_eq!(extraction.extractor_version, "ts-language-pack@1");
-    assert_eq!(extraction.parse_status, "parsed");
+    assert_eq!(extraction.parse_status, "ok");
 
     let repeated = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
@@ -1161,6 +1253,7 @@ async fn materialize_writes_artefacts_current_with_correct_symbol_id() {
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let path = "src/sample.ts";
     let content = r#"import { remoteFoo } from "./remote";
 
@@ -1262,6 +1355,7 @@ async fn materialize_then_re_materialize_is_idempotent() {
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let path = "src/sample.ts";
     let content = r#"import { remoteFoo } from "./remote";
 
@@ -1453,6 +1547,7 @@ async fn materialize_reuses_cached_extraction_at_new_path_with_path_sensitive_id
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let original_path = "src/sample.ts";
     let materialized_path = "nested/other.ts";
     let content = r#"import { remoteFoo } from "./remote";
@@ -1565,6 +1660,7 @@ async fn remove_path_deletes_all_rows() {
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
     let path = "src/sample.ts";
     let content = r#"import { remoteFoo } from "./remote";
 
@@ -1727,6 +1823,13 @@ async fn full_sync_indexes_all_supported_files() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .expect("read repo_sync_state row");
+    let repository_row: (String, String, String) = db
+        .query_row(
+            "SELECT provider, organization, name FROM repositories WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read repositories row");
 
     assert_eq!(cache_count, 4, "supported files should be cached once each");
     assert!(
@@ -1740,6 +1843,14 @@ async fn full_sync_indexes_all_supported_files() {
     assert_eq!(sync_state.0, "completed");
     assert_eq!(sync_state.1, "full");
     assert_eq!(sync_state.2.as_deref(), Some("main"));
+    assert_eq!(
+        repository_row,
+        (
+            cfg.repo.provider.clone(),
+            cfg.repo.organization.clone(),
+            cfg.repo.name.clone()
+        )
+    );
     assert!(
         sync_state.3.is_some(),
         "completed sync should persist the resolved HEAD commit"
@@ -2164,6 +2275,112 @@ async fn dirty_then_commit_unchanged_is_cache_hit() {
         )
         .expect("read content_cache retention class");
     assert_eq!(retention_class, "git_backed");
+}
+
+#[tokio::test]
+async fn cached_parse_error_hit_updates_manifest_and_clears_materialized_rows() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let path = "src/lib.rs";
+    let broken_content = "fn broken( {\n";
+
+    let baseline = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let baseline_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| row.get(0),
+        )
+        .expect("count baseline rows for parse-error path");
+    assert!(
+        baseline_rows > 0,
+        "baseline sync should materialize at least one row for parse-error path"
+    );
+
+    fs::write(repo.path().join(path), broken_content).expect("write broken source content");
+    let broken_content_id =
+        crate::host::devql::sync::content_identity::compute_blob_oid(broken_content.as_bytes());
+    let parse_error_payload = crate::host::devql::sync::content_cache::CachedExtraction {
+        content_id: broken_content_id.clone(),
+        language: "rust".to_string(),
+        parser_version: baseline.parser_version.clone(),
+        extractor_version: baseline.extractor_version.clone(),
+        parse_status: crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR.to_string(),
+        artefacts: vec![],
+        edges: vec![],
+    };
+    crate::host::devql::sync::content_cache::store_cached_content(
+        &relational,
+        &parse_error_payload,
+        "worktree_only",
+    )
+    .await
+    .expect("store parse-error cache payload");
+
+    let summary = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with cached parse-error payload");
+
+    assert_eq!(summary.paths_changed, 1);
+    assert_eq!(summary.cache_hits, 1);
+    assert_eq!(summary.cache_misses, 0);
+    assert_eq!(summary.parse_errors, 1);
+
+    let rows_after: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| row.get(0),
+        )
+        .expect("count rows after parse-error materialization");
+    assert_eq!(
+        rows_after, 0,
+        "parse-error payload should clear materialized rows for the path"
+    );
+
+    let current_state: (String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read current_file_state after parse-error sync");
+    assert_eq!(current_state.0, broken_content_id);
+    assert_eq!(current_state.1, "worktree");
+
+    let parse_status: String = db
+        .query_row(
+            "SELECT parse_status FROM content_cache \
+             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            [
+                current_state.0.as_str(),
+                "rust",
+                summary.parser_version.as_str(),
+                summary.extractor_version.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("read parse_status for parse-error cache row");
+    assert_eq!(
+        parse_status,
+        crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR
+    );
 }
 
 #[tokio::test]
@@ -2656,6 +2873,42 @@ async fn repair_mode_reprocesses_all_paths_using_cache_when_available() {
     assert_eq!(result.cache_misses, 0);
     assert_eq!(repaired_state, baseline_state);
     assert_eq!(retention_class, baseline_retention_class);
+}
+
+#[tokio::test]
+async fn execute_sync_with_stats_reports_batched_sqlite_writes() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let (summary, stats) = crate::host::devql::execute_sync_with_stats(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with stats");
+
+    assert!(summary.paths_added > 0);
+    assert_eq!(stats.prepare_worker_count, summary.paths_added.min(8));
+    assert!(stats.sqlite_commits > 0);
+    assert!(
+        stats.sqlite_commits < summary.paths_added.saturating_mul(2),
+        "batched writer should use fewer commits than per-file cache+materialise writes"
+    );
+    assert!(
+        !stats.workspace_inspection.is_zero(),
+        "workspace inspection timing should be recorded"
+    );
+    assert!(
+        !stats.desired_manifest_build.is_zero(),
+        "manifest timing should be recorded"
+    );
+    assert!(
+        stats.sqlite_rows_written > 0,
+        "writer stats should record SQLite row mutations"
+    );
 }
 
 #[tokio::test]

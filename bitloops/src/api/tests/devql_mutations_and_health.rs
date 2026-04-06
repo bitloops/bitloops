@@ -43,6 +43,37 @@ fn write_current_repo_runtime_state(repo_root: &Path) {
     fs::write(&runtime_path, bytes).expect("write runtime state");
 }
 
+fn assert_bad_user_input_error(
+    response: &async_graphql::Response,
+    operation: &str,
+    expected_message_fragment: &str,
+) {
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert_eq!(
+        extensions.get("kind"),
+        Some(&async_graphql::Value::from("validation"))
+    );
+    assert_eq!(
+        extensions.get("operation"),
+        Some(&async_graphql::Value::from(operation))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains(expected_message_fragment),
+        "expected error message to contain `{expected_message_fragment}`, got `{}`",
+        response.errors[0].message
+    );
+}
+
 #[tokio::test]
 async fn devql_schema_builds_and_executes_in_process() {
     let temp = TempDir::new().expect("temp dir");
@@ -74,6 +105,15 @@ async fn devql_schema_builds_and_executes_in_process() {
 #[tokio::test]
 async fn global_mutation_updates_cli_telemetry_consent() {
     let temp = TempDir::new().expect("temp dir");
+    let daemon_state = TempDir::new().expect("daemon state temp dir");
+    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(temp.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(daemon_state_str.as_str()),
+        )],
+    );
     let config_path = temp
         .path()
         .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
@@ -160,7 +200,15 @@ enabled = false
 #[tokio::test]
 async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let daemon_state = TempDir::new().expect("daemon state temp dir");
+    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(daemon_state_str.as_str()),
+        )],
+    );
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
@@ -272,6 +320,219 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
         .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
         .expect("count repositories");
     assert_eq!(repository_count, 1, "expected repository row after ingest");
+}
+
+#[tokio::test]
+async fn enqueue_sync_rejects_conflicting_mode_selectors() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = slim_schema_for_repo(repo.path());
+
+    let validate_and_full = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              enqueueSync(input: { validate: true, full: true }) {
+                merged
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_bad_user_input_error(
+        &validate_and_full,
+        "enqueueSync",
+        "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
+    );
+
+    let repair_and_paths = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              enqueueSync(input: { repair: true, paths: ["src/lib.rs"] }) {
+                merged
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_bad_user_input_error(
+        &repair_and_paths,
+        "enqueueSync",
+        "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
+    );
+}
+
+#[tokio::test]
+async fn sync_rejects_conflicting_mode_selectors() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = slim_schema_for_repo(repo.path());
+
+    let validate_and_full = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              sync(input: { validate: true, full: true }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_bad_user_input_error(
+        &validate_and_full,
+        "sync",
+        "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
+    );
+
+    let repair_and_paths = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              sync(input: { repair: true, paths: ["src/lib.rs"] }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_bad_user_input_error(
+        &repair_and_paths,
+        "sync",
+        "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
+    );
+}
+
+#[tokio::test]
+async fn sync_without_selector_uses_the_default_auto_behaviour() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              sync(input: {}) {
+                success
+                mode
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["sync"]["success"], true);
+    assert_eq!(
+        json["sync"]["mode"], "full",
+        "auto sync requests currently execute with the full-workspace summary mode"
+    );
+}
+
+#[tokio::test]
+async fn enqueue_sync_without_selector_defaults_to_auto_mode() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              enqueueSync(input: {}) {
+                merged
+                task {
+                  mode
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["enqueueSync"]["task"]["mode"], "auto");
+}
+
+#[tokio::test]
+async fn daemon_bootstrap_creates_devql_schema_tables() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    seed_repository_catalog_row(repo.path(), SEEDED_REPO_NAME, "main");
+    seed_duckdb_events(repo.path(), &[]);
+
+    let daemon = tokio::spawn(crate::api::run_with_options(
+        crate::api::DashboardServerConfig {
+            host: Some("127.0.0.1".to_string()),
+            port: 0,
+            no_open: true,
+            force_http: true,
+            recheck_local_dashboard_net: false,
+            bundle_dir: None,
+        },
+        crate::api::DashboardRuntimeOptions {
+            ready_subject: "Test daemon".to_string(),
+            print_ready_banner: false,
+            open_browser: false,
+            shutdown_message: None,
+            on_ready: None,
+            on_shutdown: None,
+            config_root: Some(repo.path().to_path_buf()),
+            repo_registry_path: None,
+        },
+    ));
+
+    let wait = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if sqlite_path.exists() {
+                let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+                let required_tables = [
+                    "repo_sync_state",
+                    "current_file_state",
+                    "artefacts_current",
+                    "content_cache",
+                ];
+                let all_exist = required_tables.iter().all(|table| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [*table],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map(|count| count == 1)
+                    .unwrap_or(false)
+                });
+                if all_exist {
+                    break;
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+
+    if wait.is_err() && daemon.is_finished() {
+        let result = daemon.await.expect("daemon join");
+        panic!("daemon exited early: {result:#?}");
+    }
+
+    daemon.abort();
+    let _ = daemon.await;
+
+    assert!(wait.is_ok(), "schema tables were not bootstrapped in time");
 }
 
 #[tokio::test]
