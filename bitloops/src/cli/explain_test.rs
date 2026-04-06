@@ -9,9 +9,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+    setup_git_repo_with_initial_branch("main")
+}
+
+fn setup_git_repo_with_initial_branch(
+    initial_branch: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     run_git_cmd(&root, &["init"]);
+    run_git_cmd(&root, &["checkout", "-B", initial_branch]);
     run_git_cmd(&root, &["config", "user.name", "Test"]);
     run_git_cmd(&root, &["config", "user.email", "test@example.com"]);
     run_git_cmd(&root, &["config", "commit.gpgsign", "false"]);
@@ -2169,7 +2176,7 @@ fn TestGetBranchCheckpointsReal_FiltersMainCommits() {
 
 #[test]
 fn TestGetBranchCheckpointsReal_DefaultBranchFindsMergedCheckpoints() {
-    let (_tmp, root) = setup_git_repo();
+    let (_tmp, root) = setup_git_repo_with_initial_branch("trunk");
     let checkpoint_id = "fea112233344";
 
     let _ = make_commit(&root, "file.txt", "initial", "initial commit");

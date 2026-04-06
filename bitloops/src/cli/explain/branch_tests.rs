@@ -169,21 +169,21 @@ fn resolve_branch_display_name_handles_empty_and_named_branches() {
 }
 
 #[test]
-fn compute_reachable_from_main_returns_empty_on_default_branch_and_uses_master_fallback() {
+fn compute_reachable_from_default_branch_returns_empty_on_default_branch_and_uses_custom_name() {
     let repo = setup_git_repo();
     assert!(
-        compute_reachable_from_main(repo.path(), true).is_empty(),
+        compute_reachable_from_default_branch(repo.path(), "main", true).is_empty(),
         "default branch should not compute a reachable-main set"
     );
 
-    git_ok(repo.path(), &["checkout", "-B", "master"]);
-    let master_sha = commit_file(repo.path(), "README.md", "seed", "initial commit");
-    git_ok(repo.path(), &["checkout", "-b", "feature/master-fallback"]);
+    git_ok(repo.path(), &["checkout", "-B", "trunk"]);
+    let trunk_sha = commit_file(repo.path(), "README.md", "seed", "initial commit");
+    git_ok(repo.path(), &["checkout", "-b", "feature/custom-default"]);
 
-    let reachable = compute_reachable_from_main(repo.path(), false);
+    let reachable = compute_reachable_from_default_branch(repo.path(), "trunk", false);
     assert!(
-        reachable.contains(&master_sha),
-        "expected fallback traversal through master to include the default-branch head"
+        reachable.contains(&trunk_sha),
+        "expected traversal through the resolved default branch to include the default-branch head"
     );
 }
 
