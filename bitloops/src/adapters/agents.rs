@@ -191,9 +191,11 @@ mod hook_command_tests {
 
     #[test]
     fn is_managed_hook_command_accepts_env_prefixed_commands() {
-        let command =
-            "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start";
-        assert!(is_managed_hook_command(command, &["bitloops hooks claude-code "]));
+        let command = "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start";
+        assert!(is_managed_hook_command(
+            command,
+            &["bitloops hooks claude-code "]
+        ));
     }
 }
 

@@ -1,5 +1,6 @@
 use super::*;
-use crate::test_support::process_state::{git_command, with_cwd};
+use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
+use crate::test_support::process_state::{git_command, with_cwd, with_env_var};
 use std::collections::BTreeSet;
 use tempfile::TempDir;
 
@@ -501,6 +502,32 @@ fn install_scripts_clear_inherited_git_env() {
                 "{name} should unset inherited {key}"
             );
         }
+    }
+}
+
+#[test]
+fn install_scripts_export_explicit_daemon_config_override() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some("/tmp/config root/config.toml"),
+        || {
+            install_git_hooks(dir.path(), false).unwrap();
+        },
+    );
+
+    let hooks_dir = get_hooks_dir(dir.path()).unwrap();
+    for name in expected_hooks {
+        let content = fs::read_to_string(hooks_dir.join(name)).unwrap();
+        assert!(
+            content.contains(
+                "export BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml'"
+            ),
+            "{name} should export the explicit daemon config override"
+        );
     }
 }
 

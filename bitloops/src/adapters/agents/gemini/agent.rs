@@ -384,8 +384,9 @@ impl HookSupport for GeminiCliAgent {
 
         if !force {
             let existing_cmd = Self::get_first_bitloops_hook_command(&session_start);
-            let expected_cmd =
-                crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-start"));
+            let expected_cmd = crate::adapters::agents::managed_hook_command(&format!(
+                "{cmd_prefix}session-start"
+            ));
             if existing_cmd == expected_cmd {
                 return Ok(0);
             }
