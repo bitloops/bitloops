@@ -39,6 +39,14 @@ Feature: Activation and Onboarding
         And   I run bitloops init --agent claude-code --sync=false in bitloops
         Then  git hooks exist for the claude-code agent in bitloops
 
+    Scenario: Agent hooks are installed after init with claude-code agent and sync=true
+        Given I run CleanStart for flow "agent-hooks-claude-sync-true"
+        And   I start the daemon in bitloops
+        And   I run InitCommit for bitloops
+        And   I run bitloops init --agent claude-code --sync=true in bitloops
+        Then  git hooks exist for the claude-code agent in bitloops
+        And   the repo-local .bitloops.local.toml exists in bitloops
+
     Scenario: Agent hooks are installed after init with codex agent
         Given I run CleanStart for flow "agent-hooks-codex"
         And   I start the daemon in bitloops

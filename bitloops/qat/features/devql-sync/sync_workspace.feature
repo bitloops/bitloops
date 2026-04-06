@@ -183,3 +183,44 @@ Feature: DevQL sync workspace reconciliation
     And I run DevQL sync repair --status in bitloops
     And I run DevQL sync validate --status in bitloops
     Then DevQL sync validation reports clean in bitloops
+
+  @devql @sync
+  Scenario: Init with sync=true makes immediate follow-up sync report no changes
+    Given I run CleanStart for flow "SyncInitSyncTrueNoop"
+    And I start the daemon in bitloops
+    And I create a simple Rust project in bitloops
+    And I run InitCommit for bitloops
+    And I run bitloops init --agent claude --sync=true in bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I run DevQL sync --status in bitloops
+    Then DevQL sync summary shows 0 added in bitloops
+    And DevQL sync summary shows 0 changed in bitloops
+    And DevQL sync summary shows 0 removed in bitloops
+    And DevQL sync summary shows unchanged greater than 0 in bitloops
+
+  @devql @sync
+  Scenario: Init with sync=true still allows incremental sync for new files
+    Given I run CleanStart for flow "SyncInitSyncTrueIncremental"
+    And I start the daemon in bitloops
+    And I create a simple Rust project in bitloops
+    And I run InitCommit for bitloops
+    And I run bitloops init --agent claude --sync=true in bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I add a new source file in bitloops
+    And I commit changes without hooks in bitloops
+    And I run DevQL sync --status in bitloops
+    Then DevQL sync summary shows added greater than 0 in bitloops
+
+  @devql @sync
+  Scenario: Init with sync=true keeps sync validation clean without workspace changes
+    Given I run CleanStart for flow "SyncInitSyncTrueValidateClean"
+    And I start the daemon in bitloops
+    And I create a simple Rust project in bitloops
+    And I run InitCommit for bitloops
+    And I run bitloops init --agent claude --sync=true in bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I run DevQL sync validate --status in bitloops
+    Then DevQL sync validation reports clean in bitloops
