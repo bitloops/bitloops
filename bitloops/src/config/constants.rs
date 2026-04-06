@@ -1,4 +1,5 @@
 pub const BITLOOPS_CONFIG_RELATIVE_PATH: &str = "config.toml";
+pub(crate) const ENV_DAEMON_CONFIG_PATH_OVERRIDE: &str = "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE";
 
 pub(crate) const STORES_CONFIG_KEY: &str = "stores";
 pub(crate) const RELATIONAL_CONFIG_KEY: &str = "relational";

@@ -8,20 +8,16 @@ pub(super) async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs)
         .local_addr()
         .context("reading Bitloops daemon supervisor listener address")?;
     let control_url = format!("http://127.0.0.1:{}", control_addr.port());
-    let runtime_path = supervisor_runtime_state_path()?;
     let fingerprint = current_binary_fingerprint()?;
     log::info!("daemon supervisor started: control_url={}", control_url);
 
-    write_json(
-        &runtime_path,
-        &SupervisorRuntimeState {
-            version: 1,
-            pid: std::process::id(),
-            control_url: control_url.clone(),
-            binary_fingerprint: fingerprint,
-            updated_at_unix: unix_timestamp_now(),
-        },
-    )?;
+    write_supervisor_runtime_state(&SupervisorRuntimeState {
+        version: 1,
+        pid: std::process::id(),
+        control_url: control_url.clone(),
+        binary_fingerprint: fingerprint,
+        updated_at_unix: unix_timestamp_now(),
+    })?;
 
     let app = Router::new()
         .route("/health", get(supervisor_health))
@@ -36,7 +32,7 @@ pub(super) async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs)
         .with_graceful_shutdown(wait_for_shutdown_signal())
         .await;
 
-    let _ = fs::remove_file(runtime_path);
+    let _ = delete_supervisor_runtime_state();
     result.context("running Bitloops daemon supervisor")
 }
 

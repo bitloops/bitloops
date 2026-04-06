@@ -13,6 +13,8 @@ use clap::{Args, Parser};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use sha2::{Digest, Sha256};
 
+use crate::host::relational_store::DefaultRelationalStore;
+
 #[path = "capture.rs"]
 mod capture;
 
@@ -179,16 +181,9 @@ fn resolve_config_root(explicit_config_root: Option<PathBuf>, repo_root: &Path) 
 }
 
 fn initialise_local_watch_schema(repo_root: &Path, config_root: &Path) -> Result<()> {
-    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(config_root)
-        .context("resolving store config for watcher start")?;
-    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
-        repo_root,
-        backend_cfg.relational.sqlite_path.as_deref(),
-    )
-    .context("resolving SQLite path for watcher start")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)?;
-    sqlite.initialise_devql_schema()?;
-    Ok(())
+    let relational = DefaultRelationalStore::open_local_for_roots(config_root, repo_root)
+        .context("opening local relational store for watcher start")?;
+    relational.initialise_local_devql_schema()
 }
 
 fn run_notify_loop(

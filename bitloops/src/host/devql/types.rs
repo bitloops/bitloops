@@ -135,28 +135,36 @@ impl RelationalStorage {
         RelationalDialect::Sqlite
     }
 
+    pub fn sqlite_path(&self) -> &Path {
+        &self.local.path
+    }
+
+    pub fn remote_client(&self) -> Option<&tokio_postgres::Client> {
+        self.remote.as_ref().map(|remote| &remote.client)
+    }
+
     pub async fn exec(&self, sql: &str) -> Result<()> {
-        sqlite_exec_path(&self.local.path, sql).await
+        sqlite_exec_path(self.sqlite_path(), sql).await
     }
 
     pub async fn exec_batch_transactional(&self, statements: &[String]) -> Result<()> {
-        sqlite_exec_batch_transactional_path(&self.local.path, statements).await
+        sqlite_exec_batch_transactional_path(self.sqlite_path(), statements).await
     }
 
     pub async fn exec_remote_batch_transactional(&self, statements: &[String]) -> Result<()> {
-        if let Some(remote) = self.remote.as_ref() {
-            return postgres_exec_batch_transactional(&remote.client, statements).await;
+        if let Some(remote_client) = self.remote_client() {
+            return postgres_exec_batch_transactional(remote_client, statements).await;
         }
         bail!("remote Postgres storage is not configured")
     }
 
     pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
-        sqlite_query_rows_path(&self.local.path, sql).await
+        sqlite_query_rows_path(self.sqlite_path(), sql).await
     }
 
     pub async fn query_rows_remote(&self, sql: &str) -> Result<Vec<Value>> {
-        if let Some(remote) = self.remote.as_ref() {
-            return pg_query_rows(&remote.client, sql).await;
+        if let Some(remote_client) = self.remote_client() {
+            return pg_query_rows(remote_client, sql).await;
         }
         bail!("remote Postgres storage is not configured")
     }
@@ -203,7 +211,7 @@ mod tests {
             .await
             .expect("connect relational storage");
 
-        assert_eq!(relational.local.path, sqlite_path);
+        assert_eq!(relational.sqlite_path(), sqlite_path.as_path());
         assert!(relational.remote.is_none());
         assert_eq!(relational.dialect(), RelationalDialect::Sqlite);
     }

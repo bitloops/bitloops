@@ -20,14 +20,12 @@ pub(crate) struct TemporaryCheckpointRecord {
 }
 
 pub(crate) fn resolve_temporary_checkpoint_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving backend config for temporary checkpoints")?;
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .context("resolving configured SQLite path for temporary checkpoints");
-    }
-
-    Ok(paths::default_relational_db_path(repo_root))
+    Ok(
+        crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo_root)
+            .context("opening repo runtime store for temporary checkpoints")?
+            .db_path()
+            .to_path_buf(),
+    )
 }
 
 pub(crate) fn insert_temporary_checkpoint_record(
@@ -38,8 +36,8 @@ pub(crate) fn insert_temporary_checkpoint_record(
     let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening temporary checkpoint SQLite database")?;
     sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising temporary checkpoint schema")?;
+        .initialise_runtime_checkpoint_schema()
+        .context("initialising temporary checkpoint runtime schema")?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for temporary checkpoints")?
@@ -101,7 +99,7 @@ pub(crate) fn latest_temporary_checkpoint_tree_hash(
 
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root).ok()?;
     let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    sqlite.initialise_runtime_checkpoint_schema().ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
         .repo_id;

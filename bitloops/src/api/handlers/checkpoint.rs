@@ -24,7 +24,6 @@ use super::file_diffs::{
 use super::params::normalize_checkpoint_id;
 use super::resolve_repo_root_from_repo_id;
 use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_session_content};
-use crate::host::devql::RelationalStorage;
 use crate::host::devql::checkpoint_provenance::{
     CheckpointFileGateway, CheckpointFileProvenanceDetailRow,
 };
@@ -263,15 +262,14 @@ async fn load_checkpoint_file_relations(
     repo_id: &str,
     checkpoint_id: &str,
 ) -> anyhow::Result<Vec<CheckpointFileProvenanceDetailRow>> {
-    let sqlite_path =
-        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
-            repo_root,
-        )?;
+    let relational_store =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
+    let sqlite_path = relational_store.sqlite_path().to_path_buf();
     if !sqlite_path.is_file() {
         return Ok(Vec::new());
     }
 
-    let relational = RelationalStorage::local_only(sqlite_path);
+    let relational = relational_store.to_local_inner();
     CheckpointFileGateway::new(&relational)
         .list_checkpoint_files(repo_id, checkpoint_id)
         .await
