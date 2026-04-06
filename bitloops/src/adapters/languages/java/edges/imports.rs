@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
@@ -12,7 +12,7 @@ pub(super) fn collect_java_import_edge(node: Node<'_>, traversal: &mut JavaTrave
         return;
     };
     let line_no = node.start_position().row as i32 + 1;
-    let key = format!("{}|{}|{}", traversal.path, import_ref, line_no);
+    let key = import_key(traversal.path, &import_ref);
     if !traversal.seen_imports.insert(key) {
         return;
     }
@@ -37,6 +37,7 @@ pub(super) fn collect_java_import_data(
     HashMap<String, String>,
 ) {
     let mut import_edges = Vec::new();
+    let mut seen_imports = HashSet::new();
     let mut imported_type_refs = HashMap::new();
     let mut imported_static_refs = HashMap::new();
     let mut stack = vec![root];
@@ -44,6 +45,10 @@ pub(super) fn collect_java_import_data(
         if node.kind() == "import_declaration"
             && let Some((import_ref, is_static)) = parse_import_declaration(node, content)
         {
+            let key = import_key(path, &import_ref);
+            if !seen_imports.insert(key) {
+                continue;
+            }
             let line_no = node.start_position().row as i32 + 1;
             import_edges.push(DependencyEdge {
                 edge_kind: EdgeKind::Imports,
@@ -74,6 +79,10 @@ pub(super) fn collect_java_import_data(
         }
     }
     (import_edges, imported_type_refs, imported_static_refs)
+}
+
+pub(super) fn import_key(path: &str, import_ref: &str) -> String {
+    format!("{path}|{import_ref}")
 }
 
 pub(super) fn parse_import_declaration(node: Node<'_>, content: &str) -> Option<(String, bool)> {

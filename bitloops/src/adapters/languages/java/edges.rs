@@ -23,7 +23,7 @@ use calls::{
     collect_java_explicit_constructor_invocation, collect_java_method_invocation_edge,
     collect_java_object_creation_edge,
 };
-use imports::{collect_java_import_data, collect_java_import_edge};
+use imports::{collect_java_import_data, collect_java_import_edge, import_key};
 use references::{
     collect_java_constructor_type_references, collect_java_field_type_references,
     collect_java_method_type_references,
@@ -37,6 +37,7 @@ pub(super) struct JavaTraversalCtx<'a> {
     pub(super) content: &'a str,
     pub(super) path: &'a str,
     pub(super) callables: &'a [LanguageArtefact],
+    pub(super) types: &'a [LanguageArtefact],
     pub(super) type_targets: &'a HashMap<String, String>,
     pub(super) imported_type_refs: &'a HashMap<String, String>,
     pub(super) imported_static_refs: &'a HashMap<String, String>,
@@ -72,6 +73,18 @@ pub(crate) fn extract_java_dependency_edges(
             matches!(
                 artefact.language_kind,
                 LanguageKind::Java(JavaKind::Method) | LanguageKind::Java(JavaKind::Constructor)
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let types = artefacts
+        .iter()
+        .filter(|artefact| {
+            matches!(
+                artefact.language_kind,
+                LanguageKind::Java(JavaKind::Class)
+                    | LanguageKind::Java(JavaKind::Interface)
+                    | LanguageKind::Java(JavaKind::Enum)
             )
         })
         .cloned()
@@ -125,11 +138,9 @@ pub(crate) fn extract_java_dependency_edges(
     let mut seen_extends = HashSet::new();
     let mut seen_implements = HashSet::new();
     for edge in &edges {
-        let key = format!(
-            "{}|{}|{}",
-            edge.from_symbol_fqn,
+        let key = import_key(
+            &edge.from_symbol_fqn,
             edge.to_symbol_ref.as_deref().unwrap_or(""),
-            edge.start_line.unwrap_or_default()
         );
         seen_imports.insert(key);
     }
@@ -137,6 +148,7 @@ pub(crate) fn extract_java_dependency_edges(
         content,
         path,
         callables: &callables,
+        types: &types,
         type_targets: &type_targets,
         imported_type_refs: &imported_type_refs,
         imported_static_refs: &imported_static_refs,

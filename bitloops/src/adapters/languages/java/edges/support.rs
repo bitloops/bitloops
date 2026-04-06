@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use tree_sitter::Node;
 
 use super::super::extraction::trimmed_node_text;
@@ -16,27 +14,15 @@ pub(super) fn smallest_enclosing_callable(
         .cloned()
 }
 
-pub(super) fn smallest_enclosing_symbol(
+pub(super) fn smallest_enclosing_type(
     line_no: i32,
-    path: &str,
-    type_targets: &HashMap<String, String>,
-    callables: &[LanguageArtefact],
-    field_targets_by_parent_and_name: &HashMap<(String, String), String>,
-) -> Option<String> {
-    if let Some(callable) = smallest_enclosing_callable(line_no, callables) {
-        return Some(callable.symbol_fqn);
-    }
-    field_targets_by_parent_and_name
-        .values()
-        .find(|symbol_fqn| symbol_fqn.starts_with(path))
+    types: &[LanguageArtefact],
+) -> Option<LanguageArtefact> {
+    types
+        .iter()
+        .filter(|artefact| artefact.start_line <= line_no && artefact.end_line >= line_no)
+        .min_by_key(|artefact| artefact.end_line - artefact.start_line)
         .cloned()
-        .or_else(|| {
-            type_targets
-                .values()
-                .find(|symbol_fqn| symbol_fqn.starts_with(path))
-                .cloned()
-        })
-        .or_else(|| Some(path.to_string()))
 }
 
 pub(super) fn java_type_name_from_node(node: Node<'_>, content: &str) -> Option<String> {

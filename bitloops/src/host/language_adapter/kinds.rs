@@ -413,9 +413,13 @@ mod tests {
 
     #[test]
     fn top_level_parser_rejects_ambiguous_or_unknown_kinds() {
-        assert_eq!(LanguageKind::try_from("function_declaration").ok(), None);
-        assert_eq!(LanguageKind::try_from("import_statement").ok(), None);
-        assert_eq!(LanguageKind::try_from("totally_unknown_kind").ok(), None);
+        assert!(LanguageKind::try_from("function_declaration").is_err());
+        assert!(LanguageKind::try_from("import_statement").is_err());
+        assert!(LanguageKind::try_from("class_declaration").is_err());
+        assert!(LanguageKind::try_from("interface_declaration").is_err());
+        assert!(LanguageKind::try_from("enum_declaration").is_err());
+        assert!(LanguageKind::try_from("method_declaration").is_err());
+        assert!(LanguageKind::try_from("totally_unknown_kind").is_err());
 
         assert_eq!(
             LanguageKind::try_from("impl_item").ok(),
@@ -428,6 +432,39 @@ mod tests {
         assert_eq!(
             LanguageKind::try_from("package_declaration").ok(),
             Some(LanguageKind::java(JavaKind::Package))
+        );
+
+        assert_eq!(
+            TsJsKind::from_tree_sitter_kind("class_declaration"),
+            Some(TsJsKind::ClassDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("class_declaration"),
+            Some(JavaKind::Class)
+        );
+        assert_eq!(
+            TsJsKind::from_tree_sitter_kind("interface_declaration"),
+            Some(TsJsKind::InterfaceDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("interface_declaration"),
+            Some(JavaKind::Interface)
+        );
+        assert_eq!(
+            TsJsKind::from_tree_sitter_kind("enum_declaration"),
+            Some(TsJsKind::EnumDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("enum_declaration"),
+            Some(JavaKind::Enum)
+        );
+        assert_eq!(
+            GoKind::from_tree_sitter_kind("method_declaration"),
+            Some(GoKind::MethodDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("method_declaration"),
+            Some(JavaKind::Method)
         );
     }
 }

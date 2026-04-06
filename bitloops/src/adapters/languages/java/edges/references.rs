@@ -4,7 +4,7 @@ use tree_sitter::Node;
 
 use super::JavaTraversalCtx;
 use super::support::{
-    java_type_name_from_node, smallest_enclosing_callable, smallest_enclosing_symbol,
+    java_type_name_from_node, smallest_enclosing_callable, smallest_enclosing_type,
 };
 use crate::host::devql::RefKind;
 use crate::host::language_adapter::{
@@ -24,13 +24,8 @@ pub(super) fn collect_java_field_type_references(
     };
     let mut cursor = node.walk();
     for declarator in node.children_by_field_name("declarator", &mut cursor) {
-        let Some(owner) = smallest_enclosing_symbol(
-            declarator.start_position().row as i32 + 1,
-            traversal.path,
-            traversal.type_targets,
-            traversal.callables,
-            traversal.field_targets_by_parent_and_name,
-        ) else {
+        let line_no = declarator.start_position().row as i32 + 1;
+        let Some(owner) = field_owner_symbol_fqn(declarator, line_no, traversal) else {
             continue;
         };
         push_reference_edge(
@@ -40,7 +35,7 @@ pub(super) fn collect_java_field_type_references(
             },
             &owner,
             &type_name,
-            declarator.start_position().row as i32 + 1,
+            line_no,
             RefKind::Type,
             &SymbolLookup {
                 local_targets: traversal.type_targets,
@@ -87,6 +82,26 @@ pub(super) fn collect_java_method_type_references(
         traversal.seen_refs,
         traversal.content,
     );
+}
+
+fn field_owner_symbol_fqn(
+    declarator: Node<'_>,
+    line_no: i32,
+    traversal: &JavaTraversalCtx<'_>,
+) -> Option<String> {
+    let field_name = declarator
+        .child_by_field_name("name")
+        .or_else(|| declarator.named_child(0))
+        .and_then(|name_node| name_node.utf8_text(traversal.content.as_bytes()).ok())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?;
+
+    let enclosing_type = smallest_enclosing_type(line_no, traversal.types)?;
+
+    traversal
+        .field_targets_by_parent_and_name
+        .get(&(enclosing_type.symbol_fqn, field_name.to_string()))
+        .cloned()
 }
 
 pub(super) fn collect_java_constructor_type_references(

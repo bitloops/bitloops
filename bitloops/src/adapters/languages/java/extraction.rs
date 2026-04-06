@@ -104,7 +104,6 @@ fn collect_java_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     JavaArtefactDescriptor {
                         language_kind: LanguageKind::java(JavaKind::Package),
                         name: name.clone(),
@@ -128,7 +127,6 @@ fn collect_java_nodes_recursive(
                 out,
                 seen,
                 node,
-                content,
                 JavaArtefactDescriptor {
                     language_kind: LanguageKind::java(JavaKind::Import),
                     name: name.clone(),
@@ -153,7 +151,6 @@ fn collect_java_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     JavaArtefactDescriptor {
                         language_kind: LanguageKind::java(JavaKind::Class),
                         name: name.clone(),
@@ -180,7 +177,6 @@ fn collect_java_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     JavaArtefactDescriptor {
                         language_kind: LanguageKind::java(JavaKind::Interface),
                         name: name.clone(),
@@ -207,7 +203,6 @@ fn collect_java_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     JavaArtefactDescriptor {
                         language_kind: LanguageKind::java(JavaKind::Enum),
                         name: name.clone(),
@@ -229,7 +224,6 @@ fn collect_java_nodes_recursive(
                 out,
                 seen,
                 node,
-                content,
                 JavaArtefactDescriptor {
                     language_kind: LanguageKind::java(JavaKind::Constructor),
                     name: "<init>".to_string(),
@@ -253,7 +247,6 @@ fn collect_java_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     JavaArtefactDescriptor {
                         language_kind: LanguageKind::java(JavaKind::Method),
                         name: name.clone(),
@@ -285,7 +278,6 @@ fn collect_java_nodes_recursive(
                     out,
                     seen,
                     declarator,
-                    content,
                     JavaArtefactDescriptor {
                         language_kind: LanguageKind::java(JavaKind::Field),
                         name: name.clone(),
@@ -311,7 +303,6 @@ fn push_java_artefact(
     out: &mut Vec<LanguageArtefact>,
     seen: &mut HashSet<(LanguageKind, String, i32)>,
     node: Node<'_>,
-    content: &str,
     descriptor: JavaArtefactDescriptor,
 ) {
     let JavaArtefactDescriptor {
@@ -349,7 +340,6 @@ fn push_java_artefact(
         modifiers,
         docstring,
     });
-    let _ = content;
 }
 
 fn first_name_like_child_text(node: Node<'_>, content: &str) -> Option<String> {
