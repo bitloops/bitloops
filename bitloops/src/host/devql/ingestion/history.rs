@@ -43,8 +43,8 @@ pub(super) async fn select_missing_branch_commit_segment(
         && let Some(branch_name) = branch_name.map(str::trim).filter(|value| !value.is_empty())
     {
         let watermark_key = historical_branch_watermark_key(branch_name);
-        let branch_watermark = load_sync_state_value_for_repo(relational, repo_id, &watermark_key)
-            .await?;
+        let branch_watermark =
+            load_sync_state_value_for_repo(relational, repo_id, &watermark_key).await?;
         if let Some(branch_watermark) = branch_watermark.as_deref()
             && !branch_watermark.is_empty()
             && commit_is_ancestor_of(repo_root, branch_watermark, head_sha)
@@ -62,6 +62,46 @@ pub(super) async fn select_missing_branch_commit_segment(
     list_commit_range(repo_root, head_sha)
 }
 
+pub(super) async fn select_recent_branch_commit_backfill_window(
+    repo_root: &Path,
+    relational: &RelationalStorage,
+    repo_id: &str,
+    head_sha: &str,
+    backfill_window: usize,
+) -> Result<Vec<String>> {
+    let head_sha = head_sha.trim();
+    if head_sha.is_empty() || backfill_window == 0 {
+        return Ok(Vec::new());
+    }
+
+    let output = run_git(
+        repo_root,
+        &[
+            "rev-list",
+            &format!("--max-count={backfill_window}"),
+            head_sha,
+        ],
+    )?;
+    let mut selected = Vec::new();
+    for commit_sha in output
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let existing_ledger =
+            load_commit_ingest_ledger_entry(relational, repo_id, commit_sha).await?;
+        if existing_ledger
+            .as_ref()
+            .is_some_and(commit_is_fully_ingested)
+        {
+            continue;
+        }
+        selected.push(commit_sha.to_string());
+    }
+    selected.reverse();
+    Ok(selected)
+}
+
 pub(super) async fn repo_has_historical_ingest_state(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -71,8 +111,8 @@ pub(super) async fn repo_has_historical_ingest_state(
         && let Some(branch_name) = branch_name.map(str::trim).filter(|value| !value.is_empty())
     {
         let watermark_key = historical_branch_watermark_key(branch_name);
-        let branch_watermark = load_sync_state_value_for_repo(relational, repo_id, &watermark_key)
-            .await?;
+        let branch_watermark =
+            load_sync_state_value_for_repo(relational, repo_id, &watermark_key).await?;
         if branch_watermark
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())

@@ -55,8 +55,10 @@ pub(crate) mod identity;
 pub(crate) mod sync;
 mod types;
 
-pub(crate) use self::commands_ingest::execute_ingest_with_observer;
 pub use self::commands_ingest::run_ingest;
+pub(crate) use self::commands_ingest::{
+    execute_ingest_with_backfill_window, execute_ingest_with_observer,
+};
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
 pub use self::commands_projection::{

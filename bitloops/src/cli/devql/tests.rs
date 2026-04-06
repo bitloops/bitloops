@@ -691,10 +691,7 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
         .take()
         .expect("graphql mutation should be captured");
     assert!(query.contains("ingest"));
-    assert_eq!(
-        variables,
-        json!({})
-    );
+    assert_eq!(variables, json!({}));
 }
 
 #[test]
@@ -758,10 +755,7 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
         .take()
         .expect("graphql mutation should be captured");
     assert!(query.contains("ingest"));
-    assert_eq!(
-        variables,
-        json!({})
-    );
+    assert_eq!(variables, json!({}));
 }
 
 #[test]

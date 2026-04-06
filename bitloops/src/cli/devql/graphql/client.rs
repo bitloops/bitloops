@@ -64,10 +64,23 @@ pub(crate) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()>
     Ok(())
 }
 
-pub(crate) async fn run_ingest_via_graphql(scope: &SlimCliRepoScope) -> Result<()> {
+pub(crate) async fn run_ingest_via_graphql(
+    scope: &SlimCliRepoScope,
+    backfill: Option<usize>,
+) -> Result<()> {
     ensure_daemon_available_for_ingest(scope.repo_root.as_path()).await?;
+    let variables = backfill.map_or_else(
+        || json!({}),
+        |backfill| {
+            json!({
+                "input": {
+                    "backfill": backfill,
+                }
+            })
+        },
+    );
     let response: IngestMutationData =
-        execute_devql_graphql(scope, INGEST_MUTATION, json!({})).await?;
+        execute_devql_graphql(scope, INGEST_MUTATION, variables).await?;
     println!("{}", format_ingestion_summary(&response.ingest));
     Ok(())
 }

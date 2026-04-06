@@ -83,7 +83,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         DevqlCommand::Ingest(args) => {
             if enrichment_enabled {
                 let _ = args;
-                graphql::run_ingest_via_graphql(&scope).await
+                graphql::run_ingest_via_graphql(&scope, None).await
             } else {
                 let _ = args;
                 crate::daemon::require_current_repo_runtime(&cfg.repo_root, "`devql ingest`")?;

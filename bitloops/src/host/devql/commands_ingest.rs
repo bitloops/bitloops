@@ -17,7 +17,26 @@ pub(crate) async fn execute_ingest_for_commits(
     observer: Option<&dyn IngestionObserver>,
     enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
-    execute_ingest_inner(cfg, false, 0, Some(commits), observer, enrichment).await
+    execute_ingest_inner(cfg, false, 0, None, Some(commits), observer, enrichment).await
+}
+
+pub(crate) async fn execute_ingest_with_backfill_window(
+    cfg: &DevqlConfig,
+    init: bool,
+    backfill_window: usize,
+    observer: Option<&dyn IngestionObserver>,
+    enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
+) -> Result<IngestionCounters> {
+    execute_ingest_inner(
+        cfg,
+        init,
+        0,
+        Some(backfill_window),
+        None,
+        observer,
+        enrichment,
+    )
+    .await
 }
 
 pub(crate) async fn execute_ingest_with_observer(
@@ -27,13 +46,14 @@ pub(crate) async fn execute_ingest_with_observer(
     observer: Option<&dyn IngestionObserver>,
     enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
-    execute_ingest_inner(cfg, init, max_commits, None, observer, enrichment).await
+    execute_ingest_inner(cfg, init, max_commits, None, None, observer, enrichment).await
 }
 
 async fn execute_ingest_inner(
     cfg: &DevqlConfig,
     init: bool,
     max_commits: usize,
+    backfill_window: Option<usize>,
     explicit_commits: Option<Vec<String>>,
     observer: Option<&dyn IngestionObserver>,
     enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
@@ -115,16 +135,28 @@ async fn execute_ingest_inner(
         .unwrap_or_else(|| active_branch_name(&cfg.repo_root));
     let mut commits = match explicit_commits {
         Some(commits) => commits,
-        None => {
-            select_missing_branch_commit_segment(
-                &cfg.repo_root,
-                &relational,
-                &cfg.repo.repo_id,
-                active_branch.as_deref(),
-                &head_sha,
-            )
-            .await?
-        }
+        None => match backfill_window {
+            Some(backfill_window) => {
+                select_recent_branch_commit_backfill_window(
+                    &cfg.repo_root,
+                    &relational,
+                    &cfg.repo.repo_id,
+                    &head_sha,
+                    backfill_window,
+                )
+                .await?
+            }
+            None => {
+                select_missing_branch_commit_segment(
+                    &cfg.repo_root,
+                    &relational,
+                    &cfg.repo.repo_id,
+                    active_branch.as_deref(),
+                    &head_sha,
+                )
+                .await?
+            }
+        },
     };
     if max_commits > 0 && commits.len() > max_commits {
         commits.truncate(max_commits);
@@ -532,8 +564,7 @@ async fn execute_ingest_inner(
 }
 
 fn active_branch_name(repo_root: &Path) -> String {
-    checked_out_branch_name(repo_root)
-    .unwrap_or_else(|| "main".to_string())
+    checked_out_branch_name(repo_root).unwrap_or_else(|| "main".to_string())
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

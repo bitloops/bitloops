@@ -61,6 +61,12 @@ pub struct EnqueueSyncInput {
     pub source: Option<String>,
 }
 
+#[derive(Debug, Clone, InputObject)]
+pub struct IngestInput {
+    #[graphql(default)]
+    pub backfill: Option<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct InitSchemaResult {
     pub success: bool,
@@ -355,7 +361,7 @@ impl MutationRoot {
         Ok(summary.into())
     }
 
-    async fn ingest(&self, ctx: &Context<'_>) -> Result<IngestResult> {
+    async fn ingest(&self, ctx: &Context<'_>, input: Option<IngestInput>) -> Result<IngestResult> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         context
             .require_repo_write_scope()
@@ -366,14 +372,44 @@ impl MutationRoot {
         crate::daemon::require_current_repo_runtime(cfg.repo_root.as_path(), "GraphQL ingest")
             .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
         let observer = GraphqlIngestionObserver::new(context);
-        let summary = crate::host::devql::execute_ingest_with_observer(
-            &cfg,
-            false,
-            0,
-            Some(&observer),
-            Some(crate::daemon::shared_enrichment_coordinator()),
-        )
-        .await
+        let backfill = match input.and_then(|input| input.backfill) {
+            Some(backfill) if backfill <= 0 => {
+                return Err(operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    "ingest",
+                    "`backfill` must be greater than zero",
+                ));
+            }
+            Some(backfill) => Some(usize::try_from(backfill).map_err(|_| {
+                operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    "ingest",
+                    "`backfill` must be greater than zero",
+                )
+            })?),
+            None => None,
+        };
+        let summary = if let Some(backfill) = backfill {
+            crate::host::devql::execute_ingest_with_backfill_window(
+                &cfg,
+                false,
+                backfill,
+                Some(&observer),
+                Some(crate::daemon::shared_enrichment_coordinator()),
+            )
+            .await
+        } else {
+            crate::host::devql::execute_ingest_with_observer(
+                &cfg,
+                false,
+                0,
+                Some(&observer),
+                Some(crate::daemon::shared_enrichment_coordinator()),
+            )
+            .await
+        }
         .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
         Ok(summary.into())
     }

@@ -150,6 +150,35 @@ fn init_args_support_ingest_flag_variants() {
 }
 
 #[test]
+fn init_args_support_backfill_flag_variants() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--backfill"]).expect("parse init --backfill");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.backfill, Some(50));
+
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--backfill=10"])
+        .expect("parse init --backfill=10");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.backfill, Some(10));
+}
+
+#[test]
+fn init_args_reject_zero_backfill() {
+    let err = Cli::try_parse_from(["bitloops", "init", "--backfill=0"])
+        .err()
+        .expect("expected clap parsing error");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("1..") || rendered.contains("greater than or equal to 1"),
+        "unexpected clap error: {rendered}"
+    );
+}
+
+#[test]
 fn init_cmd_agent_flag_no_value_errors() {
     let err = Cli::try_parse_from(["bitloops", "init", "--agent"])
         .err()
@@ -183,6 +212,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                     skip_baseline: false,
                     sync: Some(false),
                     ingest: Some(false),
+                    backfill: None,
                 },
                 &mut out,
                 None,
@@ -225,6 +255,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                     skip_baseline: true,
                     sync: Some(false),
                     ingest: Some(false),
+                    backfill: None,
                 },
                 &mut out,
                 None,
@@ -463,6 +494,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                                 skip_baseline: false,
                                 sync: Some(false),
                                 ingest: Some(false),
+                                backfill: None,
                             },
                             &mut out,
                             &mut input,
@@ -520,6 +552,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                                 skip_baseline: false,
                                 sync: Some(false),
                                 ingest: Some(false),
+                                backfill: None,
                             },
                             &mut out,
                             &mut input,
@@ -560,6 +593,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                         skip_baseline: false,
                         sync: Some(false),
                         ingest: Some(false),
+                        backfill: None,
                     },
                     &mut out,
                     &mut input,
@@ -613,6 +647,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                                 skip_baseline: false,
                                 sync: Some(false),
                                 ingest: Some(false),
+                                backfill: None,
                             },
                             &mut out,
                             &mut input,
@@ -656,6 +691,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                         skip_baseline: false,
                         sync: None,
                         ingest: Some(false),
+                        backfill: None,
                     },
                     &mut out,
                     &mut input,
@@ -722,7 +758,14 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
 
                                 if query.contains("ingest") {
                                     *saw_ingest.borrow_mut() = true;
-                                    assert_eq!(variables, &serde_json::json!({}));
+                                    assert_eq!(
+                                        variables,
+                                        &serde_json::json!({
+                                            "input": {
+                                                "backfill": 50
+                                            }
+                                        })
+                                    );
                                     return Ok(serde_json::json!({
                                         "ingest": {
                                             "success": true,
@@ -758,6 +801,123 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                                 skip_baseline: false,
                                                 sync: Some(false),
                                                 ingest: Some(true),
+                                                backfill: None,
+                                            },
+                                            &mut out,
+                                            &mut input,
+                                            None,
+                                        ))
+                                        .expect("run init");
+                                },
+                            )
+                        },
+                    );
+                    assert!(
+                        *saw_ingest.borrow(),
+                        "init should invoke repo-scoped ingest"
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
+    let saw_ingest = std::rc::Rc::new(std::cell::RefCell::new(false));
+    let repo = tempfile::tempdir().unwrap();
+    let repo_root = repo.path().to_path_buf();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_TTY", Some("0"))],
+        || {
+            ensure_daemon_config_exists().expect("create default daemon config");
+            write_current_daemon_runtime_state(repo.path());
+
+            with_global_graphql_executor_hook(
+                |_runtime_root, query, variables| {
+                    assert!(query.contains("updateCliTelemetryConsent"));
+                    assert_eq!(variables["telemetry"], serde_json::json!(false));
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": false,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    with_ingest_daemon_bootstrap_hook(
+                        |_repo_root| Ok(()),
+                        || {
+                            with_graphql_executor_hook(
+                                {
+                                    let saw_ingest = std::rc::Rc::clone(&saw_ingest);
+                                    let repo_root = repo_root.clone();
+                                    move |actual_repo_root: &std::path::Path,
+                                          query: &str,
+                                          variables: &serde_json::Value| {
+                                        let expected_repo_root = repo_root
+                                            .canonicalize()
+                                            .unwrap_or_else(|_| repo_root.clone());
+                                        let actual_repo_root = actual_repo_root
+                                            .canonicalize()
+                                            .unwrap_or_else(|_| actual_repo_root.to_path_buf());
+                                        assert_eq!(actual_repo_root, expected_repo_root);
+
+                                        if query.contains("enqueueSync") {
+                                            panic!("init should not enqueue sync when sync=false");
+                                        }
+
+                                        if query.contains("ingest") {
+                                            *saw_ingest.borrow_mut() = true;
+                                            assert_eq!(
+                                                variables,
+                                                &serde_json::json!({
+                                                    "input": {
+                                                        "backfill": 10
+                                                    }
+                                                })
+                                            );
+                                            return Ok(serde_json::json!({
+                                                "ingest": {
+                                                    "success": true,
+                                                    "commitsProcessed": 1,
+                                                    "checkpointCompanionsProcessed": 0,
+                                                    "eventsInserted": 0,
+                                                    "artefactsUpserted": 1,
+                                                    "semanticFeatureRowsUpserted": 0,
+                                                    "semanticFeatureRowsSkipped": 0,
+                                                    "symbolEmbeddingRowsUpserted": 0,
+                                                    "symbolEmbeddingRowsSkipped": 0,
+                                                    "symbolCloneEdgesUpserted": 0,
+                                                    "symbolCloneSourcesScored": 0
+                                                }
+                                            }));
+                                        }
+
+                                        panic!("unexpected repo-scoped query: {query}");
+                                    }
+                                },
+                                || {
+                                    let mut out = Vec::new();
+                                    let mut input = Cursor::new("");
+                                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                                    runtime
+                                        .block_on(run_with_io_async(
+                                            InitArgs {
+                                                install_default_daemon: false,
+                                                force: false,
+                                                agent: None,
+                                                telemetry: Some(false),
+                                                no_telemetry: false,
+                                                skip_baseline: false,
+                                                sync: Some(false),
+                                                ingest: None,
+                                                backfill: Some(10),
                                             },
                                             &mut out,
                                             &mut input,

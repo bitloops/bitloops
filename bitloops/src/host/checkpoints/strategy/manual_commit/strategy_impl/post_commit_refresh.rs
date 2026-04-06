@@ -1,5 +1,7 @@
 use super::*;
 
+const DEFAULT_POST_COMMIT_HISTORY_BACKFILL: usize = 50;
+
 pub(crate) fn run_devql_post_commit_refresh(
     repo_root: &Path,
     commit_sha: &str,
@@ -19,9 +21,15 @@ pub(crate) fn run_devql_post_commit_refresh(
             .context("resolving repository identity for post-commit DevQL refresh")?;
         let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
             .context("building DevQL config for post-commit refresh")?;
-        crate::host::devql::execute_ingest_with_observer(&cfg, false, 0, None, None)
-            .await
-            .context("catching up DevQL historical commit ingest for post-commit")?;
+        crate::host::devql::execute_ingest_with_backfill_window(
+            &cfg,
+            false,
+            DEFAULT_POST_COMMIT_HISTORY_BACKFILL,
+            None,
+            None,
+        )
+        .await
+        .context("catching up DevQL historical commit ingest for post-commit")?;
         let stats =
             crate::host::devql::run_post_commit_artefact_refresh(&cfg, commit_sha, &changed_files)
                 .await

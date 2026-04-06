@@ -323,6 +323,193 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
 }
 
 #[tokio::test]
+async fn devql_ingest_mutation_with_backfill_limits_history_window() {
+    use rusqlite::OptionalExtension;
+
+    let repo = seed_graphql_mutation_repo();
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn answer() -> i32 {\n    42\n}\n\npub fn second() -> i32 {\n    2\n}\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add second"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let previous_sha = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
+
+    let daemon_state = TempDir::new().expect("daemon state temp dir");
+    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(daemon_state_str.as_str()),
+        )],
+    );
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let init_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        init_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        init_response.errors
+    );
+    write_current_repo_runtime_state(repo.path());
+
+    let ingest_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { backfill: 1 }) {
+                success
+                commitsProcessed
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        ingest_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        ingest_response.errors
+    );
+    let ingest_json = ingest_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(ingest_json["ingest"]["success"], true);
+    assert_eq!(ingest_json["ingest"]["commitsProcessed"], 1);
+
+    let sqlite = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    let previous_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
+            rusqlite::params![previous_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read previous ledger");
+    let head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
+            rusqlite::params![head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read head ledger");
+
+    assert!(
+        previous_ledger.is_none(),
+        "backfill=1 should skip older history"
+    );
+    assert_eq!(head_ledger.as_deref(), Some("completed"));
+}
+
+#[tokio::test]
+async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
+    use rusqlite::OptionalExtension;
+
+    let repo = seed_graphql_mutation_repo();
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn answer() -> i32 {\n    42\n}\n\npub fn second() -> i32 {\n    2\n}\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add second"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let previous_sha = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
+
+    let daemon_state = TempDir::new().expect("daemon state temp dir");
+    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(daemon_state_str.as_str()),
+        )],
+    );
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let init_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        init_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        init_response.errors
+    );
+    write_current_repo_runtime_state(repo.path());
+
+    let ingest_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest {
+                success
+                commitsProcessed
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        ingest_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        ingest_response.errors
+    );
+    let ingest_json = ingest_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(ingest_json["ingest"]["success"], true);
+    assert_eq!(ingest_json["ingest"]["commitsProcessed"], 2);
+
+    let sqlite = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    let previous_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
+            rusqlite::params![previous_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read previous ledger");
+    let head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
+            rusqlite::params![head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read head ledger");
+
+    assert_eq!(previous_ledger.as_deref(), Some("completed"));
+    assert_eq!(head_ledger.as_deref(), Some("completed"));
+}
+
+#[tokio::test]
 async fn enqueue_sync_rejects_conflicting_mode_selectors() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);

@@ -306,6 +306,10 @@ type HealthStatus {
 	blob: HealthBackendStatus!
 }
 
+input IngestInput {
+	backfill: Int = null
+}
+
 type IngestResult {
 	success: Boolean!
 	commitsProcessed: Int!
@@ -468,7 +472,7 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest: IngestResult!
+	ingest(input: IngestInput): IngestResult!
 	sync(input: SyncInput!): SyncResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!

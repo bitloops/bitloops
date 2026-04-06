@@ -59,8 +59,11 @@ fn select_missing_branch_commit_segment_prefers_branch_watermark_when_it_is_an_a
     let cfg = cfg_for_repo(repo.path());
 
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
-        .expect("write lib.rs");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write lib.rs");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add lib"]);
     let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -109,8 +112,11 @@ fn select_missing_branch_commit_segment_falls_back_to_nearest_reachable_complete
     let cfg = cfg_for_repo(repo.path());
 
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
-        .expect("write lib.rs");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write lib.rs");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add lib"]);
     let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -187,7 +193,8 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
     assert_eq!(summary.checkpoint_companions_processed, 0);
 
     let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
-    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
 
     let file_state_count: i64 = sqlite
         .query_row(
@@ -264,9 +271,11 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
     assert_eq!(watermark, head_sha);
 
     let checkpoint_projection_rows: i64 = sqlite
-        .query_row("SELECT COUNT(*) FROM checkpoint_file_snapshots", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots",
+            [],
+            |row| row.get(0),
+        )
         .expect("count checkpoint projections");
     assert_eq!(
         checkpoint_projection_rows, 0,
@@ -275,7 +284,9 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 
     let duckdb = duckdb::Connection::open(duckdb_path_for_repo(repo.path())).expect("open duckdb");
     let checkpoint_event_rows: i64 = duckdb
-        .query_row("SELECT COUNT(*) FROM checkpoint_events", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM checkpoint_events", [], |row| {
+            row.get(0)
+        })
         .expect("count checkpoint events");
     assert_eq!(
         checkpoint_event_rows, 0,
@@ -285,7 +296,9 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 
 #[tokio::test]
 async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits() {
-    use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
+    use crate::host::checkpoints::strategy::manual_commit::{
+        WriteCommittedOptions, write_committed,
+    };
 
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
@@ -351,7 +364,8 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
     assert_eq!(replay_summary.commits_processed, 0);
     assert_eq!(replay_summary.checkpoint_companions_processed, 0);
 
-    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let checkpoint_projection_rows: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM checkpoint_file_snapshots WHERE checkpoint_id = ?1 AND commit_sha = ?2",
@@ -385,13 +399,16 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
 }
 
 #[tokio::test]
-async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_breaking_commit_queries(
-) {
+async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_breaking_commit_queries()
+ {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn stable() -> i32 { 1 }\n")
-        .expect("write first revision");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn stable() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add stable"]);
     let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -415,7 +432,8 @@ async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_b
     assert!(summary.success, "ingest should succeed");
     assert_eq!(summary.commits_processed, 3);
 
-    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let stable_row_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM artefacts
@@ -442,12 +460,20 @@ async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_b
     .await
     .expect("query head commit artefacts");
 
-    let first_rows = first_rows.as_array().expect("first query should return rows");
+    let first_rows = first_rows
+        .as_array()
+        .expect("first query should return rows");
     let head_rows = head_rows.as_array().expect("head query should return rows");
     assert_eq!(first_rows.len(), 1);
     assert_eq!(head_rows.len(), 1);
-    assert_eq!(first_rows[0]["symbol_fqn"], Value::String("src/lib.rs::stable".to_string()));
-    assert_eq!(head_rows[0]["symbol_fqn"], Value::String("src/lib.rs::stable".to_string()));
+    assert_eq!(
+        first_rows[0]["symbol_fqn"],
+        Value::String("src/lib.rs::stable".to_string())
+    );
+    assert_eq!(
+        head_rows[0]["symbol_fqn"],
+        Value::String("src/lib.rs::stable".to_string())
+    );
     assert_eq!(first_rows[0]["start_line"], Value::from(1));
     assert_eq!(head_rows[0]["start_line"], Value::from(2));
 }
@@ -459,8 +485,11 @@ async fn execute_ingest_hidden_max_commits_cap_limits_commit_replay_without_publ
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
-        .expect("write first revision");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add one"]);
 
@@ -483,7 +512,8 @@ async fn execute_ingest_hidden_max_commits_cap_limits_commit_replay_without_publ
         .expect("execute ingest with hidden max commit cap");
     assert_eq!(summary.commits_processed, 1);
 
-    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let ingested_commit_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
@@ -510,8 +540,11 @@ async fn execute_project_bootstrap_first_run_ingests_only_head() {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
-        .expect("write first revision");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add one"]);
     let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -530,7 +563,8 @@ async fn execute_project_bootstrap_first_run_ingests_only_head() {
         .await
         .expect("execute first bootstrap");
 
-    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let ingested_commit_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
@@ -556,7 +590,10 @@ async fn execute_project_bootstrap_first_run_ingests_only_head() {
         .expect("read head commit ledger row");
 
     assert_eq!(ingested_commit_count, 1);
-    assert!(first_ledger.is_none(), "first bootstrap should not backfill older commits");
+    assert!(
+        first_ledger.is_none(),
+        "first bootstrap should not backfill older commits"
+    );
     assert_eq!(head_ledger.as_deref(), Some("completed"));
 }
 
@@ -567,8 +604,11 @@ async fn execute_project_bootstrap_recovery_catches_up_missing_branch_segment() 
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn one() -> i32 { 1 }\n")
-        .expect("write first revision");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add one"]);
 
@@ -608,7 +648,8 @@ async fn execute_project_bootstrap_recovery_catches_up_missing_branch_segment() 
         .await
         .expect("execute recovery bootstrap");
 
-    let sqlite = rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let ingested_commit_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
@@ -648,4 +689,113 @@ async fn execute_project_bootstrap_recovery_catches_up_missing_branch_segment() 
         ingested_commit_count, 3,
         "recovery bootstrap should catch up both missing commits after the first HEAD-only bootstrap"
     );
+}
+
+#[tokio::test]
+async fn execute_ingest_with_backfill_window_targets_latest_commits_and_can_reach_older_skipped_history_later()
+ {
+    use rusqlite::OptionalExtension;
+
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add one"]);
+    let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add two"]);
+    let second_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\npub fn three() -> i32 { 3 }\n",
+    )
+    .expect("write third revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add three"]);
+    let third_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history bounded backfill test")
+        .await
+        .expect("initialise local devql store");
+
+    let first_summary = execute_ingest_with_backfill_window(&cfg, false, 1, None, None)
+        .await
+        .expect("execute bounded ingest");
+    assert_eq!(first_summary.commits_processed, 1);
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let first_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), first_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read first commit ledger row");
+    let second_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), second_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read second commit ledger row");
+    let third_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), third_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read third commit ledger row");
+
+    assert!(
+        first_ledger.is_none(),
+        "oldest commit should stay skipped by backfill=1"
+    );
+    assert!(
+        second_ledger.is_none(),
+        "middle commit should stay skipped by backfill=1"
+    );
+    assert_eq!(third_ledger.as_deref(), Some("completed"));
+
+    let replay_summary = execute_ingest_with_backfill_window(&cfg, false, 3, None, None)
+        .await
+        .expect("execute larger bounded ingest");
+    assert_eq!(replay_summary.commits_processed, 2);
+
+    let first_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), first_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read first commit ledger row");
+    let second_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), second_sha.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("read second commit ledger row");
+
+    assert_eq!(first_ledger.as_deref(), Some("completed"));
+    assert_eq!(second_ledger.as_deref(), Some("completed"));
 }

@@ -279,6 +279,91 @@ pub(crate) fn post_commit_catches_up_missing_historical_commit_segment_before_sy
 }
 
 #[test]
+pub(crate) fn post_commit_limits_historical_catch_up_to_latest_fifty_commits() {
+    use rusqlite::OptionalExtension;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
+    setup_git_repo(&dir);
+    let devql_sqlite_path = init_devql_schema(dir.path());
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    let mut first_commit = None::<String>;
+    let mut head_commit = None::<String>;
+    for commit_index in 1..=51 {
+        fs::write(
+            dir.path().join("src/history.ts"),
+            format!("export const value{commit_index} = () => {commit_index};\n"),
+        )
+        .unwrap();
+        git_ok(dir.path(), &["add", "."]);
+        git_ok(
+            dir.path(),
+            &["commit", "-m", &format!("history commit {commit_index}")],
+        );
+        let sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        if first_commit.is_none() {
+            first_commit = Some(sha.clone());
+        }
+        head_commit = Some(sha);
+    }
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+    let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
+    let ingested_commit_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
+            rusqlite::params![repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let first_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![
+                repo_id.as_str(),
+                first_commit.as_deref().expect("first commit sha present")
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap();
+    let head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![
+                repo_id.as_str(),
+                head_commit.as_deref().expect("head commit sha present")
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap();
+
+    assert_eq!(
+        ingested_commit_count, 50,
+        "post_commit should only ingest the latest fifty commits when more history is missing"
+    );
+    assert!(
+        first_ledger.is_none(),
+        "post_commit should leave commits older than the latest fifty outside the automatic catch-up window"
+    );
+    assert_eq!(head_ledger.as_deref(), Some("completed"));
+}
+
+#[test]
 pub(crate) fn post_commit_refresh_removes_devql_current_state_for_deleted_files() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
