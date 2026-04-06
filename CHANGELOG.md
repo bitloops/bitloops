@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Queue-adoption regressions in current-state refresh flows**: restored deterministic host-side test behaviour for watcher capture and manual-commit DevQL refresh paths with test-only inline sync execution, hardened sync worker lifecycle handling when test runtimes drop, corrected malformed SQL in the modularised `commands_sync` shared and validation queries, and cleaned the follow-up Clippy warnings in the new CLI and sync queue paths.
 - **Daemon liveness detection on macOS**: the CLI now treats Unix `kill(pid, 0)` permission errors (`EPERM`) as evidence that the daemon process still exists instead of assuming the process is gone. This fixes cases where a live Bitloops daemon was misreported as stopped, which could break daemon status and lifecycle flows.
+- **Java adapter edge and test-support stability fixes**: Java import-edge extraction now deduplicates repeated import declarations within a file, field type-reference edges now resolve the exact field owner deterministically from the enclosing type and declarator instead of relying on `HashMap` iteration order, and Java test-path detection now recognizes repo-relative `src/test/java/...` files even when they do not end with `*Test.java`, `*Tests.java`, or `*IT.java`.
+- **Language-kind ambiguity regression coverage**: strengthened `LanguageKind::try_from` tests so shared raw tree-sitter kinds such as Java/TS `class_declaration`, `interface_declaration`, and `enum_declaration`, plus Go/Java `method_declaration`, are explicitly asserted as ambiguous while per-language parsers remain the language-aware escape hatch.
 
 ## [0.0.12] - 2026-03-30
 
