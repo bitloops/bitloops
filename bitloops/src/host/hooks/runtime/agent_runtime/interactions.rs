@@ -6,8 +6,8 @@ use crate::host::checkpoints::lifecycle::interaction::{
 };
 use crate::host::checkpoints::session::state::SessionState;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
-use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
 use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
 };

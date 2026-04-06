@@ -17,11 +17,20 @@ use crate::adapters::languages::ts_js::canonical::{
 use crate::adapters::languages::ts_js::extraction::extract_js_ts_artefacts;
 use crate::host::language_adapter::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
 use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn isolated_test_repo_root() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("bitloops-devql-mapping-test-{id}"))
+}
 
 fn extension_runtime_cfg() -> DevqlConfig {
+    let repo_root = isolated_test_repo_root();
     DevqlConfig {
-        config_root: PathBuf::from("/tmp/repo"),
-        repo_root: PathBuf::from("/tmp/repo"),
+        config_root: repo_root.clone(),
+        repo_root,
         repo: RepoIdentity {
             provider: "github".to_string(),
             organization: "bitloops".to_string(),

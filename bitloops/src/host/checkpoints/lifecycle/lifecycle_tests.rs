@@ -393,11 +393,16 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
 // CLI-869
 #[test]
 fn test_handle_lifecycle_compaction_resets_transcript_offset() {
-    let adapter = ClaudeCodeLifecycleAdapter;
-    let event = sample_event(LifecycleEventType::Compaction);
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
 
-    handle_lifecycle_compaction(&adapter, &event)
-        .expect("compaction should reset transcript offset and succeed");
+    with_cwd(dir.path(), || {
+        let adapter = ClaudeCodeLifecycleAdapter;
+        let event = sample_event(LifecycleEventType::Compaction);
+
+        handle_lifecycle_compaction(&adapter, &event)
+            .expect("compaction should reset transcript offset and succeed");
+    });
 }
 
 #[test]
@@ -556,68 +561,73 @@ fn test_create_context_file_empty_prompts() {
 // CLI-872
 #[test]
 fn test_dispatch_lifecycle_event_routes_to_correct_handler() {
-    let adapter = ClaudeCodeLifecycleAdapter;
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
 
-    let cases = vec![
-        (
-            "session start empty id",
-            LifecycleEvent {
-                event_type: Some(LifecycleEventType::SessionStart),
-                session_id: String::new(),
-                ..sample_event(LifecycleEventType::SessionStart)
-            },
-            "session_id is required",
-            true,
-        ),
-        (
-            "turn end empty transcript",
-            LifecycleEvent {
-                event_type: Some(LifecycleEventType::TurnEnd),
-                session_ref: String::new(),
-                ..sample_event(LifecycleEventType::TurnEnd)
-            },
-            "transcript file not specified",
-            true,
-        ),
-        (
-            "compaction no-op",
-            sample_event(LifecycleEventType::Compaction),
-            "",
-            false,
-        ),
-        (
-            "session end empty id no-op",
-            LifecycleEvent {
-                event_type: Some(LifecycleEventType::SessionEnd),
-                session_id: String::new(),
-                ..sample_event(LifecycleEventType::SessionEnd)
-            },
-            "",
-            false,
-        ),
-        (
-            "subagent start",
-            sample_event(LifecycleEventType::SubagentStart),
-            "",
-            false,
-        ),
-        (
-            "subagent end",
-            sample_event(LifecycleEventType::SubagentEnd),
-            "",
-            false,
-        ),
-    ];
+    with_cwd(dir.path(), || {
+        let adapter = ClaudeCodeLifecycleAdapter;
 
-    for (name, event, message, should_error) in cases {
-        let result = dispatch_lifecycle_event(Some(&adapter), Some(&event));
-        if should_error {
-            let err = result.expect_err(name);
-            assert!(err.to_string().contains(message), "{name}: {err}");
-        } else {
-            result.expect(name);
+        let cases = vec![
+            (
+                "session start empty id",
+                LifecycleEvent {
+                    event_type: Some(LifecycleEventType::SessionStart),
+                    session_id: String::new(),
+                    ..sample_event(LifecycleEventType::SessionStart)
+                },
+                "session_id is required",
+                true,
+            ),
+            (
+                "turn end empty transcript",
+                LifecycleEvent {
+                    event_type: Some(LifecycleEventType::TurnEnd),
+                    session_ref: String::new(),
+                    ..sample_event(LifecycleEventType::TurnEnd)
+                },
+                "transcript file not specified",
+                true,
+            ),
+            (
+                "compaction no-op",
+                sample_event(LifecycleEventType::Compaction),
+                "",
+                false,
+            ),
+            (
+                "session end empty id no-op",
+                LifecycleEvent {
+                    event_type: Some(LifecycleEventType::SessionEnd),
+                    session_id: String::new(),
+                    ..sample_event(LifecycleEventType::SessionEnd)
+                },
+                "",
+                false,
+            ),
+            (
+                "subagent start",
+                sample_event(LifecycleEventType::SubagentStart),
+                "",
+                false,
+            ),
+            (
+                "subagent end",
+                sample_event(LifecycleEventType::SubagentEnd),
+                "",
+                false,
+            ),
+        ];
+
+        for (name, event, message, should_error) in cases {
+            let result = dispatch_lifecycle_event(Some(&adapter), Some(&event));
+            if should_error {
+                let err = result.expect_err(name);
+                assert!(err.to_string().contains(message), "{name}: {err}");
+            } else {
+                result.expect(name);
+            }
         }
-    }
+    });
 }
 
 // CLI-873

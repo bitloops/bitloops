@@ -840,7 +840,10 @@ mod tests {
             "interaction_sessions",
         )
         .expect("read session primary key columns");
-        assert_eq!(pk_columns, vec!["repo_id".to_string(), "session_id".to_string()]);
+        assert_eq!(
+            pk_columns,
+            vec!["repo_id".to_string(), "session_id".to_string()]
+        );
 
         let mut session_a = sample_session();
         session_a.repo_id = "repo-a".into();
@@ -856,8 +859,12 @@ mod tests {
         turn_b.repo_id = "repo-b".into();
         turn_b.prompt = "repo b turn".into();
 
-        repository_a.upsert_session(&session_a).expect("upsert session a");
-        repository_b.upsert_session(&session_b).expect("upsert session b");
+        repository_a
+            .upsert_session(&session_a)
+            .expect("upsert session a");
+        repository_b
+            .upsert_session(&session_b)
+            .expect("upsert session b");
         repository_a.upsert_turn(&turn_a).expect("upsert turn a");
         repository_b.upsert_turn(&turn_b).expect("upsert turn b");
 

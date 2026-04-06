@@ -84,8 +84,8 @@ fn structured_transcript_fragment_from_offsets(
 #[cfg(test)]
 mod tests {
     use super::{
-        transcript_fragment_from_bytes, transcript_position_from_bytes,
-        read_transcript_fragment_from_path,
+        read_transcript_fragment_from_path, transcript_fragment_from_bytes,
+        transcript_position_from_bytes,
     };
 
     #[test]

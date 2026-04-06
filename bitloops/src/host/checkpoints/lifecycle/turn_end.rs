@@ -17,10 +17,10 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::transcript_fragment::{
     transcript_fragment_from_bytes, transcript_position_from_bytes,
 };
-use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
 };
