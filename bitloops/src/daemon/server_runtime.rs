@@ -9,11 +9,42 @@ pub(super) struct RunServerOptions<'a> {
     pub telemetry: Option<bool>,
 }
 
+struct DaemonConfigPathOverrideGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl DaemonConfigPathOverrideGuard {
+    fn install(config_path: &Path) -> Self {
+        let previous = std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE);
+        // SAFETY: the daemon process installs this override during startup on a dedicated process
+        // path and drops it during shutdown.
+        unsafe {
+            std::env::set_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, config_path);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for DaemonConfigPathOverrideGuard {
+    fn drop(&mut self) {
+        // SAFETY: paired with install() above; the daemon owns this process state for the duration
+        // of the server lifetime.
+        unsafe {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, previous);
+            } else {
+                std::env::remove_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE);
+            }
+        }
+    }
+}
+
 pub(super) async fn run_server(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
     options: RunServerOptions<'_>,
 ) -> Result<()> {
+    let _config_override = DaemonConfigPathOverrideGuard::install(&daemon_config.config_path);
     log::debug!(
         "daemon boot: mode={} config={} host={:?} port={}",
         options.mode,
