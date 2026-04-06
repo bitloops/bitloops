@@ -246,7 +246,9 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         };
         let agent_type = interaction_agent_type(state, Some(profile));
         let transcript_path = if transcript_path.trim().is_empty() {
-            state.map(|state| state.transcript_path.as_str()).unwrap_or_default()
+            state
+                .map(|state| state.transcript_path.as_str())
+                .unwrap_or_default()
         } else {
             transcript_path
         };
