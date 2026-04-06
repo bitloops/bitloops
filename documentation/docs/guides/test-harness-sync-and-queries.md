@@ -77,14 +77,12 @@ Typical shape:
 ```json
 [
   {
-    "testId": "8fef3e25-fbf7-8780-464d-6228cb599f9e",
-    "testName": "test_add",
-    "suiteName": "tests",
     "filePath": "src/lib.rs",
-    "confidence": 0.6,
-    "discoverySource": "source",
-    "linkageSource": "static_analysis",
-    "linkageStatus": "resolved"
+    "startLine": 209,
+    "endLine": 213,
+    "suiteName": "tests",
+    "testId": "8fef3e25-fbf7-8780-464d-6228cb599f9e",
+    "testName": "test_add"
   }
 ]
 ```

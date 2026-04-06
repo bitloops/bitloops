@@ -17,6 +17,8 @@ pub struct TestHarnessCoveringTest {
     pub test_name: String,
     pub suite_name: Option<String>,
     pub file_path: String,
+    pub start_line: i32,
+    pub end_line: i32,
     pub confidence: f64,
     pub discovery_source: String,
     pub linkage_source: String,
