@@ -251,7 +251,14 @@ fn write_current_runtime_state(repo_root: &Path) {
     fs::write(&runtime_path, bytes).expect("write runtime state");
 }
 
-fn write_post_commit_test_config(repo_root: &Path, postgres_dsn: Option<&str>) {
+fn write_post_commit_test_config(
+    repo_root: &Path,
+    postgres_dsn: Option<&str>,
+    clickhouse_url: Option<&str>,
+    clickhouse_user: Option<&str>,
+    clickhouse_password: Option<&str>,
+    clickhouse_database: Option<&str>,
+) {
     let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
     let duckdb_path = repo_root.join(".bitloops/stores/events/post-commit-events.duckdb");
     let blob_local_path = repo_root.join(".bitloops/stores/blobs/post-commit");
