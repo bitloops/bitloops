@@ -117,7 +117,7 @@ Modified files:
 Before this change, you might want to know what it affects:
 
 ```bash
-bitloops devql query "artefacts(symbol_fqn:'app::middleware') → deps(direction:'in', kind:'references')"
+bitloops devql query "artefacts(symbol_fqn:'app::middleware')->deps(direction:'in', kind:'references')"
 ```
 
 This shows every part of the codebase that depends on the middleware chain — useful for understanding the impact.

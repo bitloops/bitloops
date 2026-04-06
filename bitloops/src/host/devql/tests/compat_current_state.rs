@@ -10,12 +10,34 @@ use serde_json::{Map, Value};
 const COMPAT_PARSER_VERSION: &str = "compat-parser";
 const COMPAT_EXTRACTOR_VERSION: &str = "compat-extractor";
 
+async fn ensure_current_state_repo_catalog_row(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+) -> Result<()> {
+    relational
+        .exec(&format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+             VALUES ('{}', '{}', '{}', '{}', 'main') \
+             ON CONFLICT(repo_id) DO UPDATE SET \
+               provider = excluded.provider, \
+               organization = excluded.organization, \
+               name = excluded.name, \
+               default_branch = excluded.default_branch",
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.provider),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.organization),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.name),
+        ))
+        .await
+}
+
 pub(crate) async fn upsert_current_state_for_content(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     content: &str,
 ) -> Result<()> {
+    ensure_current_state_repo_catalog_row(cfg, relational).await?;
     let content_id = rev.blob_sha.to_string();
     let language = detect_language(rev.path);
     let extraction = match crate::host::devql::sync::extraction::extract_to_cache_format(
@@ -80,6 +102,7 @@ pub(crate) async fn refresh_current_state_for_path(
     symbol_records: &[PersistedArtefactRecord],
     edges: Vec<DependencyEdge>,
 ) -> Result<()> {
+    ensure_current_state_repo_catalog_row(cfg, relational).await?;
     let mut all_records = Vec::with_capacity(symbol_records.len() + 1);
     all_records.push(build_file_current_record(
         rev.path,

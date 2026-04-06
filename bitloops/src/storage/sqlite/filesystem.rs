@@ -78,5 +78,7 @@ pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connect
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .context("enabling SQLite foreign keys")?;
     Ok(conn)
 }

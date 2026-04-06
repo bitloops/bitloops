@@ -60,14 +60,32 @@ s3_secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
 
 ## Embedding Cache
 
-Embedding model downloads are cache, not durable store data:
+Semantic and embeddings configuration lives alongside store config in the daemon config, but it uses separate sections from `[stores]`:
 
 ```toml
-[stores]
-embedding_provider = "local"
-embedding_model = "jinaai/jina-embeddings-v2-base-code"
-embedding_cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
+[semantic]
+provider = "openai_compatible"
+model = "qwen2.5-coder"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
+
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "semantic_aware_once"
+embedding_profile = "local-code"
+
+[embeddings.runtime]
+command = "bitloops-embeddings"
+startup_timeout_secs = 10
+request_timeout_secs = 60
+
+[embeddings.profiles.local-code]
+kind = "local_fastembed"
+model = "jinaai/jina-embeddings-v2-base-code"
+cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
 ```
+
+Embedding model downloads are cache, not durable relational or event store data.
 
 ## Check The Effective State
 
@@ -76,4 +94,4 @@ bitloops status
 bitloops --connection-status
 ```
 
-If Bitloops finds old repo-local store directories, it warns that they are ignored unless you explicitly point the daemon config at them.
+Store locations come only from the active daemon config. If the global config does not exist yet, create it with `bitloops start --create-default-config` or let interactive `bitloops start` create it at the default location.

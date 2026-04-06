@@ -27,17 +27,17 @@ pub(crate) fn condense_session_files_touched_fallback_empty_state() {
         .unwrap();
 
     let metadata = read_checkpoint_session_metadata_from_branch(dir.path(), checkpoint_id);
-    let files = metadata["files_touched"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|v| v.as_str().map(ToString::to_string))
-        .collect::<Vec<_>>();
+    assert!(
+        metadata.get("files_touched").is_none(),
+        "committed session metadata should no longer persist files_touched"
+    );
+    let summary = read_committed(dir.path(), checkpoint_id)
+        .unwrap()
+        .expect("expected committed checkpoint summary");
     assert_eq!(
-        files,
+        summary.files_touched,
         vec!["agent.rs".to_string()],
-        "fallback should use committed files when state.files_touched is empty"
+        "checkpoint summary should derive files_touched from checkpoint_files"
     );
 }
 #[test]
@@ -73,16 +73,17 @@ pub(crate) fn condense_session_files_touched_no_fallback_no_overlap() {
         .unwrap();
 
     let metadata = read_checkpoint_session_metadata_from_branch(dir.path(), checkpoint_id);
-    let files = metadata["files_touched"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|v| v.as_str().map(ToString::to_string))
-        .collect::<Vec<_>>();
     assert!(
-        files.is_empty(),
-        "should not fallback to committed files when session already tracked non-overlapping files: {files:?}"
+        metadata.get("files_touched").is_none(),
+        "committed session metadata should no longer persist files_touched"
+    );
+    let summary = read_committed(dir.path(), checkpoint_id)
+        .unwrap()
+        .expect("expected committed checkpoint summary");
+    assert_eq!(
+        summary.files_touched,
+        vec!["other_file.rs".to_string()],
+        "checkpoint summary should reflect the committed diff, not transient session files_touched"
     );
 }
 
@@ -216,7 +217,10 @@ pub(crate) fn update_summary_updates_session_metadata() {
     assert_eq!(after["summary"]["intent"], "Test intent");
     assert_eq!(after["summary"]["outcome"], "Test outcome");
     assert_eq!(after["session_id"], session_id);
-    assert_eq!(after["files_touched"].as_array().map(Vec::len), Some(2));
+    assert!(
+        after.get("files_touched").is_none(),
+        "committed session metadata should no longer persist files_touched"
+    );
 }
 
 #[test]

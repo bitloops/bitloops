@@ -22,6 +22,8 @@ pub(crate) const GIT_ENV_KEYS: [&str; 12] = [
     "GIT_CONFIG_NOSYSTEM",
 ];
 pub(crate) const ALLOW_HOST_GIT_CONFIG_ENV: &str = "BITLOOPS_TEST_ALLOW_HOST_GIT_CONFIG";
+pub(crate) const SUPPRESS_HOST_DAEMON_CONFIG_ENV: &str =
+    "BITLOOPS_TEST_SUPPRESS_HOST_DAEMON_CONFIG";
 
 fn process_state_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -134,7 +136,16 @@ pub(crate) fn enter_process_state(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let original_cwd = cwd.map(|_| fallback_cwd());
-    let previous_env = apply_env_vars(env_vars);
+    let mut effective_env = env_vars.to_vec();
+    if should_suppress_host_daemon_config(env_vars)
+        && !effective_env
+            .iter()
+            .any(|(key, _)| *key == SUPPRESS_HOST_DAEMON_CONFIG_ENV)
+    {
+        effective_env.push((SUPPRESS_HOST_DAEMON_CONFIG_ENV, Some("1")));
+    }
+
+    let previous_env = apply_env_vars(&effective_env);
 
     if let Some(path) = cwd {
         env::set_current_dir(path).expect("set cwd");
@@ -146,6 +157,17 @@ pub(crate) fn enter_process_state(
         previous_env,
         original_cwd,
     }
+}
+
+fn should_suppress_host_daemon_config(env_vars: &[(&str, Option<&str>)]) -> bool {
+    let exposes_config_root = env_vars.iter().any(|(key, value)| {
+        value.is_some()
+            && matches!(
+                *key,
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE" | "HOME" | "XDG_CONFIG_HOME" | "APPDATA"
+            )
+    });
+    !exposes_config_root
 }
 
 pub(crate) fn enter_env_vars(env_vars: &[(&str, Option<&str>)]) -> ProcessStateGuard {

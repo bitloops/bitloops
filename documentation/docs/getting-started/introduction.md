@@ -22,9 +22,10 @@ If you are upgrading from the older repo-local JSON model, read the [upgrade not
 - `bitloops start` launches the global daemon and can prompt to create the default daemon config on a fresh machine
 - `bitloops start --create-default-config` remains the explicit bootstrap path for the default daemon config plus local default store files
 - first-run interactive telemetry consent belongs to that default-config bootstrap in `bitloops start`
-- `bitloops init` bootstraps the current project or subproject
+- `bitloops init` bootstraps the current project or subproject and can optionally queue an initial current-state sync
 - `bitloops enable` and `bitloops disable` toggle capture in the current project policy
 - `bitloops dashboard` opens the dashboard and starts the daemon if needed
+- `bitloops status` reports daemon health and sync queue state
 - DevQL commands talk to the daemon over the local HTTP and GraphQL transport
 
 ## Next Step

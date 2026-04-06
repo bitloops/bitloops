@@ -206,6 +206,11 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         None => None,
     };
     let enrichment = enrichment_status().ok();
+    let current_repo_id = crate::utils::paths::repo_root()
+        .ok()
+        .and_then(|repo_root| crate::host::devql::resolve_repo_identity(&repo_root).ok())
+        .map(|repo| repo.repo_id);
+    let sync = super::sync_status(current_repo_id.as_deref()).ok();
 
     Ok(DaemonStatusReport {
         runtime,
@@ -213,6 +218,7 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         service_running,
         health,
         enrichment,
+        sync,
     })
 }
 

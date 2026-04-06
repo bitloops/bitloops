@@ -1,35 +1,31 @@
 # Bitloops Test-Harness Quickstart (`rust-lang/cfg-if`)
 
-Last updated: 2026-03-20
+Last updated: 2026-04-02
 
 This quickstart shows a full local flow:
 
 1. install the `bitloops` CLI from this workspace
 2. clone a small Rust repo under `/tmp`
-3. initialize Bitloops
+3. start the daemon and initialize Bitloops
 4. create a real committed Bitloops checkpoint
 5. run `bitloops devql ingest` to materialize production artefacts
-6. continue with `bitloops testlens` against that same SQLite DB
+6. continue with `bitloops testlens` against that same configured relational DB
 
 This uses `rust-lang/cfg-if` because it is small and quick to re-run.
 
-For Ruff-specific flows, keep these alongside this quickstart:
-
-- [quickstart_ruff_bitloops_devql.md](/Users/markos/code/bitloops/bitloops/bitloops/docs/test_harness/quickstart_ruff_bitloops_devql.md)
-- [quickstart_ruff_fixture.md](/Users/markos/code/bitloops/bitloops/bitloops/docs/test_harness/quickstart_ruff_fixture.md)
+This file focuses on the current daemon-first flow rather than the older repo-local store layout.
 
 ## Prerequisites
 
 - Rust / Cargo
 - `git`
 - `sqlite3`
-- this workspace checked out at:
-  `/Users/markos/code/bitloops/bitloops`
+- this workspace checked out locally
 
 ## 1) Install the CLI from this workspace
 
 ```bash
-cd /Users/markos/code/bitloops/bitloops
+cd /path/to/bitloops
 
 cargo install --path ./bitloops --force
 
@@ -58,15 +54,21 @@ git config user.email "codex@example.com"
 ## 3) Initialize Bitloops in the cloned repo
 
 ```bash
-bitloops init --agent codex
-bitloops enable --project
-bitloops devql init
+bitloops start --create-default-config
+
+cd /tmp/cfg-if
+
+bitloops init --agent codex --sync=true
 ```
 
-That creates the repo-local stores:
+What this does:
 
-- `./.bitloops/stores/relational/relational.db`
-- `./.bitloops/stores/event/events.duckdb`
+- starts the Bitloops daemon and creates the default daemon config if needed
+- creates or updates `.bitloops.local.toml`
+- installs or reconciles hooks for the selected agent
+- queues an initial DevQL current-state sync and waits for it to finish
+
+If you want to inspect SQLite tables directly later in this guide, set `CFG_IF_DB` to the `sqlite_path` configured in your daemon `config.toml`. With the default daemon config, that path lives under the Bitloops data directory rather than inside `./.bitloops/stores/...`.
 
 ## 4) Create one committed Bitloops checkpoint
 
@@ -128,7 +130,11 @@ bitloops devql ingest
 ## 6) Verify that production rows exist
 
 ```bash
-sqlite3 ./.bitloops/stores/relational/relational.db "
+# Set this to the sqlite_path from your Bitloops daemon config if you have not
+# already exported it.
+export CFG_IF_DB="/absolute/path/to/bitloops/stores/relational/relational.db"
+
+sqlite3 "$CFG_IF_DB" "
 select 'checkpoints', count(*) from checkpoints
 union all
 select 'commit_checkpoints', count(*) from commit_checkpoints
@@ -152,7 +158,6 @@ You want the important rows to be non-zero, especially:
 ## 7) Continue with `bitloops testlens` on the same DB
 
 ```bash
-export CFG_IF_DB="/tmp/cfg-if/.bitloops/stores/relational/relational.db"
 export CFG_IF_COMMIT="$(git -C /tmp/cfg-if rev-parse HEAD)"
 
 cd /tmp/cfg-if
@@ -290,8 +295,8 @@ This flow was re-checked on 2026-03-20 against a disposable `/tmp/cfg-if` clone.
 Observed outcomes:
 
 - Bitloops checkpoint creation succeeded
-- `bitloops devql ingest` succeeded against the repo-local SQLite DB
-- production rows were materialized in the same DB
+- `bitloops devql ingest` succeeded against the configured SQLite DB
+- production rows were materialized in the same configured relational DB
 - `bitloops testlens ingest-tests` completed successfully for the current `cfg-if` commit
 - `bitloops testlens ingest-coverage` ingested LCOV data with line and branch coverage hits
 - `bitloops testlens query --view coverage` returned artefact-level coverage percentages
@@ -307,6 +312,6 @@ ingest-tests complete for commit <sha> (files: 2, suites: 4, scenarios: 5, links
 
 - If `bitloops devql ingest` completes with `checkpoints_processed=0`, you do not have committed Bitloops checkpoint state yet. Repeat the `session-start -> edit -> stop -> git commit` cycle.
 - If `artefacts_current` stays `0`, `bitloops testlens ingest-tests` will stop because there is no production state to link against.
-- `bitloops devql init` creates the relational and test-harness schema but does not clear old data. If you want a clean rerun, start from a fresh clone or delete the DB first.
+- `bitloops devql init` explicitly ensures the configured schema exists, but it does not clear old data. If you want a clean rerun, start from a fresh clone or delete the DB first.
 - If `ingest-coverage` reports `diagnostics: N` with N > 0, some coverage file paths could not be mapped to production artefacts. This usually means the source files were not part of a DevQL checkpoint or the paths in the LCOV report do not match the repo-relative paths in the artefact index.
 - If `coverage_mode` in query output is `none`, no coverage has been ingested for that commit yet. Run `ingest-coverage` first.

@@ -18,6 +18,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
+        if let Some(sync) = report.sync.as_ref() {
+            append_sync_lines(&mut lines, sync);
+        }
         return lines;
     }
 
@@ -44,6 +47,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
+        if let Some(sync) = report.sync.as_ref() {
+            append_sync_lines(&mut lines, sync);
+        }
         return lines;
     }
 
@@ -52,6 +58,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     lines.push(format!("Log file: {}", log_path.display()));
     if let Some(enrichment) = report.enrichment.as_ref() {
         append_enrichment_lines(&mut lines, enrichment);
+    }
+    if let Some(sync) = report.sync.as_ref() {
+        append_sync_lines(&mut lines, sync);
     }
     lines
 }
@@ -183,39 +192,56 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     ));
 }
 
-pub(super) fn print_legacy_repo_data_warnings() {
-    for line in legacy_repo_data_warnings() {
-        eprintln!("{line}");
+fn append_sync_lines(lines: &mut Vec<String>, status: &daemon::SyncQueueStatus) {
+    lines.push(format!(
+        "Sync pending tasks: {}",
+        status.state.pending_tasks
+    ));
+    lines.push(format!(
+        "Sync running tasks: {}",
+        status.state.running_tasks
+    ));
+    lines.push(format!("Sync failed tasks: {}", status.state.failed_tasks));
+    lines.push(format!(
+        "Sync completed recent tasks: {}",
+        status.state.completed_recent_tasks
+    ));
+    if let Some(action) = status.state.last_action.as_ref() {
+        lines.push(format!("Sync last action: {action}"));
     }
-}
-
-pub(super) fn legacy_repo_data_warnings() -> Vec<String> {
-    let Some(repo_root) = crate::utils::paths::repo_root().ok() else {
-        return Vec::new();
-    };
-
-    let legacy_paths = [
-        repo_root.join(".bitloops").join("stores"),
-        repo_root.join(".bitloops").join("embeddings"),
-        repo_root.join(".bitloops").join("tmp"),
-        repo_root.join(".bitloops").join("metadata"),
-    ];
-    let found: Vec<_> = legacy_paths
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect();
-    if found.is_empty() {
-        return Vec::new();
+    if let Some(task) = status.current_repo_task.as_ref() {
+        lines.push(format!(
+            "Current repo sync task: {} ({}, mode={}, source={})",
+            task.task_id, task.status, task.mode, task.source
+        ));
+        lines.push(format!(
+            "Current repo sync phase: {}",
+            task.progress.phase.as_str()
+        ));
+        if task.progress.paths_total > 0 {
+            lines.push(format!(
+                "Current repo sync progress: {}/{} paths complete ({} remaining)",
+                task.progress.paths_completed,
+                task.progress.paths_total,
+                task.progress.paths_remaining
+            ));
+        }
+        if let Some(position) = task.queue_position {
+            lines.push(format!(
+                "Current repo sync queue position: {} ({} ahead)",
+                position,
+                task.tasks_ahead.unwrap_or(position.saturating_sub(1))
+            ));
+        }
+        if let Some(path) = task.progress.current_path.as_ref() {
+            lines.push(format!("Current repo sync path: {path}"));
+        }
+        if let Some(error) = task.error.as_ref() {
+            lines.push(format!("Current repo sync error: {error}"));
+        }
     }
-
-    let mut lines = Vec::with_capacity(found.len() + 1);
-    lines.push(
-        "Warning: legacy repo-local Bitloops data was found and is ignored unless you configure those paths explicitly in the daemon config.".to_string(),
-    );
-    lines.extend(
-        found
-            .into_iter()
-            .map(|path| format!("Legacy path: {}", path.display())),
-    );
-    lines
+    lines.push(format!(
+        "Sync persisted: {}",
+        if status.persisted { "yes" } else { "no" }
+    ));
 }

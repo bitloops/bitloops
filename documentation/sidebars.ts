@@ -37,6 +37,7 @@ const sidebars: SidebarsConfig = {
         'guides/devql-query-cookbook',
         'guides/connecting-knowledge-sources',
         'guides/configuring-storage',
+        'guides/semantic-embeddings-quickstart',
         'guides/using-the-dashboard',
         'guides/dashboard-local-https-setup',
       ],
@@ -49,6 +50,7 @@ const sidebars: SidebarsConfig = {
         'reference/uninstall',
         'reference/configuration',
         'reference/environment-variables',
+        'reference/upgrading-to-the-daemon-architecture',
       ],
     },
     {

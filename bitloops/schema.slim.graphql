@@ -44,12 +44,25 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	copyLineage: [ArtefactCopyLineage!]!
 }
 
 type ArtefactConnection {
 	edges: [ArtefactEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type ArtefactCopyLineage {
+	checkpointId: String!
+	eventTime: DateTime!
+	commitSha: String!
+	sourceSymbolId: String!
+	sourceArtefactId: ID!
+	destSymbolId: String!
+	destArtefactId: ID!
+	source: Artefact
+	destination: Artefact
 }
 
 type ArtefactEdge {
@@ -153,6 +166,7 @@ type Checkpoint {
 	isTask: Boolean!
 	toolUseId: String
 	commit: Commit
+	fileRelations: [CheckpointFileRelation!]!
 }
 
 type CheckpointConnection {
@@ -164,6 +178,17 @@ type CheckpointConnection {
 type CheckpointEdge {
 	node: Checkpoint!
 	cursor: String!
+}
+
+type CheckpointFileRelation {
+	filepath: String!
+	changeKind: String!
+	pathBefore: String
+	pathAfter: String
+	blobShaBefore: String
+	blobShaAfter: String
+	copiedFromPath: String
+	copiedFromBlobSha: String
 }
 
 type CheckpointTokenUsage {
@@ -270,6 +295,19 @@ enum EdgeKind {
 	EXTENDS
 	IMPLEMENTS
 	EXPORTS
+}
+
+input EnqueueSyncInput {
+	full: Boolean! = false
+	paths: [String!] = null
+	repair: Boolean! = false
+	validate: Boolean! = false
+	source: String = null
+}
+
+type EnqueueSyncResult {
+	task: SyncTask!
+	merged: Boolean!
 }
 
 type FileContext {
@@ -463,6 +501,7 @@ type MutationRoot {
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
 	sync(input: SyncInput!): SyncResult!
+	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
@@ -517,6 +556,8 @@ type SlimQueryRoot {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	telemetry(eventType: String, agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): TelemetryEventConnection!
 	users: [String!]!
+	syncTask(id: String!): SyncTask
+	syncTasks(limit: Int): [SyncTask!]!
 	agents: [String!]!
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
@@ -532,6 +573,7 @@ type SlimQueryRoot {
 type SlimSubscriptionRoot {
 	checkpointIngested: Checkpoint!
 	ingestionProgress: IngestionProgressEvent!
+	syncProgress(taskId: String!): SyncProgressEvent!
 }
 
 input SyncInput {
@@ -553,6 +595,36 @@ input SyncInput {
 	validate: Boolean! = false
 }
 
+type SyncProgressEvent {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	source: String!
+	mode: String!
+	status: String!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	phase: String!
+	currentPath: String
+	pathsTotal: Int!
+	pathsCompleted: Int!
+	pathsRemaining: Int!
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	error: String
+	summary: SyncResult
+}
+
 type SyncResult {
 	success: Boolean!
 	mode: String!
@@ -569,6 +641,36 @@ type SyncResult {
 	cacheMisses: Int!
 	parseErrors: Int!
 	validation: SyncValidationResult
+}
+
+type SyncTask {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	source: String!
+	mode: String!
+	status: String!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	phase: String!
+	currentPath: String
+	pathsTotal: Int!
+	pathsCompleted: Int!
+	pathsRemaining: Int!
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	error: String
+	summary: SyncResult
 }
 
 type SyncValidationFileDriftResult {

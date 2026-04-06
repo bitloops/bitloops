@@ -1,12 +1,44 @@
+[env]
+# Fast local default for hosts with official DuckDB prebuilts (including Apple silicon macOS).
+DUCKDB_DOWNLOAD_LIB = { value = "1", force = false }
+
 [alias]
 # Aliases apply only when Cargo loads this file: run from `bitloops/` (or a subdir), not `cargo <alias> --manifest-path bitloops/Cargo.toml` from the repo root (Cargo walks config upward from cwd, not from the manifest path).
-# Shorthand for full crate: same as `cargo test --no-fail-fast`.
-test-all = "test --no-fail-fast"
-test-core = "test --lib --no-fail-fast"
-test-cli = "test --bin bitloops --no-fail-fast"
-test-integration = "test --tests --no-fail-fast"
-test-coverage = "llvm-cov --workspace --no-default-features --all-targets --html --output-dir target/llvm-cov-html"
-test-coverage-lcov = "llvm-cov --workspace --no-default-features --all-targets --lcov --output-path target/llvm-cov.info"
+
+# Cargo-first local developer surface from `bitloops/`.
+dev-check = "check --no-default-features"
+dev-build = "build --no-default-features"
+dev-install = "run --manifest-path ../Cargo.toml --quiet --package xtask -- install"
+dev-file-size = "run --manifest-path ../Cargo.toml --quiet --package xtask -- file-size ."
+dev-loop = "run --manifest-path ../Cargo.toml --quiet --package xtask -- dev-loop"
+dev-fmt = "fmt --all"
+dev-fmt-check = "fmt --all --check"
+dev-clippy = "clippy --all-targets --no-default-features -- -D warnings"
+dev-test-lib = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test lib"
+dev-test-core = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test core"
+dev-test-cli = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test cli"
+dev-test-fast = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test fast"
+dev-test-slow = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test slow"
+dev-test-full = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test full"
+dev-coverage = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage run-lcov --lcov bitloops/target/llvm-cov.info"
+dev-coverage-all = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage run-all --lcov bitloops/target/llvm-cov.info --html-dir bitloops/target/llvm-cov-html"
+dev-coverage-metrics = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage metrics --lcov bitloops/target/llvm-cov.info"
+dev-coverage-compare = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage compare --lines 80 --functions 75 --epsilon 0.5 --lcov bitloops/target/llvm-cov.info"
+dev-coverage-html = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --html --output-dir target/llvm-cov-html"
+
+# Explicit bundled-DuckDB aliases for release/offline/exotic targets.
+dev-check-bundled = "check --features duckdb-bundled"
+dev-build-bundled = "build --features duckdb-bundled"
+
+# Back-compat aliases (kept while docs and local usage migrate to `dev-*`).
+test-all = "test --no-fail-fast --no-default-features"
+test-core = "test --lib --no-fail-fast --no-default-features"
+test-cli = "test --bin bitloops --no-fail-fast --no-default-features"
+test-integration = "test --tests --no-fail-fast --no-default-features"
+test-coverage = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --html --output-dir target/llvm-cov-html"
+test-coverage-lcov = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path target/llvm-cov.info"
+
+# QAT aliases
 qat = "test --test qat_acceptance -- --ignored"
 qat-smoke = "test --test qat_acceptance qat_smoke -- --ignored"
 qat-devql = "test --test qat_acceptance qat_devql -- --ignored"

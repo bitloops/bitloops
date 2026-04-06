@@ -50,12 +50,12 @@ bitloops uninstall --config --data --caching --service --shell
 
 | Flag | Removes |
 | --- | --- |
-| `--full` | All targets below, including legacy cleanup |
+| `--full` | All targets below, including repository-local cleanup |
 | `--binaries` | Recognised `bitloops` binaries |
 | `--service` | The global daemon service plus daemon state metadata |
-| `--data` | Platform data directory plus legacy repo-local `.bitloops/` data |
+| `--data` | Platform data directory plus repo-local `.bitloops/` data |
 | `--caching` | Platform cache directory |
-| `--config` | Platform config directory plus legacy TLS artefacts in `~/.bitloops/certs` |
+| `--config` | Platform config directory plus TLS artefacts in `~/.bitloops/certs` |
 | `--agent-hooks` | Supported agent hooks |
 | `--git-hooks` | Git hooks installed by Bitloops |
 | `--shell` | Managed shell completion integration |
@@ -78,9 +78,9 @@ If you only want to pause capture without removing hooks, use `bitloops disable`
 - shell integration managed by Bitloops
 - the global daemon service
 - global config, data, cache, and state directories
-- legacy global TLS artefacts
+- TLS artefacts in `~/.bitloops/certs`
 - Bitloops hook integration in known repositories
-- legacy repo-local `.bitloops/` data directories in known repositories
+- repo-local `.bitloops/` data directories in known repositories
 
 ## What Bitloops Does Not Remove
 

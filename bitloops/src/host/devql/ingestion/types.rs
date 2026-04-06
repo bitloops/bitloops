@@ -17,6 +17,8 @@ pub(crate) struct IngestionCounters {
     pub(crate) symbol_embedding_rows_skipped: usize,
     pub(crate) symbol_clone_edges_upserted: usize,
     pub(crate) symbol_clone_sources_scored: usize,
+    #[serde(default)]
+    pub(crate) interaction_events_attempted: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

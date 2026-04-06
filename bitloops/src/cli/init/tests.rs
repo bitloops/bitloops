@@ -87,6 +87,22 @@ fn init_args_supports_skip_baseline_flag() {
 }
 
 #[test]
+fn init_args_support_sync_flag_variants() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--sync"]).expect("parse init --sync");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.sync, Some(true));
+
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--sync=false"]).expect("parse init --sync=false");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(args.sync, Some(false));
+}
+
+#[test]
 fn init_cmd_agent_flag_no_value_errors() {
     let err = Cli::try_parse_from(["bitloops", "init", "--agent"])
         .err()
@@ -118,6 +134,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: false,
+                    sync: Some(false),
                 },
                 &mut out,
                 None,
@@ -158,6 +175,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: true,
+                    sync: Some(false),
                 },
                 &mut out,
                 None,
@@ -394,6 +412,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                                 telemetry: None,
                                 no_telemetry: false,
                                 skip_baseline: false,
+                                sync: Some(false),
                             },
                             &mut out,
                             &mut input,
@@ -449,6 +468,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                                 telemetry: None,
                                 no_telemetry: false,
                                 skip_baseline: false,
+                                sync: Some(false),
                             },
                             &mut out,
                             &mut input,
@@ -487,6 +507,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                         telemetry: None,
                         no_telemetry: false,
                         skip_baseline: false,
+                        sync: Some(false),
                     },
                     &mut out,
                     &mut input,
@@ -538,6 +559,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                                 telemetry: Some(false),
                                 no_telemetry: false,
                                 skip_baseline: false,
+                                sync: Some(false),
                             },
                             &mut out,
                             &mut input,
@@ -548,6 +570,48 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                     let rendered = String::from_utf8(out).expect("utf8 output");
                     assert!(!rendered.contains("Help us improve Bitloops"));
                 },
+            );
+        },
+    );
+}
+
+#[test]
+fn run_init_noninteractive_requires_explicit_sync_choice() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            let err = runtime
+                .block_on(run_with_io_async(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        agent: None,
+                        telemetry: Some(false),
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: None,
+                    },
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect_err("init should require an explicit sync flag");
+
+            assert_eq!(
+                err.to_string(),
+                "`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively."
             );
         },
     );

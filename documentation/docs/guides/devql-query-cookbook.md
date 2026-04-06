@@ -5,7 +5,7 @@ title: DevQL Query Cookbook
 
 # DevQL Query Cookbook
 
-Practical examples for the current DevQL GraphQL surface. All examples assume you have already run `bitloops devql init` and `bitloops devql ingest`.
+Practical examples for the current DevQL GraphQL surface. All examples assume the daemon has already bootstrapped the schema and you have already run `bitloops devql ingest`.
 
 `bitloops devql query` accepts both DevQL DSL and raw GraphQL:
 

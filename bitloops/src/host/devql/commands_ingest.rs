@@ -152,33 +152,50 @@ pub(crate) async fn execute_ingest_with_observer(
         )
         .await?;
 
-        for path in &cp.files_touched {
-            let normalized_path = normalize_repo_path(path);
-            if normalized_path.is_empty() {
-                continue;
-            }
+        let checkpoint_event_time = checkpoint_event_time_rfc3339(&cp, commit_info);
+        let provenance_context = crate::host::devql::checkpoint_provenance::CheckpointProvenanceContext {
+            repo_id: &cfg.repo.repo_id,
+            checkpoint_id: &cp.checkpoint_id,
+            session_id: &cp.session_id,
+            event_time: &checkpoint_event_time,
+            agent: &cp.agent,
+            branch: &cp.branch,
+            strategy: &cp.strategy,
+            commit_sha: &commit_sha,
+        };
+        let checkpoint_file_rows =
+            crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
+                &cfg.repo_root,
+                provenance_context,
+            )?;
+        let mut seen_after_snapshots = std::collections::BTreeSet::new();
 
-            let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
-                .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, path));
-            let Some(blob_sha) = blob_sha else {
+        for file_row in &checkpoint_file_rows {
+            let Some(normalized_path) = file_row.path_after.as_deref() else {
                 continue;
             };
-            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+            let Some(blob_sha) = file_row.blob_sha_after.as_deref() else {
+                continue;
+            };
+            if !seen_after_snapshots.insert((normalized_path.to_string(), blob_sha.to_string())) {
+                continue;
+            };
+            let content = git_blob_content(&cfg.repo_root, blob_sha).unwrap_or_default();
 
             upsert_file_state_row(
                 &cfg.repo.repo_id,
                 &relational,
                 &commit_sha,
-                &normalized_path,
-                &blob_sha,
+                normalized_path,
+                blob_sha,
             )
             .await?;
             let file_artefact = upsert_file_artefact_row(
                 &cfg.repo.repo_id,
                 &cfg.repo_root,
                 &relational,
-                &normalized_path,
-                &blob_sha,
+                normalized_path,
+                blob_sha,
             )
             .await?;
             upsert_language_artefacts(
@@ -194,8 +211,8 @@ pub(crate) async fn execute_ingest_with_observer(
                     commit_unix: commit_info
                         .expect("commit_info exists when sha exists")
                         .commit_unix,
-                    path: &normalized_path,
-                    blob_sha: &blob_sha,
+                    path: normalized_path,
+                    blob_sha,
                 },
                 &file_artefact,
             )
@@ -205,15 +222,15 @@ pub(crate) async fn execute_ingest_with_observer(
             let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
                 &relational,
                 &cfg.repo.repo_id,
-                &blob_sha,
-                &normalized_path,
+                blob_sha,
+                normalized_path,
             )
             .await?;
             let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
                 &relational,
                 &cfg.repo.repo_id,
-                &blob_sha,
-                &normalized_path,
+                blob_sha,
+                normalized_path,
             )
             .await?;
             let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(
@@ -361,6 +378,13 @@ pub(crate) async fn execute_ingest_with_observer(
         )
         .await?;
     }
+    // Propagate interaction events from checkpoint SQLite to the events store.
+    // Failures here are logged but do not block the rest of ingestion.
+    match ingest_interaction_events_from_checkpoint(cfg, &backends.events).await {
+        Ok(n) => counters.interaction_events_attempted = n,
+        Err(err) => log::warn!("interaction event ingestion skipped: {err:#}"),
+    }
+
     counters.success = true;
     emit_progress(
         observer,
@@ -400,6 +424,25 @@ fn active_branch_name(repo_root: &Path) -> String {
     .ok()
     .filter(|value| !value.trim().is_empty())
     .unwrap_or_else(|| "main".to_string())
+}
+
+async fn ingest_interaction_events_from_checkpoint(
+    cfg: &DevqlConfig,
+    events_cfg: &crate::config::EventsBackendConfig,
+) -> Result<usize> {
+    let sqlite_path =
+        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+            &cfg.repo_root,
+        )?;
+    if !sqlite_path.is_file() {
+        return Ok(0);
+    }
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+        .context("opening checkpoint SQLite for interaction event ingestion")?;
+    sqlite
+        .initialise_checkpoint_schema()
+        .context("ensuring interaction tables exist for ingestion")?;
+    ingest_interaction_events(&sqlite, cfg, events_cfg, &cfg.repo.repo_id).await
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

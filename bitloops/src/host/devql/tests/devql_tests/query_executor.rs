@@ -86,7 +86,8 @@ async fn duckdb_path_with_sql(sql: &str) -> PathBuf {
 }
 
 fn checkpoint_file_snapshot_projection_table_sql() -> &'static str {
-    "CREATE TABLE checkpoint_file_snapshots (
+    "CREATE TABLE checkpoint_files (
+        relation_id TEXT NOT NULL,
         repo_id TEXT NOT NULL,
         checkpoint_id TEXT NOT NULL,
         session_id TEXT NOT NULL,
@@ -95,8 +96,13 @@ fn checkpoint_file_snapshot_projection_table_sql() -> &'static str {
         branch TEXT NOT NULL,
         strategy TEXT NOT NULL,
         commit_sha TEXT NOT NULL,
-        path TEXT NOT NULL,
-        blob_sha TEXT NOT NULL
+        change_kind TEXT NOT NULL,
+        path_before TEXT,
+        path_after TEXT,
+        blob_sha_before TEXT,
+        blob_sha_after TEXT,
+        copy_source_path TEXT,
+        copy_source_blob_sha TEXT
     );"
 }
 
@@ -225,10 +231,10 @@ async fn checkpoint_matches_for_artefact_snapshot_reads_projection_rows() {
     let relational = sqlite_relational_with_sql(
         &format!(
             "{}\
-             INSERT INTO checkpoint_file_snapshots VALUES \
-                ('repo-1', 'checkpoint-1', 'session-1', '2026-03-17T12:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'src/lib.rs', 'blob-1'), \
-                ('repo-1', 'checkpoint-2', 'session-2', '2026-03-18T12:00:00Z', 'codex', 'main', 'manual', 'commit-2', 'src/lib.rs', 'blob-1'), \
-                ('repo-1', 'checkpoint-3', 'session-3', '2026-03-19T12:00:00Z', 'codex', 'main', 'manual', 'commit-3', 'src/other.rs', 'blob-1');",
+             INSERT INTO checkpoint_files VALUES \
+                ('relation-1', 'repo-1', 'checkpoint-1', 'session-1', '2026-03-17T12:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-1', NULL, NULL), \
+                ('relation-2', 'repo-1', 'checkpoint-2', 'session-2', '2026-03-18T12:00:00Z', 'codex', 'main', 'manual', 'commit-2', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-1', NULL, NULL), \
+                ('relation-3', 'repo-1', 'checkpoint-3', 'session-3', '2026-03-19T12:00:00Z', 'codex', 'main', 'manual', 'commit-3', 'modify', 'src/other.rs', 'src/other.rs', 'blob-1', 'blob-1', NULL, NULL);",
             checkpoint_file_snapshot_projection_table_sql()
         ),
     )
@@ -321,10 +327,10 @@ async fn attach_chat_history_to_artefacts_uses_projection_without_file_state() {
     let relational = sqlite_relational_with_sql(
         &format!(
             "{}\
-             INSERT INTO checkpoint_file_snapshots VALUES \
-                ('repo-1', 'a1b2c3d4e5f6', 'session-older', '2026-03-17T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-1', 'src/lib.rs', 'blob-1'), \
-                ('repo-1', 'b1c2d3e4f5a6', 'session-newer', '2026-03-18T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-2', 'src/lib.rs', 'blob-1'), \
-                ('repo-1', 'c1d2e3f4a5b6', 'session-other', '2026-03-19T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-3', 'src/other.rs', 'blob-1');",
+             INSERT INTO checkpoint_files VALUES \
+                ('relation-1', 'repo-1', 'a1b2c3d4e5f6', 'session-older', '2026-03-17T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-1', NULL, NULL), \
+                ('relation-2', 'repo-1', 'b1c2d3e4f5a6', 'session-newer', '2026-03-18T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-2', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-1', 'blob-1', NULL, NULL), \
+                ('relation-3', 'repo-1', 'c1d2e3f4a5b6', 'session-other', '2026-03-19T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-3', 'modify', 'src/other.rs', 'src/other.rs', 'blob-1', 'blob-1', NULL, NULL);",
             checkpoint_file_snapshot_projection_table_sql()
         ),
     )

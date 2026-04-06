@@ -6,7 +6,8 @@ on:
       - main
     paths:
       - "bitloops/**"
-      - "scripts/check-rust-file-size.sh"
+      - "xtask/**"
+      - ".cargo/config.toml"
       - ".github/workflows/ci.yml"
 
 permissions:
@@ -18,10 +19,9 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - uses: dtolnay/rust-toolchain@stable
       - name: Check Rust file size limits
-        run: bash scripts/check-rust-file-size.sh
+        run: cargo dev-file-size
   test:
     name: Test compile (Ubuntu)
     runs-on: self-hosted
@@ -33,7 +33,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Compile test targets
-        run: cargo test --manifest-path bitloops/Cargo.toml --no-run --no-default-features
+        run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
 
   build-matrix:
     name: Build smoke ${{ matrix.target }}
@@ -83,7 +83,9 @@ jobs:
 
       - name: Build (musl targets)
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
-        run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }}
+        env:
+          DUCKDB_DOWNLOAD_LIB: "0"
+        run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }} --features duckdb-bundled
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}

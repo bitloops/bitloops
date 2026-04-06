@@ -2,7 +2,7 @@
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
@@ -339,6 +339,57 @@ fn init_hook_logging(repo_root: &Path) {
     let _ = logging::init(&session_id);
 }
 
+fn hook_action_descriptor(
+    agent_name: &str,
+    hook_name: &str,
+) -> crate::telemetry::analytics::ActionDescriptor {
+    let mut properties = std::collections::HashMap::new();
+    properties.insert(
+        "command".to_string(),
+        serde_json::Value::String("bitloops hook".to_string()),
+    );
+    properties.insert(
+        "agent".to_string(),
+        serde_json::Value::String(agent_name.to_string()),
+    );
+    properties.insert(
+        "hook".to_string(),
+        serde_json::Value::String(hook_name.to_string()),
+    );
+    properties.insert(
+        "hook_type".to_string(),
+        serde_json::Value::String(get_hook_type(agent_name, hook_name).to_string()),
+    );
+
+    crate::telemetry::analytics::ActionDescriptor {
+        event: "bitloops hook".to_string(),
+        surface: "hook",
+        properties,
+    }
+}
+
+fn track_hook_action(
+    repo_root: &Path,
+    dispatch_context: Option<&crate::telemetry::analytics::TelemetryDispatchContext>,
+    agent_name: &str,
+    hook_name: &str,
+    success: bool,
+    duration_ms: u128,
+) {
+    let Some(dispatch_context) = dispatch_context else {
+        return;
+    };
+    let descriptor = hook_action_descriptor(agent_name, hook_name);
+    crate::telemetry::analytics::track_action_detached(
+        Some(&descriptor),
+        dispatch_context,
+        env!("CARGO_PKG_VERSION"),
+        Some(repo_root),
+        success,
+        duration_ms,
+    );
+}
+
 pub(crate) fn run_agent_hook_with_logging<F>(
     repo_root: &Path,
     agent_name: &str,
@@ -429,6 +480,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
     let strategy_name = settings::load_settings(&config_start)
         .map(|s| s.strategy)
         .unwrap_or_else(|_| registry::STRATEGY_NAME_MANUAL_COMMIT.to_string());
+    let dispatch_context = crate::telemetry::analytics::load_dispatch_context_for_repo(&repo_root);
 
     match agent {
         HooksAgent::ClaudeCode(cc) => {
@@ -438,8 +490,8 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
             let hook_name = cc.verb.hook_name();
             let stdin = read_stdin()?;
-
-            run_agent_hook_with_logging(
+            let started = Instant::now();
+            let result = run_agent_hook_with_logging(
                 &repo_root,
                 AGENT_NAME_CLAUDE_CODE,
                 hook_name,
@@ -496,7 +548,16 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                         )
                     }
                 },
-            )
+            );
+            track_hook_action(
+                &repo_root,
+                dispatch_context.as_ref(),
+                AGENT_NAME_CLAUDE_CODE,
+                hook_name,
+                result.is_ok(),
+                started.elapsed().as_millis(),
+            );
+            result
         }
         HooksAgent::Codex(codex) => {
             let backend = create_session_backend_or_local(&repo_root);
@@ -505,8 +566,8 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
             let hook_name = codex.verb.hook_name();
             let stdin = read_stdin()?;
-
-            run_agent_hook_with_logging(
+            let started = Instant::now();
+            let result = run_agent_hook_with_logging(
                 &repo_root,
                 AGENT_NAME_CODEX,
                 hook_name,
@@ -541,18 +602,37 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                         ),
                     }
                 },
-            )
+            );
+            track_hook_action(
+                &repo_root,
+                dispatch_context.as_ref(),
+                AGENT_NAME_CODEX,
+                hook_name,
+                result.is_ok(),
+                started.elapsed().as_millis(),
+            );
+            result
         }
         HooksAgent::Gemini(gemini) => {
             let hook_name = gemini.verb.hook_name();
             let stdin = read_stdin()?;
-            run_agent_hook_with_logging(
+            let started = Instant::now();
+            let result = run_agent_hook_with_logging(
                 &repo_root,
                 AGENT_NAME_GEMINI,
                 hook_name,
                 &strategy_name,
                 || route_hook_command_to_lifecycle(AGENT_NAME_GEMINI, hook_name, &stdin),
-            )
+            );
+            track_hook_action(
+                &repo_root,
+                dispatch_context.as_ref(),
+                AGENT_NAME_GEMINI,
+                hook_name,
+                result.is_ok(),
+                started.elapsed().as_millis(),
+            );
+            result
         }
         HooksAgent::Cursor(cursor) => {
             let hook_name = cursor.verb.hook_name();
@@ -561,7 +641,8 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
             let strategy: Box<dyn Strategy> = strategy_registry
                 .get(&strategy_name, &repo_root)
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
-            run_agent_hook_with_logging(
+            let started = Instant::now();
+            let result = run_agent_hook_with_logging(
                 &repo_root,
                 AGENT_NAME_CURSOR,
                 hook_name,
@@ -576,18 +657,37 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                         hook_name,
                     )
                 },
-            )
+            );
+            track_hook_action(
+                &repo_root,
+                dispatch_context.as_ref(),
+                AGENT_NAME_CURSOR,
+                hook_name,
+                result.is_ok(),
+                started.elapsed().as_millis(),
+            );
+            result
         }
         HooksAgent::Copilot(copilot) => {
             let hook_name = copilot.verb.hook_name();
             let stdin = read_stdin()?;
-            run_agent_hook_with_logging(
+            let started = Instant::now();
+            let result = run_agent_hook_with_logging(
                 &repo_root,
                 AGENT_NAME_COPILOT,
                 hook_name,
                 &strategy_name,
                 || route_hook_command_to_lifecycle(AGENT_NAME_COPILOT, hook_name, &stdin),
-            )
+            );
+            track_hook_action(
+                &repo_root,
+                dispatch_context.as_ref(),
+                AGENT_NAME_COPILOT,
+                hook_name,
+                result.is_ok(),
+                started.elapsed().as_millis(),
+            );
+            result
         }
         HooksAgent::Git(_) => unreachable!(),
     }
@@ -770,4 +870,43 @@ fn read_stdin() -> Result<String> {
         .read_to_string(&mut buf)
         .context("reading stdin")?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn hook_action_descriptor_uses_canonical_event_name() {
+        let descriptor = hook_action_descriptor(AGENT_NAME_CODEX, "stop");
+        assert_eq!(descriptor.event, "bitloops hook");
+        assert_eq!(descriptor.surface, "hook");
+    }
+
+    #[test]
+    fn hook_action_descriptor_includes_only_safe_properties() {
+        let descriptor = hook_action_descriptor(AGENT_NAME_CURSOR, "before-submit-prompt");
+        assert_eq!(
+            descriptor.properties.get("command"),
+            Some(&Value::String("bitloops hook".to_string()))
+        );
+        assert_eq!(
+            descriptor.properties.get("agent"),
+            Some(&Value::String("cursor".to_string()))
+        );
+        assert_eq!(
+            descriptor.properties.get("hook"),
+            Some(&Value::String("before-submit-prompt".to_string()))
+        );
+        assert_eq!(
+            descriptor.properties.get("hook_type"),
+            Some(&Value::String("agent".to_string()))
+        );
+        assert_eq!(
+            descriptor.properties.len(),
+            4,
+            "hook telemetry should not include payload/session data"
+        );
+    }
 }

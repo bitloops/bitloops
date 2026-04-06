@@ -3,5 +3,6 @@ members = [
     "bitloops",
     "bitloops-embeddings-protocol",
     "bitloops-embeddings",
+    "xtask",
 ]
 resolver = "2"
