@@ -26,14 +26,11 @@ pub(super) async fn run_server(
         crate::cli::telemetry_consent::CURRENT_CLI_VERSION,
         options.telemetry,
     )?;
-    let repo =
-        crate::host::devql::resolve_repo_identity(daemon_config.config_root.as_path())
-            .context("resolving repository identity for daemon startup")?;
-    let devql_cfg = crate::host::devql::DevqlConfig::from_env(
-        daemon_config.config_root.clone(),
-        repo,
-    )
-    .context("building DevQL config for daemon startup")?;
+    let repo = crate::host::devql::resolve_repo_identity(daemon_config.config_root.as_path())
+        .context("resolving repository identity for daemon startup")?;
+    let devql_cfg =
+        crate::host::devql::DevqlConfig::from_env(daemon_config.config_root.clone(), repo)
+            .context("building DevQL config for daemon startup")?;
     let _ = crate::host::devql::ensure_devql_storage_current(&devql_cfg, "Bitloops daemon startup")
         .await?;
 

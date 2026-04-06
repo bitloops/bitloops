@@ -205,7 +205,10 @@ fn select_missing_branch_commit_segment_caps_history_when_branch_watermark_is_st
         std::fs::write(repo.path().join("src/lib.rs"), format!("{body}\n"))
             .expect("write rewritten history lib.rs");
         git_ok(repo.path(), &["add", "."]);
-        git_ok(repo.path(), &["commit", "-m", &format!("rewritten commit {idx}")]);
+        git_ok(
+            repo.path(),
+            &["commit", "-m", &format!("rewritten commit {idx}")],
+        );
     }
     let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
 

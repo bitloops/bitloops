@@ -1077,7 +1077,10 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
     assert_eq!(phases.last(), Some(&"COMPLETE".to_string()));
     assert_eq!(last_payload["commitsTotal"], Value::from(1));
     assert_eq!(last_payload["commitsProcessed"], Value::from(1));
-    assert_eq!(last_payload["checkpointCompanionsProcessed"], Value::from(1));
+    assert_eq!(
+        last_payload["checkpointCompanionsProcessed"],
+        Value::from(1)
+    );
 }
 
 #[tokio::test]

@@ -102,12 +102,8 @@ fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
     let sql = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap();
 
     assert!(sql.contains("FROM artefact_edges e"));
-    assert!(sql.contains(
-        "JOIN artefacts_historical af ON af.artefact_id = e.from_artefact_id"
-    ));
-    assert!(sql.contains(
-        "LEFT JOIN artefacts_historical at ON at.artefact_id = e.to_artefact_id"
-    ));
+    assert!(sql.contains("JOIN artefacts_historical af ON af.artefact_id = e.from_artefact_id"));
+    assert!(sql.contains("LEFT JOIN artefacts_historical at ON at.artefact_id = e.to_artefact_id"));
     assert!(!sql.contains("artefact_edges_current"));
     assert!(!sql.contains("artefacts_current"));
     assert!(!sql.contains("a.revision_kind"));
