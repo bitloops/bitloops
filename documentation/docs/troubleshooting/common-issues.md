@@ -32,11 +32,16 @@ Checks:
 2. Confirm the store paths or remote DSNs in the global daemon config.
 3. Re-run `bitloops devql init` if the stores were recreated.
 
-## Legacy Repo-Local Data Is Present
+## Daemon Config Is Missing
 
-Bitloops now warns when it finds old repo-local data directories. Those paths are ignored unless you explicitly point the daemon config at them.
+Bitloops starts with either an explicit daemon config path or the default global config location.
 
-If you want to remove those old directories entirely, use `bitloops uninstall --data` or `bitloops uninstall --full`.
+If the default global config does not exist yet:
+
+1. Run `bitloops start --create-default-config`, or
+2. Run interactive `bitloops start` and accept the prompt to create the default config.
+
+In non-interactive environments, Bitloops does not create the default config unless you pass `--create-default-config`.
 
 ## Capture Seems Disabled Unexpectedly
 

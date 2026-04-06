@@ -39,48 +39,18 @@ pub struct CheckpointFileSnapshotBackfillSummary {
     pub last_checkpoint_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ProjectionRowKey {
-    path: String,
-    blob_sha: String,
-}
-
-#[derive(Debug, Clone)]
-struct ProjectionRow {
-    repo_id: String,
-    checkpoint_id: String,
-    session_id: String,
-    event_time: String,
-    agent: String,
-    branch: String,
-    strategy: String,
-    commit_sha: String,
-    path: String,
-    blob_sha: String,
-}
-
-impl ProjectionRow {
-    fn key(&self) -> ProjectionRowKey {
-        ProjectionRowKey {
-            path: self.path.clone(),
-            blob_sha: self.blob_sha.clone(),
-        }
-    }
-}
-
 pub async fn run_checkpoint_file_snapshot_backfill(
     cfg: &DevqlConfig,
     mut options: CheckpointFileSnapshotBackfillOptions,
 ) -> Result<()> {
     options.resume_after = normalise_optional_resume_after(options.resume_after);
     validate_backfill_options(&options)?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root).context(
-        "resolving DevQL backend config for `devql projection checkpoint-file-snapshots`",
-    )?;
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+        .context("resolving DevQL backend config for `devql projection checkpoint-provenance`")?;
     let relational = RelationalStorage::connect(
         cfg,
         &backends.relational,
-        "devql projection checkpoint-file-snapshots",
+        "devql projection checkpoint-provenance",
     )
     .await?;
     init_relational_schema(cfg, &relational).await?;
@@ -145,64 +115,143 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
         }
 
         let event_time = checkpoint_event_time_rfc3339(&checkpoint, Some(commit_info));
-        let existing_keys =
-            load_existing_projection_keys(relational, &cfg.repo.repo_id, &checkpoint.checkpoint_id)
-                .await?;
-        let (resolved_rows, unresolved_files) = resolve_projection_rows_for_checkpoint(
-            cfg,
+        let context = crate::host::devql::checkpoint_provenance::CheckpointProvenanceContext {
+            repo_id: &cfg.repo.repo_id,
+            checkpoint_id: &checkpoint.checkpoint_id,
+            session_id: &checkpoint.session_id,
+            event_time: &event_time,
+            agent: &checkpoint.agent,
+            branch: &checkpoint.branch,
+            strategy: &checkpoint.strategy,
+            commit_sha: &commit_info.commit_sha,
+        };
+        let file_rows =
+            crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
+                &cfg.repo_root,
+                context,
+            )?;
+        let artefact_provenance =
+            crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance(
+                &cfg.repo_root,
+                context,
+                &file_rows,
+            )?;
+        let existing_relation_ids = load_existing_checkpoint_file_relation_ids(
             relational,
-            &checkpoint,
-            &commit_info.commit_sha,
-            &event_time,
+            &cfg.repo.repo_id,
+            &checkpoint.checkpoint_id,
         )
         .await?;
-
-        let resolved_keys = resolved_rows
+        let new_relation_ids = file_rows
             .iter()
-            .map(ProjectionRow::key)
+            .map(|row| row.relation_id.clone())
             .collect::<HashSet<_>>();
-        let stale_keys = existing_keys
-            .difference(&resolved_keys)
-            .cloned()
-            .collect::<Vec<_>>();
-        let missing_rows = resolved_rows
-            .into_iter()
-            .filter(|row| !existing_keys.contains(&row.key()))
-            .collect::<Vec<_>>();
+        let already_present = existing_relation_ids
+            .intersection(&new_relation_ids)
+            .count();
+        let rows_projected = new_relation_ids.len().saturating_sub(already_present);
+        let stale_rows = existing_relation_ids.difference(&new_relation_ids).count();
+        let unresolved_files = file_rows
+            .iter()
+            .filter(|row| row.path_after.is_some() && row.blob_sha_after.is_none())
+            .count();
 
         summary.checkpoints_processed += 1;
-        summary.rows_projected += missing_rows.len();
-        summary.rows_already_present += resolved_keys.len().saturating_sub(missing_rows.len());
-        summary.stale_rows_detected += stale_keys.len();
+        summary.rows_projected += rows_projected;
+        summary.rows_already_present += already_present;
+        summary.stale_rows_detected += stale_rows;
         summary.unresolved_files += unresolved_files;
         checkpoints_in_batch += 1;
 
         if !options.dry_run {
-            for row in &missing_rows {
-                sqlite_statements.push(insert_projection_row_sql(row, RelationalDialect::Sqlite));
-                if relational.remote.is_some() {
-                    postgres_statements
-                        .push(insert_projection_row_sql(row, RelationalDialect::Postgres));
-                }
-            }
-
-            if unresolved_files == 0 {
-                summary.stale_rows_deleted += stale_keys.len();
-                for key in stale_keys {
-                    sqlite_statements.push(delete_projection_row_sql(
+            sqlite_statements.push(
+                crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+                    &cfg.repo.repo_id,
+                    &checkpoint.checkpoint_id,
+                ),
+            );
+            sqlite_statements.push(
+                crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
+                    &cfg.repo.repo_id,
+                    &checkpoint.checkpoint_id,
+                ),
+            );
+            sqlite_statements.push(
+                crate::host::devql::checkpoint_provenance::delete_checkpoint_file_rows_sql(
+                    &cfg.repo.repo_id,
+                    &checkpoint.checkpoint_id,
+                ),
+            );
+            if relational.remote.is_some() {
+                postgres_statements.push(
+                    crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
                         &cfg.repo.repo_id,
                         &checkpoint.checkpoint_id,
-                        &key,
-                    ));
-                    if relational.remote.is_some() {
-                        postgres_statements.push(delete_projection_row_sql(
-                            &cfg.repo.repo_id,
-                            &checkpoint.checkpoint_id,
-                            &key,
-                        ));
-                    }
+                    ),
+                );
+                postgres_statements.push(
+                    crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
+                        &cfg.repo.repo_id,
+                        &checkpoint.checkpoint_id,
+                    ),
+                );
+                postgres_statements.push(
+                    crate::host::devql::checkpoint_provenance::delete_checkpoint_file_rows_sql(
+                        &cfg.repo.repo_id,
+                        &checkpoint.checkpoint_id,
+                    ),
+                );
+            }
+
+            for row in &file_rows {
+                sqlite_statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
+                        row,
+                        RelationalDialect::Sqlite,
+                    ),
+                );
+                if relational.remote.is_some() {
+                    postgres_statements.push(
+                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
+                            row,
+                            RelationalDialect::Postgres,
+                        ),
+                    );
                 }
             }
+            for row in &artefact_provenance.semantic_rows {
+                sqlite_statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                        row,
+                        RelationalDialect::Sqlite,
+                    ),
+                );
+                if relational.remote.is_some() {
+                    postgres_statements.push(
+                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                            row,
+                            RelationalDialect::Postgres,
+                        ),
+                    );
+                }
+            }
+            for row in &artefact_provenance.lineage_rows {
+                sqlite_statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                        row,
+                        RelationalDialect::Sqlite,
+                    ),
+                );
+                if relational.remote.is_some() {
+                    postgres_statements.push(
+                        crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                            row,
+                            RelationalDialect::Postgres,
+                        ),
+                    );
+                }
+            }
+            summary.stale_rows_deleted += stale_rows;
         }
 
         if checkpoints_in_batch >= options.batch_size {
@@ -211,7 +260,7 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
             checkpoints_in_batch = 0;
             if options.emit_progress {
                 println!(
-                    "checkpoint_file_snapshots progress: checkpoints_processed={}, rows_projected={}, rows_already_present={}, stale_rows_deleted={}, stale_rows_detected={}, unresolved_files={}, last_checkpoint_id={}",
+                    "checkpoint_provenance progress: checkpoints_processed={}, rows_projected={}, rows_already_present={}, stale_rows_deleted={}, stale_rows_detected={}, unresolved_files={}, last_checkpoint_id={}",
                     summary.checkpoints_processed,
                     summary.rows_projected,
                     summary.rows_already_present,
@@ -272,99 +321,13 @@ fn apply_resume_filter(
     Ok(filtered)
 }
 
-async fn resolve_projection_rows_for_checkpoint(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    checkpoint: &CommittedInfo,
-    commit_sha: &str,
-    event_time: &str,
-) -> Result<(Vec<ProjectionRow>, usize)> {
-    let mut rows = Vec::new();
-    let mut seen = HashSet::new();
-    let mut unresolved_files = 0usize;
-
-    for raw_path in &checkpoint.files_touched {
-        let normalized_path = normalize_repo_path(raw_path);
-        if normalized_path.is_empty() {
-            continue;
-        }
-
-        let Some(blob_sha) = load_file_state_blob_sha(
-            relational,
-            &cfg.repo.repo_id,
-            commit_sha,
-            &normalized_path,
-            raw_path,
-        )
-        .await?
-        else {
-            unresolved_files += 1;
-            continue;
-        };
-
-        let row = ProjectionRow {
-            repo_id: cfg.repo.repo_id.clone(),
-            checkpoint_id: checkpoint.checkpoint_id.clone(),
-            session_id: checkpoint.session_id.clone(),
-            event_time: event_time.to_string(),
-            agent: checkpoint.agent.clone(),
-            branch: checkpoint.branch.clone(),
-            strategy: checkpoint.strategy.clone(),
-            commit_sha: commit_sha.to_string(),
-            path: normalized_path,
-            blob_sha,
-        };
-
-        if seen.insert(row.key()) {
-            rows.push(row);
-        }
-    }
-
-    Ok((rows, unresolved_files))
-}
-
-async fn load_file_state_blob_sha(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    commit_sha: &str,
-    normalized_path: &str,
-    raw_path: &str,
-) -> Result<Option<String>> {
-    let path_predicate = if normalized_path == raw_path {
-        format!("path = '{}'", esc_pg(normalized_path))
-    } else {
-        format!(
-            "(path = '{}' OR path = '{}')",
-            esc_pg(normalized_path),
-            esc_pg(raw_path),
-        )
-    };
-    let sql = format!(
-        "SELECT blob_sha, path FROM file_state \
-WHERE repo_id = '{}' AND commit_sha = '{}' AND {} \
-ORDER BY CASE WHEN path = '{}' THEN 0 ELSE 1 END \
-LIMIT 1",
-        esc_pg(repo_id),
-        esc_pg(commit_sha),
-        path_predicate,
-        esc_pg(normalized_path),
-    );
-    let rows = relational.query_rows(&sql).await?;
-    Ok(rows
-        .first()
-        .and_then(|row| row.get("blob_sha"))
-        .and_then(Value::as_str)
-        .map(str::to_string))
-}
-
-async fn load_existing_projection_keys(
+async fn load_existing_checkpoint_file_relation_ids(
     relational: &RelationalStorage,
     repo_id: &str,
     checkpoint_id: &str,
-) -> Result<HashSet<ProjectionRowKey>> {
+) -> Result<HashSet<String>> {
     let sql = format!(
-        "SELECT path, blob_sha FROM checkpoint_file_snapshots \
-WHERE repo_id = '{}' AND checkpoint_id = '{}'",
+        "SELECT relation_id FROM checkpoint_files WHERE repo_id = '{}' AND checkpoint_id = '{}'",
         esc_pg(repo_id),
         esc_pg(checkpoint_id),
     );
@@ -372,59 +335,11 @@ WHERE repo_id = '{}' AND checkpoint_id = '{}'",
     Ok(rows
         .into_iter()
         .filter_map(|row| {
-            Some(ProjectionRowKey {
-                path: row.get("path")?.as_str()?.to_string(),
-                blob_sha: row.get("blob_sha")?.as_str()?.to_string(),
-            })
+            row.get("relation_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
         })
         .collect())
-}
-
-fn insert_projection_row_sql(row: &ProjectionRow, dialect: RelationalDialect) -> String {
-    let event_time_sql = projection_event_time_sql(&row.event_time, dialect);
-    format!(
-        "INSERT INTO checkpoint_file_snapshots (repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha, path, blob_sha) \
-VALUES ('{}', '{}', '{}', {}, '{}', '{}', '{}', '{}', '{}', '{}') \
-ON CONFLICT (repo_id, checkpoint_id, path, blob_sha) DO UPDATE SET \
-session_id = EXCLUDED.session_id, \
-event_time = EXCLUDED.event_time, \
-agent = EXCLUDED.agent, \
-branch = EXCLUDED.branch, \
-strategy = EXCLUDED.strategy, \
-commit_sha = EXCLUDED.commit_sha",
-        esc_pg(&row.repo_id),
-        esc_pg(&row.checkpoint_id),
-        esc_pg(&row.session_id),
-        event_time_sql,
-        esc_pg(&row.agent),
-        esc_pg(&row.branch),
-        esc_pg(&row.strategy),
-        esc_pg(&row.commit_sha),
-        esc_pg(&row.path),
-        esc_pg(&row.blob_sha),
-    )
-}
-
-fn delete_projection_row_sql(repo_id: &str, checkpoint_id: &str, key: &ProjectionRowKey) -> String {
-    format!(
-        "DELETE FROM checkpoint_file_snapshots \
-WHERE repo_id = '{}' AND checkpoint_id = '{}' AND path = '{}' AND blob_sha = '{}'",
-        esc_pg(repo_id),
-        esc_pg(checkpoint_id),
-        esc_pg(&key.path),
-        esc_pg(&key.blob_sha),
-    )
-}
-
-fn projection_event_time_sql(event_time: &str, dialect: RelationalDialect) -> String {
-    let trimmed = event_time.trim();
-    match dialect {
-        RelationalDialect::Sqlite => format!("'{}'", esc_pg(trimmed)),
-        RelationalDialect::Postgres => trimmed
-            .parse::<i64>()
-            .map(|unix| format!("to_timestamp({unix})"))
-            .unwrap_or_else(|_| format!("CAST('{}' AS TIMESTAMPTZ)", esc_pg(trimmed))),
-    }
 }
 
 async fn flush_projection_batch(

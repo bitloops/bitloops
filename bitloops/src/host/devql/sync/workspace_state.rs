@@ -30,6 +30,14 @@ pub(crate) struct WorkspaceState {
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn inspect_workspace(repo_root: &Path) -> Result<WorkspaceState> {
+    inspect_workspace_for_paths(repo_root, None)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn inspect_workspace_for_paths(
+    repo_root: &Path,
+    requested_paths: Option<&std::collections::HashSet<String>>,
+) -> Result<WorkspaceState> {
     let head_commit_sha =
         try_head_hash(repo_root).context("resolving HEAD for workspace inspection")?;
     let has_head = head_commit_sha.is_some();
@@ -41,7 +49,7 @@ pub(crate) fn inspect_workspace(repo_root: &Path) -> Result<WorkspaceState> {
         None => None,
     };
     let head_tree = if head_tree_sha.is_some() {
-        read_head_tree(repo_root)?
+        read_head_tree(repo_root, requested_paths)?
     } else {
         HashMap::new()
     };
@@ -51,9 +59,9 @@ pub(crate) fn inspect_workspace(repo_root: &Path) -> Result<WorkspaceState> {
         head_tree_sha,
         active_branch: read_active_branch(repo_root)?,
         head_tree,
-        staged_changes: read_staged_changes(repo_root, has_head)?,
-        dirty_files: read_dirty_files(repo_root)?,
-        untracked_files: read_untracked_files(repo_root)?,
+        staged_changes: read_staged_changes(repo_root, has_head, requested_paths)?,
+        dirty_files: read_dirty_files(repo_root, requested_paths)?,
+        untracked_files: read_untracked_files(repo_root, requested_paths)?,
     })
 }
 
@@ -65,8 +73,15 @@ fn read_active_branch(repo_root: &Path) -> Result<Option<String>> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn read_head_tree(repo_root: &Path) -> Result<HashMap<String, String>> {
-    let output = match run_git(repo_root, &["ls-tree", "-rz", "--full-tree", "HEAD"]) {
+fn read_head_tree(
+    repo_root: &Path,
+    requested_paths: Option<&std::collections::HashSet<String>>,
+) -> Result<HashMap<String, String>> {
+    let output = match run_git_with_optional_paths(
+        repo_root,
+        &["ls-tree", "-rz", "--full-tree", "HEAD"],
+        requested_paths,
+    ) {
         Ok(output) => output,
         Err(err) if is_missing_head_error(&err) => return Ok(HashMap::new()),
         Err(err) => return Err(err).context("listing HEAD tree for workspace inspection"),
@@ -103,9 +118,13 @@ fn read_head_tree(repo_root: &Path) -> Result<HashMap<String, String>> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn read_staged_changes(repo_root: &Path, has_head: bool) -> Result<HashMap<String, StagedChange>> {
+fn read_staged_changes(
+    repo_root: &Path,
+    has_head: bool,
+    requested_paths: Option<&std::collections::HashSet<String>>,
+) -> Result<HashMap<String, StagedChange>> {
     if has_head {
-        let output = run_git(
+        let output = run_git_with_optional_paths(
             repo_root,
             &[
                 "diff-index",
@@ -116,31 +135,65 @@ fn read_staged_changes(repo_root: &Path, has_head: bool) -> Result<HashMap<Strin
                 "-z",
                 "HEAD",
             ],
+            requested_paths,
         )
         .context("listing staged changes for workspace inspection")?;
         return parse_staged_changes_from_diff_index(&output);
     }
 
-    let output = run_git(repo_root, &["ls-files", "--stage", "-z"])
-        .context("listing staged additions for unborn HEAD workspace inspection")?;
+    let output =
+        run_git_with_optional_paths(repo_root, &["ls-files", "--stage", "-z"], requested_paths)
+            .context("listing staged additions for unborn HEAD workspace inspection")?;
     parse_staged_changes_from_ls_files(&output)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn read_dirty_files(repo_root: &Path) -> Result<Vec<String>> {
-    let output = run_git(repo_root, &["diff", "--name-only", "-z"])
-        .context("listing dirty files for workspace inspection")?;
+fn read_dirty_files(
+    repo_root: &Path,
+    requested_paths: Option<&std::collections::HashSet<String>>,
+) -> Result<Vec<String>> {
+    let output =
+        run_git_with_optional_paths(repo_root, &["diff", "--name-only", "-z"], requested_paths)
+            .context("listing dirty files for workspace inspection")?;
     collect_paths(repo_root, &output, false)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn read_untracked_files(repo_root: &Path) -> Result<Vec<String>> {
-    let output = run_git(
+fn read_untracked_files(
+    repo_root: &Path,
+    requested_paths: Option<&std::collections::HashSet<String>>,
+) -> Result<Vec<String>> {
+    let output = run_git_with_optional_paths(
         repo_root,
         &["ls-files", "--others", "--exclude-standard", "-z"],
+        requested_paths,
     )
     .context("listing untracked files for workspace inspection")?;
     collect_paths(repo_root, &output, true)
+}
+
+fn run_git_with_optional_paths(
+    repo_root: &Path,
+    base_args: &[&str],
+    requested_paths: Option<&std::collections::HashSet<String>>,
+) -> Result<String> {
+    let Some(requested_paths) = requested_paths else {
+        return run_git(repo_root, base_args);
+    };
+    if requested_paths.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut args = base_args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    args.push("--".to_string());
+    let mut sorted_paths = requested_paths.iter().cloned().collect::<Vec<_>>();
+    sorted_paths.sort();
+    args.extend(sorted_paths);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_git(repo_root, &arg_refs)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

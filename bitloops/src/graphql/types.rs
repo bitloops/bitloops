@@ -8,17 +8,19 @@ pub mod dependency_edge;
 pub mod file_context;
 pub mod health;
 pub mod ingestion;
+pub mod interaction;
 pub mod knowledge;
 pub mod project;
 pub mod repository;
 pub mod scalars;
+pub mod sync;
 pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
 
-pub use artefact::{Artefact, ArtefactFilterInput, CanonicalKind};
+pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
 pub use chat::{ChatEntry, ChatRole};
-pub use checkpoint::Checkpoint;
+pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{
@@ -39,6 +41,7 @@ pub use knowledge::{
 pub use project::Project;
 pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
+pub use sync::{SyncProgressEvent, SyncTaskObject};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
 pub use test_harness::{

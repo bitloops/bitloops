@@ -86,6 +86,7 @@ pub(super) struct DashboardGraphqlCheckpointNode {
     pub(super) agent: Option<String>,
     pub(super) strategy: Option<String>,
     pub(super) files_touched: Vec<String>,
+    pub(super) file_relations: Vec<DashboardGraphqlCheckpointFileRelation>,
     pub(super) checkpoints_count: usize,
     pub(super) session_count: usize,
     pub(super) token_usage: Option<DashboardGraphqlTokenUsage>,
@@ -95,6 +96,15 @@ pub(super) struct DashboardGraphqlCheckpointNode {
     pub(super) created_at: Option<String>,
     pub(super) is_task: bool,
     pub(super) tool_use_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DashboardGraphqlCheckpointFileRelation {
+    pub(super) filepath: String,
+    pub(super) change_kind: String,
+    pub(super) copied_from_path: Option<String>,
+    pub(super) copied_from_blob_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -203,6 +213,12 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
                         agent
                         strategy
                         filesTouched
+                        fileRelations {
+                          filepath
+                          changeKind
+                          copiedFromPath
+                          copiedFromBlobSha
+                        }
                         checkpointsCount
                         sessionCount
                         tokenUsage {
@@ -456,7 +472,7 @@ pub(super) fn api_commit_row_from_graphql(
 ) -> ApiCommitRowDto {
     let DashboardGraphqlCommitRow { commit, checkpoint } = row;
     let agents = checkpoint_agents(&checkpoint);
-    let checkpoint_files_touched = files_touched.clone();
+    let checkpoint_files_touched = checkpoint_file_diffs_from_graphql(&checkpoint, &files_touched);
     let timestamp = DateTime::parse_from_rfc3339(&commit.committed_at)
         .map(|value| value.timestamp())
         .unwrap_or(0);
@@ -486,4 +502,43 @@ pub(super) fn api_commit_row_from_graphql(
             tool_use_id: checkpoint.tool_use_id.unwrap_or_default(),
         },
     }
+}
+
+fn checkpoint_file_diffs_from_graphql(
+    checkpoint: &DashboardGraphqlCheckpointNode,
+    commit_file_diffs: &[ApiCommitFileDiffDto],
+) -> Vec<ApiCommitFileDiffDto> {
+    if checkpoint.file_relations.is_empty() {
+        return commit_file_diffs.to_vec();
+    }
+
+    let counts_by_path = commit_file_diffs
+        .iter()
+        .map(|diff| {
+            (
+                diff.filepath.clone(),
+                (diff.additions_count, diff.deletions_count),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut files_touched = checkpoint
+        .file_relations
+        .iter()
+        .map(|relation| {
+            let (additions_count, deletions_count) = counts_by_path
+                .get(&relation.filepath)
+                .copied()
+                .unwrap_or((0, 0));
+            ApiCommitFileDiffDto {
+                filepath: relation.filepath.clone(),
+                additions_count,
+                deletions_count,
+                change_kind: Some(relation.change_kind.clone()),
+                copied_from_path: relation.copied_from_path.clone(),
+                copied_from_blob_sha: relation.copied_from_blob_sha.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    files_touched.sort_by(|left, right| left.filepath.cmp(&right.filepath));
+    files_touched
 }

@@ -115,7 +115,6 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
-    assert!(ingest.init);
     assert_eq!(ingest.max_checkpoints, 500);
 }
 
@@ -144,6 +143,7 @@ fn devql_cli_parses_sync_modes() {
     );
     assert!(!sync.repair);
     assert!(!sync.validate);
+    assert!(!sync.status);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
         .expect("devql sync repair should parse");
@@ -157,6 +157,7 @@ fn devql_cli_parses_sync_modes() {
     assert_eq!(sync.paths, None);
     assert!(sync.repair);
     assert!(!sync.validate);
+    assert!(!sync.status);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
         .expect("devql sync full should parse");
@@ -170,6 +171,7 @@ fn devql_cli_parses_sync_modes() {
     assert_eq!(sync.paths, None);
     assert!(!sync.repair);
     assert!(!sync.validate);
+    assert!(!sync.status);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
         .expect("devql sync validate should parse");
@@ -183,6 +185,20 @@ fn devql_cli_parses_sync_modes() {
     assert_eq!(sync.paths, None);
     assert!(!sync.repair);
     assert!(sync.validate);
+    assert!(!sync.status);
+}
+
+#[test]
+fn devql_cli_parses_sync_status_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--status"])
+        .expect("devql sync --status should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(sync.status);
 }
 
 #[test]
@@ -614,7 +630,6 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                         Ok(json!({
                             "ingest": {
                                 "success": true,
-                                "initRequested": false,
                                 "checkpointsProcessed": 2,
                                 "eventsInserted": 3,
                                 "artefactsUpserted": 5,
@@ -634,7 +649,6 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                     test_runtime()
                         .block_on(run(DevqlArgs {
                             command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                                init: false,
                                 max_checkpoints: 42,
                             })),
                         }))
@@ -653,7 +667,6 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
         variables,
         json!({
             "input": {
-                "init": false,
                 "maxCheckpoints": 42
             }
         })
@@ -689,7 +702,6 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
                         Ok(json!({
                             "ingest": {
                                 "success": true,
-                                "initRequested": true,
                                 "checkpointsProcessed": 0,
                                 "eventsInserted": 0,
                                 "artefactsUpserted": 0,
@@ -709,7 +721,6 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
                     test_runtime()
                         .block_on(run(DevqlArgs {
                             command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                                init: true,
                                 max_checkpoints: 500,
                             })),
                         }))
@@ -730,7 +741,6 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
         variables,
         json!({
             "input": {
-                "init": true,
                 "maxCheckpoints": 500
             }
         })
@@ -738,7 +748,7 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
 }
 
 #[test]
-fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
+fn devql_run_ingest_uses_graphql_when_enrichment_is_disabled() {
     let repo = seed_devql_cli_repo();
     fs::write(
         repo.path()
@@ -759,46 +769,297 @@ embedding_mode = "off"
 "#,
     )
     .expect("write deterministic-only config");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
     let graphql_calls = Rc::new(RefCell::new(0usize));
-    {
-        let _guard = enter_process_state(Some(repo.path()), &[]);
+    let bootstrap_calls = Rc::new(RefCell::new(0usize));
 
-        with_graphql_executor_hook(
-            {
-                let graphql_calls = Rc::clone(&graphql_calls);
-                move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
-                    *graphql_calls.borrow_mut() += 1;
-                    panic!("graphql should not be used when enrichment is disabled");
-                }
-            },
-            || {
-                test_runtime()
-                    .block_on(run(DevqlArgs {
-                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                            init: true,
-                            max_checkpoints: 25,
-                        })),
-                    }))
-                    .expect("local deterministic ingest should succeed");
-            },
-        );
-    }
-
-    assert_eq!(*graphql_calls.borrow(), 0);
-    assert!(
-        sqlite_path_for_repo(repo.path()).exists(),
-        "local ingest should initialize the relational database",
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        {
+            let bootstrap_calls = Rc::clone(&bootstrap_calls);
+            move |_repo_root: &std::path::Path| {
+                *bootstrap_calls.borrow_mut() += 1;
+                Ok(())
+            }
+        },
+        || {
+            with_graphql_executor_hook(
+                {
+                    let graphql_calls = Rc::clone(&graphql_calls);
+                    move |_repo_root: &std::path::Path,
+                          _query: &str,
+                          _variables: &serde_json::Value| {
+                        *graphql_calls.borrow_mut() += 1;
+                        Ok(json!({
+                            "ingest": {
+                                "success": true,
+                                "checkpointsProcessed": 0,
+                                "eventsInserted": 0,
+                                "artefactsUpserted": 0,
+                                "checkpointsWithoutCommit": 0,
+                                "temporaryRowsPromoted": 0,
+                                "semanticFeatureRowsUpserted": 0,
+                                "semanticFeatureRowsSkipped": 0,
+                                "symbolEmbeddingRowsUpserted": 0,
+                                "symbolEmbeddingRowsSkipped": 0,
+                                "symbolCloneEdgesUpserted": 0,
+                                "symbolCloneSourcesScored": 0
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                max_checkpoints: 25,
+                            })),
+                        }))
+                        .expect("deterministic-only ingest should execute via GraphQL");
+                },
+            );
+        },
     );
-    with_isolated_daemon_state(repo.path(), || {
-        test_runtime()
-            .block_on(run(DevqlArgs {
-                command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                    init: true,
-                    max_checkpoints: 500,
-                })),
-            }))
-            .expect("deterministic-only ingest should stay local without a daemon");
-    });
+
+    assert_eq!(*bootstrap_calls.borrow(), 1);
+    assert_eq!(*graphql_calls.borrow(), 1);
+}
+
+#[test]
+fn devql_run_sync_executes_graphql_mutation() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        |_repo_root: &std::path::Path| Ok(()),
+        || {
+            with_graphql_executor_hook(
+                {
+                    let captured = Rc::clone(&captured);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "enqueueSync": {
+                                "merged": false,
+                                "task": {
+                                    "taskId": "sync-task-1",
+                                    "repoId": "repo-1",
+                                    "repoName": "demo",
+                                    "repoIdentity": "local/demo",
+                                    "source": "manual_cli",
+                                    "mode": "full",
+                                    "status": "queued",
+                                    "phase": "queued",
+                                    "submittedAtUnix": 1,
+                                    "startedAtUnix": null,
+                                    "updatedAtUnix": 1,
+                                    "completedAtUnix": null,
+                                    "queuePosition": 1,
+                                    "tasksAhead": 0,
+                                    "currentPath": null,
+                                    "pathsTotal": 0,
+                                    "pathsCompleted": 0,
+                                    "pathsRemaining": 0,
+                                    "pathsUnchanged": 0,
+                                    "pathsAdded": 0,
+                                    "pathsChanged": 0,
+                                    "pathsRemoved": 0,
+                                    "cacheHits": 0,
+                                    "cacheMisses": 0,
+                                    "parseErrors": 0,
+                                    "error": null,
+                                    "summary": null
+                                }
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                                full: true,
+                                paths: None,
+                                repair: false,
+                                validate: false,
+                                status: false,
+                            })),
+                        }))
+                        .expect("devql sync should succeed");
+                },
+            );
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(
+        query.contains("enqueueSync"),
+        "expected enqueueSync mutation in query"
+    );
+    assert_eq!(variables["input"]["full"], json!(true));
+}
+
+#[test]
+fn devql_run_sync_passes_paths_to_graphql_mutation() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        |_repo_root: &std::path::Path| Ok(()),
+        || {
+            with_graphql_executor_hook(
+                {
+                    let captured = Rc::clone(&captured);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "enqueueSync": {
+                                "merged": false,
+                                "task": {
+                                    "taskId": "sync-task-2",
+                                    "repoId": "repo-1",
+                                    "repoName": "demo",
+                                    "repoIdentity": "local/demo",
+                                    "source": "manual_cli",
+                                    "mode": "paths",
+                                    "status": "queued",
+                                    "phase": "queued",
+                                    "submittedAtUnix": 1,
+                                    "startedAtUnix": null,
+                                    "updatedAtUnix": 1,
+                                    "completedAtUnix": null,
+                                    "queuePosition": 1,
+                                    "tasksAhead": 0,
+                                    "currentPath": null,
+                                    "pathsTotal": 0,
+                                    "pathsCompleted": 0,
+                                    "pathsRemaining": 0,
+                                    "pathsUnchanged": 0,
+                                    "pathsAdded": 0,
+                                    "pathsChanged": 0,
+                                    "pathsRemoved": 0,
+                                    "cacheHits": 0,
+                                    "cacheMisses": 0,
+                                    "parseErrors": 0,
+                                    "error": null,
+                                    "summary": null
+                                }
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                                full: false,
+                                paths: Some(vec![
+                                    "src/lib.rs".to_string(),
+                                    "src/main.rs".to_string(),
+                                ]),
+                                repair: false,
+                                validate: false,
+                                status: false,
+                            })),
+                        }))
+                        .expect("devql sync with paths should succeed");
+                },
+            );
+        },
+    );
+
+    let (_query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert_eq!(
+        variables["input"]["paths"],
+        json!(["src/lib.rs", "src/main.rs"])
+    );
+}
+
+#[test]
+fn devql_run_sync_ensures_daemon_available() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        {
+            let bootstrap_count = Rc::clone(&bootstrap_count);
+            move |_repo_root: &std::path::Path| {
+                *bootstrap_count.borrow_mut() += 1;
+                Ok(())
+            }
+        },
+        || {
+            with_graphql_executor_hook(
+                |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
+                    Ok(json!({
+                        "enqueueSync": {
+                            "merged": false,
+                            "task": {
+                                "taskId": "sync-task-3",
+                                "repoId": "repo-1",
+                                "repoName": "demo",
+                                "repoIdentity": "local/demo",
+                                "source": "manual_cli",
+                                "mode": "auto",
+                                "status": "queued",
+                                "phase": "queued",
+                                "submittedAtUnix": 1,
+                                "startedAtUnix": null,
+                                "updatedAtUnix": 1,
+                                "completedAtUnix": null,
+                                "queuePosition": 1,
+                                "tasksAhead": 0,
+                                "currentPath": null,
+                                "pathsTotal": 0,
+                                "pathsCompleted": 0,
+                                "pathsRemaining": 0,
+                                "pathsUnchanged": 0,
+                                "pathsAdded": 0,
+                                "pathsChanged": 0,
+                                "pathsRemoved": 0,
+                                "cacheHits": 0,
+                                "cacheMisses": 0,
+                                "parseErrors": 0,
+                                "error": null,
+                                "summary": null
+                            }
+                        }
+                    }))
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                                full: false,
+                                paths: None,
+                                repair: false,
+                                validate: false,
+                                status: false,
+                            })),
+                        }))
+                        .expect("devql sync should succeed");
+                },
+            );
+        },
+    );
+
+    assert_eq!(
+        *bootstrap_count.borrow(),
+        1,
+        "daemon bootstrap should be called once"
+    );
 }
 
 #[test]
@@ -823,12 +1084,10 @@ fn devql_run_projection_checkpoint_file_snapshots_succeeds_for_empty_repo() {
 
     let conn = Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let projection_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots",
-            [],
-            |row| row.get(0),
-        )
-        .expect("count checkpoint_file_snapshots rows");
+        .query_row("SELECT COUNT(*) FROM checkpoint_files", [], |row| {
+            row.get(0)
+        })
+        .expect("count checkpoint_files rows");
     assert_eq!(projection_count, 0);
 }
 

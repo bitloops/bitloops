@@ -4,7 +4,7 @@ use crate::graphql::types::{
     ChatEntry, ChatRole, ClonesFilterInput, DateTimeScalar, SemanticClone,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
-    SessionContentView, read_session_content_by_id,
+    SessionContentView, list_committed, read_session_content_by_id,
 };
 use crate::host::devql::{esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape};
 use anyhow::{Context, Result, anyhow, bail};
@@ -150,35 +150,45 @@ impl DevqlGraphqlContext {
             return Ok(Vec::new());
         }
 
-        let backend_config = self
-            .backend_config
-            .as_ref()
-            .context("store backend configuration unavailable")?;
-        let repo_id = self.repo_id_for_scope(scope)?;
-
-        if backend_config.events.has_clickhouse() {
-            let sql = build_clickhouse_chat_history_sql(&repo_id, path_candidates);
-            let rows = self
-                .query_clickhouse_data(&sql)
-                .await?
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            return rows
-                .into_iter()
-                .map(checkpoint_chat_event_from_row)
-                .collect();
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let commit_mappings =
+            super::commit_checkpoints::read_commit_checkpoint_mappings_all(repo_root.as_path())?;
+        let mut checkpoint_commits = HashMap::<String, String>::new();
+        for (commit_sha, checkpoint_ids) in commit_mappings {
+            for checkpoint_id in checkpoint_ids {
+                checkpoint_commits
+                    .entry(checkpoint_id)
+                    .or_insert_with(|| commit_sha.clone());
+            }
         }
 
-        let sql = build_duckdb_chat_history_sql(&repo_id, path_candidates);
-        let duckdb_path = backend_config
-            .events
-            .resolve_duckdb_db_path_for_repo(&self.config_root);
-        let rows = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
-        rows.into_iter()
-            .map(normalise_duckdb_event_row)
-            .map(checkpoint_chat_event_from_row)
-            .collect()
+        let checkpoints = list_committed(repo_root.as_path())?;
+        let mut events = Vec::new();
+        for checkpoint in checkpoints {
+            let matches = path_candidates
+                .values()
+                .any(|candidates| files_touched_matches(&checkpoint.files_touched, candidates));
+            if !matches {
+                continue;
+            }
+            let event_time = DateTimeScalar::from_rfc3339(checkpoint.created_at.clone())
+                .or_else(|_| DateTimeScalar::from_rfc3339("1970-01-01T00:00:00+00:00"))
+                .context("parsing committed checkpoint timestamp for chat history")?;
+            events.push(CheckpointChatEvent {
+                checkpoint_id: checkpoint.checkpoint_id.clone(),
+                session_id: checkpoint.session_id.clone(),
+                agent: checkpoint.agent.clone(),
+                event_time,
+                commit_sha: checkpoint_commits.get(&checkpoint.checkpoint_id).cloned(),
+                branch: (!checkpoint.branch.trim().is_empty()).then_some(checkpoint.branch.clone()),
+                strategy: (!checkpoint.strategy.trim().is_empty())
+                    .then_some(checkpoint.strategy.clone()),
+                files_touched: checkpoint.files_touched.clone(),
+                payload: None,
+            });
+        }
+
+        Ok(events)
     }
 }
 
@@ -267,6 +277,7 @@ fn build_clone_filters(repo_id: &str, filter: Option<&ClonesFilterInput>) -> Vec
     clauses
 }
 
+#[allow(dead_code)]
 fn build_clickhouse_chat_history_sql(
     repo_id: &str,
     path_candidates: &HashMap<String, Vec<String>>,
@@ -297,6 +308,7 @@ fn build_clickhouse_chat_history_sql(
     )
 }
 
+#[allow(dead_code)]
 fn build_duckdb_chat_history_sql(
     repo_id: &str,
     path_candidates: &HashMap<String, Vec<String>>,
@@ -362,6 +374,7 @@ fn clone_from_row(row: Value) -> Result<SemanticClone> {
     })
 }
 
+#[allow(dead_code)]
 fn checkpoint_chat_event_from_row(row: Value) -> Result<CheckpointChatEvent> {
     Ok(CheckpointChatEvent {
         checkpoint_id: required_string(&row, "checkpoint_id")?,
@@ -703,6 +716,7 @@ fn parse_json_column(value: Option<&Value>) -> Result<Option<Value>> {
     }
 }
 
+#[allow(dead_code)]
 fn normalise_duckdb_event_row(row: Value) -> Value {
     let Some(mut obj) = row.as_object().cloned() else {
         return row;
@@ -723,6 +737,7 @@ fn normalise_duckdb_event_row(row: Value) -> Value {
     Value::Object(obj)
 }
 
+#[allow(dead_code)]
 fn parse_string_array(value: Option<&Value>) -> Result<Vec<String>> {
     match value {
         None | Some(Value::Null) => Ok(Vec::new()),
@@ -746,6 +761,7 @@ fn parse_string_array(value: Option<&Value>) -> Result<Vec<String>> {
     }
 }
 
+#[allow(dead_code)]
 fn parse_payload(value: Option<&Value>) -> Result<Option<Value>> {
     match value {
         None | Some(Value::Null) => Ok(None),
@@ -795,6 +811,7 @@ fn parse_event_time(raw: &str) -> Result<DateTimeScalar> {
     bail!("unsupported event timestamp `{trimmed}`")
 }
 
+#[allow(dead_code)]
 fn escape_like_literal(value: &str) -> String {
     value
         .replace('\\', "\\\\")

@@ -181,13 +181,15 @@ Do not mix the two modes in the same field call.
 
 ## Mutations
 
-The CLI write commands now execute GraphQL mutations in-process:
+The CLI write commands are thin clients over the local daemon GraphQL surface:
 
 - `bitloops devql init` → `initSchema`
 - `bitloops devql ingest` → `ingest`
 - `bitloops devql knowledge add` → `addKnowledge`
 - `bitloops devql knowledge associate` → `associateKnowledge`
 - `bitloops devql knowledge refresh` → `refreshKnowledge`
+
+The daemon now owns normal schema bootstrap on startup. Use `initSchema` when you want an explicit schema-initialisation pass, and use `ingest` for ingestion only.
 
 Example mutation:
 
@@ -205,7 +207,6 @@ mutation Ingest($input: IngestInput!) {
 ```json
 {
   "input": {
-    "init": true,
     "maxCheckpoints": 200
   }
 }

@@ -1086,11 +1086,28 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
     let mut checkpoint_rx = context.subscriptions().subscribe_checkpoints();
     let schema = crate::graphql::build_slim_schema(context);
 
+    let init_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        init_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        init_response.errors
+    );
+
     let response = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { init: true, maxCheckpoints: 1 }) {
+              ingest(input: { maxCheckpoints: 1 }) {
                 success
                 checkpointsProcessed
                 temporaryRowsPromoted

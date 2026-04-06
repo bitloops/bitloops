@@ -2,7 +2,9 @@ use super::DevqlGraphqlContext;
 use crate::adapters::agents::canonical_agent_key;
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::graphql::ResolverScope;
-use crate::graphql::types::{Checkpoint, DateTimeScalar};
+use crate::graphql::types::{
+    ArtefactCopyLineage, Checkpoint, CheckpointFileRelation, DateTimeScalar,
+};
 use crate::host::checkpoints::strategy::manual_commit::{list_committed, read_committed_info};
 use crate::host::devql::resolve_repo_identity;
 use crate::storage::SqliteConnectionPool;
@@ -52,7 +54,8 @@ impl DevqlGraphqlContext {
                     checkpoint_commits
                         .get(&info.checkpoint_id)
                         .map(String::as_str),
-                );
+                )
+                .with_scope(scope.clone());
                 if !committed_checkpoint_matches_since(&checkpoint, since.as_ref()) {
                     continue;
                 }
@@ -71,6 +74,7 @@ impl DevqlGraphqlContext {
     ) -> Result<Vec<Checkpoint>> {
         let repo_root = self.repo_root_for_scope(scope)?;
         let repo_id = self.repo_id_for_scope(scope)?;
+        let scope = scope.clone();
         let commit_sha = commit_sha.to_string();
         let sqlite_path = self
             .backend_config
@@ -108,13 +112,90 @@ impl DevqlGraphqlContext {
             let mut checkpoints = Vec::new();
             for checkpoint_id in checkpoint_ids {
                 if let Some(info) = read_committed_info(repo_root.as_path(), &checkpoint_id)? {
-                    checkpoints.push(Checkpoint::from_committed(&commit_sha, &info));
+                    checkpoints.push(
+                        Checkpoint::from_committed(&commit_sha, &info).with_scope(scope.clone()),
+                    );
                 }
             }
             Ok(checkpoints)
         })
         .await
         .context("joining commit checkpoint query task")?
+    }
+}
+
+impl DevqlGraphqlContext {
+    pub(crate) async fn list_checkpoint_file_relations(
+        &self,
+        checkpoint_id: &str,
+        scope: &ResolverScope,
+    ) -> Result<Vec<CheckpointFileRelation>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let sqlite_path =
+            crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+                &repo_root,
+            )?;
+        if !sqlite_path.is_file() {
+            return Ok(Vec::new());
+        }
+        let relational = crate::host::devql::RelationalStorage::local_only(sqlite_path);
+        let rows =
+            crate::host::devql::checkpoint_provenance::CheckpointFileGateway::new(&relational)
+                .list_checkpoint_files(&repo_id, checkpoint_id)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| CheckpointFileRelation {
+                filepath: crate::host::devql::checkpoint_provenance::checkpoint_display_path(
+                    row.path_before.as_deref(),
+                    row.path_after.as_deref(),
+                ),
+                change_kind: row.change_kind.as_str().to_string(),
+                path_before: row.path_before,
+                path_after: row.path_after,
+                blob_sha_before: row.blob_sha_before,
+                blob_sha_after: row.blob_sha_after,
+                copied_from_path: row.copy_source_path,
+                copied_from_blob_sha: row.copy_source_blob_sha,
+            })
+            .collect())
+    }
+
+    pub(crate) async fn list_artefact_copy_lineage(
+        &self,
+        artefact_id: &str,
+        scope: &ResolverScope,
+    ) -> Result<Vec<ArtefactCopyLineage>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let sqlite_path =
+            crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+                &repo_root,
+            )?;
+        if !sqlite_path.is_file() {
+            return Ok(Vec::new());
+        }
+        let relational = crate::host::devql::RelationalStorage::local_only(sqlite_path);
+        let rows =
+            crate::host::devql::checkpoint_provenance::CheckpointFileGateway::new(&relational)
+                .list_artefact_copy_lineage(&repo_id, artefact_id, 100)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ArtefactCopyLineage {
+                checkpoint_id: row.checkpoint_id,
+                event_time: DateTimeScalar::from_rfc3339(row.event_time)
+                    .or_else(|_| DateTimeScalar::from_rfc3339("1970-01-01T00:00:00+00:00"))
+                    .expect("static epoch timestamp must parse"),
+                commit_sha: row.commit_sha,
+                source_symbol_id: row.source_symbol_id,
+                source_artefact_id: row.source_artefact_id.into(),
+                dest_symbol_id: row.dest_symbol_id,
+                dest_artefact_id: row.dest_artefact_id.into(),
+                scope: scope.clone(),
+            })
+            .collect())
     }
 }
 

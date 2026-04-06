@@ -6,7 +6,7 @@ pub(super) fn test_state(
     bundle_dir: PathBuf,
 ) -> DashboardState {
     let db = crate::api::DashboardDbPools::default();
-    DashboardState {
+    let state = DashboardState {
         config_root: repo_root.clone(),
         repo_registry_path: None,
         subscription_hub: crate::graphql::SubscriptionHub::new_arc(),
@@ -16,7 +16,9 @@ pub(super) fn test_state(
         mode,
         db,
         bundle_dir,
-    }
+    };
+    crate::daemon::activate_sync_worker(state.subscription_hub());
+    state
 }
 
 pub(super) fn seed_dashboard_repo() -> TempDir {
@@ -149,6 +151,35 @@ pub(super) fn seed_dashboard_repo_with_duckdb_events() -> TempDir {
     let repo = seed_dashboard_repo();
     let head_commit = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     let previous_commit = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
+
+    seed_checkpoint_storage_for_dashboard(
+        repo.path(),
+        SeedCheckpointStorage {
+            commit_sha: &previous_commit,
+            checkpoint_id: "checkpoint-dashboard-previous",
+            branch: "main",
+            files_touched: &["app.rs"],
+            checkpoints_count: 1,
+            token_usage: json!({
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "api_call_count": 1
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-dashboard-previous",
+                agent: "codex",
+                created_at: "2026-03-26T09:15:00Z",
+                checkpoints_count: 1,
+                transcript: "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Checkpoint previous\"}]}}\n",
+                prompts: "Checkpoint previous",
+                context: "Previous checkpoint context",
+            }],
+            insert_mapping: true,
+        },
+    );
 
     seed_duckdb_events(
         repo.path(),

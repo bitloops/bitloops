@@ -264,8 +264,8 @@ fn stop(repo: &Path, session_id: &str, transcript_path: &str) {
 }
 
 fn write_test_session_state_for_logging(repo: &Path, session_id: &str) {
-    ensure_relational_store_file(repo);
     test_command_support::with_repo_app_env(repo, || {
+        ensure_relational_store_file(repo);
         create_session_backend_or_local(repo)
             .save_session(&SessionState {
                 session_id: session_id.to_string(),

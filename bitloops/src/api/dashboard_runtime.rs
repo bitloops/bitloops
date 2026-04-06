@@ -45,6 +45,7 @@ pub(super) async fn run(
         .and_then(normalized_host)
         .map(str::to_string);
     let startup_mode = select_startup_mode(&config, local_dashboard_cfg, explicit_host.as_deref())?;
+    log::info!("dashboard startup phase: initialising database pools");
     let db_init = db::init_dashboard_db().await;
     if db_init.startup_health.has_failures() {
         bail!(
@@ -139,6 +140,19 @@ pub(super) async fn run(
     };
     let repo_root = config_root.clone();
 
+    // Bootstrap DevQL schema on daemon start (idempotent).
+    if let Ok(repo_identity) = crate::host::devql::resolve_repo_identity(&repo_root)
+        && let Err(err) = crate::host::devql::ensure_relational_and_events_schema(
+            &config_root,
+            &repo_root,
+            repo_identity,
+        )
+        .await
+    {
+        log::warn!("DevQL schema bootstrap on daemon start failed: {err:#}");
+        startup_warnings.push(format!("Warning: DevQL schema bootstrap failed: {err:#}"));
+    }
+
     if matches!(startup_mode, DashboardStartupMode::SlowProbe)
         && discovery.tls
         && let Err(err) = persist_local_dashboard_discovery(&repo_root, discovery)
@@ -216,6 +230,7 @@ pub(super) async fn run(
         devql_schema,
         devql_slim_schema,
     };
+    crate::daemon::activate_sync_worker(state.subscription_hub());
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {
@@ -490,4 +505,30 @@ pub(super) fn open_in_default_browser(url: &str) -> Result<()> {
         let _ = child.wait();
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod dashboard_runtime_unit_tests {
+    use super::{clickable_url, warning_block_lines};
+
+    #[test]
+    fn clickable_url_inserts_osc8_hyperlink_sequence() {
+        let url = "https://example.test/path";
+        let rendered = clickable_url(url);
+        assert!(rendered.contains(url));
+        assert!(rendered.contains("\x1b]8;;"));
+    }
+
+    #[test]
+    fn warning_block_lines_returns_nothing_for_empty_warning() {
+        assert!(warning_block_lines("", false).is_empty());
+    }
+
+    #[test]
+    fn warning_block_lines_plain_mode_includes_message_lines() {
+        let lines = warning_block_lines("line one\nline two", false);
+        assert!(lines.iter().any(|l| l.contains('⚠')));
+        assert!(lines.iter().any(|l| l.contains("line one")));
+        assert!(lines.iter().any(|l| l.contains("line two")));
+    }
 }

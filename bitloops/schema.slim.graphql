@@ -44,12 +44,25 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	copyLineage: [ArtefactCopyLineage!]!
 }
 
 type ArtefactConnection {
 	edges: [ArtefactEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type ArtefactCopyLineage {
+	checkpointId: String!
+	eventTime: DateTime!
+	commitSha: String!
+	sourceSymbolId: String!
+	sourceArtefactId: ID!
+	destSymbolId: String!
+	destArtefactId: ID!
+	source: Artefact
+	destination: Artefact
 }
 
 type ArtefactEdge {
@@ -153,6 +166,7 @@ type Checkpoint {
 	isTask: Boolean!
 	toolUseId: String
 	commit: Commit
+	fileRelations: [CheckpointFileRelation!]!
 }
 
 type CheckpointConnection {
@@ -164,6 +178,17 @@ type CheckpointConnection {
 type CheckpointEdge {
 	node: Checkpoint!
 	cursor: String!
+}
+
+type CheckpointFileRelation {
+	filepath: String!
+	changeKind: String!
+	pathBefore: String
+	pathAfter: String
+	blobShaBefore: String
+	blobShaAfter: String
+	copiedFromPath: String
+	copiedFromBlobSha: String
 }
 
 type CheckpointTokenUsage {
@@ -272,6 +297,19 @@ enum EdgeKind {
 	EXPORTS
 }
 
+input EnqueueSyncInput {
+	full: Boolean! = false
+	paths: [String!] = null
+	repair: Boolean! = false
+	validate: Boolean! = false
+	source: String = null
+}
+
+type EnqueueSyncResult {
+	task: SyncTask!
+	merged: Boolean!
+}
+
 type FileContext {
 	path: String!
 	language: String
@@ -294,13 +332,11 @@ type HealthStatus {
 }
 
 input IngestInput {
-	init: Boolean! = true
 	maxCheckpoints: Int! = 500
 }
 
 type IngestResult {
 	success: Boolean!
-	initRequested: Boolean!
 	checkpointsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!
@@ -464,6 +500,8 @@ type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
+	sync(input: SyncInput!): SyncResult!
+	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
@@ -518,6 +556,8 @@ type SlimQueryRoot {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	telemetry(eventType: String, agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): TelemetryEventConnection!
 	users: [String!]!
+	syncTask(id: String!): SyncTask
+	syncTasks(limit: Int): [SyncTask!]!
 	agents: [String!]!
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
@@ -533,6 +573,129 @@ type SlimQueryRoot {
 type SlimSubscriptionRoot {
 	checkpointIngested: Checkpoint!
 	ingestionProgress: IngestionProgressEvent!
+	syncProgress(taskId: String!): SyncProgressEvent!
+}
+
+input SyncInput {
+	"""
+	Run a full workspace reconciliation.
+	"""
+	full: Boolean! = false
+	"""
+	Reconcile only the specified workspace paths (comma-delimited values accepted).
+	"""
+	paths: [String!] = null
+	"""
+	Rebuild sync state from the current workspace, ignoring stored manifest trust.
+	"""
+	repair: Boolean! = false
+	"""
+	Validate current-state tables against a full read-only workspace reconciliation.
+	"""
+	validate: Boolean! = false
+}
+
+type SyncProgressEvent {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	source: String!
+	mode: String!
+	status: String!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	phase: String!
+	currentPath: String
+	pathsTotal: Int!
+	pathsCompleted: Int!
+	pathsRemaining: Int!
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	error: String
+	summary: SyncResult
+}
+
+type SyncResult {
+	success: Boolean!
+	mode: String!
+	parserVersion: String!
+	extractorVersion: String!
+	activeBranch: String
+	headCommitSha: String
+	headTreeSha: String
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	validation: SyncValidationResult
+}
+
+type SyncTask {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	source: String!
+	mode: String!
+	status: String!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	phase: String!
+	currentPath: String
+	pathsTotal: Int!
+	pathsCompleted: Int!
+	pathsRemaining: Int!
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	error: String
+	summary: SyncResult
+}
+
+type SyncValidationFileDriftResult {
+	path: String!
+	missingArtefacts: Int!
+	staleArtefacts: Int!
+	mismatchedArtefacts: Int!
+	missingEdges: Int!
+	staleEdges: Int!
+	mismatchedEdges: Int!
+}
+
+type SyncValidationResult {
+	valid: Boolean!
+	expectedArtefacts: Int!
+	actualArtefacts: Int!
+	expectedEdges: Int!
+	actualEdges: Int!
+	missingArtefacts: Int!
+	staleArtefacts: Int!
+	mismatchedArtefacts: Int!
+	missingEdges: Int!
+	staleEdges: Int!
+	mismatchedEdges: Int!
+	filesWithDrift: [SyncValidationFileDriftResult!]!
 }
 
 type TelemetryEvent {

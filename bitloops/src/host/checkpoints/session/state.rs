@@ -142,6 +142,7 @@ pub struct SessionState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrePromptState {
     pub session_id: String,
+    /// When the prompt was submitted (RFC 3339).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub timestamp: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

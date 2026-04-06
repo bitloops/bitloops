@@ -371,11 +371,12 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
     }
 
     conn.execute(
-        "INSERT INTO checkpoint_file_snapshots (
-            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha,
-            path, blob_sha
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO checkpoint_files (
+            relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+            commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'modify', ?10, ?10, ?11, ?11)",
         rusqlite::params![
+            "relation-1",
             repo_id,
             "checkpoint-1",
             "session-1",
@@ -388,7 +389,7 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
             "shared-blob",
         ],
     )
-    .expect("insert checkpoint snapshot");
+    .expect("insert checkpoint provenance row");
 
     for (source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id, score) in [
         (

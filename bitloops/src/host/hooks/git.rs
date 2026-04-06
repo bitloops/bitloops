@@ -269,6 +269,7 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    const TEST_CONFIG_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE";
     const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
 
     fn setup_git_repo(dir: &TempDir) {
@@ -288,11 +289,27 @@ mod tests {
         run(&["commit", "-m", "initial"]);
     }
 
+    fn with_hook_test_process_state<T>(
+        repo_root: &Path,
+        extra_env: &[(&str, Option<&str>)],
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let config_root = repo_root.join("config-root");
+        let config_root_value = config_root.display().to_string();
+        let mut env = Vec::with_capacity(extra_env.len() + 1);
+        env.push((
+            TEST_CONFIG_DIR_OVERRIDE_ENV,
+            Some(config_root_value.as_str()),
+        ));
+        env.extend_from_slice(extra_env);
+        with_process_state(Some(repo_root), &env, f)
+    }
+
     fn with_test_logging_state<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
         let state_root = repo_root.join("state-root");
         let state_root_value = state_root.display().to_string();
-        with_process_state(
-            Some(repo_root),
+        with_hook_test_process_state(
+            repo_root,
             &[(TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str()))],
             f,
         )
@@ -350,8 +367,8 @@ mod tests {
         write_strategy_config(dir.path(), "manual-commit");
         let state_root_value = dir.path().join("state-root").display().to_string();
 
-        with_process_state(
-            Some(dir.path()),
+        with_hook_test_process_state(
+            dir.path(),
             &[
                 (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str())),
                 (logging::LOG_LEVEL_ENV_VAR, None),
@@ -418,7 +435,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
 
-        with_cwd(dir.path(), || {
+        with_hook_test_process_state(dir.path(), &[], || {
             fs::create_dir_all(dir.path().join(".bitloops")).unwrap();
             fs::write(
                 dir.path().join(".bitloops/settings.json"),
@@ -449,7 +466,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
 
-        with_cwd(dir.path(), || {
+        with_hook_test_process_state(dir.path(), &[], || {
             with_logger_test_lock(|| {
                 // Non-existent nested path causes prepare-commit-msg handler to error.
                 let sr = StrategyRegistry::builtin();

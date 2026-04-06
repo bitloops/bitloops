@@ -164,6 +164,24 @@ mod tests {
         fs::write(config_path, toml).expect("write config");
     }
 
+    fn enter_isolated_platform_dirs(
+        home_root: &Path,
+    ) -> crate::test_support::process_state::ProcessStateGuard {
+        let xdg_config_home = home_root.join(".config").display().to_string();
+        let app_data = home_root
+            .join("AppData")
+            .join("Roaming")
+            .display()
+            .to_string();
+        let home = home_root.display().to_string();
+        let env_vars = vec![
+            ("HOME", Some(home.as_str())),
+            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
+            ("APPDATA", Some(app_data.as_str())),
+        ];
+        enter_process_state(Some(home_root), &env_vars)
+    }
+
     #[test]
     fn main_target_resolves_store_backend_config_from_daemon_config() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -175,20 +193,7 @@ postgres_dsn = "postgres://u:p@localhost:5432/bitloops"
 "#,
         );
 
-        let xdg_config_home = temp.path().join(".config").display().to_string();
-        let app_data = temp
-            .path()
-            .join("AppData")
-            .join("Roaming")
-            .display()
-            .to_string();
-        let home = temp.path().display().to_string();
-        let env_vars = vec![
-            ("HOME", Some(home.as_str())),
-            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
-            ("APPDATA", Some(app_data.as_str())),
-        ];
-        let _guard = enter_process_state(Some(temp.path()), &env_vars);
+        let _guard = enter_isolated_platform_dirs(temp.path());
         let cfg = resolve_store_backend_config().expect("backend config");
 
         assert_eq!(
@@ -208,20 +213,7 @@ tls = true
 "#,
         );
 
-        let xdg_config_home = temp.path().join(".config").display().to_string();
-        let app_data = temp
-            .path()
-            .join("AppData")
-            .join("Roaming")
-            .display()
-            .to_string();
-        let home = temp.path().display().to_string();
-        let env_vars = vec![
-            ("HOME", Some(home.as_str())),
-            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
-            ("APPDATA", Some(app_data.as_str())),
-        ];
-        let _guard = enter_process_state(Some(temp.path()), &env_vars);
+        let _guard = enter_isolated_platform_dirs(temp.path());
 
         assert_eq!(
             resolve_dashboard_config().local_dashboard,
@@ -232,7 +224,7 @@ tls = true
     #[test]
     fn main_target_provider_config_defaults_without_repo_config() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let _guard = enter_process_state(Some(temp.path()), &[]);
+        let _guard = enter_isolated_platform_dirs(temp.path());
 
         let cfg = resolve_provider_config().expect("provider config");
 

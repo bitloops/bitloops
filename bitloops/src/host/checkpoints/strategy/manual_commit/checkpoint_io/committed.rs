@@ -92,14 +92,12 @@ pub(crate) fn resolve_checkpoint_session_index_for_write(
 pub(crate) fn aggregate_checkpoint_metadata_from_db(
     sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
-) -> Result<(u32, Vec<String>, Option<TokenUsageMetadata>)> {
-    let (checkpoints_total, files_touched, token_usage) = sqlite.with_connection(|conn| {
+) -> Result<(u32, Option<TokenUsageMetadata>)> {
+    let (checkpoints_total, token_usage) = sqlite.with_connection(|conn| {
         let mut checkpoints_total = 0u64;
-        let mut files_touched: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
         let mut token_usage: Option<TokenUsageMetadata> = None;
         let mut stmt = conn.prepare(
-            "SELECT checkpoints_count, files_touched, token_usage
+            "SELECT checkpoints_count, token_usage
              FROM checkpoint_sessions
              WHERE checkpoint_id = ?1
              ORDER BY session_index ASC",
@@ -109,29 +107,45 @@ pub(crate) fn aggregate_checkpoint_metadata_from_db(
             let count: i64 = row.get(0)?;
             checkpoints_total += count.max(0) as u64;
 
-            let files_raw: String = row.get(1)?;
-            if let Ok(files) = serde_json::from_str::<Vec<String>>(&files_raw) {
-                for file in files {
-                    if !file.is_empty() {
-                        files_touched.insert(file);
-                    }
-                }
-            }
-
-            let token_usage_raw: Option<String> = row.get(2)?;
+            let token_usage_raw: Option<String> = row.get(1)?;
             let parsed_token_usage = token_usage_raw
                 .as_deref()
                 .and_then(|raw| serde_json::from_str::<TokenUsageMetadata>(raw).ok());
             token_usage = aggregate_token_usage(token_usage, parsed_token_usage);
         }
-        Ok((checkpoints_total, files_touched, token_usage))
+        Ok((checkpoints_total, token_usage))
     })?;
 
-    Ok((
-        checkpoints_total.min(u32::MAX as u64) as u32,
-        files_touched.into_iter().collect(),
-        token_usage,
-    ))
+    Ok((checkpoints_total.min(u32::MAX as u64) as u32, token_usage))
+}
+
+pub(crate) fn load_checkpoint_files_touched_from_db(
+    sqlite: &crate::storage::SqliteConnectionPool,
+    repo_id: &str,
+    checkpoint_id: &str,
+) -> Result<Vec<String>> {
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT path_before, path_after
+             FROM checkpoint_files
+             WHERE repo_id = ?1 AND checkpoint_id = ?2
+             ORDER BY COALESCE(path_after, path_before) ASC, relation_id ASC",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![repo_id, checkpoint_id])?;
+        let mut files_touched = std::collections::BTreeSet::new();
+        while let Some(row) = rows.next()? {
+            let path_before: Option<String> = row.get(0)?;
+            let path_after: Option<String> = row.get(1)?;
+            let display_path = crate::host::devql::checkpoint_provenance::checkpoint_display_path(
+                path_before.as_deref(),
+                path_after.as_deref(),
+            );
+            if !display_path.is_empty() {
+                files_touched.insert(display_path);
+            }
+        }
+        Ok(files_touched.into_iter().collect())
+    })
 }
 
 pub(crate) fn upsert_checkpoint_blob(
@@ -178,8 +192,6 @@ pub(crate) fn upsert_checkpoint_session_row(
     content_hash: &str,
     subagent_transcript_path: &str,
 ) -> Result<()> {
-    let files_touched = serde_json::to_string(&session_meta.files_touched)
-        .context("serializing files_touched for checkpoint_sessions row")?;
     let initial_attribution = session_meta
         .initial_attribution
         .as_ref()
@@ -204,23 +216,22 @@ pub(crate) fn upsert_checkpoint_session_row(
         conn.execute(
             "INSERT INTO checkpoint_sessions (
                 checkpoint_id, session_id, session_index, agent, turn_id,
-                checkpoints_count, files_touched, is_task, tool_use_id,
+                checkpoints_count, is_task, tool_use_id,
                 transcript_identifier_at_start, checkpoint_transcript_start,
                 initial_attribution, token_usage, summary, author_name, author_email,
                 transcript_path, subagent_transcript_path, content_hash, created_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, ?8, ?9,
-                ?10, ?11,
-                ?12, ?13, ?14, ?15, ?16,
-                ?17, ?18, ?19, ?20
+                ?6, ?7, ?8,
+                ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15,
+                ?16, ?17, ?18, ?19
             )
             ON CONFLICT(checkpoint_id, session_index) DO UPDATE SET
                 session_id = excluded.session_id,
                 agent = excluded.agent,
                 turn_id = excluded.turn_id,
                 checkpoints_count = excluded.checkpoints_count,
-                files_touched = excluded.files_touched,
                 is_task = excluded.is_task,
                 tool_use_id = excluded.tool_use_id,
                 transcript_identifier_at_start = excluded.transcript_identifier_at_start,
@@ -240,7 +251,6 @@ pub(crate) fn upsert_checkpoint_session_row(
                 session_meta.agent,
                 session_meta.turn_id,
                 i64::from(session_meta.checkpoints_count),
-                files_touched,
                 if session_meta.is_task { 1_i64 } else { 0_i64 },
                 session_meta.tool_use_id,
                 session_meta.transcript_identifier_at_start,
@@ -267,11 +277,8 @@ pub(crate) fn upsert_checkpoint_row(
     strategy: &str,
     branch: &str,
     checkpoints_count: u32,
-    files_touched: &[String],
     token_usage: &Option<TokenUsageMetadata>,
 ) -> Result<()> {
-    let files_touched_json = serde_json::to_string(files_touched)
-        .context("serializing files_touched for checkpoints row")?;
     let token_usage_json = token_usage
         .as_ref()
         .map(serde_json::to_string)
@@ -282,17 +289,16 @@ pub(crate) fn upsert_checkpoint_row(
         conn.execute(
             "INSERT INTO checkpoints (
                 checkpoint_id, repo_id, strategy, branch, cli_version,
-                files_touched, checkpoints_count, token_usage, created_at, updated_at
+                checkpoints_count, token_usage, created_at, updated_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, ?8, datetime('now'), datetime('now')
+                ?6, ?7, datetime('now'), datetime('now')
             )
             ON CONFLICT(checkpoint_id) DO UPDATE SET
                 repo_id = excluded.repo_id,
                 strategy = excluded.strategy,
                 branch = excluded.branch,
                 cli_version = excluded.cli_version,
-                files_touched = excluded.files_touched,
                 checkpoints_count = excluded.checkpoints_count,
                 token_usage = excluded.token_usage,
                 updated_at = datetime('now')",
@@ -302,7 +308,6 @@ pub(crate) fn upsert_checkpoint_row(
                 strategy,
                 branch,
                 CLI_VERSION,
-                files_touched_json,
                 i64::from(checkpoints_count),
                 token_usage_json,
             ],
@@ -310,6 +315,90 @@ pub(crate) fn upsert_checkpoint_row(
         .context("upserting checkpoints row")?;
         Ok(())
     })
+}
+
+fn persist_checkpoint_provenance_rows(
+    repo_root: &Path,
+    storage: &CheckpointStorageContext,
+    session_meta: &CommittedMetadata,
+) -> Result<()> {
+    let Some(commit_sha) = try_head_hash(repo_root)? else {
+        return Ok(());
+    };
+    if commit_sha.trim().is_empty() {
+        return Ok(());
+    }
+
+    let context = crate::host::devql::checkpoint_provenance::CheckpointProvenanceContext {
+        repo_id: &storage.repo_id,
+        checkpoint_id: &session_meta.checkpoint_id,
+        session_id: &session_meta.session_id,
+        event_time: &session_meta.created_at,
+        agent: &session_meta.agent,
+        branch: &session_meta.branch,
+        strategy: &session_meta.strategy,
+        commit_sha: &commit_sha,
+    };
+    let file_rows =
+        crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
+            repo_root, context,
+        )?;
+    let artefact_provenance =
+        crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance(
+            repo_root, context, &file_rows,
+        )?;
+
+    storage
+        .sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM checkpoint_artefact_lineage WHERE repo_id = ?1 AND checkpoint_id = ?2",
+                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+            )?;
+            conn.execute(
+                "DELETE FROM checkpoint_artefacts WHERE repo_id = ?1 AND checkpoint_id = ?2",
+                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+            )?;
+            conn.execute(
+                "DELETE FROM checkpoint_files WHERE repo_id = ?1 AND checkpoint_id = ?2",
+                rusqlite::params![storage.repo_id, session_meta.checkpoint_id],
+            )?;
+
+            let mut statements = Vec::with_capacity(
+                file_rows.len()
+                    + artefact_provenance.semantic_rows.len()
+                    + artefact_provenance.lineage_rows.len(),
+            );
+            for row in &file_rows {
+                statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
+                        row,
+                        crate::host::devql::RelationalDialect::Sqlite,
+                    ),
+                );
+            }
+            for row in &artefact_provenance.semantic_rows {
+                statements.push(
+                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                    row,
+                    crate::host::devql::RelationalDialect::Sqlite,
+                ),
+            );
+            }
+            for row in &artefact_provenance.lineage_rows {
+                statements.push(
+                    crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                        row,
+                        crate::host::devql::RelationalDialect::Sqlite,
+                    ),
+                );
+            }
+            for statement in statements {
+                conn.execute_batch(&statement)?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .context("persisting checkpoint provenance rows")
 }
 
 pub(crate) fn persist_committed_checkpoint_db_and_blobs(
@@ -370,7 +459,9 @@ pub(crate) fn persist_committed_checkpoint_db_and_blobs(
         &opts.subagent_transcript_path,
     )?;
 
-    let (checkpoints_count, files_touched, token_usage) =
+    persist_checkpoint_provenance_rows(repo_root, &storage, session_meta)?;
+
+    let (checkpoints_count, token_usage) =
         aggregate_checkpoint_metadata_from_db(&storage.sqlite, &opts.checkpoint_id)?;
     upsert_checkpoint_row(
         &storage,
@@ -378,7 +469,6 @@ pub(crate) fn persist_committed_checkpoint_db_and_blobs(
         &opts.strategy,
         &session_meta.branch,
         checkpoints_count,
-        &files_touched,
         &token_usage,
     )
 }
@@ -447,7 +537,6 @@ pub(crate) fn write_committed(repo_root: &Path, opts: WriteCommittedOptions) -> 
         created_at: now_rfc3339(),
         cli_version: CLI_VERSION.to_string(),
         turn_id: opts.turn_id.clone(),
-        files_touched: opts.files_touched.clone(),
         is_task: opts.is_task,
         tool_use_id: opts.tool_use_id.clone(),
         transcript_identifier_at_start: opts.transcript_identifier_at_start.clone(),

@@ -428,4 +428,74 @@ mod tests {
             .expect_err("expected error");
         assert!(format!("{err:#}").contains("embed failed"));
     }
+
+    struct FakeProvider {
+        dim: Option<usize>,
+    }
+
+    impl EmbeddingRuntimeProvider for FakeProvider {
+        fn provider_name(&self) -> &str {
+            "fake"
+        }
+
+        fn model_name(&self) -> &str {
+            "fake-model"
+        }
+
+        fn output_dimension(&self) -> Option<usize> {
+            self.dim
+        }
+
+        fn cache_dir(&self) -> Option<&Path> {
+            None
+        }
+
+        fn cache_key(&self) -> String {
+            "provider=fake".to_string()
+        }
+
+        fn embed(&self, input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+            Ok(vec![input.len() as f32, 1.0])
+        }
+    }
+
+    #[test]
+    fn describe_provider_reflects_runtime_fields() {
+        let provider = FakeProvider { dim: Some(8) };
+        let d = describe_provider(&provider);
+        assert_eq!(d.kind, "fake");
+        assert_eq!(d.model_name, "fake-model");
+        assert_eq!(d.output_dimension, Some(8));
+        assert!(d.cache_dir.is_none());
+    }
+
+    #[test]
+    fn build_batch_vectors_calls_embed_per_input() {
+        let provider = FakeProvider { dim: None };
+        let inputs = vec![
+            EmbeddingInput {
+                id: None,
+                text: "ab".to_string(),
+                input_type: EmbeddingInputType::Document,
+            },
+            EmbeddingInput {
+                id: None,
+                text: "x".to_string(),
+                input_type: EmbeddingInputType::Query,
+            },
+        ];
+        let batch = build_batch_vectors(&provider, &inputs).expect("batch");
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0], vec![2.0, 1.0]);
+        assert_eq!(batch[1], vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn extract_embedding_reads_openai_style_response() {
+        let value = json!({
+            "data": [{ "embedding": [0.25, -1.5] }]
+        });
+        let v = extract_embedding(&value).expect("vector");
+        assert_eq!(v, vec![0.25f32, -1.5f32]);
+    }
 }
