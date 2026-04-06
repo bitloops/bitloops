@@ -37,7 +37,7 @@ async fn qat_devql() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT DevQL sync suite; use `cargo qat-devql-sync`"]
+#[ignore = "slow E2E: runs QAT DevQL sync suite; use `cargo qat-devql-sync` or `cargo qat`"]
 async fn qat_devql_sync() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::DevqlSync)
@@ -55,7 +55,7 @@ async fn qat_claude_code() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT onboarding suite; use `cargo test --test qat_acceptance qat_onboarding -- --ignored`"]
+#[ignore = "slow E2E: runs QAT onboarding suite; use `cargo qat-onboarding` or `cargo qat`"]
 async fn qat_onboarding() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::Onboarding)

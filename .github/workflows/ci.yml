@@ -5,10 +5,10 @@ on:
     branches:
       - main
     paths:
-      - "bitloops/**"
-      - "xtask/**"
-      - ".cargo/config.toml"
-      - ".github/workflows/ci.yml"
+      - 'bitloops/**'
+      - 'xtask/**'
+      - '.cargo/config.toml'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
@@ -26,7 +26,7 @@ jobs:
     name: Test compile (Ubuntu)
     runs-on: self-hosted
     env:
-      DUCKDB_DOWNLOAD_LIB: "1"
+      DUCKDB_DOWNLOAD_LIB: '1'
     steps:
       - uses: actions/checkout@v5
 
@@ -34,6 +34,21 @@ jobs:
 
       - name: Compile test targets
         run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
+
+  qat:
+    name: QAT
+    runs-on: self-hosted
+    needs: test
+    timeout-minutes: 180
+    env:
+      DUCKDB_DOWNLOAD_LIB: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run QAT acceptance suites
+        run: cargo qat
 
   build-matrix:
     name: Build smoke ${{ matrix.target }}
@@ -84,7 +99,7 @@ jobs:
       - name: Build (musl targets)
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         env:
-          DUCKDB_DOWNLOAD_LIB: "0"
+          DUCKDB_DOWNLOAD_LIB: '0'
         run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }} --features duckdb-bundled
 
       - name: Build (non-musl targets)

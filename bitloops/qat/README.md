@@ -12,6 +12,30 @@ Cargo aliases are configured in `.cargo/config.toml` and only resolve from this 
 
 ## Implemented test suites
 
+### Onboarding + DevQL sync (CI bundle)
+
+Runs both suites below in a single `cargo test` invocation (28 scenarios). This is what CI executes.
+
+From the `bitloops/` crate directory:
+
+```bash
+cargo qat
+```
+
+From the repository root (uses the workspace-root `.cargo/config.toml`):
+
+```bash
+cargo qat
+```
+
+Equivalent (filters after `--` are passed to the test harness; both names match onboarding and DevQL sync only):
+
+```bash
+cargo test --test qat_acceptance -- qat_onboarding qat_devql_sync --ignored
+```
+
+From the repository root, add `--manifest-path bitloops/Cargo.toml` after `cargo test` if you are not using the root alias.
+
 ### 1. Onboarding (13 scenarios)
 
 Covers the full first-time developer experience: install verification, daemon config,
