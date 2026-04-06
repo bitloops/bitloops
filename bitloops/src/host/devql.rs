@@ -112,6 +112,8 @@ const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 #[cfg(test)]
 const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
+#[cfg(test)]
+const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
