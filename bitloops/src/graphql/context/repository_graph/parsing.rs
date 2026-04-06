@@ -18,13 +18,12 @@ pub(super) fn file_context_from_value(row: Value) -> Result<FileContext> {
 }
 
 pub(super) fn artefact_from_value(row: Value) -> Result<Artefact> {
-    let canonical_kind_raw = string_field(&row, "canonical_kind")?;
     Ok(Artefact {
         id: async_graphql::ID(string_field(&row, "artefact_id")?),
         symbol_id: string_field(&row, "symbol_id")?,
         path: string_field(&row, "path")?,
         language: string_field(&row, "language")?,
-        canonical_kind: parse_canonical_kind(canonical_kind_raw.as_str())?,
+        canonical_kind: optional_canonical_kind_field(&row, "canonical_kind"),
         language_kind: optional_string_field(&row, "language_kind"),
         symbol_fqn: optional_string_field(&row, "symbol_fqn"),
         parent_artefact_id: optional_string_field(&row, "parent_artefact_id")
@@ -72,6 +71,12 @@ fn optional_string_field(row: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn optional_canonical_kind_field(row: &Value, key: &str) -> Option<CanonicalKind> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .and_then(parse_canonical_kind)
 }
 
 fn required_i32_field(row: &Value, key: &str) -> Result<i32> {
@@ -127,25 +132,25 @@ fn parse_storage_datetime(value: &str) -> Result<DateTimeScalar> {
     .with_context(|| format!("normalising storage timestamp `{value}`"))
 }
 
-fn parse_canonical_kind(value: &str) -> Result<CanonicalKind> {
+fn parse_canonical_kind(value: &str) -> Option<CanonicalKind> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "file" => Ok(CanonicalKind::File),
-        "namespace" => Ok(CanonicalKind::Namespace),
-        "module" => Ok(CanonicalKind::Module),
-        "import" => Ok(CanonicalKind::Import),
-        "type" => Ok(CanonicalKind::Type),
-        "interface" => Ok(CanonicalKind::Interface),
-        "enum" => Ok(CanonicalKind::Enum),
-        "callable" => Ok(CanonicalKind::Callable),
-        "function" => Ok(CanonicalKind::Function),
-        "method" => Ok(CanonicalKind::Method),
-        "value" | "constant" => Ok(CanonicalKind::Value),
-        "variable" => Ok(CanonicalKind::Variable),
-        "member" => Ok(CanonicalKind::Member),
-        "parameter" => Ok(CanonicalKind::Parameter),
-        "type_parameter" => Ok(CanonicalKind::TypeParameter),
-        "alias" => Ok(CanonicalKind::Alias),
-        other => anyhow::bail!("unsupported canonical kind `{other}`"),
+        "file" => Some(CanonicalKind::File),
+        "namespace" => Some(CanonicalKind::Namespace),
+        "module" => Some(CanonicalKind::Module),
+        "import" => Some(CanonicalKind::Import),
+        "type" => Some(CanonicalKind::Type),
+        "interface" => Some(CanonicalKind::Interface),
+        "enum" => Some(CanonicalKind::Enum),
+        "callable" => Some(CanonicalKind::Callable),
+        "function" => Some(CanonicalKind::Function),
+        "method" => Some(CanonicalKind::Method),
+        "value" | "constant" => Some(CanonicalKind::Value),
+        "variable" => Some(CanonicalKind::Variable),
+        "member" => Some(CanonicalKind::Member),
+        "parameter" => Some(CanonicalKind::Parameter),
+        "type_parameter" => Some(CanonicalKind::TypeParameter),
+        "alias" => Some(CanonicalKind::Alias),
+        _ => None,
     }
 }
 
@@ -158,5 +163,48 @@ fn parse_edge_kind(value: &str) -> Result<EdgeKind> {
         "implements" => Ok(EdgeKind::Implements),
         "exports" => Ok(EdgeKind::Exports),
         other => anyhow::bail!("unsupported dependency edge kind `{other}`"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn artefact_row(canonical_kind: Value) -> Value {
+        json!({
+            "artefact_id": "artefact::one",
+            "symbol_id": "sym::one",
+            "path": "src/lib.rs",
+            "language": "rust",
+            "canonical_kind": canonical_kind,
+            "language_kind": "function_item",
+            "symbol_fqn": "crate::one",
+            "parent_artefact_id": Value::Null,
+            "start_line": 1,
+            "end_line": 2,
+            "start_byte": 0,
+            "end_byte": 20,
+            "signature": Value::Null,
+            "modifiers": "[]",
+            "docstring": Value::Null,
+            "content_hash": Value::Null,
+            "blob_sha": "blob-one",
+            "created_at": "2026-03-26T09:00:00Z"
+        })
+    }
+
+    #[test]
+    fn artefact_from_value_allows_null_canonical_kind() {
+        let artefact = artefact_from_value(artefact_row(Value::Null)).expect("parse artefact");
+        assert_eq!(artefact.canonical_kind, None);
+    }
+
+    #[test]
+    fn artefact_from_value_allows_unknown_canonical_kind() {
+        let artefact =
+            artefact_from_value(artefact_row(Value::String("class_declaration".to_string())))
+                .expect("parse artefact");
+        assert_eq!(artefact.canonical_kind, None);
     }
 }
