@@ -1,6 +1,6 @@
 //! Stage 2: symbol embedding rows (`symbol_embeddings`) for the semantic_clones pipeline.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -35,6 +35,15 @@ ON symbol_embeddings (repo_id, artefact_id);
 
 CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
 ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
+
+CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
+    repo_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    setup_fingerprint TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 "#
 }
 
@@ -57,7 +66,29 @@ ON symbol_embeddings (repo_id, artefact_id);
 
 CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
 ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
+
+CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
+    repo_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    setup_fingerprint TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 "#
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepoEmbeddingSyncAction {
+    Incremental,
+    AdoptExisting,
+    RefreshCurrentRepo,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CurrentRepoEmbeddingRefreshResult {
+    pub embedding_stats: embeddings::SymbolEmbeddingIngestionStats,
+    pub clone_build: crate::capability_packs::semantic_clones::scoring::SymbolCloneBuildResult,
 }
 
 pub(crate) async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
@@ -141,6 +172,88 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
     relational.exec(&sql).await
 }
 
+pub(crate) async fn clear_repo_active_embedding_setup(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let sql = format!(
+        "DELETE FROM semantic_clone_embedding_setup_state WHERE repo_id = '{}'",
+        esc_pg(repo_id),
+    );
+    relational.exec(&sql).await
+}
+
+pub(crate) async fn load_active_embedding_setup(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Option<embeddings::EmbeddingSetup>> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let rows = relational
+        .query_rows(&build_active_embedding_setup_lookup_sql(repo_id))
+        .await?;
+    Ok(parse_embedding_setup_rows(&rows).into_iter().next())
+}
+
+pub(crate) async fn persist_active_embedding_setup(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    setup: &embeddings::EmbeddingSetup,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let sql = build_active_embedding_setup_persist_sql(repo_id, setup);
+    relational.exec(&sql).await
+}
+
+pub(crate) async fn determine_repo_embedding_sync_action(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    setup: &embeddings::EmbeddingSetup,
+) -> Result<RepoEmbeddingSyncAction> {
+    if let Some(active) = load_active_embedding_setup(relational, repo_id).await? {
+        return Ok(if active == *setup {
+            RepoEmbeddingSyncAction::Incremental
+        } else {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo
+        });
+    }
+
+    let current_setups = load_current_repo_embedding_setups(relational, repo_id).await?;
+    Ok(
+        if current_setups.len() == 1 && current_setups[0] == *setup {
+            RepoEmbeddingSyncAction::AdoptExisting
+        } else {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo
+        },
+    )
+}
+
+pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+    embedding_provider: Arc<dyn EmbeddingProvider>,
+) -> Result<CurrentRepoEmbeddingRefreshResult> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
+    let current_inputs =
+        super::load_semantic_feature_inputs_for_current_repo(relational, repo_root, repo_id)
+            .await?;
+    let embedding_stats =
+        upsert_symbol_embedding_rows(relational, &current_inputs, embedding_provider).await?;
+    persist_active_embedding_setup(relational, repo_id, &setup).await?;
+    let clone_build =
+        crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
+            relational, repo_id,
+        )
+        .await?;
+
+    Ok(CurrentRepoEmbeddingRefreshResult {
+        embedding_stats,
+        clone_build,
+    })
+}
+
 async fn load_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -194,6 +307,42 @@ WHERE artefact_id = '{artefact_id}'",
     )
 }
 
+fn build_active_embedding_setup_lookup_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT provider, model, dimension \
+FROM semantic_clone_embedding_setup_state \
+WHERE repo_id = '{}'",
+        esc_pg(repo_id),
+    )
+}
+
+fn build_current_repo_embedding_setups_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT DISTINCT e.provider, e.model, e.dimension \
+FROM artefacts_current a \
+JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
+WHERE a.repo_id = '{}' \
+ORDER BY e.provider, e.model, e.dimension",
+        esc_pg(repo_id),
+    )
+}
+
+fn build_active_embedding_setup_persist_sql(
+    repo_id: &str,
+    setup: &embeddings::EmbeddingSetup,
+) -> String {
+    format!(
+        "INSERT INTO semantic_clone_embedding_setup_state (repo_id, provider, model, dimension, setup_fingerprint) \
+VALUES ('{repo_id}', '{provider}', '{model}', {dimension}, '{setup_fingerprint}') \
+ON CONFLICT (repo_id) DO UPDATE SET provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, setup_fingerprint = excluded.setup_fingerprint, updated_at = CURRENT_TIMESTAMP",
+        repo_id = esc_pg(repo_id),
+        provider = esc_pg(&setup.provider),
+        model = esc_pg(&setup.model),
+        dimension = setup.dimension,
+        setup_fingerprint = esc_pg(&setup.setup_fingerprint),
+    )
+}
+
 fn parse_symbol_embedding_index_state_rows(
     rows: &[Value],
 ) -> embeddings::SymbolEmbeddingIndexState {
@@ -209,6 +358,43 @@ fn parse_symbol_embedding_index_state_rows(
     }
 }
 
+fn parse_embedding_setup_rows(rows: &[Value]) -> Vec<embeddings::EmbeddingSetup> {
+    let mut setups = BTreeSet::new();
+    for row in rows {
+        let Some(provider) = row.get("provider").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(model) = row.get("model").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(dimension) = row
+            .get("dimension")
+            .and_then(value_as_positive_usize)
+            .filter(|value| *value > 0)
+        else {
+            continue;
+        };
+        setups.insert((provider.to_string(), model.to_string(), dimension));
+    }
+
+    setups
+        .into_iter()
+        .map(|(provider, model, dimension)| {
+            embeddings::EmbeddingSetup::new(provider, model, dimension)
+        })
+        .collect()
+}
+
+fn value_as_positive_usize(value: &Value) -> Option<usize> {
+    if let Some(value) = value.as_u64() {
+        return usize::try_from(value).ok();
+    }
+    if let Some(value) = value.as_i64() {
+        return usize::try_from(value).ok();
+    }
+    value.as_str()?.trim().parse::<usize>().ok()
+}
+
 fn build_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
     format!(
         "SELECT artefact_id, summary \
@@ -216,6 +402,16 @@ FROM symbol_semantics \
 WHERE artefact_id IN ({})",
         sql_string_list_pg(artefact_ids)
     )
+}
+
+pub(crate) async fn load_current_repo_embedding_setups(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<embeddings::EmbeddingSetup>> {
+    let rows = relational
+        .query_rows(&build_current_repo_embedding_setups_sql(repo_id))
+        .await?;
+    Ok(parse_embedding_setup_rows(&rows))
 }
 
 #[cfg(test)]
@@ -292,6 +488,14 @@ mod semantic_embedding_persistence_tests {
             .expect("create sqlite schema");
         std::mem::forget(temp);
         RelationalStorage::local_only(db_path)
+    }
+
+    async fn sqlite_relational_with_embedding_state_schema() -> RelationalStorage {
+        sqlite_relational_with_schema(&format!(
+            "{}\nCREATE TABLE artefacts_current (repo_id TEXT NOT NULL, artefact_id TEXT PRIMARY KEY, path TEXT, start_line INTEGER, symbol_id TEXT);",
+            semantic_embeddings_sqlite_schema_sql()
+        ))
+        .await
     }
 
     #[test]
@@ -487,5 +691,64 @@ mod semantic_embedding_persistence_tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("name"), Some(&json!("symbol_embeddings")));
+    }
+
+    #[tokio::test]
+    async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
+        let relational = sqlite_relational_with_embedding_state_schema().await;
+        relational
+            .exec(
+                "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id)
+                 VALUES ('repo-1', 'artefact-1', 'src/a.ts', 1, 'sym-1')",
+            )
+            .await
+            .expect("insert current artefact");
+        relational
+            .exec(
+                "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding)
+                 VALUES ('artefact-1', 'repo-1', 'blob-1', 'local_fastembed', 'jinaai/jina-embeddings-v2-base-code', 3, 'hash-1', '[0.1,0.2,0.3]')",
+            )
+            .await
+            .expect("insert embedding row");
+
+        let action = determine_repo_embedding_sync_action(
+            &relational,
+            "repo-1",
+            &embeddings::EmbeddingSetup::new(
+                "local_fastembed",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            ),
+        )
+        .await
+        .expect("sync action");
+
+        assert_eq!(action, RepoEmbeddingSyncAction::AdoptExisting);
+    }
+
+    #[tokio::test]
+    async fn semantic_embedding_sync_action_refreshes_when_active_setup_changes() {
+        let relational = sqlite_relational_with_embedding_state_schema().await;
+        persist_active_embedding_setup(
+            &relational,
+            "repo-1",
+            &embeddings::EmbeddingSetup::new(
+                "local_fastembed",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            ),
+        )
+        .await
+        .expect("persist active setup");
+
+        let action = determine_repo_embedding_sync_action(
+            &relational,
+            "repo-1",
+            &embeddings::EmbeddingSetup::new("voyage", "voyage-code-3", 1024),
+        )
+        .await
+        .expect("sync action");
+
+        assert_eq!(action, RepoEmbeddingSyncAction::RefreshCurrentRepo);
     }
 }

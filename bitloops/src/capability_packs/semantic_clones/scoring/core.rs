@@ -42,7 +42,8 @@ pub(super) fn semantic_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> f32 {
-    if source.embedding.is_empty()
+    if source.embedding_setup != target.embedding_setup
+        || source.embedding.is_empty()
         || target.embedding.is_empty()
         || source.embedding.len() != target.embedding.len()
     {

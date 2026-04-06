@@ -1,4 +1,9 @@
 use super::*;
+use crate::capability_packs::semantic_clones::{
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
+    determine_repo_embedding_sync_action, persist_active_embedding_setup,
+    refresh_current_repo_symbol_embeddings_and_clone_edges,
+};
 use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
@@ -95,6 +100,22 @@ pub(crate) async fn execute_ingest_with_observer(
     }
 
     ensure_repository_row(cfg, &relational).await?;
+
+    let mut resolved_embedding_setup = None;
+    let direct_embedding_sync_action = if enrichment.is_none() {
+        if let Some(embedding_provider) = embedding_provider.as_ref() {
+            let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
+            let action =
+                determine_repo_embedding_sync_action(&relational, &cfg.repo.repo_id, &setup)
+                    .await?;
+            resolved_embedding_setup = Some(setup);
+            Some(action)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut checkpoints = list_committed(&cfg.repo_root)?;
     checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -303,6 +324,13 @@ pub(crate) async fn execute_ingest_with_observer(
                     }
                 }
             } else if let Some(embedding_provider) = embedding_provider.as_ref() {
+                if direct_embedding_sync_action == Some(RepoEmbeddingSyncAction::RefreshCurrentRepo)
+                {
+                    counters.artefacts_upserted += 1;
+                    counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+                    counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
+                    continue;
+                }
                 let embedding_stats = upsert_symbol_embedding_rows(
                     &relational,
                     &semantic_feature_inputs,
@@ -347,28 +375,58 @@ pub(crate) async fn execute_ingest_with_observer(
     }
 
     if enrichment.is_none() && embedding_provider.is_some() {
-        let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
-        let clone_ingest = capability_host
-            .invoke_ingester_with_relational(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-                json!({}),
-                Some(&relational),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+        match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo => {
+                let refresh = refresh_current_repo_symbol_embeddings_and_clone_edges(
+                    &relational,
+                    &cfg.repo_root,
+                    &cfg.repo.repo_id,
+                    embedding_provider.expect("embedding provider exists for refresh"),
                 )
-            })?;
-        counters.symbol_clone_edges_upserted += clone_ingest.payload["symbol_clone_edges_upserted"]
-            .as_u64()
-            .unwrap_or_default() as usize;
-        counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
-            .as_u64()
-            .unwrap_or_default() as usize;
+                .await?;
+                counters.symbol_embedding_rows_upserted += refresh.embedding_stats.upserted;
+                counters.symbol_embedding_rows_skipped += refresh.embedding_stats.skipped;
+                counters.symbol_clone_edges_upserted += refresh.clone_build.edges.len();
+                counters.symbol_clone_sources_scored += refresh.clone_build.sources_considered;
+            }
+            RepoEmbeddingSyncAction::Incremental | RepoEmbeddingSyncAction::AdoptExisting => {
+                if matches!(
+                    direct_embedding_sync_action,
+                    Some(RepoEmbeddingSyncAction::AdoptExisting)
+                ) {
+                    if let Some(setup) = resolved_embedding_setup.as_ref() {
+                        persist_active_embedding_setup(&relational, &cfg.repo.repo_id, setup)
+                            .await?;
+                    }
+                }
+
+                let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+                let clone_ingest = capability_host
+                    .invoke_ingester_with_relational(
+                        SEMANTIC_CLONES_CAPABILITY_ID,
+                        SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+                        json!({}),
+                        Some(&relational),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+                        )
+                    })?;
+                counters.symbol_clone_edges_upserted += clone_ingest.payload
+                    ["symbol_clone_edges_upserted"]
+                    .as_u64()
+                    .unwrap_or_default() as usize;
+                counters.symbol_clone_sources_scored += clone_ingest.payload
+                    ["symbol_clone_sources_scored"]
+                    .as_u64()
+                    .unwrap_or_default() as usize;
+            }
+        }
     } else if !embedding_outputs_enabled || (enrichment.is_none() && embedding_provider.is_none()) {
         clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
+        clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
         crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
             &relational,
             &cfg.repo.repo_id,

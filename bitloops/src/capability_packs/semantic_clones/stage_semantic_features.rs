@@ -305,6 +305,26 @@ pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
     Ok(hydrated_inputs)
 }
 
+pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    let rows = relational
+        .query_rows(&build_current_repo_artefact_ids_sql(repo_id))
+        .await?;
+    let artefact_ids = rows
+        .into_iter()
+        .filter_map(|row| {
+            row.get("artefact_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+
+    load_semantic_feature_inputs_for_artefacts(relational, repo_root, &artefact_ids).await
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticSummarySnapshot {
     pub semantic_features_input_hash: String,
@@ -415,6 +435,16 @@ ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
         repo_id = esc_pg(repo_id),
         blob_sha = esc_pg(blob_sha),
         path = esc_pg(path),
+    )
+}
+
+fn build_current_repo_artefact_ids_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT artefact_id \
+FROM artefacts_current \
+WHERE repo_id = '{repo_id}' \
+ORDER BY path, start_line, symbol_id",
+        repo_id = esc_pg(repo_id),
     )
 }
 
