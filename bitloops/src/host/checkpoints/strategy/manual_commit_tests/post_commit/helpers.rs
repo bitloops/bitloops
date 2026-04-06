@@ -7,8 +7,10 @@ pub(crate) fn open_test_spool(repo_root: &Path) -> SqliteInteractionSpool {
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .expect("resolve repo identity")
         .repo_id;
-    let sqlite = SqliteConnectionPool::connect(interaction_spool_db_path(repo_root))
-        .expect("open interaction spool sqlite");
+    let sqlite = SqliteConnectionPool::connect(
+        interaction_spool_db_path(repo_root).expect("resolve interaction spool path"),
+    )
+    .expect("open interaction spool sqlite");
     SqliteInteractionSpool::new(sqlite, repo_id).expect("initialise interaction spool")
 }
 

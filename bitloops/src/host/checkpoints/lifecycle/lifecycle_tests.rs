@@ -43,10 +43,14 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         event_type: Some(event_type),
         session_id: String::from("session-123"),
         session_ref: String::from("/tmp/transcript.jsonl"),
+        source: String::new(),
         prompt: String::from("hello"),
+        tool_name: String::new(),
         tool_use_id: String::from("toolu_123"),
+        tool_input: None,
         subagent_id: String::from("subagent-1"),
         model: String::new(),
+        finalize_open_turn: false,
     }
 }
 
@@ -166,9 +170,10 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    ensure_test_store_backends(dir.path());
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
-    ensure_test_store_backends(dir.path());
 }
 
 // CLI-866
@@ -770,16 +775,28 @@ fn test_parse_hook_event_subagent_end_no_agent_id_claude() {
 
 // CLI-875
 #[test]
-fn test_parse_hook_event_post_todo_returns_nil_claude() {
+fn test_parse_hook_event_post_todo_maps_todo_checkpoint_claude() {
     let adapter = ClaudeCodeLifecycleAdapter;
-    let mut stdin =
-        Cursor::new(r#"{"session_id":"todo-session","transcript_path":"/tmp/todo.jsonl"}"#);
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"todo-session","transcript_path":"/tmp/todo.jsonl","tool_use_id":"toolu_todo","tool_name":"TodoWrite","tool_input":{"todos":[{"content":"Ship feature","status":"completed"}]}}"#,
+    );
 
     let event = adapter
         .parse_hook_event(CLAUDE_HOOK_POST_TODO, &mut stdin)
-        .unwrap();
+        .unwrap()
+        .expect("event should exist");
 
-    assert!(event.is_none());
+    assert_eq!(Some(LifecycleEventType::TodoCheckpoint), event.event_type);
+    assert_eq!("todo-session", event.session_id);
+    assert_eq!("/tmp/todo.jsonl", event.session_ref);
+    assert_eq!("toolu_todo", event.tool_use_id);
+    assert_eq!("TodoWrite", event.tool_name);
+    assert_eq!(
+        Some(serde_json::json!({
+            "todos": [{"content": "Ship feature", "status": "completed"}]
+        })),
+        event.tool_input
+    );
 }
 
 #[test]
@@ -863,9 +880,9 @@ fn test_parse_hook_event_all_hook_types_claude() {
         ),
         (
             CLAUDE_HOOK_POST_TODO,
-            None,
-            true,
-            r#"{"session_id":"s7","transcript_path":"/t"}"#,
+            Some(LifecycleEventType::TodoCheckpoint),
+            false,
+            r#"{"session_id":"s7","transcript_path":"/t","tool_name":"TodoWrite","tool_use_id":"todo-7","tool_input":{"todos":[]}}"#,
         ),
     ];
 
@@ -1555,17 +1572,76 @@ fn test_parse_hook_event_subagent_stop_no_task_cursor() {
 }
 
 #[test]
-fn test_subagent_start_handler_safe_noop() {
-    let adapter = ClaudeCodeLifecycleAdapter;
-    let event = sample_event(LifecycleEventType::SubagentStart);
-    handle_lifecycle_subagent_start(&adapter, &event)
-        .expect("subagent start should be a safe no-op in compatibility scaffold");
+fn test_subagent_start_handler_creates_marker_and_updates_session() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "session-123".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = ClaudeCodeLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::SubagentStart);
+        event.session_id = "session-123".to_string();
+        event.tool_use_id = "toolu_123".to_string();
+        event.subagent_id = "subagent-1".to_string();
+
+        handle_lifecycle_subagent_start(&adapter, &event)
+            .expect("subagent start should persist runtime marker state");
+
+        assert!(backend.load_pre_task_marker("toolu_123").unwrap().is_some());
+        let state = backend
+            .load_session("session-123")
+            .unwrap()
+            .expect("session should exist");
+        assert!(state.last_interaction_time.is_some());
+    });
 }
 
 #[test]
-fn test_subagent_end_handler_safe_noop() {
-    let adapter = ClaudeCodeLifecycleAdapter;
-    let event = sample_event(LifecycleEventType::SubagentEnd);
-    handle_lifecycle_subagent_end(&adapter, &event)
-        .expect("subagent end should be a safe no-op in compatibility scaffold");
+fn test_subagent_end_handler_clears_marker_and_updates_session_without_repo_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "session-123".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = ClaudeCodeLifecycleAdapter;
+        let mut start_event = sample_event(LifecycleEventType::SubagentStart);
+        start_event.session_id = "session-123".to_string();
+        start_event.tool_use_id = "toolu_123".to_string();
+        start_event.subagent_id = "subagent-1".to_string();
+        start_event.tool_input = Some(serde_json::json!({"prompt":"task start"}));
+        handle_lifecycle_subagent_start(&adapter, &start_event)
+            .expect("subagent start should create marker");
+
+        let mut end_event = sample_event(LifecycleEventType::SubagentEnd);
+        end_event.session_id = "session-123".to_string();
+        end_event.tool_use_id = "toolu_123".to_string();
+        end_event.subagent_id = "subagent-1".to_string();
+        end_event.tool_input = Some(serde_json::json!({"prompt":"task done"}));
+
+        handle_lifecycle_subagent_end(&adapter, &end_event)
+            .expect("subagent end should complete cleanly without repository changes");
+
+        assert!(backend.load_pre_task_marker("toolu_123").unwrap().is_none());
+        let state = backend
+            .load_session("session-123")
+            .unwrap()
+            .expect("session should exist");
+        assert!(state.last_interaction_time.is_some());
+    });
 }

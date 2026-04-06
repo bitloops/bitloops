@@ -16,7 +16,7 @@ use crate::host::checkpoints::session::state::SessionState;
 use crate::telemetry::logging;
 
 mod handlers;
-mod helpers;
+pub(crate) mod helpers;
 mod interactions;
 mod types;
 

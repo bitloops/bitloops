@@ -17,6 +17,7 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 use crate::host::interactions::model::resolve_interaction_model_from_bytes;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::transcript_fragment::{
@@ -67,6 +68,12 @@ pub fn handle_lifecycle_turn_end(
 
     let backend = create_session_backend_or_local(&repo_root);
     let pre_prompt = backend.load_pre_prompt(&session_id).ok().flatten();
+    if event.source == PRE_PROMPT_SOURCE_CURSOR_SHELL
+        && pre_prompt.as_ref().map(|state| state.source.as_str())
+            != Some(PRE_PROMPT_SOURCE_CURSOR_SHELL)
+    {
+        return Ok(());
+    }
     let lifecycle_pre = pre_prompt.as_ref().map(|p| PrePromptState {
         transcript_offset: p.transcript_offset as usize,
     });

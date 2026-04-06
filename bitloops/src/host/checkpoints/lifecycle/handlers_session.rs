@@ -15,11 +15,28 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
 };
+
+fn ensure_hook_setup(repo_root: &std::path::Path) -> Result<()> {
+    if !crate::adapters::agents::claude_code::hooks::are_hooks_installed(repo_root) {
+        let _ = crate::adapters::agents::claude_code::hooks::install_hooks(repo_root, false);
+    }
+    if !crate::adapters::agents::claude_code::git_hooks::is_git_hook_installed(repo_root) {
+        let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+        let local_dev = crate::config::settings::load_settings(&policy_start)
+            .map(|s| s.local_dev)
+            .unwrap_or(false);
+        let _ = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
+            repo_root, local_dev,
+        );
+    }
+    Ok(())
+}
 
 pub fn handle_lifecycle_session_start(
     agent: &dyn LifecycleAgentAdapter,
@@ -124,6 +141,14 @@ pub fn handle_lifecycle_turn_start(
     let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
 
+    if event.source == PRE_PROMPT_SOURCE_CURSOR_SHELL
+        && backend.load_pre_prompt(&session_id)?.is_some()
+    {
+        return Ok(());
+    }
+
+    let _ = ensure_hook_setup(&repo_root);
+
     let transcript_offset = agent
         .as_transcript_analyzer()
         .and_then(|analyzer| analyzer.get_transcript_position(&event.session_ref).ok())
@@ -132,6 +157,7 @@ pub fn handle_lifecycle_turn_start(
     let pre_prompt = crate::host::checkpoints::session::state::PrePromptState {
         session_id: session_id.clone(),
         timestamp: now_rfc3339(),
+        source: event.source.clone(),
         prompt: truncate_prompt_for_storage(
             canonical_request.prompt.as_deref().unwrap_or(&event.prompt),
         ),

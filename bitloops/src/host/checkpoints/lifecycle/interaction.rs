@@ -7,8 +7,8 @@ use crate::host::interactions::event_sink::{
 use crate::host::interactions::store::InteractionSpool;
 
 pub(crate) fn resolve_interaction_spool(repo_root: &Path) -> Option<SqliteInteractionSpool> {
-    let sqlite =
-        crate::storage::SqliteConnectionPool::connect(interaction_spool_db_path(repo_root)).ok()?;
+    let spool_path = interaction_spool_db_path(repo_root).ok()?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(spool_path).ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
         .repo_id;

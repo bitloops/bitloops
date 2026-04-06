@@ -5,9 +5,13 @@ use crate::host::checkpoints::lifecycle::{
     LifecycleEvent, LifecycleEventType, SessionIdPolicy, apply_session_id_policy,
     read_and_parse_hook_input,
 };
+use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 
 use super::agent::CursorAgent;
-use super::types::{CursorBeforeSubmitPromptRaw, CursorSessionInfoRaw, CursorSubagentRaw};
+use super::types::{
+    CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
+    CursorSessionInfoRaw, CursorSubagentRaw,
+};
 
 pub const HOOK_NAME_SESSION_START: &str = "session-start";
 pub const HOOK_NAME_SESSION_END: &str = "session-end";
@@ -67,6 +71,38 @@ pub fn parse_hook_event(
                 ..LifecycleEvent::default()
             }))
         }
+        HOOK_NAME_BEFORE_SHELL_EXECUTION => {
+            let raw: CursorBeforeShellExecutionRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::Strict)?;
+            let command = raw.command.trim();
+            Ok(Some(LifecycleEvent {
+                event_type: Some(LifecycleEventType::TurnStart),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                source: PRE_PROMPT_SOURCE_CURSOR_SHELL.to_string(),
+                prompt: if command.is_empty() {
+                    "Run shell command".to_string()
+                } else {
+                    format!("Run shell command: {command}")
+                },
+                model: raw.model,
+                ..LifecycleEvent::default()
+            }))
+        }
+        HOOK_NAME_AFTER_SHELL_EXECUTION => {
+            let raw: CursorAfterShellExecutionRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::PreserveEmpty)?;
+            Ok(Some(LifecycleEvent {
+                event_type: Some(LifecycleEventType::TurnEnd),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                source: PRE_PROMPT_SOURCE_CURSOR_SHELL.to_string(),
+                model: raw.model,
+                ..LifecycleEvent::default()
+            }))
+        }
         HOOK_NAME_STOP => {
             let raw: CursorSessionInfoRaw = read_and_parse_hook_input(stdin)?;
             let session_id =
@@ -88,6 +124,7 @@ pub fn parse_hook_event(
                 session_id: session_id.clone(),
                 session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
                 model: raw.model,
+                finalize_open_turn: true,
                 ..LifecycleEvent::default()
             }))
         }
@@ -169,6 +206,21 @@ mod tests {
         assert_eq!(parsed.prompt, "hello");
         assert_eq!(parsed.session_ref, "/tmp/t.jsonl");
         assert_eq!(parsed.model, "gpt-5.4-mini");
+    }
+
+    #[test]
+    fn parse_before_shell_execution_maps_shell_turn_start() {
+        let mut input = std::io::Cursor::new(
+            br#"{"conversation_id":"c1","transcript_path":"/tmp/t.jsonl","command":"npm test","model":"gpt-5.4"}"#
+                .as_slice(),
+        );
+        let parsed = parse_hook_event(HOOK_NAME_BEFORE_SHELL_EXECUTION, &mut input)
+            .expect("parse")
+            .expect("event");
+        assert_eq!(parsed.event_type, Some(LifecycleEventType::TurnStart));
+        assert_eq!(parsed.source, PRE_PROMPT_SOURCE_CURSOR_SHELL);
+        assert_eq!(parsed.prompt, "Run shell command: npm test");
+        assert_eq!(parsed.model, "gpt-5.4");
     }
 
     #[test]

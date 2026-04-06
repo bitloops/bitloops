@@ -46,9 +46,10 @@ fn setup_git_repo(dir: &TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
+    fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    ensure_test_store_backends(dir.path());
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
-    ensure_test_store_backends(dir.path());
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
@@ -2358,6 +2359,16 @@ fn copilot_hooks_cmd_has_logging_hooks() {
         .get_subcommands()
         .any(|cmd| cmd.get_name() == "copilot");
     assert!(has_copilot);
+}
+
+#[test]
+fn opencode_hooks_cmd_has_logging_hooks() {
+    let hooks_cmd =
+        <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
+    let has_opencode = hooks_cmd
+        .get_subcommands()
+        .any(|cmd| cmd.get_name() == "opencode");
+    assert!(has_opencode);
 }
 
 #[test]

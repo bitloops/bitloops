@@ -119,6 +119,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::SubagentStart),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    tool_input: Some(raw.tool_input),
                     tool_use_id: raw.tool_use_id,
                     model: raw.model,
                     ..LifecycleEvent::default()
@@ -130,13 +131,26 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::SubagentEnd),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    tool_input: raw.tool_input,
                     tool_use_id: raw.tool_use_id,
                     subagent_id: raw.tool_response.agent_id,
                     model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
-            CLAUDE_HOOK_POST_TODO => Ok(None),
+            CLAUDE_HOOK_POST_TODO => {
+                let raw: PostTodoHookInputRaw = read_and_parse_hook_input(stdin)?;
+                Ok(Some(LifecycleEvent {
+                    event_type: Some(LifecycleEventType::TodoCheckpoint),
+                    session_id: raw.session_id,
+                    session_ref: raw.transcript_path,
+                    tool_name: raw.tool_name,
+                    tool_use_id: raw.tool_use_id,
+                    tool_input: raw.tool_input,
+                    model: raw.model,
+                    ..LifecycleEvent::default()
+                }))
+            }
             _ => Ok(None),
         }
     }
@@ -357,6 +371,8 @@ impl LifecycleAgentAdapter for CursorLifecycleAdapter {
         vec![
             CURSOR_HOOK_SESSION_START,
             CURSOR_HOOK_BEFORE_SUBMIT_PROMPT,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SHELL_EXECUTION,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION,
             CURSOR_HOOK_STOP,
             CURSOR_HOOK_SESSION_END,
             CURSOR_HOOK_PRE_COMPACT,
@@ -477,8 +493,10 @@ mod route_tests {
         git_ok(root, &["checkout", "-B", "main"]);
         git_ok(root, &["config", "user.name", "Bitloops Test"]);
         git_ok(root, &["config", "user.email", "bitloops-test@example.com"]);
+        std::fs::write(root.join(".gitignore"), "stores/\n").expect("write .gitignore");
+        crate::test_support::git_fixtures::ensure_test_store_backends(root);
         std::fs::write(root.join("tracked.txt"), "one\n").expect("write tracked file");
-        git_ok(root, &["add", "tracked.txt"]);
+        git_ok(root, &["add", "."]);
         git_ok(root, &["commit", "-m", "initial"]);
         dir
     }
@@ -510,6 +528,12 @@ mod route_tests {
                 &session_payload,
             )?;
 
+            let relational_path =
+                crate::config::resolve_store_backend_config_for_repo(repo.path())?
+                    .relational
+                    .resolve_sqlite_db_path_for_repo(repo.path())?;
+            std::fs::remove_file(&relational_path).expect("remove relational sqlite");
+
             let stop_payload = serde_json::json!({
                 "sessionId": session_id,
                 "transcriptPath": transcript_path_str,
@@ -521,15 +545,16 @@ mod route_tests {
                         "stop should still fail when the relational checkpoint store is absent",
                     );
             assert!(
-                err.to_string()
-                    .contains("opening temporary checkpoint SQLite database"),
+                err.to_string().contains("session backend is unavailable"),
                 "unexpected stop error: {err:#}"
             );
             Ok(())
         })?;
 
         with_process_state(Some(repo.path()), &[], || -> Result<()> {
-            let event_db_path = crate::utils::paths::default_events_db_path(repo.path());
+            let event_db_path = crate::config::resolve_store_backend_config_for_repo(repo.path())?
+                .events
+                .resolve_duckdb_db_path_for_repo(repo.path());
             assert!(
                 event_db_path.is_file(),
                 "expected events DuckDB at {}",
@@ -600,8 +625,10 @@ mod route_tests {
             assert_eq!(turn_end.1, session_id);
             assert!(!turn_end.2.is_empty(), "expected turn_end turn_id");
 
-            let spool = rusqlite::Connection::open(interaction_spool_db_path(repo.path()))
-                .expect("open interaction spool");
+            let spool = rusqlite::Connection::open(
+                interaction_spool_db_path(repo.path()).expect("resolve interaction spool path"),
+            )
+            .expect("open interaction spool");
             let local_session_count: i64 = spool
                 .query_row(
                     "SELECT COUNT(*) FROM interaction_sessions WHERE repo_id = ?1 AND session_id = ?2",
@@ -702,7 +729,7 @@ struct TaskHookInputRaw {
     )]
     model: String,
     #[serde(default, rename = "tool_input")]
-    _tool_input: Value,
+    tool_input: Value,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -726,9 +753,35 @@ struct PostTaskHookInputRaw {
     )]
     model: String,
     #[serde(default, rename = "tool_input")]
-    _tool_input: Value,
+    tool_input: Option<Value>,
     #[serde(default)]
     tool_response: PostTaskResponseRaw,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PostTodoHookInputRaw {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    transcript_path: String,
+    #[serde(default)]
+    tool_use_id: String,
+    #[serde(default)]
+    tool_name: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
+    #[serde(default, rename = "tool_input")]
+    tool_input: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Default)]

@@ -690,8 +690,9 @@ fn open_interaction_spool(repo_root: &Path) -> Result<SqliteInteractionSpool> {
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for interaction spool")?
         .repo_id;
-    let sqlite =
-        crate::storage::SqliteConnectionPool::connect(interaction_spool_db_path(repo_root))
-            .context("opening interaction spool SQLite")?;
+    let spool_path =
+        interaction_spool_db_path(repo_root).context("resolving interaction spool SQLite path")?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(spool_path)
+        .context("opening interaction spool SQLite")?;
     SqliteInteractionSpool::new(sqlite, repo_id)
 }

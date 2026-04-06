@@ -10,6 +10,13 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::checkpoints::session::state::PreTaskState;
+use crate::host::checkpoints::strategy::TaskStepContext;
+use crate::host::hooks::runtime::agent_runtime::helpers::{
+    count_todos_from_tool_input, detect_file_changes, detect_untracked_files,
+    extract_last_completed_todo_from_tool_input, next_incremental_sequence,
+    parse_subagent_type_and_description, resolve_subagent_transcript_path,
+};
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
@@ -107,7 +114,7 @@ pub fn handle_lifecycle_compaction(
 }
 
 pub fn handle_lifecycle_session_end(
-    _agent: &dyn LifecycleAgentAdapter,
+    agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
@@ -117,6 +124,24 @@ pub fn handle_lifecycle_session_end(
 
     let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
+    if event.finalize_open_turn {
+        let pre_prompt = backend.load_pre_prompt(&session_id)?;
+        let session = backend.load_session(&session_id)?;
+        let should_finalize_turn = !session_id.is_empty()
+            && (pre_prompt.is_some()
+                || session.is_none()
+                || session.as_ref().is_some_and(|state| {
+                    state.phase == crate::host::checkpoints::session::phase::SessionPhase::Active
+                        || (state.phase
+                            == crate::host::checkpoints::session::phase::SessionPhase::Idle
+                            && state.pending.step_count == 0)
+                }));
+        if should_finalize_turn {
+            let mut turn_end = event.clone();
+            turn_end.event_type = Some(super::types::LifecycleEventType::TurnEnd);
+            super::turn_end::handle_lifecycle_turn_end(agent, &turn_end)?;
+        }
+    }
     let ended_at = now_rfc3339();
     let maybe_state = backend.load_session(&session_id)?;
     if let Some(mut state) = maybe_state.clone() {
@@ -187,54 +212,198 @@ pub fn handle_lifecycle_subagent_start(
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Some(spool) = resolve_interaction_spool(&repo_root)
-    {
-        if let Err(err) = spool.record_event(&InteractionEvent {
-            event_id: generate_interaction_event_id(),
-            session_id: event.session_id.clone(),
-            turn_id: None,
-            repo_id: spool.repo_id().to_string(),
-            event_type: InteractionEventType::SubagentStart,
-            event_time: now_rfc3339(),
-            agent_type: String::new(),
-            model: resolve_interaction_model(&event.model, &event.session_ref),
-            payload: serde_json::json!({
-                "subagent_id": event.subagent_id,
-                "tool_use_id": event.tool_use_id,
-            }),
-        }) {
-            eprintln!("[bitloops] Warning: failed to spool subagent_start event: {err}");
+    if let Ok(repo_root) = crate::utils::paths::repo_root() {
+        let backend = create_session_backend_or_local(&repo_root);
+        if let Some(mut state) = backend.load_session(&event.session_id)? {
+            state.last_interaction_time = Some(now_rfc3339());
+            backend.save_session(&state)?;
         }
-        flush_interaction_spool_best_effort(&repo_root);
+
+        let marker = PreTaskState {
+            tool_use_id: event.tool_use_id.clone(),
+            session_id: event.session_id.clone(),
+            timestamp: now_rfc3339(),
+            untracked_files: detect_untracked_files(Some(&repo_root)),
+        };
+        backend.create_pre_task_marker(&marker)?;
+
+        if let Some(spool) = resolve_interaction_spool(&repo_root) {
+            if let Err(err) = spool.record_event(&InteractionEvent {
+                event_id: generate_interaction_event_id(),
+                session_id: event.session_id.clone(),
+                turn_id: None,
+                repo_id: spool.repo_id().to_string(),
+                event_type: InteractionEventType::SubagentStart,
+                event_time: now_rfc3339(),
+                agent_type: String::new(),
+                model: resolve_interaction_model(&event.model, &event.session_ref),
+                payload: serde_json::json!({
+                    "subagent_id": event.subagent_id,
+                    "tool_use_id": event.tool_use_id,
+                }),
+            }) {
+                eprintln!("[bitloops] Warning: failed to spool subagent_start event: {err}");
+            }
+            flush_interaction_spool_best_effort(&repo_root);
+        }
     }
     Ok(())
 }
 
 pub fn handle_lifecycle_subagent_end(
-    _agent: &dyn LifecycleAgentAdapter,
+    agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Some(spool) = resolve_interaction_spool(&repo_root)
-    {
-        if let Err(err) = spool.record_event(&InteractionEvent {
-            event_id: generate_interaction_event_id(),
-            session_id: event.session_id.clone(),
-            turn_id: None,
-            repo_id: spool.repo_id().to_string(),
-            event_type: InteractionEventType::SubagentEnd,
-            event_time: now_rfc3339(),
-            agent_type: String::new(),
-            model: resolve_interaction_model(&event.model, &event.session_ref),
-            payload: serde_json::json!({
-                "subagent_id": event.subagent_id,
-                "tool_use_id": event.tool_use_id,
-            }),
-        }) {
-            eprintln!("[bitloops] Warning: failed to spool subagent_end event: {err}");
+    if let Ok(repo_root) = crate::utils::paths::repo_root() {
+        let backend = create_session_backend_or_local(&repo_root);
+        let subagent_transcript_path = resolve_subagent_transcript_path(
+            &event.session_ref,
+            &event.session_id,
+            &event.subagent_id,
+        );
+        let pre_untracked = backend
+            .load_pre_task_marker(&event.tool_use_id)?
+            .map(|s| s.untracked_files)
+            .unwrap_or_default();
+        let changes = detect_file_changes(Some(&repo_root), Some(&pre_untracked));
+        let total_changes =
+            changes.modified.len() + changes.new_files.len() + changes.deleted.len();
+        let (subagent_type, task_description) =
+            parse_subagent_type_and_description(event.tool_input.as_ref());
+
+        if let Some(spool) = resolve_interaction_spool(&repo_root) {
+            if let Err(err) = spool.record_event(&InteractionEvent {
+                event_id: generate_interaction_event_id(),
+                session_id: event.session_id.clone(),
+                turn_id: None,
+                repo_id: spool.repo_id().to_string(),
+                event_type: InteractionEventType::SubagentEnd,
+                event_time: now_rfc3339(),
+                agent_type: String::new(),
+                model: resolve_interaction_model(&event.model, &event.session_ref),
+                payload: serde_json::json!({
+                    "subagent_id": event.subagent_id,
+                    "tool_use_id": event.tool_use_id,
+                }),
+            }) {
+                eprintln!("[bitloops] Warning: failed to spool subagent_end event: {err}");
+            }
+            flush_interaction_spool_best_effort(&repo_root);
         }
-        flush_interaction_spool_best_effort(&repo_root);
+
+        if total_changes > 0 {
+            let registry =
+                crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
+            let strategy = registry.get(
+                crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
+                &repo_root,
+            )?;
+            strategy.save_task_step(&TaskStepContext {
+                session_id: event.session_id.clone(),
+                tool_use_id: event.tool_use_id.clone(),
+                agent_id: event.subagent_id.clone(),
+                modified_files: changes.modified,
+                new_files: changes.new_files,
+                deleted_files: changes.deleted,
+                transcript_path: event.session_ref.clone(),
+                subagent_transcript_path,
+                checkpoint_uuid: String::new(),
+                author_name: String::new(),
+                author_email: String::new(),
+                subagent_type,
+                task_description,
+                agent_type: agent.agent_name().to_string(),
+                is_incremental: false,
+                incremental_sequence: 0,
+                incremental_type: String::new(),
+                incremental_data: String::new(),
+                todo_content: String::new(),
+                commit_message: String::new(),
+            })?;
+        }
+
+        backend.delete_pre_task_marker(&event.tool_use_id)?;
+        if let Some(mut state) = backend.load_session(&event.session_id)? {
+            state.last_interaction_time = Some(now_rfc3339());
+            backend.save_session(&state)?;
+        }
     }
+    Ok(())
+}
+
+pub fn handle_lifecycle_todo_checkpoint(
+    agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    let Ok(repo_root) = crate::utils::paths::repo_root() else {
+        return Ok(());
+    };
+    let backend = create_session_backend_or_local(&repo_root);
+    let active_task = backend.find_active_pre_task()?;
+    let task_tool_use_id = match active_task {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
+    let (skip, branch_name) = crate::git::should_skip_on_default_branch();
+    if skip {
+        eprintln!("Bitloops: skipping incremental checkpoint on branch '{branch_name}'");
+        return Ok(());
+    }
+
+    let changes = detect_file_changes(Some(&repo_root), None);
+    let total_changes = changes.modified.len() + changes.new_files.len() + changes.deleted.len();
+    if total_changes == 0 {
+        return Ok(());
+    }
+
+    let mut todo_content = extract_last_completed_todo_from_tool_input(event.tool_input.as_ref());
+    if todo_content.is_empty() {
+        let todo_count = count_todos_from_tool_input(event.tool_input.as_ref());
+        if todo_count > 0 {
+            todo_content = format!("Planning: {todo_count} todos");
+        }
+    }
+
+    let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
+    let strategy = registry.get(
+        crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
+        &repo_root,
+    )?;
+    strategy.save_task_step(&TaskStepContext {
+        session_id: event.session_id.clone(),
+        tool_use_id: task_tool_use_id.clone(),
+        agent_id: String::new(),
+        modified_files: changes.modified,
+        new_files: changes.new_files,
+        deleted_files: changes.deleted,
+        transcript_path: event.session_ref.clone(),
+        subagent_transcript_path: String::new(),
+        checkpoint_uuid: String::new(),
+        author_name: String::new(),
+        author_email: String::new(),
+        subagent_type: String::new(),
+        task_description: String::new(),
+        agent_type: agent.agent_name().to_string(),
+        is_incremental: true,
+        incremental_sequence: next_incremental_sequence(
+            Some(&repo_root),
+            &event.session_id,
+            &task_tool_use_id,
+        ),
+        incremental_type: event.tool_name.clone(),
+        incremental_data: event
+            .tool_input
+            .as_ref()
+            .map_or_else(String::new, |v| v.to_string()),
+        todo_content,
+        commit_message: String::new(),
+    })?;
+
+    if let Some(mut state) = backend.load_session(&event.session_id)? {
+        state.last_interaction_time = Some(now_rfc3339());
+        backend.save_session(&state)?;
+    }
+
     Ok(())
 }
