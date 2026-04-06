@@ -7,6 +7,7 @@ use super::{
     TestHarnessQueryRepository, TestHarnessRepository, init_test_domain_database,
 };
 use crate::config::resolve_store_backend_config_for_repo;
+use crate::host::relational_store::DefaultRelationalStore;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
@@ -39,11 +40,9 @@ fn init_schema_for_backends(
         log::info!("Postgres test-harness schema initialized");
         Ok(())
     } else {
-        let sqlite_path = backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(repo_root)
-            .context("resolving SQLite path for test-harness schema init")?;
-        init_test_domain_database(&sqlite_path)
+        let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening local relational store for test-harness schema init")?;
+        init_test_domain_database(relational.sqlite_path())
     }
 }
 
@@ -66,12 +65,10 @@ fn open_repository_for_backends(
             PostgresTestHarnessRepository::connect(dsn)?,
         ))
     } else {
-        let sqlite_path = backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(repo_root)
-            .context("resolving SQLite path for `bitloops testlens`")?;
+        let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening local relational store for `bitloops testlens`")?;
         Ok(BitloopsTestHarnessRepository::Sqlite(
-            SqliteTestHarnessRepository::open_existing(&sqlite_path)?,
+            SqliteTestHarnessRepository::open_existing(relational.sqlite_path())?,
         ))
     }
 }

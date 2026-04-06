@@ -1,5 +1,5 @@
 use super::*;
-use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
+use crate::host::interactions::db_store::SqliteInteractionSpool;
 use crate::host::interactions::event_sink::create_event_repository;
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 
@@ -712,12 +712,7 @@ fn update_active_session_base_commits(
 }
 
 fn open_interaction_spool(repo_root: &Path) -> Result<SqliteInteractionSpool> {
-    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
-        .context("resolving repo identity for interaction spool")?
-        .repo_id;
-    let spool_path =
-        interaction_spool_db_path(repo_root).context("resolving interaction spool SQLite path")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(spool_path)
-        .context("opening interaction spool SQLite")?;
-    SqliteInteractionSpool::new(sqlite, repo_id)
+    crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo_root)
+        .context("opening repo runtime store for interaction spool")?
+        .interaction_spool()
 }

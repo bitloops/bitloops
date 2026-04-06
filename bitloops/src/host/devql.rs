@@ -521,15 +521,15 @@ async fn init_relational_schema_with_mode(
     relational: &RelationalStorage,
     mode: RelationalSchemaInitMode,
 ) -> Result<SyncExecutionSchemaOutcome> {
-    init_sqlite_schema(&relational.local.path).await?;
+    init_sqlite_schema(relational.sqlite_path()).await?;
     let mut outcome = SyncExecutionSchemaOutcome::default();
-    if let Some(remote) = relational.remote.as_ref() {
+    if let Some(remote_client) = relational.remote_client() {
         let init_outcome = match mode {
             RelationalSchemaInitMode::SafeBootstrap => {
-                init_postgres_schema(cfg, &remote.client).await?
+                init_postgres_schema(cfg, remote_client).await?
             }
             RelationalSchemaInitMode::SyncExecution => {
-                init_postgres_schema_for_sync_execution(cfg, &remote.client).await?
+                init_postgres_schema_for_sync_execution(cfg, remote_client).await?
             }
         };
         outcome.remote_current_state_rebuilt = init_outcome.rebuilt_current_state;
@@ -797,8 +797,13 @@ use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
 pub(crate) use self::ingestion_schema::{
-    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
-    knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
+    checkpoint_relational_schema_sql_postgres, checkpoint_relational_schema_sql_sqlite,
+    checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite, knowledge_schema_sql_duckdb,
+    knowledge_schema_sql_sqlite,
+};
+#[cfg(test)]
+pub(crate) use self::ingestion_schema::{
+    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite,
 };
 use self::ingestion_types::*;
 pub(crate) use self::ingestion_types::{

@@ -2,13 +2,12 @@ use super::*;
 
 pub(super) const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
-pub(super) const ENRICHMENT_STATE_FILE_NAME: &str = "enrichment.json";
-pub(super) const SYNC_STATE_FILE_NAME: &str = "sync.json";
-pub(super) const SYNC_STATE_LOCK_FILE_NAME: &str = "sync.lock";
+pub(crate) const ENRICHMENT_STATE_FILE_NAME: &str = "enrichment.json";
+pub(crate) const SYNC_STATE_FILE_NAME: &str = "sync.json";
 pub(super) const INTERNAL_DAEMON_COMMAND_NAME: &str = "__daemon-process";
 pub(super) const INTERNAL_SUPERVISOR_COMMAND_NAME: &str = "__daemon-supervisor";
 pub(super) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops.daemon";
-pub(super) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
+pub(crate) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
 pub(super) const SUPERVISOR_SERVICE_STATE_FILE_NAME: &str = "supervisor-service.json";
 pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -482,10 +481,6 @@ pub(super) fn global_daemon_dir_fallback() -> PathBuf {
     crate::utils::platform_dirs::bitloops_state_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("bitloops").join("state"))
         .join("daemon")
-}
-
-pub(super) fn supervisor_runtime_state_path() -> Result<PathBuf> {
-    Ok(global_daemon_dir()?.join(SUPERVISOR_RUNTIME_STATE_FILE_NAME))
 }
 
 pub(super) fn supervisor_service_metadata_path() -> Result<PathBuf> {
