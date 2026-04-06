@@ -7,43 +7,83 @@ QAT runs as a standard Cargo integration test. The production binary no longer e
 
 ## Where to run from
 
-Run commands from the repository root:
+All commands below assume you are inside the `bitloops/` crate directory.
+Cargo aliases are configured in `.cargo/config.toml` and only resolve from this directory.
+
+## Implemented test suites
+
+### 1. Onboarding (13 scenarios)
+
+Covers the full first-time developer experience: install verification, daemon config,
+repository enablement, agent hook installation for every supported agent, disable, and uninstall.
 
 ```bash
-cargo test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_claude_code -- --ignored
+cargo qat-onboarding
 ```
 
-If you are already in `bitloops/` (the Rust crate directory), you can run:
+Or equivalently:
 
 ```bash
-cargo test --test qat_acceptance qat_claude_code -- --ignored
+cargo test --test qat_acceptance qat_onboarding -- --ignored
 ```
 
-## Test suites
+**Scenarios:**
 
-QAT supports three main entry points:
+| #   | Scenario                                           | Flow                           |
+| --- | -------------------------------------------------- | ------------------------------ |
+| 1   | Binary is callable and reports a version           | `install-verify`               |
+| 2   | Initialize daemon config from scratch              | `daemon-config-init`           |
+| 3   | Enable Bitloops in a fresh git repository          | `enable-repo`                  |
+| 4   | Agent hooks — claude-code                          | `agent-hooks-claude`           |
+| 5   | Agent hooks — claude-code with sync=true           | `agent-hooks-claude-sync-true` |
+| 6   | Agent hooks — codex                                | `agent-hooks-codex`            |
+| 7   | Agent hooks — cursor                               | `agent-hooks-cursor`           |
+| 8   | Agent hooks — gemini                               | `agent-hooks-gemini`           |
+| 9   | Agent hooks — copilot                              | `agent-hooks-copilot`          |
+| 10  | Agent hooks — open-code                            | `agent-hooks-open-code`        |
+| 11  | Disable stops capture and status reflects disabled | `disable-repo`                 |
+| 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
+| 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
 
-1. Default Claude Code suite (2 scenarios):
+### 2. DevQL Sync (15 scenarios)
+
+Exercises the `devql sync` workspace reconciliation flow: full indexing, incremental
+add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
+sync validation and repair, and `init --sync=true` integration.
 
 ```bash
-cargo test --test qat_acceptance qat_claude_code -- --ignored
+cargo qat-devql-sync
 ```
 
-2. Smoke suite (2 scenarios):
+Or equivalently:
 
 ```bash
-cargo test --test qat_acceptance qat_smoke -- --ignored
+cargo test --test qat_acceptance qat_devql_sync -- --ignored
 ```
 
-3. DevQL suite (23 scenarios):
+**Scenarios:**
 
-```bash
-cargo test --test qat_acceptance qat_devql -- --ignored
-```
+| #   | Scenario                                           | Flow                            |
+| --- | -------------------------------------------------- | ------------------------------- |
+| 1   | Full sync indexes workspace source files           | `SyncFullIndex`                 |
+| 2   | Sync detects newly added source files              | `SyncNewFiles`                  |
+| 3   | Sync detects modified source files                 | `SyncModifiedFiles`             |
+| 4   | Sync removes artefacts for deleted files           | `SyncDeletedFiles`              |
+| 5   | No-op sync reports zero changes                    | `SyncNoop`                      |
+| 6   | Sync after branch checkout reflects new state      | `SyncBranchCheckout`            |
+| 7   | Sync catches up after daemon downtime              | `SyncDaemonDowntime`            |
+| 8   | Sync indexes changes from git pull                 | `SyncGitPull`                   |
+| 9   | Sync validate detects drift (never synced)         | `SyncValidateDrift`             |
+| 10  | Sync validate reports clean after full sync        | `SyncValidateClean`             |
+| 11  | Sync validate detects drift after changes          | `SyncValidateDriftAfterChange`  |
+| 12  | Sync repair restores clean state                   | `SyncRepair`                    |
+| 13  | Init sync=true — follow-up sync reports no changes | `SyncInitSyncTrueNoop`          |
+| 14  | Init sync=true — incremental sync for new files    | `SyncInitSyncTrueIncremental`   |
+| 15  | Init sync=true — validation stays clean            | `SyncInitSyncTrueValidateClean` |
 
 ## Daemon prerequisite
 
-Most QAT flows now require a running Bitloops daemon before `bitloops init`, `bitloops enable`,
+Most QAT flows require a running Bitloops daemon before `bitloops init`, `bitloops enable`,
 and `bitloops devql ...` commands.
 
 Feature setup should include:
@@ -54,20 +94,6 @@ immediately after `Given I run CleanStart ...`.
 
 QAT starts one daemon per scenario (isolated `HOME`/`XDG_CONFIG_HOME`) and stops it in the
 scenario teardown hook.
-
-## Claude auth behavior
-
-Claude-based scenarios include the step:
-
-`I ensure Claude Code auth in bitloops`
-
-It performs:
-
-1. `claude auth status --json`
-2. If not logged in: `claude auth login --claudeai`
-3. Status check again
-
-If auth still fails, the step fails.
 
 ## Artifacts and folder layout
 
@@ -100,21 +126,7 @@ This is expected. QAT keeps historical suites and does not auto-delete old runs.
 
 If you run QAT 15 times, you will have 15 top-level suite folders.
 
-## Runtime expectations
-
-- `qat_smoke`: usually short
-- `qat_claude_code`: moderate
-- `qat_devql`: typically long (many scenarios; can take tens of minutes)
-
-## Useful options and env vars
-
-Cargo test selectors:
-
-- `qat_smoke`: run only the smoke suite
-- `qat_claude_code`: run only the Claude Code suite
-- `qat_devql`: run only the DevQL suite
-
-Environment variables:
+## Environment variables
 
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
 - `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`)
@@ -129,7 +141,7 @@ Environment variables:
 Example:
 
 ```bash
-BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS=600 cargo test --test qat_acceptance qat_claude_code -- --ignored
+BITLOOPS_QAT_COMMAND_TIMEOUT_SECS=300 cargo qat-devql-sync
 ```
 
 ## Troubleshooting
@@ -139,13 +151,13 @@ If a run appears stuck:
 1. Check the active run:
 
 ```bash
-cat bitloops/target/qat-runs/.last-run
+cat target/qat-runs/.last-run
 ```
 
 2. Inspect the scenario log:
 
 ```bash
-sed -n '1,200p' <scenario-run-dir>/terminal.log
+head -200 <scenario-run-dir>/terminal.log
 ```
 
-3. For long suites, expect delays around `devql init`, `devql ingest`, semantic clone rebuild, and knowledge ingestion.
+3. For long suites, expect delays around `devql init`, `devql sync`, and workspace indexing.
