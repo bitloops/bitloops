@@ -44,12 +44,25 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	copyLineage: [ArtefactCopyLineage!]!
 }
 
 type ArtefactConnection {
 	edges: [ArtefactEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type ArtefactCopyLineage {
+	checkpointId: String!
+	eventTime: DateTime!
+	commitSha: String!
+	sourceSymbolId: String!
+	sourceArtefactId: ID!
+	destSymbolId: String!
+	destArtefactId: ID!
+	source: Artefact
+	destination: Artefact
 }
 
 type ArtefactEdge {
@@ -153,6 +166,7 @@ type Checkpoint {
 	isTask: Boolean!
 	toolUseId: String
 	commit: Commit
+	fileRelations: [CheckpointFileRelation!]!
 }
 
 type CheckpointConnection {
@@ -164,6 +178,17 @@ type CheckpointConnection {
 type CheckpointEdge {
 	node: Checkpoint!
 	cursor: String!
+}
+
+type CheckpointFileRelation {
+	filepath: String!
+	changeKind: String!
+	pathBefore: String
+	pathAfter: String
+	blobShaBefore: String
+	blobShaAfter: String
+	copiedFromPath: String
+	copiedFromBlobSha: String
 }
 
 type CheckpointTokenUsage {
@@ -351,6 +376,37 @@ type InitSchemaResult {
 	repoId: String!
 	relationalBackend: String!
 	eventsBackend: String!
+}
+
+type InteractionSessionObject {
+	id: ID!
+	agentType: String!
+	model: String
+	firstPrompt: String
+	startedAt: String!
+	endedAt: String
+}
+
+type InteractionTokenUsage {
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+}
+
+type InteractionTurnObject {
+	id: ID!
+	sessionId: String!
+	turnNumber: Int!
+	prompt: String
+	agentType: String!
+	model: String
+	startedAt: String!
+	endedAt: String
+	tokenUsage: InteractionTokenUsage
+	filesModified: [String!]!
+	checkpointId: String
 }
 
 """
@@ -544,6 +600,8 @@ type Repository {
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
+	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
 }
 
 enum SaveSelector {

@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS current_file_state (
     PRIMARY KEY (repo_id, path)
 );
 
--- Exact checkpoint-to-file snapshot projection for event-backed artefact filters.
-CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots (
+CREATE TABLE IF NOT EXISTS checkpoint_files (
+    relation_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
     checkpoint_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -60,25 +60,87 @@ CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots (
     branch TEXT NOT NULL DEFAULT '',
     strategy TEXT NOT NULL DEFAULT '',
     commit_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
-    PRIMARY KEY (repo_id, checkpoint_id, path, blob_sha)
+    change_kind TEXT NOT NULL,
+    path_before TEXT,
+    path_after TEXT,
+    blob_sha_before TEXT,
+    blob_sha_after TEXT,
+    copy_source_path TEXT,
+    copy_source_blob_sha TEXT
 );
 
-CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_lookup_idx
-ON checkpoint_file_snapshots (repo_id, path, blob_sha);
+CREATE INDEX IF NOT EXISTS checkpoint_files_lookup_idx
+ON checkpoint_files (repo_id, path_after, blob_sha_after);
 
-CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_agent_time_idx
-ON checkpoint_file_snapshots (repo_id, agent, event_time DESC);
+CREATE INDEX IF NOT EXISTS checkpoint_files_agent_time_idx
+ON checkpoint_files (repo_id, agent, event_time DESC);
 
-CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx
-ON checkpoint_file_snapshots (repo_id, event_time DESC);
+CREATE INDEX IF NOT EXISTS checkpoint_files_event_time_idx
+ON checkpoint_files (repo_id, event_time DESC);
 
-CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx
-ON checkpoint_file_snapshots (repo_id, checkpoint_id);
+CREATE INDEX IF NOT EXISTS checkpoint_files_checkpoint_idx
+ON checkpoint_files (repo_id, checkpoint_id);
 
-CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx
-ON checkpoint_file_snapshots (repo_id, commit_sha);
+CREATE INDEX IF NOT EXISTS checkpoint_files_commit_idx
+ON checkpoint_files (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_change_kind_idx
+ON checkpoint_files (repo_id, checkpoint_id, change_kind);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_copy_source_idx
+ON checkpoint_files (repo_id, copy_source_path, copy_source_blob_sha);
+
+CREATE TABLE IF NOT EXISTS checkpoint_artefacts (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TIMESTAMPTZ NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    before_symbol_id TEXT,
+    after_symbol_id TEXT,
+    before_artefact_id TEXT,
+    after_artefact_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx
+ON checkpoint_artefacts (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx
+ON checkpoint_artefacts (repo_id, before_artefact_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx
+ON checkpoint_artefacts (repo_id, after_artefact_id);
+
+CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TIMESTAMPTZ NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    lineage_kind TEXT NOT NULL,
+    source_symbol_id TEXT NOT NULL,
+    source_artefact_id TEXT NOT NULL,
+    dest_symbol_id TEXT NOT NULL,
+    dest_artefact_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx
+ON checkpoint_artefact_lineage (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx
+ON checkpoint_artefact_lineage (repo_id, source_artefact_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_dest_idx
+ON checkpoint_artefact_lineage (repo_id, dest_artefact_id);
 
 CREATE TABLE IF NOT EXISTS artefacts (
     artefact_id TEXT PRIMARY KEY,

@@ -25,7 +25,7 @@ pub(super) fn uninstall_data(repo_roots: &[PathBuf], out: &mut dyn Write) -> Res
     for repo_root in repo_roots {
         let bitloops_dir = repo_root.join(SETTINGS_DIR);
         if remove_dir_if_exists(&bitloops_dir)? {
-            writeln!(out, "  Removed legacy repo data {}", bitloops_dir.display())?;
+            writeln!(out, "  Removed repo data {}", bitloops_dir.display())?;
             removed_any = true;
         }
     }
@@ -57,13 +57,9 @@ pub(super) fn uninstall_config(out: &mut dyn Write) -> Result<()> {
         removed_any = true;
     }
 
-    let legacy_certs_dir = bitloops_home_dir()?.join(".bitloops").join("certs");
-    if remove_dir_if_exists(&legacy_certs_dir)? {
-        writeln!(
-            out,
-            "  Removed legacy TLS artefacts {}",
-            legacy_certs_dir.display()
-        )?;
+    let tls_certs_dir = bitloops_home_dir()?.join(".bitloops").join("certs");
+    if remove_dir_if_exists(&tls_certs_dir)? {
+        writeln!(out, "  Removed TLS artefacts {}", tls_certs_dir.display())?;
         removed_any = true;
     }
 

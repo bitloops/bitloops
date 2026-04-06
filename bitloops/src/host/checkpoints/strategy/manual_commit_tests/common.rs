@@ -205,6 +205,22 @@ pub(crate) fn git_ok(repo_root: &Path, args: &[&str]) -> String {
     run_git(repo_root, args).unwrap_or_else(|e| panic!("git {:?} failed: {e}", args))
 }
 
+pub(crate) fn commit_files(repo_root: &Path, files: &[(&str, &str)], message: &str) -> String {
+    for (path, content) in files {
+        let full_path = repo_root.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(full_path, content).unwrap();
+    }
+
+    let mut args = vec!["add"];
+    args.extend(files.iter().map(|(path, _)| *path));
+    git_ok(repo_root, &args);
+    git_ok(repo_root, &["commit", "-m", message]);
+    git_ok(repo_root, &["rev-parse", "HEAD"])
+}
+
 pub(crate) fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
     paths::default_relational_db_path(repo_root)
 }

@@ -29,10 +29,6 @@ pub(crate) fn build_checkpoint_session_ref(
     }
 }
 
-pub(crate) fn parse_json_string_array(raw: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
-}
-
 pub(crate) fn read_checkpoint_blob_text(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
@@ -62,7 +58,7 @@ pub(crate) fn read_committed_from_db(
 
     let checkpoint_row = storage.sqlite.with_connection(|conn| {
         conn.query_row(
-            "SELECT strategy, branch, cli_version, checkpoints_count, files_touched, token_usage
+            "SELECT strategy, branch, cli_version, checkpoints_count, token_usage
              FROM checkpoints
              WHERE checkpoint_id = ?1 AND repo_id = ?2
              LIMIT 1",
@@ -73,25 +69,19 @@ pub(crate) fn read_committed_from_db(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             },
         )
         .optional()
         .map_err(anyhow::Error::from)
     })?;
-    let Some((
-        strategy,
-        branch,
-        cli_version,
-        checkpoints_count,
-        files_touched_raw,
-        token_usage_raw,
-    )) = checkpoint_row
+    let Some((strategy, branch, cli_version, checkpoints_count, token_usage_raw)) = checkpoint_row
     else {
         return Ok(None);
     };
+    let files_touched =
+        load_checkpoint_files_touched_from_db(&storage.sqlite, &storage.repo_id, checkpoint_id)?;
 
     let session_indexes = storage.sqlite.with_connection(|conn| {
         let mut stmt = conn.prepare(
@@ -121,7 +111,7 @@ pub(crate) fn read_committed_from_db(
         strategy,
         branch,
         checkpoints_count: checkpoints_count.max(0).min(u32::MAX as i64) as u32,
-        files_touched: parse_json_string_array(&files_touched_raw),
+        files_touched,
         sessions,
         token_usage,
         ..Default::default()
@@ -211,7 +201,7 @@ pub(crate) fn read_session_content_from_db(
         conn.query_row(
             "SELECT c.strategy, c.branch, c.cli_version,
                     s.session_id, s.agent, s.created_at, s.turn_id, s.checkpoints_count,
-                    s.files_touched, s.is_task, s.tool_use_id,
+                    s.is_task, s.tool_use_id,
                     s.transcript_identifier_at_start, s.checkpoint_transcript_start,
                     s.initial_attribution, s.token_usage, s.summary,
                     s.transcript_path
@@ -236,15 +226,14 @@ pub(crate) fn read_session_content_from_db(
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, i64>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
                     row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, Option<String>>(14)?,
-                    row.get::<_, Option<String>>(15)?,
-                    row.get::<_, String>(16)?,
+                    row.get::<_, String>(15)?,
                 ))
             },
         )
@@ -260,7 +249,6 @@ pub(crate) fn read_session_content_from_db(
         created_at,
         turn_id,
         checkpoints_count,
-        files_touched_raw,
         is_task,
         tool_use_id,
         transcript_identifier_at_start,
@@ -283,7 +271,6 @@ pub(crate) fn read_session_content_from_db(
         created_at,
         cli_version,
         turn_id,
-        files_touched: parse_json_string_array(&files_touched_raw),
         is_task: is_task != 0,
         tool_use_id,
         transcript_identifier_at_start,

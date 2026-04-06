@@ -1,12 +1,14 @@
 use super::root::{
     CompletionShell, ROOT_NAME, ROOT_SHORT_ABOUT, build_commit, build_date, build_target,
     build_version, has_hidden_in_chain, run_curl_bash_post_install_command_with_io,
-    should_attempt_watcher_autostart, write_completion, write_help, write_version,
+    should_attempt_watcher_autostart, telemetry_action_for_command, write_completion, write_help,
+    write_version,
 };
 use super::{Cli, Commands};
 use crate::test_support::process_state::with_env_vars;
 use crate::utils::branding::bitloops_wordmark;
 use clap::{Command, CommandFactory, Parser};
+use serde_json::Value;
 use std::io::Cursor;
 use tempfile::TempDir;
 
@@ -650,4 +652,157 @@ fn TestPersistentPostRun_ParentHiddenWalk() {
             tt.name, got_hidden, tt.want_hidden
         );
     }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_StartAliasCollapsesToCanonicalDaemonStart() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "start", "-d"]).expect("start alias should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops daemon start");
+    assert_eq!(action.surface, "cli");
+    assert_eq!(
+        action.properties.get("flags"),
+        Some(&Value::Array(vec![Value::String("detached".to_string())]))
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_HiddenInternalCommandsDoNotEmit() {
+    let analytics = Cli::try_parse_from(["bitloops", "__send_analytics", "{}"])
+        .expect("internal analytics command should parse");
+    let analytics_command = analytics.command.as_ref().expect("command");
+    assert!(
+        telemetry_action_for_command(analytics_command).is_none(),
+        "internal analytics command should not emit telemetry"
+    );
+
+    let completion =
+        Cli::try_parse_from(["bitloops", "completion", "bash"]).expect("completion should parse");
+    let completion_command = completion.command.as_ref().expect("command");
+    assert!(
+        telemetry_action_for_command(completion_command).is_none(),
+        "hidden completion command should not emit telemetry"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DaemonStartCanonicalCommandUsesSameEventName() {
+    let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "--until-stopped"])
+        .expect("daemon start should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops daemon start");
+    assert_eq!(action.surface, "cli");
+    assert_eq!(
+        action.properties.get("flags"),
+        Some(&Value::Array(vec![Value::String(
+            "until_stopped".to_string()
+        )]))
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlSyncTracksSafeProperties() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--paths", "a,b", "--status"])
+        .expect("devql sync should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql sync");
+    assert_eq!(
+        action.properties.get("sync_mode").and_then(Value::as_str),
+        Some("paths")
+    );
+    assert_eq!(
+        action.properties.get("paths_count").and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        action
+            .properties
+            .get("status_follow")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    let rendered = serde_json::to_string(&action.properties).expect("serialize properties");
+    assert!(
+        !rendered.contains("\"a\"") && !rendered.contains("\"b\""),
+        "telemetry should not include raw path values"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlQueryTracksRawGraphqlModeWithoutQueryText() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "query",
+        "--graphql",
+        "query DashboardRepos { repositories { name } }",
+    ])
+    .expect("raw GraphQL query should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql query");
+    assert_eq!(
+        action.properties.get("query_mode").and_then(Value::as_str),
+        Some("raw_graphql")
+    );
+    assert!(
+        !action.properties.contains_key("stage_sequence"),
+        "raw GraphQL mode should not capture stage sequence"
+    );
+    let rendered = serde_json::to_string(&action.properties).expect("serialize properties");
+    assert!(
+        !rendered.contains("DashboardRepos") && !rendered.contains("repositories"),
+        "telemetry should not include raw GraphQL query text"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlQueryTracksDslStageSequence() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "query",
+        "repo(\"x\")->artefacts()->deps()->limit(5)",
+    ])
+    .expect("devql query should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql query");
+    assert_eq!(
+        action.properties.get("query_mode").and_then(Value::as_str),
+        Some("dsl")
+    );
+    let expected_sequence = vec![
+        Value::String("repo".to_string()),
+        Value::String("artefacts".to_string()),
+        Value::String("deps".to_string()),
+        Value::String("limit".to_string()),
+    ];
+    assert_eq!(
+        action
+            .properties
+            .get("stage_sequence")
+            .and_then(Value::as_array),
+        Some(&expected_sequence)
+    );
+    let rendered = serde_json::to_string(&action.properties).expect("serialize properties");
+    assert!(
+        !rendered.contains("\"x\"") && !rendered.contains("limit(5)"),
+        "telemetry should not include raw DevQL literals"
+    );
 }

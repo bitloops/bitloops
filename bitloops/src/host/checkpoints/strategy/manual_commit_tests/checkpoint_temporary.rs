@@ -429,6 +429,15 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
 pub(crate) fn write_committed_duplicate_session_id_updates_in_place() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    commit_files(
+        dir.path(),
+        &[
+            ("a.rs", "pub fn a() {}\n"),
+            ("b.rs", "pub fn b() {}\n"),
+            ("c.rs", "pub fn c() {}\n"),
+        ],
+        "prepare duplicate-session provenance",
+    );
     let checkpoint_id = "deda01234567";
 
     let mut session_x_v1 =
@@ -508,6 +517,11 @@ pub(crate) fn write_committed_duplicate_session_id_updates_in_place() {
 pub(crate) fn write_committed_duplicate_session_id_single_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    commit_files(
+        dir.path(),
+        &[("new.rs", "pub fn new_value() {}\n")],
+        "prepare single-session provenance",
+    );
     let checkpoint_id = "dedb07654321";
 
     let mut v1 = default_write_committed_opts(checkpoint_id, "session-X", r#"{"message":"v1"}"#);

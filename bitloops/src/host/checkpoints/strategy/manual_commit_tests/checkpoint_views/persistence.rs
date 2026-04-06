@@ -245,6 +245,15 @@ pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
 pub(crate) fn write_committed_three_sessions() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    commit_files(
+        dir.path(),
+        &[
+            ("s0.rs", "pub fn s0() {}\n"),
+            ("s1.rs", "pub fn s1() {}\n"),
+            ("s2.rs", "pub fn s2() {}\n"),
+        ],
+        "prepare three-session provenance",
+    );
     let checkpoint_id = "515253545556";
 
     for i in 0..3 {

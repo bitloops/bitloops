@@ -57,6 +57,7 @@ struct MetadataCommitInput<'a> {
     transcript: &'a [u8],
     prompt: &'a str,
     context: &'a str,
+    #[allow(dead_code)]
     files_touched: &'a [String],
     author_name: &'a str,
     author_email: &'a str,
@@ -194,7 +195,6 @@ impl AutoCommitStrategy {
             created_at: now_rfc3339(),
             cli_version: env!("CARGO_PKG_VERSION").to_string(),
             turn_id: String::new(),
-            files_touched: input.files_touched.to_vec(),
             is_task: input.is_task,
             tool_use_id: input.tool_use_id.to_string(),
             transcript_identifier_at_start: String::new(),
@@ -305,7 +305,7 @@ impl SessionInitializer for AutoCommitStrategy {
         let backend = create_session_backend_or_local(&self.repo_root);
 
         if let Some(mut existing) = backend.load_session(session_id)? {
-            existing.last_interaction_time = Some(now_string());
+            existing.last_interaction_time = Some(now_rfc3339());
             if existing.first_prompt.is_empty() && !user_prompt.is_empty() {
                 existing.first_prompt = truncate_prompt(user_prompt);
             }
@@ -314,7 +314,7 @@ impl SessionInitializer for AutoCommitStrategy {
         }
 
         let base_commit = run_git(&self.repo_root, &["rev-parse", "HEAD"]).unwrap_or_default();
-        let now = now_string();
+        let now = now_rfc3339();
 
         let state = SessionState {
             session_id: session_id.to_string(),
@@ -337,14 +337,6 @@ impl SessionInitializer for AutoCommitStrategy {
 
 fn truncate_prompt(prompt: &str) -> String {
     strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
-}
-
-fn now_string() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{secs}")
 }
 
 fn now_rfc3339() -> String {

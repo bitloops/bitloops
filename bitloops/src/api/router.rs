@@ -1,8 +1,8 @@
 use super::handlers::{
     handle_api_agents, handle_api_branches, handle_api_check_bundle_version, handle_api_checkpoint,
-    handle_api_commits, handle_api_db_health, handle_api_fetch_bundle, handle_api_kpis,
-    handle_api_not_found, handle_api_openapi, handle_api_repositories, handle_api_root,
-    handle_api_users,
+    handle_api_commits, handle_api_db_health, handle_api_fetch_bundle, handle_api_git_blob,
+    handle_api_kpis, handle_api_not_found, handle_api_openapi, handle_api_repositories,
+    handle_api_root, handle_api_users,
 };
 use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
@@ -21,6 +21,9 @@ use axum::{
     response::Response,
     routing::{any, get, post},
 };
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Instant;
 
 const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update-prompt-script">
 (function () {
@@ -216,6 +219,7 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
             "/checkpoints/{repo_id}/{checkpoint_id}",
             get(handle_api_checkpoint),
         )
+        .route("/blobs/{repo_id}/{blob_sha}", get(handle_api_git_blob))
         .route(
             "/check_bundle_version",
             get(handle_api_check_bundle_version),
@@ -226,7 +230,10 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
 }
 
 async fn handle_dashboard_root(State(state): State<DashboardState>, method: Method) -> Response {
-    serve_dashboard_request(&state, "/", method).await
+    let started = Instant::now();
+    let response = serve_dashboard_request(&state, "/", method.clone()).await;
+    track_dashboard_page_event(&state, "/", &method, response.status(), started.elapsed());
+    response
 }
 
 async fn handle_dashboard_path(
@@ -235,7 +242,16 @@ async fn handle_dashboard_path(
     method: Method,
 ) -> Response {
     let request_path = format!("/{path}");
-    serve_dashboard_request(&state, &request_path, method).await
+    let started = Instant::now();
+    let response = serve_dashboard_request(&state, &request_path, method.clone()).await;
+    track_dashboard_page_event(
+        &state,
+        &request_path,
+        &method,
+        response.status(),
+        started.elapsed(),
+    );
+    response
 }
 
 async fn serve_dashboard_request(
@@ -400,4 +416,40 @@ fn response_with_bytes(
         );
     }
     response
+}
+
+fn track_dashboard_page_event(
+    state: &DashboardState,
+    request_path: &str,
+    method: &Method,
+    status: StatusCode,
+    duration: std::time::Duration,
+) {
+    if *method != Method::GET && *method != Method::HEAD {
+        return;
+    }
+    if request_path_looks_like_asset(request_path) {
+        return;
+    }
+
+    let mut properties = HashMap::new();
+    properties.insert(
+        "http_method".to_string(),
+        Value::String(method.as_str().to_string()),
+    );
+    properties.insert(
+        "status_code_class".to_string(),
+        Value::String(super::status_code_class(status).to_string()),
+    );
+
+    super::track_repo_action(
+        &state.repo_root,
+        crate::telemetry::analytics::ActionDescriptor {
+            event: "bitloops dashboard page".to_string(),
+            surface: "dashboard",
+            properties,
+        },
+        status.is_success(),
+        duration,
+    );
 }

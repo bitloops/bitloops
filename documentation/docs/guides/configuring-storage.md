@@ -94,4 +94,4 @@ bitloops status
 bitloops --connection-status
 ```
 
-If Bitloops finds old repo-local store directories, it warns that they are ignored unless you explicitly point the daemon config at them.
+Store locations come only from the active daemon config. If the global config does not exist yet, create it with `bitloops start --create-default-config` or let interactive `bitloops start` create it at the default location.

@@ -62,11 +62,9 @@ fn checkpoint_write_options(checkpoint_id: &str, files_touched: &[&str]) -> Writ
 
 fn projection_row_count(sqlite_path: &Path) -> i64 {
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
-    conn.query_row(
-        "SELECT COUNT(*) FROM checkpoint_file_snapshots",
-        [],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT COUNT(*) FROM checkpoint_files", [], |row| {
+        row.get(0)
+    })
     .expect("count projection rows")
 }
 
@@ -104,7 +102,7 @@ async fn checkpoint_file_snapshot_backfill_noops_for_repo_without_committed_chec
 }
 
 #[tokio::test]
-async fn checkpoint_file_snapshot_backfill_is_rerunnable_and_skips_unresolved_files() {
+async fn checkpoint_file_snapshot_backfill_is_rerunnable_for_checkpoint_file_rows() {
     let repo = seed_git_repo();
     let home = TempDir::new().expect("home dir");
     let home_path = home.path().to_string_lossy().to_string();
@@ -134,22 +132,10 @@ async fn checkpoint_file_snapshot_backfill_is_rerunnable_and_skips_unresolved_fi
 
     write_committed(
         repo.path(),
-        checkpoint_write_options(checkpoint_id, &[file_path, "src/missing.rs"]),
+        checkpoint_write_options(checkpoint_id, &[file_path]),
     )
     .expect("write committed checkpoint");
     insert_commit_checkpoint_mapping(repo.path(), &head_sha, checkpoint_id);
-
-    let blob_sha =
-        git_blob_sha_at_commit(repo.path(), &head_sha, file_path).expect("resolve blob sha");
-    upsert_file_state_row(
-        &cfg.repo.repo_id,
-        &relational,
-        &head_sha,
-        file_path,
-        &blob_sha,
-    )
-    .await
-    .expect("upsert file_state");
 
     let first = execute_checkpoint_file_snapshot_backfill_with_relational(
         &cfg,
@@ -161,9 +147,9 @@ async fn checkpoint_file_snapshot_backfill_is_rerunnable_and_skips_unresolved_fi
     assert!(first.success);
     assert_eq!(first.checkpoints_scanned, 1);
     assert_eq!(first.checkpoints_processed, 1);
-    assert_eq!(first.rows_projected, 1);
-    assert_eq!(first.rows_already_present, 0);
-    assert_eq!(first.unresolved_files, 1);
+    assert_eq!(first.rows_projected, 0);
+    assert_eq!(first.rows_already_present, 1);
+    assert_eq!(first.unresolved_files, 0);
     assert_eq!(projection_row_count(&sqlite_path), 1);
 
     let second = execute_checkpoint_file_snapshot_backfill_with_relational(
@@ -177,7 +163,7 @@ async fn checkpoint_file_snapshot_backfill_is_rerunnable_and_skips_unresolved_fi
     assert_eq!(second.checkpoints_scanned, 1);
     assert_eq!(second.rows_projected, 0);
     assert_eq!(second.rows_already_present, 1);
-    assert_eq!(second.unresolved_files, 1);
+    assert_eq!(second.unresolved_files, 0);
     assert_eq!(projection_row_count(&sqlite_path), 1);
 }
 
@@ -219,23 +205,16 @@ async fn checkpoint_file_snapshot_backfill_deletes_stale_rows_when_checkpoint_is
 
     let blob_sha =
         git_blob_sha_at_commit(repo.path(), &head_sha, file_path).expect("resolve blob sha");
-    upsert_file_state_row(
-        &cfg.repo.repo_id,
-        &relational,
-        &head_sha,
-        file_path,
-        &blob_sha,
-    )
-    .await
-    .expect("upsert file_state");
 
     {
         let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
         conn.execute(
-            "INSERT INTO checkpoint_file_snapshots (
-                repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha, path, blob_sha
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO checkpoint_files (
+                relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+                commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'modify', ?10, ?10, ?11, ?11)",
             rusqlite::params![
+                "stale-relation",
                 cfg.repo.repo_id.as_str(),
                 checkpoint_id,
                 "stale-session",
@@ -248,7 +227,7 @@ async fn checkpoint_file_snapshot_backfill_deletes_stale_rows_when_checkpoint_is
                 "stale-blob"
             ],
         )
-        .expect("insert stale projection row");
+        .expect("insert stale checkpoint_files row");
     }
 
     let summary = execute_checkpoint_file_snapshot_backfill_with_relational(
@@ -261,7 +240,8 @@ async fn checkpoint_file_snapshot_backfill_deletes_stale_rows_when_checkpoint_is
 
     assert!(summary.success);
     assert_eq!(summary.checkpoints_scanned, 1);
-    assert_eq!(summary.rows_projected, 1);
+    assert_eq!(summary.rows_projected, 0);
+    assert_eq!(summary.rows_already_present, 1);
     assert_eq!(summary.stale_rows_detected, 1);
     assert_eq!(summary.stale_rows_deleted, 1);
     assert_eq!(summary.unresolved_files, 0);
@@ -269,9 +249,9 @@ async fn checkpoint_file_snapshot_backfill_deletes_stale_rows_when_checkpoint_is
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     let blobs = conn
         .prepare(
-            "SELECT blob_sha FROM checkpoint_file_snapshots
+            "SELECT blob_sha_after FROM checkpoint_files
              WHERE repo_id = ?1 AND checkpoint_id = ?2
-             ORDER BY blob_sha ASC",
+             ORDER BY blob_sha_after ASC",
         )
         .expect("prepare blob query")
         .query_map(

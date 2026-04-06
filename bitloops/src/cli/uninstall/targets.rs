@@ -35,7 +35,7 @@ pub struct UninstallArgs {
     #[arg(long, default_value_t = false)]
     pub service: bool,
 
-    /// Remove Bitloops data directories and legacy repo-local data.
+    /// Remove Bitloops data directories and repo-local `.bitloops/` data.
     #[arg(long, default_value_t = false)]
     pub data: bool,
 
@@ -43,7 +43,7 @@ pub struct UninstallArgs {
     #[arg(long, default_value_t = false)]
     pub caching: bool,
 
-    /// Remove Bitloops config directories and legacy global config artefacts.
+    /// Remove Bitloops config directories and TLS artefacts under `~/.bitloops/certs`.
     #[arg(long, default_value_t = false)]
     pub config: bool,
 
@@ -99,24 +99,24 @@ impl UninstallTarget {
             Self::AgentHooks => "Agent hooks in known repositories",
             Self::GitHooks => "Git hooks in known repositories",
             Self::Shell => "Shell completion integration",
-            Self::Data => "Global data and legacy repo-local data",
+            Self::Data => "Global data and repo-local `.bitloops/` data",
             Self::Caching => "Global cache directories",
-            Self::Config => "Global config and legacy TLS artefacts",
+            Self::Config => "Global config and TLS artefacts",
             Self::Service => "Daemon service and state metadata",
             Self::Binaries => "Installed bitloops binaries",
         }
     }
 
-    pub(super) fn summary(self, hook_repo_count: usize, legacy_repo_count: usize) -> String {
+    pub(super) fn summary(self, hook_repo_count: usize, repo_data_count: usize) -> String {
         match self {
             Self::AgentHooks => format!("Agent hooks in {hook_repo_count} repo(s)"),
             Self::GitHooks => format!("Git hooks in {hook_repo_count} repo(s)"),
             Self::Shell => "Shell completion integration".to_string(),
-            Self::Data => format!(
-                "Global data directory and legacy .bitloops dirs in {legacy_repo_count} repo(s)"
-            ),
+            Self::Data => {
+                format!("Global data directory and .bitloops dirs in {repo_data_count} repo(s)")
+            }
             Self::Caching => "Global cache directory".to_string(),
-            Self::Config => "Global config directory and legacy TLS artefacts".to_string(),
+            Self::Config => "Global config directory and TLS artefacts".to_string(),
             Self::Service => "Global daemon service and state metadata".to_string(),
             Self::Binaries => "Recognised bitloops binaries".to_string(),
         }

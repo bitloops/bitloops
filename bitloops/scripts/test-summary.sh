@@ -36,9 +36,9 @@ Options:
   --coverage       Run tests through cargo-llvm-cov (single test run),
                    then print a coverage summary.
   --test-threads   Set RUST_TEST_THREADS for the test binary runner.
-                   Defaults to BITLOOPS_TEST_THREADS or 1.
+                   Defaults to BITLOOPS_TEST_THREADS or 8.
   --cargo-jobs     Set Cargo job parallelism for compiling/running test binaries.
-                   Defaults to BITLOOPS_CARGO_JOBS or 1.
+                   Defaults to BITLOOPS_CARGO_JOBS or 4.
 
 Examples:
   ./scripts/test-summary.sh
@@ -85,12 +85,12 @@ if [[ "$with_coverage" -eq 1 ]]; then
 
   rm -f "$coverage_file"
   if [[ ${#cargo_args[@]} -gt 0 ]]; then
-    cargo llvm-cov -j "$cargo_jobs" "${duckdb_no_bundle_flags[@]}" --no-fail-fast --lcov --output-path "$coverage_file" "${cargo_args[@]}" 2>&1 | tee "$log_file"
+    cargo llvm-cov -j "$cargo_jobs" "${duckdb_no_bundle_flags[@]}" --features slow-tests --no-fail-fast --lcov --output-path "$coverage_file" "${cargo_args[@]}" 2>&1 | tee "$log_file"
   else
-    cargo llvm-cov -j "$cargo_jobs" --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --lcov --output-path "$coverage_file" 2>&1 | tee "$log_file"
+    cargo llvm-cov -j "$cargo_jobs" --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --features slow-tests --no-fail-fast --lcov --output-path "$coverage_file" 2>&1 | tee "$log_file"
   fi
 else
-  cargo test -j "$cargo_jobs" --no-fail-fast "${duckdb_no_bundle_flags[@]}" "${cargo_args[@]}" 2>&1 | tee "$log_file"
+  cargo test -j "$cargo_jobs" --features slow-tests --no-fail-fast "${duckdb_no_bundle_flags[@]}" "${cargo_args[@]}" 2>&1 | tee "$log_file"
 fi
 status=${PIPESTATUS[0]}
 set -e

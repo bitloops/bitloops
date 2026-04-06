@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     strategy TEXT DEFAULT 'manual-commit',
     branch TEXT DEFAULT '',
     cli_version TEXT DEFAULT '',
-    files_touched TEXT DEFAULT '[]',
     checkpoints_count INTEGER DEFAULT 0,
     token_usage TEXT,
     created_at TEXT DEFAULT (datetime('now')),
@@ -83,7 +82,6 @@ CREATE TABLE IF NOT EXISTS checkpoint_sessions (
     agent TEXT DEFAULT '',
     turn_id TEXT DEFAULT '',
     checkpoints_count INTEGER DEFAULT 0,
-    files_touched TEXT DEFAULT '[]',
     is_task INTEGER DEFAULT 0,
     tool_use_id TEXT DEFAULT '',
     transcript_identifier_at_start TEXT DEFAULT '',
@@ -102,6 +100,98 @@ CREATE TABLE IF NOT EXISTS checkpoint_sessions (
 
 CREATE INDEX IF NOT EXISTS checkpoint_sessions_session_idx
 ON checkpoint_sessions (session_id, checkpoint_id);
+
+CREATE TABLE IF NOT EXISTS checkpoint_files (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    path_before TEXT,
+    path_after TEXT,
+    blob_sha_before TEXT,
+    blob_sha_after TEXT,
+    copy_source_path TEXT,
+    copy_source_blob_sha TEXT
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_checkpoint_idx
+ON checkpoint_files (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_lookup_idx
+ON checkpoint_files (repo_id, path_after, blob_sha_after);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_agent_time_idx
+ON checkpoint_files (repo_id, agent, event_time);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_event_time_idx
+ON checkpoint_files (repo_id, event_time);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_commit_idx
+ON checkpoint_files (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_change_kind_idx
+ON checkpoint_files (repo_id, checkpoint_id, change_kind);
+
+CREATE INDEX IF NOT EXISTS checkpoint_files_copy_source_idx
+ON checkpoint_files (repo_id, copy_source_path, copy_source_blob_sha);
+
+CREATE TABLE IF NOT EXISTS checkpoint_artefacts (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    before_symbol_id TEXT,
+    after_symbol_id TEXT,
+    before_artefact_id TEXT,
+    after_artefact_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx
+ON checkpoint_artefacts (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx
+ON checkpoint_artefacts (repo_id, before_artefact_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx
+ON checkpoint_artefacts (repo_id, after_artefact_id);
+
+CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage (
+    relation_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    lineage_kind TEXT NOT NULL,
+    source_symbol_id TEXT NOT NULL,
+    source_artefact_id TEXT NOT NULL,
+    dest_symbol_id TEXT NOT NULL,
+    dest_artefact_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx
+ON checkpoint_artefact_lineage (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx
+ON checkpoint_artefact_lineage (repo_id, source_artefact_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_dest_idx
+ON checkpoint_artefact_lineage (repo_id, dest_artefact_id);
 
 CREATE TABLE IF NOT EXISTS commit_checkpoints (
     commit_sha TEXT NOT NULL,
@@ -149,5 +239,64 @@ CREATE TABLE IF NOT EXISTS checkpoint_blobs (
 
 CREATE INDEX IF NOT EXISTS checkpoint_blobs_lookup_idx
 ON checkpoint_blobs (checkpoint_id, session_index, blob_type);
+
+CREATE TABLE IF NOT EXISTS interaction_sessions (
+    session_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    first_prompt TEXT NOT NULL DEFAULT '',
+    transcript_path TEXT NOT NULL DEFAULT '',
+    worktree_path TEXT NOT NULL DEFAULT '',
+    worktree_id TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
+ON interaction_sessions (repo_id);
+
+CREATE TABLE IF NOT EXISTS interaction_turns (
+    turn_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL DEFAULT 1,
+    prompt TEXT NOT NULL DEFAULT '',
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    token_usage TEXT,
+    files_modified TEXT NOT NULL DEFAULT '[]',
+    checkpoint_id TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
+ON interaction_turns (session_id, turn_number);
+
+CREATE TABLE IF NOT EXISTS interaction_events (
+    event_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_id TEXT,
+    repo_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent_type TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS interaction_events_session_idx
+ON interaction_events (session_id, event_time);
+
+CREATE INDEX IF NOT EXISTS interaction_events_type_idx
+ON interaction_events (repo_id, event_type, event_time);
+
+CREATE INDEX IF NOT EXISTS interaction_events_turn_idx
+ON interaction_events (turn_id, event_time);
 "#
 }

@@ -177,6 +177,30 @@ fn resolve_daemon_config_uses_default_global_config_path() {
 }
 
 #[test]
+fn resolve_daemon_config_requires_bootstrapped_default_global_config() {
+    let config_root = TempDir::new().expect("temp dir");
+    let other_cwd = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(other_cwd.path()),
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+
+    let err = resolve_daemon_config(None).expect_err("missing default config should fail");
+    let expected_path = config_root
+        .path()
+        .join("bitloops")
+        .join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let message = format!("{err:#}");
+
+    assert!(message.contains(&expected_path.display().to_string()));
+    assert!(message.contains("--create-default-config"));
+}
+
+#[test]
 fn bootstrap_default_daemon_environment_creates_config_and_local_store_files() {
     let config_root = TempDir::new().expect("temp dir");
     let data_root = TempDir::new().expect("temp dir");
