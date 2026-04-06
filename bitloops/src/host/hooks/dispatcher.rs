@@ -35,8 +35,9 @@ use crate::utils::paths;
 use super::git;
 use crate::adapters::agents::claude_code::hooks_cmd::{
     PostTaskInput, PostTodoInput, SessionInfoInput, TaskHookInput, UserPromptSubmitInput,
-    handle_post_task_with_profile_and_model, handle_post_todo, handle_pre_task_with_profile_and_model,
-    handle_session_end_with_profile_and_model, handle_session_start_with_profile_and_model, handle_stop_with_profile_and_model,
+    handle_post_task_with_profile_and_model, handle_post_todo,
+    handle_pre_task_with_profile_and_model, handle_session_end_with_profile_and_model,
+    handle_session_start_with_profile_and_model, handle_stop_with_profile_and_model,
     handle_user_prompt_submit_with_strategy_and_profile_and_model,
 };
 
