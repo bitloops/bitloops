@@ -657,7 +657,7 @@ fn test_dispatch_lifecycle_event_routes_to_correct_handler() {
 fn test_parse_hook_event_session_start_claude() {
     let adapter = ClaudeCodeLifecycleAdapter;
     let mut stdin = Cursor::new(
-        r#"{"session_id":"test-session-123","transcript_path":"/tmp/transcript.jsonl"}"#,
+        r#"{"session_id":"test-session-123","transcript_path":"/tmp/transcript.jsonl","model":"claude-opus-4-1"}"#,
     );
 
     let event = adapter
@@ -668,6 +668,7 @@ fn test_parse_hook_event_session_start_claude() {
     assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
     assert_eq!("test-session-123", event.session_id);
     assert_eq!("/tmp/transcript.jsonl", event.session_ref);
+    assert_eq!("claude-opus-4-1", event.model);
 }
 
 #[test]

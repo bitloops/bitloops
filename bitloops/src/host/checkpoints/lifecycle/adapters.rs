@@ -78,6 +78,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::SessionStart),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -88,6 +89,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
                     prompt: raw.prompt,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -97,6 +99,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::TurnEnd),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -106,6 +109,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::SessionEnd),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -116,6 +120,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
                     tool_use_id: raw.tool_use_id,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -127,6 +132,7 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     session_ref: raw.transcript_path,
                     tool_use_id: raw.tool_use_id,
                     subagent_id: raw.tool_response.agent_id,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -219,6 +225,7 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::SessionStart),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -229,6 +236,7 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
                     prompt: raw.prompt,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -238,6 +246,7 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::TurnEnd),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -247,6 +256,7 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::Compaction),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -256,6 +266,7 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
                     event_type: Some(LifecycleEventType::SessionEnd),
                     session_id: raw.session_id,
                     session_ref: raw.transcript_path,
+                    model: raw.model,
                     ..LifecycleEvent::default()
                 }))
             }
@@ -634,6 +645,18 @@ struct SessionInfoRaw {
     session_id: String,
     #[serde(default)]
     transcript_path: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -644,6 +667,18 @@ struct TurnStartRaw {
     transcript_path: String,
     #[serde(default)]
     prompt: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -654,6 +689,18 @@ struct TaskHookInputRaw {
     transcript_path: String,
     #[serde(default)]
     tool_use_id: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
     #[serde(default, rename = "tool_input")]
     _tool_input: Value,
 }
@@ -666,6 +713,18 @@ struct PostTaskHookInputRaw {
     transcript_path: String,
     #[serde(default)]
     tool_use_id: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
     #[serde(default, rename = "tool_input")]
     _tool_input: Value,
     #[serde(default)]

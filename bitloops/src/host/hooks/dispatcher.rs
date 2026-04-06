@@ -28,19 +28,16 @@ use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 use crate::host::checkpoints::strategy::Strategy;
 use crate::host::checkpoints::strategy::manual_commit::ManualCommitStrategy;
 use crate::host::checkpoints::strategy::registry::{self, StrategyRegistry};
+use crate::host::interactions::model::extract_model_from_hook_payload;
 use crate::telemetry::logging;
 use crate::utils::paths;
 
 use super::git;
 use crate::adapters::agents::claude_code::hooks_cmd::{
     PostTaskInput, PostTodoInput, SessionInfoInput, TaskHookInput, UserPromptSubmitInput,
-    handle_post_task, handle_post_todo, handle_pre_task_with_profile,
-    handle_session_end_with_profile, handle_session_start_with_profile, handle_stop,
-    handle_user_prompt_submit_with_strategy,
-};
-use crate::adapters::agents::cursor::hooks_cmd::{
-    handle_before_submit_prompt_cursor, handle_session_end_cursor, handle_session_start_cursor,
-    handle_stop_cursor,
+    handle_post_task_with_profile_and_model, handle_post_todo, handle_pre_task_with_profile_and_model,
+    handle_session_end_with_profile_and_model, handle_session_start_with_profile_and_model, handle_stop_with_profile_and_model,
+    handle_user_prompt_submit_with_strategy_and_profile_and_model,
 };
 
 #[derive(Args)]
@@ -497,58 +494,78 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 &strategy_name,
                 || match cc.verb {
                     ClaudeCodeHookVerb::SessionStart => {
+                        let model_hint = extract_model_from_hook_payload(&stdin);
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-start input")?;
-                        handle_session_start_with_profile(
+                        handle_session_start_with_profile_and_model(
                             input,
                             backend.as_ref(),
                             Some(&repo_root),
                             Some(crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE),
+                            &model_hint,
                         )
                     }
                     ClaudeCodeHookVerb::UserPromptSubmit => {
+                        let model_hint = extract_model_from_hook_payload(&stdin);
                         let input: UserPromptSubmitInput = serde_json::from_str(&stdin)
                             .context("parsing user-prompt-submit input")?;
-                        handle_user_prompt_submit_with_strategy(
+                        handle_user_prompt_submit_with_strategy_and_profile_and_model(
                             input,
                             backend.as_ref(),
                             strategy.as_ref(),
                             Some(&repo_root),
+                            crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE,
+                            &model_hint,
                         )
                     }
                     ClaudeCodeHookVerb::Stop => {
+                        let model_hint = extract_model_from_hook_payload(&stdin);
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing stop input")?;
-                        handle_stop(input, backend.as_ref(), strategy.as_ref(), Some(&repo_root))
+                        handle_stop_with_profile_and_model(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                            crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE,
+                            &model_hint,
+                        )
                     }
                     ClaudeCodeHookVerb::SessionEnd => {
+                        let model_hint = extract_model_from_hook_payload(&stdin);
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-end input")?;
-                        handle_session_end_with_profile(
+                        handle_session_end_with_profile_and_model(
                             input,
                             backend.as_ref(),
                             Some(&repo_root),
                             Some(crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE),
+                            &model_hint,
                         )
                     }
                     ClaudeCodeHookVerb::PreTask => {
+                        let model_hint = extract_model_from_hook_payload(&stdin);
                         let input: TaskHookInput =
                             serde_json::from_str(&stdin).context("parsing pre-task input")?;
-                        handle_pre_task_with_profile(
+                        handle_pre_task_with_profile_and_model(
                             input,
                             backend.as_ref(),
                             Some(&repo_root),
                             crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE,
+                            &model_hint,
                         )
                     }
                     ClaudeCodeHookVerb::PostTask => {
+                        let model_hint = extract_model_from_hook_payload(&stdin);
                         let input: PostTaskInput =
                             serde_json::from_str(&stdin).context("parsing post-task input")?;
-                        handle_post_task(
+                        handle_post_task_with_profile_and_model(
                             input,
                             backend.as_ref(),
                             strategy.as_ref(),
                             Some(&repo_root),
+                            crate::host::hooks::runtime::agent_runtime::CLAUDE_HOOK_AGENT_PROFILE,
+                            &model_hint,
                         )
                     }
                     ClaudeCodeHookVerb::PostTodo => {
@@ -684,6 +701,7 @@ pub(crate) fn dispatch_cursor_hook(
 ) -> Result<()> {
     match verb {
         CursorHookVerb::SessionStart => {
+            let model_hint = extract_model_from_hook_payload(stdin);
             let raw: CursorSessionInfoRaw =
                 serde_json::from_str(stdin).context("parsing session-start input")?;
             let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -697,9 +715,16 @@ pub(crate) fn dispatch_cursor_hook(
                     raw.transcript_path.as_deref(),
                 ),
             };
-            handle_session_start_cursor(input, backend, Some(repo_root))
+            crate::host::hooks::runtime::agent_runtime::handle_session_start_with_profile_and_model(
+                input,
+                backend,
+                Some(repo_root),
+                Some(crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE),
+                &model_hint,
+            )
         }
         CursorHookVerb::BeforeSubmitPrompt => {
+            let model_hint = extract_model_from_hook_payload(stdin);
             let raw: CursorBeforeSubmitPromptRaw =
                 serde_json::from_str(stdin).context("parsing before-submit-prompt input")?;
             let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -714,9 +739,17 @@ pub(crate) fn dispatch_cursor_hook(
                 ),
                 prompt: raw.prompt,
             };
-            handle_before_submit_prompt_cursor(input, backend, strategy, Some(repo_root))
+            crate::host::hooks::runtime::agent_runtime::handle_user_prompt_submit_with_strategy_and_profile_and_model(
+                input,
+                backend,
+                strategy,
+                Some(repo_root),
+                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
+                &model_hint,
+            )
         }
         CursorHookVerb::BeforeShellExecution => {
+            let model_hint = extract_model_from_hook_payload(stdin);
             let raw: CursorBeforeShellExecutionRaw =
                 serde_json::from_str(stdin).context("parsing before-shell-execution input")?;
             let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -738,7 +771,14 @@ pub(crate) fn dispatch_cursor_hook(
                 ),
                 prompt: shell_command_to_prompt(&raw.command),
             };
-            handle_before_submit_prompt_cursor(input, backend, strategy, Some(repo_root))?;
+            crate::host::hooks::runtime::agent_runtime::handle_user_prompt_submit_with_strategy_and_profile_and_model(
+                input,
+                backend,
+                strategy,
+                Some(repo_root),
+                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
+                &model_hint,
+            )?;
 
             if let Some(mut pre_prompt) = backend.load_pre_prompt(&session_id)? {
                 pre_prompt.source = PRE_PROMPT_SOURCE_CURSOR_SHELL.to_string();
@@ -747,6 +787,7 @@ pub(crate) fn dispatch_cursor_hook(
             Ok(())
         }
         CursorHookVerb::AfterShellExecution => {
+            let model_hint = extract_model_from_hook_payload(stdin);
             let raw: CursorAfterShellExecutionRaw =
                 serde_json::from_str(stdin).context("parsing after-shell-execution input")?;
             let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -769,9 +810,17 @@ pub(crate) fn dispatch_cursor_hook(
                     raw.transcript_path.as_deref(),
                 ),
             };
-            handle_stop_cursor(input, backend, strategy, Some(repo_root))
+            crate::host::hooks::runtime::agent_runtime::handle_stop_with_profile_and_model(
+                input,
+                backend,
+                strategy,
+                Some(repo_root),
+                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
+                &model_hint,
+            )
         }
         CursorHookVerb::Stop => {
+            let model_hint = extract_model_from_hook_payload(stdin);
             let raw: CursorSessionInfoRaw =
                 serde_json::from_str(stdin).context("parsing stop input")?;
             let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -785,9 +834,17 @@ pub(crate) fn dispatch_cursor_hook(
                     raw.transcript_path.as_deref(),
                 ),
             };
-            handle_stop_cursor(input, backend, strategy, Some(repo_root))
+            crate::host::hooks::runtime::agent_runtime::handle_stop_with_profile_and_model(
+                input,
+                backend,
+                strategy,
+                Some(repo_root),
+                crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
+                &model_hint,
+            )
         }
         CursorHookVerb::SessionEnd => {
+            let model_hint = extract_model_from_hook_payload(stdin);
             let raw: CursorSessionInfoRaw =
                 serde_json::from_str(stdin).context("parsing session-end input")?;
             let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -811,7 +868,7 @@ pub(crate) fn dispatch_cursor_hook(
                     }));
 
             if should_finalize_turn {
-                handle_stop_cursor(
+                crate::host::hooks::runtime::agent_runtime::handle_stop_with_profile_and_model(
                     SessionInfoInput {
                         session_id: session_id.clone(),
                         transcript_path: transcript_path.clone(),
@@ -819,6 +876,8 @@ pub(crate) fn dispatch_cursor_hook(
                     backend,
                     strategy,
                     Some(repo_root),
+                    crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE,
+                    &model_hint,
                 )?;
             }
 
@@ -826,7 +885,13 @@ pub(crate) fn dispatch_cursor_hook(
                 session_id,
                 transcript_path,
             };
-            handle_session_end_cursor(input, backend, Some(repo_root))
+            crate::host::hooks::runtime::agent_runtime::handle_session_end_with_profile_and_model(
+                input,
+                backend,
+                Some(repo_root),
+                Some(crate::host::hooks::runtime::agent_runtime::CURSOR_HOOK_AGENT_PROFILE),
+                &model_hint,
+            )
         }
         CursorHookVerb::PreCompact
         | CursorHookVerb::SubagentStart

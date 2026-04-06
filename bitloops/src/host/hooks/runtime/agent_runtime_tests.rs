@@ -714,6 +714,35 @@ fn cursor_before_submit_prompt_creates_pre_prompt_state() {
 }
 
 #[test]
+fn cursor_before_submit_prompt_persists_model_from_hook_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = create_session_backend_or_local(dir.path());
+    let strategy = RecordingStrategy::default();
+
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeSubmitPrompt,
+            r#"{"conversation_id":"cursor-model-1","transcript_path":"/tmp/cursor-model-1.jsonl","prompt":"Fix bug in parser","modelSlug":"gpt-5.4-mini"}"#,
+            backend.as_ref(),
+            &strategy,
+            dir.path(),
+            "before-submit-prompt",
+        )
+    })
+    .expect("before-submit-prompt should succeed");
+
+    assert_eq!(
+        interaction_session_model(dir.path(), "cursor-model-1"),
+        "gpt-5.4-mini"
+    );
+    assert_eq!(
+        interaction_turn_model(dir.path(), "cursor-model-1"),
+        "gpt-5.4-mini"
+    );
+}
+
+#[test]
 fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
     let (dir, backend, strat) = setup();
     let err = dispatch_cursor_hook(

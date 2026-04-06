@@ -44,6 +44,16 @@ pub fn handle_session_start_with_profile(
     repo_root: Option<&std::path::Path>,
     profile: Option<HookAgentProfile>,
 ) -> Result<()> {
+    handle_session_start_with_profile_and_model(input, backend, repo_root, profile, "")
+}
+
+pub fn handle_session_start_with_profile_and_model(
+    input: SessionInfoInput,
+    backend: &dyn SessionBackend,
+    repo_root: Option<&std::path::Path>,
+    profile: Option<HookAgentProfile>,
+    model_hint: &str,
+) -> Result<()> {
     let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
         &input.session_id,
         crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict,
@@ -73,7 +83,7 @@ pub fn handle_session_start_with_profile(
     }
 
     backend.save_session(&state)?;
-    record_session_start_interaction(repo_root, &state, profile, "");
+    record_session_start_interaction(repo_root, &state, profile, model_hint);
     Ok(())
 }
 
@@ -109,6 +119,19 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     strategy: &dyn Strategy,
     repo_root: Option<&Path>,
     profile: HookAgentProfile,
+) -> Result<()> {
+    handle_user_prompt_submit_with_strategy_and_profile_and_model(
+        input, backend, strategy, repo_root, profile, "",
+    )
+}
+
+pub fn handle_user_prompt_submit_with_strategy_and_profile_and_model(
+    input: UserPromptSubmitInput,
+    backend: &dyn SessionBackend,
+    strategy: &dyn Strategy,
+    repo_root: Option<&Path>,
+    profile: HookAgentProfile,
+    model_hint: &str,
 ) -> Result<()> {
     let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
         &input.session_id,
@@ -192,7 +215,7 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     }
 
     backend.save_session(&state)?;
-    record_turn_start_interaction(repo_root, &state, &input.prompt, profile, "");
+    record_turn_start_interaction(repo_root, &state, &input.prompt, profile, model_hint);
     Ok(())
 }
 
@@ -237,6 +260,17 @@ pub fn handle_stop_with_profile(
     strategy: &dyn Strategy,
     repo_root: Option<&Path>,
     profile: HookAgentProfile,
+) -> Result<()> {
+    handle_stop_with_profile_and_model(input, backend, strategy, repo_root, profile, "")
+}
+
+pub fn handle_stop_with_profile_and_model(
+    input: SessionInfoInput,
+    backend: &dyn SessionBackend,
+    strategy: &dyn Strategy,
+    repo_root: Option<&Path>,
+    profile: HookAgentProfile,
+    model_hint: &str,
 ) -> Result<()> {
     // stop should remain tolerant when pre-turn/session state is missing.
     let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
@@ -297,7 +331,7 @@ pub fn handle_stop_with_profile(
         prompt,
         turn_started_at,
         profile,
-        model_hint: "",
+        model_hint,
         files_modified: &all_files,
         token_usage: token_usage.as_ref(),
     });
@@ -377,6 +411,16 @@ pub fn handle_session_end_with_profile(
     repo_root: Option<&Path>,
     profile: Option<HookAgentProfile>,
 ) -> Result<()> {
+    handle_session_end_with_profile_and_model(input, backend, repo_root, profile, "")
+}
+
+pub fn handle_session_end_with_profile_and_model(
+    input: SessionInfoInput,
+    backend: &dyn SessionBackend,
+    repo_root: Option<&Path>,
+    profile: Option<HookAgentProfile>,
+    model_hint: &str,
+) -> Result<()> {
     let session_id = input.session_id;
     mark_session_ended(&session_id, backend)?;
     let state = backend.load_session(&session_id)?;
@@ -386,7 +430,7 @@ pub fn handle_session_end_with_profile(
         &input.transcript_path,
         state.as_ref(),
         profile,
-        "",
+        model_hint,
     );
     Ok(())
 }
@@ -420,6 +464,16 @@ pub fn handle_pre_task_with_profile(
     repo_root: Option<&Path>,
     profile: HookAgentProfile,
 ) -> Result<()> {
+    handle_pre_task_with_profile_and_model(input, backend, repo_root, profile, "")
+}
+
+pub fn handle_pre_task_with_profile_and_model(
+    input: TaskHookInput,
+    backend: &dyn SessionBackend,
+    repo_root: Option<&Path>,
+    profile: HookAgentProfile,
+    model_hint: &str,
+) -> Result<()> {
     log_pre_task_hook_context(&mut io::stderr(), &input);
 
     // Update session state interaction time.
@@ -443,7 +497,7 @@ pub fn handle_pre_task_with_profile(
         session_state.as_ref(),
         profile,
         InteractionEventType::SubagentStart,
-        "",
+        model_hint,
         serde_json::json!({
             "tool_use_id": marker.tool_use_id,
         }),
@@ -475,6 +529,17 @@ pub fn handle_post_task_with_profile(
     repo_root: Option<&Path>,
     profile: HookAgentProfile,
 ) -> Result<()> {
+    handle_post_task_with_profile_and_model(input, backend, strategy, repo_root, profile, "")
+}
+
+pub fn handle_post_task_with_profile_and_model(
+    input: PostTaskInput,
+    backend: &dyn SessionBackend,
+    strategy: &dyn Strategy,
+    repo_root: Option<&Path>,
+    profile: HookAgentProfile,
+    model_hint: &str,
+) -> Result<()> {
     let subagent_transcript_path = resolve_subagent_transcript_path(
         &input.transcript_path,
         &input.session_id,
@@ -497,7 +562,7 @@ pub fn handle_post_task_with_profile(
         session_state.as_ref(),
         profile,
         InteractionEventType::SubagentEnd,
-        "",
+        model_hint,
         serde_json::json!({
             "subagent_id": input.tool_response.agent_id.clone(),
             "tool_use_id": input.tool_use_id.clone(),

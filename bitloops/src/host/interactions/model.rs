@@ -29,6 +29,16 @@ pub(crate) fn resolve_interaction_model_from_bytes(model_hint: &str, transcript:
     extract_model_from_transcript_bytes(transcript)
 }
 
+pub(crate) fn extract_model_from_hook_payload(payload: &str) -> String {
+    if payload.trim().is_empty() {
+        return String::new();
+    }
+
+    extract_model_from_json_bytes(payload.as_bytes())
+        .or_else(|| extract_model_from_jsonl_bytes(payload.as_bytes()))
+        .unwrap_or_default()
+}
+
 pub(crate) fn extract_model_from_transcript_path(transcript_path: &str) -> String {
     if transcript_path.trim().is_empty() {
         return String::new();
@@ -121,8 +131,8 @@ fn collect_models(value: &Value, models: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_model_from_transcript_bytes, resolve_interaction_model,
-        resolve_interaction_model_from_bytes,
+        extract_model_from_hook_payload, extract_model_from_transcript_bytes,
+        resolve_interaction_model, resolve_interaction_model_from_bytes,
     };
 
     #[test]
@@ -177,5 +187,11 @@ mod tests {
             resolve_interaction_model("", transcript_path.to_string_lossy().as_ref()),
             "gemini-2.5-flash"
         );
+    }
+
+    #[test]
+    fn extracts_model_from_hook_payload_json() {
+        let payload = r#"{"sessionId":"s1","modelSlug":"gpt-5.4-codex"}"#;
+        assert_eq!(extract_model_from_hook_payload(payload), "gpt-5.4-codex");
     }
 }

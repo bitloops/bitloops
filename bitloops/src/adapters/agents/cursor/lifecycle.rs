@@ -50,6 +50,7 @@ pub fn parse_hook_event(
                 event_type: Some(LifecycleEventType::SessionStart),
                 session_id,
                 session_ref: raw.transcript_path.unwrap_or_default(),
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -62,6 +63,7 @@ pub fn parse_hook_event(
                 session_id: session_id.clone(),
                 session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
                 prompt: raw.prompt,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -73,6 +75,7 @@ pub fn parse_hook_event(
                 event_type: Some(LifecycleEventType::TurnEnd),
                 session_id: session_id.clone(),
                 session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -84,6 +87,7 @@ pub fn parse_hook_event(
                 event_type: Some(LifecycleEventType::SessionEnd),
                 session_id: session_id.clone(),
                 session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -96,6 +100,7 @@ pub fn parse_hook_event(
                     SessionIdPolicy::PreserveEmpty,
                 )?,
                 session_ref: raw.transcript_path.unwrap_or_default(),
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -113,6 +118,7 @@ pub fn parse_hook_event(
                 session_ref: raw.transcript_path.unwrap_or_default(),
                 tool_use_id: raw.subagent_id.clone(),
                 subagent_id: raw.subagent_id,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -130,6 +136,7 @@ pub fn parse_hook_event(
                 session_ref: raw.transcript_path.unwrap_or_default(),
                 tool_use_id: raw.subagent_id.clone(),
                 subagent_id: raw.subagent_id,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -151,7 +158,7 @@ mod tests {
     #[test]
     fn parse_before_submit_prompt_maps_turn_start() {
         let mut input = std::io::Cursor::new(
-            br#"{"conversation_id":"c1","transcript_path":"/tmp/t.jsonl","prompt":"hello"}"#
+            br#"{"conversation_id":"c1","transcript_path":"/tmp/t.jsonl","prompt":"hello","modelSlug":"gpt-5.4-mini"}"#
                 .as_slice(),
         );
         let parsed = parse_hook_event(HOOK_NAME_BEFORE_SUBMIT_PROMPT, &mut input)
@@ -161,6 +168,7 @@ mod tests {
         assert_eq!(parsed.session_id, "c1");
         assert_eq!(parsed.prompt, "hello");
         assert_eq!(parsed.session_ref, "/tmp/t.jsonl");
+        assert_eq!(parsed.model, "gpt-5.4-mini");
     }
 
     #[test]
