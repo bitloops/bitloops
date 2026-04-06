@@ -15,10 +15,7 @@ pub(super) fn blocking_query_rows(
     password: Option<&str>,
     sql: &str,
 ) -> Result<Vec<Value>> {
-    let mut query = sql.trim().to_string();
-    if !query.to_ascii_uppercase().contains("FORMAT JSON") {
-        query.push_str(" FORMAT JSON");
-    }
+    let query = prepare_json_query(sql);
     let raw = blocking_exec(endpoint, user, password, &query)?;
     if raw.trim().is_empty() {
         return Ok(Vec::new());
@@ -30,6 +27,14 @@ pub(super) fn blocking_query_rows(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+fn prepare_json_query(sql: &str) -> String {
+    let mut query = sql.trim().trim_end_matches(';').trim_end().to_string();
+    if !query.to_ascii_uppercase().contains("FORMAT JSON") {
+        query.push_str(" FORMAT JSON");
+    }
+    query
 }
 
 pub(super) fn blocking_exec(
@@ -206,4 +211,33 @@ fn nullable_i64(row: &Value, field: &str) -> Option<i64> {
         Value::String(text) => text.parse::<i64>().ok(),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_json_query;
+
+    #[test]
+    fn prepare_json_query_appends_format_json() {
+        assert_eq!(
+            prepare_json_query("SELECT * FROM interaction_events"),
+            "SELECT * FROM interaction_events FORMAT JSON"
+        );
+    }
+
+    #[test]
+    fn prepare_json_query_preserves_existing_format_json() {
+        assert_eq!(
+            prepare_json_query("SELECT * FROM interaction_events FORMAT JSON"),
+            "SELECT * FROM interaction_events FORMAT JSON"
+        );
+    }
+
+    #[test]
+    fn prepare_json_query_strips_trailing_semicolon_before_appending() {
+        assert_eq!(
+            prepare_json_query("SELECT * FROM interaction_events;"),
+            "SELECT * FROM interaction_events FORMAT JSON"
+        );
+    }
 }

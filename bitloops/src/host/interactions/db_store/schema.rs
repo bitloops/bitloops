@@ -87,35 +87,202 @@ ON interaction_spool_queue (repo_id, mutation_id);
 "#;
 
 pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()> {
-    let existing = sqlite_table_columns(conn, "interaction_turns")?;
-    let missing = [
-        (
-            "summary",
-            "ALTER TABLE interaction_turns ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
-        ),
-        (
-            "prompt_count",
-            "ALTER TABLE interaction_turns ADD COLUMN prompt_count INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "transcript_offset_start",
-            "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_start INTEGER",
-        ),
-        (
-            "transcript_offset_end",
-            "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_end INTEGER",
-        ),
-        (
-            "transcript_fragment",
-            "ALTER TABLE interaction_turns ADD COLUMN transcript_fragment TEXT NOT NULL DEFAULT ''",
-        ),
-    ];
+    ensure_table_columns(
+        conn,
+        "interaction_sessions",
+        &[
+            (
+                "repo_id",
+                "ALTER TABLE interaction_sessions ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "agent_type",
+                "ALTER TABLE interaction_sessions ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "model",
+                "ALTER TABLE interaction_sessions ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "first_prompt",
+                "ALTER TABLE interaction_sessions ADD COLUMN first_prompt TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "transcript_path",
+                "ALTER TABLE interaction_sessions ADD COLUMN transcript_path TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "worktree_path",
+                "ALTER TABLE interaction_sessions ADD COLUMN worktree_path TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "worktree_id",
+                "ALTER TABLE interaction_sessions ADD COLUMN worktree_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "started_at",
+                "ALTER TABLE interaction_sessions ADD COLUMN started_at TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "ended_at",
+                "ALTER TABLE interaction_sessions ADD COLUMN ended_at TEXT",
+            ),
+            (
+                "last_event_at",
+                "ALTER TABLE interaction_sessions ADD COLUMN last_event_at TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "updated_at",
+                "ALTER TABLE interaction_sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+            ),
+        ],
+    )?;
+    ensure_table_columns(
+        conn,
+        "interaction_turns",
+        &[
+            (
+                "session_id",
+                "ALTER TABLE interaction_turns ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "repo_id",
+                "ALTER TABLE interaction_turns ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "turn_number",
+                "ALTER TABLE interaction_turns ADD COLUMN turn_number INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "prompt",
+                "ALTER TABLE interaction_turns ADD COLUMN prompt TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "agent_type",
+                "ALTER TABLE interaction_turns ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "model",
+                "ALTER TABLE interaction_turns ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "started_at",
+                "ALTER TABLE interaction_turns ADD COLUMN started_at TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "ended_at",
+                "ALTER TABLE interaction_turns ADD COLUMN ended_at TEXT",
+            ),
+            (
+                "has_token_usage",
+                "ALTER TABLE interaction_turns ADD COLUMN has_token_usage INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "input_tokens",
+                "ALTER TABLE interaction_turns ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "cache_creation_tokens",
+                "ALTER TABLE interaction_turns ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "cache_read_tokens",
+                "ALTER TABLE interaction_turns ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "output_tokens",
+                "ALTER TABLE interaction_turns ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "api_call_count",
+                "ALTER TABLE interaction_turns ADD COLUMN api_call_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "summary",
+                "ALTER TABLE interaction_turns ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "prompt_count",
+                "ALTER TABLE interaction_turns ADD COLUMN prompt_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "transcript_offset_start",
+                "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_start INTEGER",
+            ),
+            (
+                "transcript_offset_end",
+                "ALTER TABLE interaction_turns ADD COLUMN transcript_offset_end INTEGER",
+            ),
+            (
+                "transcript_fragment",
+                "ALTER TABLE interaction_turns ADD COLUMN transcript_fragment TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "files_modified",
+                "ALTER TABLE interaction_turns ADD COLUMN files_modified TEXT NOT NULL DEFAULT '[]'",
+            ),
+            (
+                "checkpoint_id",
+                "ALTER TABLE interaction_turns ADD COLUMN checkpoint_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "updated_at",
+                "ALTER TABLE interaction_turns ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+            ),
+        ],
+    )?;
+    ensure_table_columns(
+        conn,
+        "interaction_events",
+        &[
+            (
+                "session_id",
+                "ALTER TABLE interaction_events ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "turn_id",
+                "ALTER TABLE interaction_events ADD COLUMN turn_id TEXT",
+            ),
+            (
+                "repo_id",
+                "ALTER TABLE interaction_events ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "event_type",
+                "ALTER TABLE interaction_events ADD COLUMN event_type TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "event_time",
+                "ALTER TABLE interaction_events ADD COLUMN event_time TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "agent_type",
+                "ALTER TABLE interaction_events ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "model",
+                "ALTER TABLE interaction_events ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "payload",
+                "ALTER TABLE interaction_events ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'",
+            ),
+        ],
+    )
+}
+
+fn ensure_table_columns(
+    conn: &rusqlite::Connection,
+    table: &str,
+    missing: &[(&str, &str)],
+) -> Result<()> {
+    let existing = sqlite_table_columns(conn, table)?;
     for (column, sql) in missing {
-        if existing.contains(column) {
+        if existing.contains(*column) {
             continue;
         }
         conn.execute_batch(sql)
-            .with_context(|| format!("adding interaction_turns.{column} column"))?;
+            .with_context(|| format!("adding {table}.{column} column"))?;
     }
     Ok(())
 }
@@ -135,4 +302,43 @@ fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Hash
         columns.insert(name);
     }
     Ok(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_additive_columns_migrates_legacy_spool_tables() {
+        let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
+        conn.execute_batch(
+            r#"
+CREATE TABLE interaction_sessions (
+    session_id TEXT PRIMARY KEY
+);
+CREATE TABLE interaction_turns (
+    turn_id TEXT PRIMARY KEY
+);
+CREATE TABLE interaction_events (
+    event_id TEXT PRIMARY KEY
+);
+"#,
+        )
+        .expect("create legacy tables");
+
+        ensure_additive_columns(&conn).expect("apply additive columns");
+
+        let session_columns = sqlite_table_columns(&conn, "interaction_sessions").unwrap();
+        assert!(session_columns.contains("last_event_at"));
+        assert!(session_columns.contains("updated_at"));
+
+        let turn_columns = sqlite_table_columns(&conn, "interaction_turns").unwrap();
+        assert!(turn_columns.contains("summary"));
+        assert!(turn_columns.contains("transcript_fragment"));
+        assert!(turn_columns.contains("updated_at"));
+
+        let event_columns = sqlite_table_columns(&conn, "interaction_events").unwrap();
+        assert!(event_columns.contains("model"));
+        assert!(event_columns.contains("payload"));
+    }
 }
