@@ -271,6 +271,73 @@ fn resolve_store_backend_config_for_repo_reads_nearest_ancestor_daemon_config() 
 }
 
 #[test]
+fn resolve_store_backend_config_for_repo_prefers_repo_scoped_config_over_explicit_override_in_tests()
+ {
+    let repo = tempfile::tempdir().expect("repo temp dir");
+    let foreign = tempfile::tempdir().expect("foreign temp dir");
+
+    write_envelope_config(
+        repo.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/local.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/local.duckdb"
+                }
+            }
+        }),
+    );
+    write_envelope_config(
+        foreign.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/foreign.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/foreign.duckdb"
+                }
+            }
+        }),
+    );
+
+    let foreign_config = foreign
+        .path()
+        .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+        .to_string_lossy()
+        .to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(foreign_config.as_str()),
+        )],
+    );
+
+    let cfg = resolve_store_backend_config_for_repo(repo.path()).expect("store backend config");
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some(
+            repo.path()
+                .join("stores/relational/local.db")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some(
+            repo.path()
+                .join("stores/event/local.duckdb")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
 fn resolve_store_backend_config_honours_explicit_daemon_config_override_inside_git_repo() {
     let temp = tempfile::tempdir().expect("temp dir");
     let status = git_command()

@@ -44,16 +44,41 @@ fn discover_nearest_daemon_config(start: &Path) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+fn load_nearest_daemon_settings(repo_root: &Path) -> Result<Option<LoadedDaemonSettings>> {
+    discover_nearest_daemon_config(repo_root)
+        .map(|config_path| load_daemon_settings(Some(&config_path)))
+        .transpose()
+}
+
+#[cfg(test)]
+fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
+    // In tests, prefer repo-local config so concurrent tests using a process-wide
+    // daemon-config override do not leak store paths across unrelated repos.
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
+        return Ok(loaded);
+    }
+
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        return load_daemon_settings(Some(Path::new(&explicit_path)));
+    }
+
+    bail!(
+        "Bitloops daemon config is required to resolve the repo runtime store. Set `{}` to an explicit config path, add `{}` next to the repository, or create the default daemon config.",
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        BITLOOPS_CONFIG_RELATIVE_PATH
+    )
+}
+
+#[cfg(not(test))]
 fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
     if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
         return load_daemon_settings(Some(Path::new(&explicit_path)));
     }
 
-    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
-        return load_daemon_settings(Some(&config_path));
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
+        return Ok(loaded);
     }
 
-    #[cfg(not(test))]
     if default_daemon_config_exists().unwrap_or(false) {
         return load_daemon_settings(None);
     }
@@ -71,13 +96,12 @@ pub fn resolve_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> 
 
 #[cfg(test)]
 fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
-    if let Some(override_settings) = explicit_daemon_settings_override()? {
-        return Ok(override_settings);
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
+        return Ok((loaded.root, loaded.settings));
     }
 
-    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
-        let loaded = load_daemon_settings(Some(&config_path))?;
-        return Ok((loaded.root, loaded.settings));
+    if let Some(override_settings) = explicit_daemon_settings_override()? {
+        return Ok(override_settings);
     }
 
     Ok((repo_root.to_path_buf(), UnifiedSettings::default()))
@@ -89,8 +113,7 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
         return Ok(override_settings);
     }
 
-    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
-        let loaded = load_daemon_settings(Some(&config_path))?;
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
         return Ok((loaded.root, loaded.settings));
     }
 
