@@ -175,6 +175,13 @@ pub(super) fn compile_clones_filter_input(parsed: &ParsedDevqlQuery) -> Option<S
     if let Some(min_score) = parsed.clones.min_score {
         fields.push(format!("minScore: {min_score}"));
     }
+    if let Some(neighbors) = parsed.clones.neighbors {
+        let clamped = neighbors.clamp(
+            crate::capability_packs::semantic_clones::scoring::MIN_ANN_NEIGHBORS as i64,
+            crate::capability_packs::semantic_clones::scoring::MAX_ANN_NEIGHBORS as i64,
+        );
+        fields.push(format!("neighbors: {clamped}"));
+    }
 
     (!fields.is_empty()).then(|| format!("{{ {} }}", fields.join(", ")))
 }

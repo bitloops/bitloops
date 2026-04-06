@@ -1,5 +1,8 @@
 use async_graphql::{ComplexObject, Context, ID, InputObject, Result, SimpleObject};
 
+use crate::capability_packs::semantic_clones::scoring::{
+    CloneScoringOptions, MAX_ANN_NEIGHBORS, MIN_ANN_NEIGHBORS,
+};
 use crate::graphql::{ResolverScope, backend_error, bad_user_input_error, loaders::DataLoaders};
 
 use super::{Artefact, JsonScalar};
@@ -8,6 +11,7 @@ use super::{Artefact, JsonScalar};
 pub struct ClonesFilterInput {
     pub relation_kind: Option<String>,
     pub min_score: Option<f64>,
+    pub neighbors: Option<i32>,
 }
 
 impl ClonesFilterInput {
@@ -26,6 +30,12 @@ impl ClonesFilterInput {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+    }
+
+    pub(crate) fn neighbors_override(&self) -> Option<CloneScoringOptions> {
+        self.neighbors
+            .map(|value| value.clamp(MIN_ANN_NEIGHBORS as i32, MAX_ANN_NEIGHBORS as i32))
+            .map(|value| CloneScoringOptions::new(value as usize))
     }
 }
 

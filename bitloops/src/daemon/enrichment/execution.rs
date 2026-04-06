@@ -282,10 +282,14 @@ async fn execute_clone_edges_rebuild_job(
             Err(err) => JobExecutionOutcome::failed(err),
         };
     }
+    let options = crate::capability_packs::semantic_clones::scoring::CloneScoringOptions::new(
+        capability.semantic_clones.ann_neighbors,
+    );
 
-    match crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
+    match crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
         relational,
         &job.repo_id,
+        options,
     )
     .await
     {

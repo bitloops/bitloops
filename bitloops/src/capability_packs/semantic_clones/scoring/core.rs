@@ -42,9 +42,22 @@ pub(super) fn semantic_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> f32 {
+    if !source
+        .embedding_provider
+        .eq_ignore_ascii_case(&target.embedding_provider)
+        || !source
+            .embedding_model
+            .eq_ignore_ascii_case(&target.embedding_model)
+        || source.embedding_dimension != target.embedding_dimension
+    {
+        return 0.0;
+    }
+
     if source.embedding.is_empty()
         || target.embedding.is_empty()
         || source.embedding.len() != target.embedding.len()
+        || source.embedding_dimension != source.embedding.len()
+        || target.embedding_dimension != target.embedding.len()
     {
         return 0.0;
     }

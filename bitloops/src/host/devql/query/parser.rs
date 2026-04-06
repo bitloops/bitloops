@@ -54,6 +54,7 @@ pub(crate) struct ArtefactFilter {
 pub(super) struct CloneFilter {
     pub(super) relation_kind: Option<String>,
     pub(super) min_score: Option<f32>,
+    pub(super) neighbors: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -192,6 +193,13 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                     min_score
                         .parse::<f32>()
                         .map_err(|_| anyhow!("invalid clones min_score value: {min_score}"))?,
+                );
+            }
+            if let Some(neighbors) = args.get("neighbors") {
+                parsed.clones.neighbors = Some(
+                    neighbors
+                        .parse::<i64>()
+                        .map_err(|_| anyhow!("invalid clones neighbors value: {neighbors}"))?,
                 );
             }
             continue;

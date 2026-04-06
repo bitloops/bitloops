@@ -47,15 +47,29 @@ async fn ensure_semantic_clones_schema(relational: &RelationalStorage) -> Result
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn rebuild_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
+) -> Result<scoring::SymbolCloneBuildResult> {
+    rebuild_symbol_clone_edges_with_options(
+        relational,
+        repo_id,
+        scoring::CloneScoringOptions::default(),
+    )
+    .await
+}
+
+pub(crate) async fn rebuild_symbol_clone_edges_with_options(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    options: scoring::CloneScoringOptions,
 ) -> Result<scoring::SymbolCloneBuildResult> {
     ensure_semantic_clones_schema(relational).await?;
     ensure_semantic_embeddings_schema(relational).await?;
     let candidates = load_symbol_clone_candidate_inputs(relational, repo_id).await?;
     let build_result = tokio::task::spawn_blocking(move || {
-        semantic_clones_pack::build_symbol_clone_edges(&candidates)
+        semantic_clones_pack::build_symbol_clone_edges_with_options(&candidates, options)
     })
     .await
     .context("building semantic clone edges on blocking worker")?;
@@ -63,6 +77,27 @@ pub(crate) async fn rebuild_symbol_clone_edges(
     delete_repo_symbol_clone_edges(relational, repo_id).await?;
     persist_symbol_clone_edges(relational, &build_result.edges).await?;
     Ok(build_result)
+}
+
+pub(crate) async fn score_symbol_clone_edges_for_source_with_options(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    source_symbol_id: &str,
+    options: scoring::CloneScoringOptions,
+) -> Result<scoring::SymbolCloneBuildResult> {
+    ensure_semantic_clones_schema(relational).await?;
+    ensure_semantic_embeddings_schema(relational).await?;
+    let candidates = load_symbol_clone_candidate_inputs(relational, repo_id).await?;
+    let source_symbol_id = source_symbol_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        semantic_clones_pack::build_symbol_clone_edges_for_source_with_options(
+            &candidates,
+            &source_symbol_id,
+            options,
+        )
+    })
+    .await
+    .context("building source symbol clone edges on blocking worker")
 }
 
 async fn load_symbol_clone_candidate_inputs(
@@ -136,6 +171,20 @@ async fn load_symbol_clone_candidate_inputs(
                 .and_then(Value::as_str)
                 .map(str::to_string),
             context_tokens: parse_clone_json_string_array(row.get("context_tokens")),
+            embedding_provider: row
+                .get("embedding_provider")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            embedding_model: row
+                .get("embedding_model")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            embedding_dimension: row
+                .get("embedding_dimension")
+                .and_then(value_as_usize)
+                .unwrap_or(embedding.len()),
             embedding,
             call_targets: call_targets_by_symbol_id
                 .get(symbol_id)
@@ -267,6 +316,7 @@ fn build_symbol_clone_candidate_lookup_sql(repo_id: &str) -> String {
 LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) AS canonical_kind, \
 COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, ss.summary, \
 sf.normalized_name, sf.normalized_signature, sf.identifier_tokens, sf.normalized_body_tokens, sf.parent_kind, sf.context_tokens, \
+e.provider AS embedding_provider, e.model AS embedding_model, e.dimension AS embedding_dimension, \
 e.embedding \
 FROM artefacts_current a \
 JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
@@ -382,6 +432,8 @@ mod semantic_clone_pipeline_tests {
 
         assert!(sql.contains("FROM artefacts_current a"));
         assert!(sql.contains("JOIN symbol_embeddings e"));
+        assert!(sql.contains("e.provider AS embedding_provider"));
+        assert!(sql.contains("e.model AS embedding_model"));
         assert!(sql.contains("repo''1"));
         assert!(!sql.contains(" IN ("));
     }

@@ -236,6 +236,11 @@ impl Project {
     ) -> Result<CloneConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
+            if filter.neighbors_override().is_some() {
+                return Err(bad_user_input_error(
+                    "`neighbors` override is only supported for artefact-scoped `clones` queries",
+                ));
+            }
         }
         if self
             .scope

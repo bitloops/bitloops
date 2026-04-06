@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6)->limit(5)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6,neighbors:9)->limit(5)"#,
     )
     .unwrap();
 
@@ -13,6 +13,7 @@ fn parse_devql_clones_stage_basic() {
         Some("similar_implementation")
     );
     assert_eq!(parsed.clones.min_score, Some(0.6));
+    assert_eq!(parsed.clones.neighbors, Some(9));
 }
 
 #[tokio::test]
@@ -47,6 +48,27 @@ async fn execute_devql_query_rejects_clones_with_asof() {
     assert!(
         err.to_string()
             .contains("clones() does not yet support asOf")
+    );
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_rejects_neighbors_without_single_source() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(neighbors:5)->limit(10)"#,
+    )
+    .expect("parse clone query");
+    let err = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect_err("neighbors override should require one source");
+    assert!(
+        err.to_string()
+            .contains("requires the source artefact set to resolve to exactly one source symbol")
     );
 }
 

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -89,6 +89,42 @@ pub const RELATION_KIND_DIVERGED_IMPLEMENTATION: &str = "diverged_implementation
 pub const RELATION_KIND_WEAK_CLONE_CANDIDATE: &str = "weak_clone_candidate";
 pub const LABEL_PREFERRED_LOCAL_PATTERN: &str = "preferred_local_pattern";
 
+pub const DEFAULT_ANN_NEIGHBORS: usize = 5;
+pub const MIN_ANN_NEIGHBORS: usize = 1;
+pub const MAX_ANN_NEIGHBORS: usize = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloneScoringOptions {
+    pub ann_neighbors: usize,
+}
+
+impl Default for CloneScoringOptions {
+    fn default() -> Self {
+        Self {
+            ann_neighbors: DEFAULT_ANN_NEIGHBORS,
+        }
+    }
+}
+
+impl CloneScoringOptions {
+    pub fn new(ann_neighbors: usize) -> Self {
+        Self {
+            ann_neighbors: ann_neighbors.clamp(MIN_ANN_NEIGHBORS, MAX_ANN_NEIGHBORS),
+        }
+    }
+
+    pub fn from_i64_clamped(value: i64) -> Self {
+        let value = if value < MIN_ANN_NEIGHBORS as i64 {
+            MIN_ANN_NEIGHBORS
+        } else if value > MAX_ANN_NEIGHBORS as i64 {
+            MAX_ANN_NEIGHBORS
+        } else {
+            value as usize
+        };
+        Self::new(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SymbolCloneCandidateInput {
     pub repo_id: String,
@@ -104,6 +140,9 @@ pub struct SymbolCloneCandidateInput {
     pub normalized_body_tokens: Vec<String>,
     pub parent_kind: Option<String>,
     pub context_tokens: Vec<String>,
+    pub embedding_provider: String,
+    pub embedding_model: String,
+    pub embedding_dimension: usize,
     pub embedding: Vec<f32>,
     pub call_targets: Vec<String>,
     pub dependency_targets: Vec<String>,
@@ -132,20 +171,133 @@ pub struct SymbolCloneBuildResult {
     pub sources_considered: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CandidateGroupKey {
+    repo_id: String,
+    effective_kind: String,
+    embedding_provider: String,
+    embedding_model: String,
+    embedding_dimension: usize,
+}
+
+#[derive(Debug)]
+struct GroupAnnIndex {
+    global_indices: Vec<usize>,
+    local_by_global: HashMap<usize, usize>,
+    index: ann::HnswLikeIndex,
+}
+
 pub fn build_symbol_clone_edges(inputs: &[SymbolCloneCandidateInput]) -> SymbolCloneBuildResult {
+    build_symbol_clone_edges_with_options(inputs, CloneScoringOptions::default())
+}
+
+pub fn build_symbol_clone_edges_with_options(
+    inputs: &[SymbolCloneCandidateInput],
+    options: CloneScoringOptions,
+) -> SymbolCloneBuildResult {
     let candidates = inputs
         .iter()
         .filter(|input| is_meaningful_clone_candidate(input))
         .collect::<Vec<_>>();
-    let mut edges = Vec::new();
+    build_symbol_clone_edges_for_sources(&candidates, &candidates, options)
+}
 
-    for source in &candidates {
-        let mut source_edges = candidates
-            .iter()
-            .filter(|target| {
-                target.symbol_id != source.symbol_id && target.repo_id == source.repo_id
+pub fn build_symbol_clone_edges_for_source_with_options(
+    inputs: &[SymbolCloneCandidateInput],
+    source_symbol_id: &str,
+    options: CloneScoringOptions,
+) -> SymbolCloneBuildResult {
+    let candidates = inputs
+        .iter()
+        .filter(|input| is_meaningful_clone_candidate(input))
+        .collect::<Vec<_>>();
+    let sources = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.symbol_id == source_symbol_id)
+        .collect::<Vec<_>>();
+    build_symbol_clone_edges_for_sources(&candidates, &sources, options)
+}
+
+fn build_symbol_clone_edges_for_sources(
+    candidates: &[&SymbolCloneCandidateInput],
+    sources: &[&SymbolCloneCandidateInput],
+    options: CloneScoringOptions,
+) -> SymbolCloneBuildResult {
+    if candidates.is_empty() || sources.is_empty() {
+        return SymbolCloneBuildResult {
+            edges: Vec::new(),
+            sources_considered: sources.len(),
+        };
+    }
+
+    let mut group_indices = HashMap::<CandidateGroupKey, Vec<usize>>::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        group_indices
+            .entry(candidate_group_key(candidate))
+            .or_default()
+            .push(idx);
+    }
+
+    let group_ann_indexes = build_group_ann_indexes(candidates, &group_indices);
+    let duplicate_buckets = build_duplicate_buckets(candidates, &group_indices);
+
+    let mut candidate_index_by_symbol_id =
+        HashMap::<String, usize>::with_capacity(candidates.len());
+    for (idx, candidate) in candidates.iter().enumerate() {
+        candidate_index_by_symbol_id.insert(candidate.symbol_id.clone(), idx);
+    }
+
+    let mut edges = Vec::new();
+    for source in sources {
+        let Some(source_idx) = candidate_index_by_symbol_id
+            .get(source.symbol_id.as_str())
+            .copied()
+        else {
+            continue;
+        };
+
+        let group_key = candidate_group_key(source);
+        let mut target_indices = HashSet::<usize>::new();
+
+        if let Some(group_ann_index) = group_ann_indexes.get(&group_key)
+            && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
+        {
+            let ann_local = group_ann_index
+                .index
+                .nearest(*source_local_idx, options.ann_neighbors.saturating_add(1));
+            for local_idx in ann_local {
+                if let Some(global_idx) = group_ann_index.global_indices.get(local_idx).copied()
+                    && global_idx != source_idx
+                {
+                    target_indices.insert(global_idx);
+                }
+            }
+        }
+
+        // Exact-duplicate recall: always include deterministic duplicate-bucket peers.
+        if !source.normalized_body_tokens.is_empty() {
+            let bucket_key = (
+                normalized_body_hash(source),
+                normalized_signature_hash(source),
+            );
+            if let Some(group_buckets) = duplicate_buckets.get(&group_key)
+                && let Some(bucket_members) = group_buckets.get(&bucket_key)
+            {
+                for member_idx in bucket_members {
+                    if *member_idx != source_idx {
+                        target_indices.insert(*member_idx);
+                    }
+                }
+            }
+        }
+
+        let mut source_edges = target_indices
+            .into_iter()
+            .filter_map(|target_idx| {
+                let target = candidates.get(target_idx).copied()?;
+                build_symbol_clone_edge(source, target)
             })
-            .filter_map(|target| build_symbol_clone_edge(source, target))
             .collect::<Vec<_>>();
 
         source_edges.sort_by(|left, right| {
@@ -161,7 +313,81 @@ pub fn build_symbol_clone_edges(inputs: &[SymbolCloneCandidateInput]) -> SymbolC
 
     SymbolCloneBuildResult {
         edges,
-        sources_considered: candidates.len(),
+        sources_considered: sources.len(),
+    }
+}
+
+fn build_group_ann_indexes(
+    candidates: &[&SymbolCloneCandidateInput],
+    group_indices: &HashMap<CandidateGroupKey, Vec<usize>>,
+) -> HashMap<CandidateGroupKey, GroupAnnIndex> {
+    let mut out = HashMap::with_capacity(group_indices.len());
+    for (group_key, global_indices) in group_indices {
+        if global_indices.len() < 2 {
+            continue;
+        }
+
+        let vectors = global_indices
+            .iter()
+            .filter_map(|idx| candidates.get(*idx))
+            .map(|candidate| candidate.embedding.clone())
+            .collect::<Vec<_>>();
+        if vectors.is_empty() {
+            continue;
+        }
+
+        let index = ann::HnswLikeIndex::build(&vectors);
+        let local_by_global = global_indices
+            .iter()
+            .enumerate()
+            .map(|(local, global)| (*global, local))
+            .collect::<HashMap<_, _>>();
+        out.insert(
+            group_key.clone(),
+            GroupAnnIndex {
+                global_indices: global_indices.clone(),
+                local_by_global,
+                index,
+            },
+        );
+    }
+    out
+}
+
+fn build_duplicate_buckets(
+    candidates: &[&SymbolCloneCandidateInput],
+    group_indices: &HashMap<CandidateGroupKey, Vec<usize>>,
+) -> HashMap<CandidateGroupKey, HashMap<(String, String), Vec<usize>>> {
+    let mut out = HashMap::with_capacity(group_indices.len());
+    for (group_key, global_indices) in group_indices {
+        let mut buckets = HashMap::<(String, String), Vec<usize>>::new();
+        for candidate_idx in global_indices {
+            let Some(candidate) = candidates.get(*candidate_idx).copied() else {
+                continue;
+            };
+            if candidate.normalized_body_tokens.is_empty() {
+                continue;
+            }
+            let key = (
+                normalized_body_hash(candidate),
+                normalized_signature_hash(candidate),
+            );
+            buckets.entry(key).or_default().push(*candidate_idx);
+        }
+        if !buckets.is_empty() {
+            out.insert(group_key.clone(), buckets);
+        }
+    }
+    out
+}
+
+fn candidate_group_key(candidate: &SymbolCloneCandidateInput) -> CandidateGroupKey {
+    CandidateGroupKey {
+        repo_id: candidate.repo_id.clone(),
+        effective_kind: candidate.canonical_kind.trim().to_ascii_lowercase(),
+        embedding_provider: candidate.embedding_provider.trim().to_ascii_lowercase(),
+        embedding_model: candidate.embedding_model.trim().to_ascii_lowercase(),
+        embedding_dimension: candidate.embedding_dimension,
     }
 }
 
@@ -258,6 +484,8 @@ mod classification;
 mod explanation;
 // utils: jaccard, hashing, token helpers, path/name similarity
 mod utils;
+// ann: in-memory HNSW-like nearest-neighbour index for semantic prefiltering
+mod ann;
 
 use self::classification::*;
 use self::core::*;
@@ -288,11 +516,31 @@ mod tests {
             ],
             parent_kind: Some("module".to_string()),
             context_tokens: vec!["services".to_string(), "orders".to_string()],
+            embedding_provider: "local_fastembed".to_string(),
+            embedding_model: "jinaai/jina-embeddings-v2-base-code".to_string(),
+            embedding_dimension: 3,
             embedding: vec![0.9, 0.1, 0.0],
             call_targets: vec!["db.fetchOrder".to_string()],
             dependency_targets: vec!["references:order_repository::entity".to_string()],
             churn_count: 1,
         }
+    }
+
+    #[test]
+    fn clone_scoring_options_clamp_neighbors() {
+        assert_eq!(
+            CloneScoringOptions::default().ann_neighbors,
+            DEFAULT_ANN_NEIGHBORS
+        );
+        assert_eq!(CloneScoringOptions::new(0).ann_neighbors, MIN_ANN_NEIGHBORS);
+        assert_eq!(
+            CloneScoringOptions::new(MAX_ANN_NEIGHBORS + 10).ann_neighbors,
+            MAX_ANN_NEIGHBORS
+        );
+        assert_eq!(
+            CloneScoringOptions::from_i64_clamped(-10).ann_neighbors,
+            MIN_ANN_NEIGHBORS
+        );
     }
 
     #[test]
@@ -553,5 +801,84 @@ mod tests {
             edge.explanation_json["evidence"]["shared_signals"]["dependency_targets"][0],
             Value::String("implements:path_validator".to_string())
         );
+    }
+
+    #[test]
+    fn semantic_similarity_requires_matching_provider_model_and_dimension() {
+        let source = sample_input("source", "fetch_order");
+        let mut target = sample_input("target", "fetch_order_copy");
+        target.embedding_provider = "voyage".to_string();
+        assert_eq!(semantic_similarity(&source, &target), 0.0);
+
+        let mut target = sample_input("target2", "fetch_order_copy_2");
+        target.embedding_model = "other-model".to_string();
+        assert_eq!(semantic_similarity(&source, &target), 0.0);
+
+        let mut target = sample_input("target3", "fetch_order_copy_3");
+        target.embedding_dimension = 6;
+        assert_eq!(semantic_similarity(&source, &target), 0.0);
+    }
+
+    #[test]
+    fn build_symbol_clone_edges_for_source_respects_ann_neighbors_prefilter() {
+        let source = sample_input("source", "alpha");
+
+        let mut top = sample_input("top", "alpha_top");
+        top.path = "src/services/top.ts".to_string();
+        top.symbol_fqn = "src/services/top.ts::alpha_top".to_string();
+        top.embedding = vec![0.91, 0.09, 0.0];
+
+        let mut other = sample_input("other", "alpha_other");
+        other.path = "src/services/other.ts".to_string();
+        other.symbol_fqn = "src/services/other.ts::alpha_other".to_string();
+        other.embedding = vec![0.2, 0.8, 0.0];
+
+        let result = build_symbol_clone_edges_for_source_with_options(
+            &[source, top, other],
+            "source",
+            CloneScoringOptions::new(1),
+        );
+
+        let source_edges = result
+            .edges
+            .iter()
+            .filter(|edge| edge.source_symbol_id == "source")
+            .collect::<Vec<_>>();
+        assert!(source_edges.len() <= 1);
+    }
+
+    #[test]
+    fn low_ann_neighbors_keeps_exact_duplicate_recall_via_duplicate_bucket() {
+        let mut source = sample_input("source", "fetch_order");
+        source.embedding = vec![1.0, 0.0, 0.0];
+
+        let mut nearest_non_duplicate = sample_input("nearest", "fetch_order_nearest");
+        nearest_non_duplicate.path = "src/services/nearest.ts".to_string();
+        nearest_non_duplicate.symbol_fqn =
+            "src/services/nearest.ts::fetch_order_nearest".to_string();
+        nearest_non_duplicate.normalized_name = "fetch_order_nearest".to_string();
+        nearest_non_duplicate.normalized_body_tokens =
+            vec!["fetch".to_string(), "nearest".to_string()];
+        nearest_non_duplicate.normalized_signature =
+            Some("function fetch_order_nearest(id: string)".to_string());
+        nearest_non_duplicate.embedding = vec![0.99, 0.01, 0.0];
+
+        let mut exact_duplicate = sample_input("duplicate", "fetch_order");
+        exact_duplicate.path = "src/services/duplicate.ts".to_string();
+        exact_duplicate.symbol_fqn = "src/services/duplicate.ts::fetch_order".to_string();
+        // Make the duplicate semantically far so ANN(1) would likely miss it without backfill.
+        exact_duplicate.embedding = vec![0.0, 1.0, 0.0];
+
+        let result = build_symbol_clone_edges_for_source_with_options(
+            &[source, nearest_non_duplicate, exact_duplicate],
+            "source",
+            CloneScoringOptions::new(1),
+        );
+
+        assert!(result.edges.iter().any(|edge| {
+            edge.source_symbol_id == "source"
+                && edge.target_symbol_id == "duplicate"
+                && edge.relation_kind == RELATION_KIND_EXACT_DUPLICATE
+        }));
     }
 }

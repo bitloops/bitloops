@@ -92,11 +92,27 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub const DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 5;
+pub const MIN_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 1;
+pub const MAX_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticClonesConfig {
     pub summary_mode: SemanticSummaryMode,
     pub embedding_mode: SemanticCloneEmbeddingMode,
     pub embedding_profile: Option<String>,
+    pub ann_neighbors: usize,
+}
+
+impl Default for SemanticClonesConfig {
+    fn default() -> Self {
+        Self {
+            summary_mode: SemanticSummaryMode::default(),
+            embedding_mode: SemanticCloneEmbeddingMode::default(),
+            embedding_profile: None,
+            ann_neighbors: DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

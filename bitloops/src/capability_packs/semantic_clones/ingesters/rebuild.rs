@@ -10,6 +10,7 @@ use crate::host::capability_host::registrar::{
 use super::super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
 };
+use crate::config::resolve_embedding_capability_config_for_repo;
 
 pub struct SymbolCloneEdgesRebuildIngester;
 
@@ -25,12 +26,18 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
                 .context("clone-edge rebuild relational for semantic clone-edge rebuild")?;
 
             let repo_id = ctx.repo().repo_id.clone();
-            let build =
-                crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
-                    relational, &repo_id,
-                )
-                .await
-                .context("rebuilding symbol clone edges")?;
+            let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
+            let options =
+                crate::capability_packs::semantic_clones::scoring::CloneScoringOptions::new(
+                    capability.semantic_clones.ann_neighbors,
+                );
+            let build = crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
+                relational,
+                &repo_id,
+                options,
+            )
+            .await
+            .context("rebuilding symbol clone edges")?;
             Ok(IngestResult::new(
                 json!({
                     "symbol_clone_edges_upserted": build.edges.len(),

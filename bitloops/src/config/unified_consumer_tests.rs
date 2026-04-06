@@ -196,6 +196,7 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
         SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
     assert_eq!(semantic_clones.embedding_profile.as_deref(), Some("local"));
+    assert_eq!(semantic_clones.ann_neighbors, 5);
 
     let embeddings = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
     assert_eq!(embeddings.runtime.command, "bitloops-embeddings");
@@ -235,6 +236,7 @@ fn semantic_clones_from_unified_reads_mode_fields() {
         semantic_clones: Some(json!({
             "summary_mode": "off",
             "embedding_mode": "refresh_on_upgrade",
+            "ann_neighbors": 17,
         })),
         ..Default::default()
     };
@@ -246,6 +248,17 @@ fn semantic_clones_from_unified_reads_mode_fields() {
         SemanticCloneEmbeddingMode::RefreshOnUpgrade
     );
     assert_eq!(semantic_clones.embedding_profile, None);
+    assert_eq!(semantic_clones.ann_neighbors, 17);
+}
+
+#[test]
+fn semantic_clones_from_unified_clamps_ann_neighbors_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_ANN_NEIGHBORS" => Some("999".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.ann_neighbors, 50);
 }
 
 // ---------------------------------------------------------------------------
