@@ -16,6 +16,30 @@ fn parse_devql_clones_stage_basic() {
     assert!(parsed.clones.raw);
 }
 
+#[test]
+fn parse_devql_clones_stage_accepts_raw_false() {
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(raw:false)->limit(5)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_clones_stage);
+    assert!(!parsed.clones.raw);
+}
+
+#[test]
+fn parse_devql_clones_stage_rejects_invalid_raw_literal() {
+    let err = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(raw:"maybe")->limit(5)"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("invalid boolean value for clones raw")
+    );
+}
+
 #[tokio::test]
 async fn execute_devql_query_rejects_clones_without_artefacts_stage() {
     let cfg = test_cfg();

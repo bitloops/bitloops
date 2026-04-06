@@ -626,6 +626,36 @@ mod tests {
     }
 
     #[test]
+    fn format_query_output_preserves_non_clone_payload_when_parsed_query_has_no_clones_stage() {
+        let parsed =
+            parse_devql_query(r#"repo("bitloops-cli")->artefacts(kind:"function")->limit(5)"#)
+                .expect("query parses");
+
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "artefacts": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "path": "src/main.rs",
+                                    "symbolFqn": "main"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+            true,
+            false,
+            Some(&parsed),
+        )
+        .expect("compact output should render");
+
+        assert_eq!(rendered, r#"[{"path":"src/main.rs","symbolFqn":"main"}]"#);
+    }
+
+    #[test]
     fn format_query_output_keeps_raw_graphql_shape() {
         let rendered = format_query_output(
             &json!({
@@ -713,6 +743,65 @@ mod tests {
     }
 
     #[test]
+    fn format_query_output_flattens_direct_clone_rows_with_user_facing_fallbacks() {
+        let parsed = parse_devql_query(
+            r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->limit(5)"#,
+        )
+        .expect("query parses");
+
+        let rendered = format_query_output(
+            &json!([
+                {
+                    "sourceArtefact": {
+                        "symbolFqn": "   ",
+                        "path": "src/pdf.ts"
+                    },
+                    "targetArtefact": {
+                        "path": "src/render.ts"
+                    },
+                    "relationKind": "exact_duplicate",
+                    "score": 1.0
+                },
+                {
+                    "sourceArtefactId": "artefact::source",
+                    "targetArtefactId": "   ",
+                    "relationKind": "similar_implementation"
+                },
+                {
+                    "id": "clone::debug"
+                },
+                "keep-me"
+            ]),
+            true,
+            false,
+            Some(&parsed),
+        )
+        .expect("clone output should render");
+
+        let value: Value =
+            serde_json::from_str(&rendered).expect("compact clone output is valid json");
+        assert_eq!(
+            value,
+            json!([
+                {
+                    "from": "src/pdf.ts",
+                    "to": "src/render.ts",
+                    "relationKind": "exact_duplicate",
+                    "score": 1.0
+                },
+                {
+                    "from": "artefact::source",
+                    "relationKind": "similar_implementation"
+                },
+                {
+                    "id": "clone::debug"
+                },
+                "keep-me"
+            ])
+        );
+    }
+
+    #[test]
     fn format_query_output_keeps_clone_raw_mode_opted_in() {
         let parsed = parse_devql_query(
             r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(raw:true)->limit(5)"#,
@@ -776,6 +865,35 @@ mod tests {
                     }
                 }
             ])
+        );
+    }
+
+    #[test]
+    fn format_query_output_preserves_direct_clone_rows_in_raw_mode() {
+        let parsed = parse_devql_query(
+            r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(raw:true)->limit(5)"#,
+        )
+        .expect("query parses");
+
+        let rendered = format_query_output(
+            &json!([
+                {
+                    "id": "clone::a",
+                    "sourceArtefactId": "artefact::source",
+                    "targetArtefactId": "artefact::target",
+                    "relationKind": "similar_implementation",
+                    "score": 0.91
+                }
+            ]),
+            true,
+            false,
+            Some(&parsed),
+        )
+        .expect("raw clone output should render");
+
+        assert_eq!(
+            rendered,
+            r#"[{"id":"clone::a","relationKind":"similar_implementation","score":0.91,"sourceArtefactId":"artefact::source","targetArtefactId":"artefact::target"}]"#
         );
     }
 }
