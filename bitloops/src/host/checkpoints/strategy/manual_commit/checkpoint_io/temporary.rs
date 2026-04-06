@@ -1,4 +1,8 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::SessionMetadataBundle;
+use crate::host::runtime_store::{
+    RepoSqliteRuntimeStore, RuntimeMetadataBlobType, TaskCheckpointArtefact,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TemporaryCheckpointRecord {
@@ -180,24 +184,12 @@ pub(crate) fn write_temporary(
         &resolved_new_files,
         &resolved_deleted_files,
     )?;
-    let mut metadata_entries = opts.metadata_entries;
-    if metadata_entries.is_empty()
-        && let Some(session_metadata) = opts.session_metadata.as_ref()
-    {
-        metadata_entries.extend(
-            session_metadata
-                .logical_entries(&opts.session_id)
-                .into_iter()
-                .map(|(logical_path, payload)| LogicalCheckpointFile {
-                    logical_path,
-                    payload,
-                }),
-        );
-    }
-    let mut tree = tree;
-    if !metadata_entries.is_empty() {
-        tree = stage_logical_checkpoint_files(repo_root, Some(&tree), metadata_entries)?;
-    }
+    persist_session_metadata_if_present(
+        repo_root,
+        &opts.session_id,
+        opts.session_metadata.as_ref(),
+    )
+    .context("persisting temporary session metadata")?;
 
     if latest_tree_hash.as_deref() == Some(tree.as_str()) {
         return Ok(WriteTemporaryResult {
@@ -256,49 +248,21 @@ pub(crate) fn write_temporary_task(
         })
         .ok_or_else(|| anyhow::anyhow!("failed to resolve base tree for task checkpoint"))?;
 
-    let mut tree = build_tree(
+    let tree = build_tree(
         repo_root,
         Some(parent_tree.as_str()),
         &opts.modified_files,
         &opts.new_files,
         &opts.deleted_files,
     )?;
-    let mut metadata_entries = opts.metadata_entries;
-    if metadata_entries.is_empty() {
-        if !opts.is_incremental
-            && let Some(session_metadata) = opts.session_metadata.as_ref()
-        {
-            metadata_entries.extend(
-                session_metadata
-                    .logical_entries(&opts.session_id)
-                    .into_iter()
-                    .map(|(logical_path, payload)| LogicalCheckpointFile {
-                        logical_path,
-                        payload,
-                    }),
-            );
-        }
-        if let Some(task_metadata) = opts.task_metadata.as_ref() {
-            metadata_entries.extend(
-                task_metadata
-                    .logical_entries(
-                        &opts.session_id,
-                        &opts.tool_use_id,
-                        &opts.agent_id,
-                        opts.incremental_sequence,
-                    )
-                    .into_iter()
-                    .map(|(logical_path, payload)| LogicalCheckpointFile {
-                        logical_path,
-                        payload,
-                    }),
-            );
-        }
-    }
-
-    if !metadata_entries.is_empty() {
-        tree = stage_logical_checkpoint_files(repo_root, Some(&tree), metadata_entries)?;
-    }
+    persist_session_metadata_if_present(
+        repo_root,
+        &opts.session_id,
+        opts.session_metadata.as_ref(),
+    )
+    .context("persisting temporary task session metadata")?;
+    persist_task_metadata_if_present(repo_root, &opts)
+        .context("persisting temporary task metadata")?;
 
     insert_temporary_checkpoint_record(
         repo_root,
@@ -347,34 +311,114 @@ pub(crate) fn write_temporary_task(
     })
 }
 
-fn stage_logical_checkpoint_files(
+fn persist_session_metadata_if_present(
     repo_root: &Path,
-    parent_tree: Option<&str>,
-    files: Vec<LogicalCheckpointFile>,
-) -> Result<String> {
-    let staging_dir = paths::default_session_tmp_dir(repo_root).join(format!(
-        "checkpoint-artifacts-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    fs::create_dir_all(&staging_dir).context("creating checkpoint artefact staging directory")?;
+    session_id: &str,
+    session_metadata: Option<&SessionMetadataBundle>,
+) -> Result<()> {
+    let Some(session_metadata) = session_metadata else {
+        return Ok(());
+    };
+    persist_session_metadata_bundle(repo_root, session_id, session_metadata, None)
+}
 
-    let mut file_pairs: Vec<(PathBuf, String)> = Vec::new();
-    for (idx, file) in files.into_iter().enumerate() {
-        if file.logical_path.trim().is_empty() || file.payload.is_empty() {
-            continue;
-        }
-        let disk_path = staging_dir.join(format!("artefact-{idx}.bin"));
-        let payload = if file.logical_path.ends_with(".jsonl") {
-            redact_jsonl_bytes_with_fallback(&file.payload)
-        } else {
-            redact_bytes(&file.payload)
-        };
-        fs::write(&disk_path, payload)
-            .with_context(|| format!("writing staged checkpoint artefact {}", file.logical_path))?;
-        file_pairs.push((disk_path, file.logical_path));
+fn persist_task_metadata_if_present(
+    repo_root: &Path,
+    opts: &WriteTemporaryTaskOptions,
+) -> Result<()> {
+    let Some(task_metadata) = opts.task_metadata.as_ref() else {
+        return Ok(());
+    };
+
+    let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
+        .context("opening runtime store for temporary task metadata")?;
+    let mut existing = runtime_store
+        .load_task_checkpoint_artefacts(&opts.session_id, &opts.tool_use_id)
+        .context("loading existing runtime task artefacts")?;
+    let mut desired = Vec::new();
+
+    if let Some(payload) = task_metadata.checkpoint_json.as_ref()
+        && !payload.is_empty()
+    {
+        let mut artefact = TaskCheckpointArtefact::new(
+            opts.session_id.clone(),
+            opts.tool_use_id.clone(),
+            RuntimeMetadataBlobType::TaskCheckpoint,
+            payload.clone(),
+        );
+        artefact.agent_id = opts.agent_id.clone();
+        desired.push(artefact);
     }
 
-    let result = build_tree_with_explicit_paths(repo_root, parent_tree, &file_pairs);
-    let _ = fs::remove_dir_all(&staging_dir);
-    result
+    if let Some(payload) = task_metadata.subagent_transcript.as_ref()
+        && !payload.is_empty()
+    {
+        let mut artefact = TaskCheckpointArtefact::new(
+            opts.session_id.clone(),
+            opts.tool_use_id.clone(),
+            RuntimeMetadataBlobType::SubagentTranscript,
+            payload.clone(),
+        );
+        artefact.agent_id = opts.agent_id.clone();
+        desired.push(artefact);
+    }
+
+    if let Some(payload) = task_metadata.incremental_checkpoint.as_ref()
+        && !payload.is_empty()
+    {
+        let mut artefact = TaskCheckpointArtefact::new(
+            opts.session_id.clone(),
+            opts.tool_use_id.clone(),
+            RuntimeMetadataBlobType::IncrementalCheckpoint,
+            payload.clone(),
+        );
+        artefact.agent_id = opts.agent_id.clone();
+        artefact.incremental_sequence = Some(opts.incremental_sequence);
+        artefact.incremental_type = opts.incremental_type.clone();
+        artefact.is_incremental = true;
+        desired.push(artefact);
+    }
+
+    if let Some(payload) = task_metadata.prompt.as_ref()
+        && !payload.is_empty()
+    {
+        let mut artefact = TaskCheckpointArtefact::new(
+            opts.session_id.clone(),
+            opts.tool_use_id.clone(),
+            RuntimeMetadataBlobType::Prompt,
+            payload.clone(),
+        );
+        artefact.agent_id = opts.agent_id.clone();
+        desired.push(artefact);
+    }
+
+    for artefact in desired {
+        if existing
+            .iter()
+            .any(|current| task_artefact_matches(current, &artefact))
+        {
+            continue;
+        }
+        runtime_store
+            .save_task_checkpoint_artefact(&artefact)
+            .context("saving runtime task artefact")?;
+        existing.push(artefact);
+    }
+
+    Ok(())
+}
+
+fn task_artefact_matches(
+    current: &TaskCheckpointArtefact,
+    candidate: &TaskCheckpointArtefact,
+) -> bool {
+    current.session_id == candidate.session_id
+        && current.tool_use_id == candidate.tool_use_id
+        && current.agent_id == candidate.agent_id
+        && current.checkpoint_uuid == candidate.checkpoint_uuid
+        && current.kind == candidate.kind
+        && current.incremental_sequence == candidate.incremental_sequence
+        && current.incremental_type == candidate.incremental_type
+        && current.is_incremental == candidate.is_incremental
+        && current.payload == candidate.payload
 }

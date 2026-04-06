@@ -19,6 +19,7 @@ async fn promote_temporary_rows_for_head_commit_updates_file_row_to_commit() {
     git_ok(repo_dir.path(), &["add", "."]);
     git_ok(repo_dir.path(), &["commit", "-m", "initial"]);
     let old_head = git_ok(repo_dir.path(), &["rev-parse", "HEAD"]);
+    crate::test_support::git_fixtures::write_test_daemon_config(repo_dir.path());
 
     let repo = resolve_repo_identity(repo_dir.path()).expect("resolve repo identity");
     let cfg = DevqlConfig::from_env(repo_dir.path().to_path_buf(), repo).expect("build config");

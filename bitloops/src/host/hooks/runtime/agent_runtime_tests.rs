@@ -2556,7 +2556,7 @@ fn filter_and_normalize_paths_sibling_directories() {
 
     let files = vec![
         "/repo/src/file.ts".to_string(),
-        "/repo/.bitloops/checkpoint-artifacts/sessions/session.json".to_string(),
+        "/repo/.bitloops/internal/sessions/session.json".to_string(),
     ];
     let got = filter_and_normalize_paths(&files, "/repo");
     assert_eq!(got, vec!["src/file.ts".to_string()]);

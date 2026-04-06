@@ -93,10 +93,9 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let mut session_metadata = ctx.metadata.clone();
+        let session_metadata = ctx.metadata.clone();
         if session_metadata.is_none() && !transcript_path.trim().is_empty() {
             let _ = write_session_metadata(&self.repo_root, &ctx.session_id, &transcript_path);
-            session_metadata = read_session_metadata_bundle(&self.repo_root, &ctx.session_id);
         }
 
         let author_name = if ctx.author_name.trim().is_empty() {
@@ -128,7 +127,6 @@ impl Strategy for ManualCommitStrategy {
                 new_files: new_files.clone(),
                 deleted_files: deleted.clone(),
                 session_metadata,
-                metadata_entries: vec![],
                 commit_message: commit_msg,
                 author_name,
                 author_email,
@@ -271,12 +269,11 @@ impl Strategy for ManualCommitStrategy {
                         &ctx.session_id,
                         &ctx.transcript_path,
                     );
-                    read_session_metadata_bundle(&self.repo_root, &ctx.session_id)
+                    None
                 } else {
                     None
                 },
                 task_metadata: ctx.task_metadata.clone(),
-                metadata_entries: vec![],
                 is_incremental: ctx.is_incremental,
                 incremental_sequence: ctx.incremental_sequence,
                 incremental_type: ctx.incremental_type.clone(),

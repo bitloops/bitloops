@@ -11,9 +11,9 @@ pub(crate) fn write_session_metadata(
     repo_root: &Path,
     session_id: &str,
     transcript_path: &str,
-) -> Result<Vec<String>> {
+) -> Result<()> {
     if transcript_path.is_empty() {
-        return Ok(vec![]);
+        return Ok(());
     }
 
     let meta = fs::symlink_metadata(transcript_path)
@@ -24,7 +24,7 @@ pub(crate) fn write_session_metadata(
 
     let transcript = match read_transcript_with_retry(transcript_path) {
         Some(transcript) => transcript,
-        None => return Ok(vec![]),
+        None => return Ok(()),
     };
 
     let prompts = extract_user_prompts_from_jsonl(&transcript);
@@ -35,19 +35,32 @@ pub(crate) fn write_session_metadata(
         transcript.as_bytes(),
     )?;
 
+    persist_session_metadata_bundle(repo_root, session_id, &bundle, Some(transcript_path))
+}
+
+pub(crate) fn persist_session_metadata_bundle(
+    repo_root: &Path,
+    session_id: &str,
+    bundle: &SessionMetadataBundle,
+    transcript_path: Option<&str>,
+) -> Result<()> {
     let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
         .context("opening runtime store for session metadata snapshot")?;
+    let transcript_path = transcript_path.unwrap_or_default();
+    if let Some(existing) = runtime_store
+        .load_latest_session_metadata_snapshot(session_id)
+        .context("loading latest session metadata snapshot")?
+        && existing.bundle == *bundle
+        && existing.transcript_path == transcript_path
+    {
+        return Ok(());
+    }
+
     let mut snapshot = SessionMetadataSnapshot::new(session_id.to_string(), bundle.clone());
     snapshot.transcript_path = transcript_path.to_string();
     runtime_store
         .save_session_metadata_snapshot(&snapshot)
-        .context("saving session metadata snapshot to runtime store")?;
-
-    Ok(bundle
-        .logical_entries(session_id)
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect())
+        .context("saving session metadata snapshot to runtime store")
 }
 
 /// Retries transcript reads briefly to handle asynchronous transcript flushing.

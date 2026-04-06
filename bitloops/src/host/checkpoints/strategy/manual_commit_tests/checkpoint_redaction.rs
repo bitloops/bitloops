@@ -499,7 +499,7 @@ pub(crate) fn write_committed_subagent_transcript_jsonl_fallback() {
 }
 
 #[test]
-pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
+pub(crate) fn write_temporary_task_subagent_transcript_persists_runtime_artefact() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -526,7 +526,6 @@ pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
                 incremental_checkpoint: None,
                 prompt: None,
             }),
-            metadata_entries: vec![],
             is_incremental: false,
             incremental_sequence: 0,
             incremental_type: String::new(),
@@ -555,25 +554,35 @@ pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
         "write_temporary_task result should return the persisted tree hash"
     );
 
-    let agent_path =
-        ".bitloops/checkpoint-artifacts/sessions/test-session/tasks/toolu_test456/agent-agent1.jsonl"
-            .to_string();
-    let content = run_git(
+    let legacy_agent_path =
+        ".bitloops/internal/sessions/test-session/tasks/toolu_test456/agent-agent1.jsonl";
+    let legacy = run_git(
         dir.path(),
-        &["show", &format!("{}:{agent_path}", result.commit_hash)],
-    )
-    .unwrap();
-    assert!(
-        !content.is_empty(),
-        "subagent transcript should not be empty"
+        &[
+            "show",
+            &format!("{}:{legacy_agent_path}", result.commit_hash),
+        ],
     );
     assert!(
-        !content.contains(HIGH_ENTROPY_SECRET),
-        "subagent transcript in checkpoint tree should not contain secret"
+        legacy.is_err(),
+        "temporary checkpoint tree should not materialise repo-local checkpoint artefacts"
     );
+
+    let runtime_store = crate::host::runtime_store::RepoSqliteRuntimeStore::open(dir.path())
+        .expect("open runtime store for temporary task artefacts");
+    let artefacts = runtime_store
+        .load_task_checkpoint_artefacts("test-session", "toolu_test456")
+        .expect("load runtime task artefacts");
+    let content = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.kind == crate::host::runtime_store::RuntimeMetadataBlobType::SubagentTranscript
+        })
+        .map(|artefact| String::from_utf8_lossy(&artefact.payload).to_string())
+        .expect("subagent transcript should be present in runtime store");
     assert!(
-        content.contains("REDACTED"),
-        "subagent transcript in checkpoint tree should contain REDACTED"
+        content.contains(HIGH_ENTROPY_SECRET),
+        "runtime-store subagent transcript should preserve the original payload"
     );
 }
 
@@ -587,7 +596,7 @@ pub(crate) fn add_directory_to_entries_path_traversal() {
 
     let result = add_directory_to_entries_with_abs_path(
         &metadata_dir,
-        ".bitloops/checkpoint-artifacts/sessions/session",
+        ".bitloops/internal/sessions/session",
     );
     assert!(
         result.is_ok(),
@@ -595,7 +604,7 @@ pub(crate) fn add_directory_to_entries_path_traversal() {
     );
 
     let entries = result.unwrap();
-    let expected = ".bitloops/checkpoint-artifacts/sessions/session/sub/data.txt";
+    let expected = ".bitloops/internal/sessions/session/sub/data.txt";
     assert!(
         entries.contains_key(expected),
         "expected entry {expected}, got {entries:?}"

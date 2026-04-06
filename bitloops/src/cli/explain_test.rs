@@ -15,6 +15,7 @@ fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     run_git_cmd(&root, &["config", "user.name", "Test"]);
     run_git_cmd(&root, &["config", "user.email", "test@example.com"]);
     run_git_cmd(&root, &["config", "commit.gpgsign", "false"]);
+    crate::test_support::git_fixtures::write_test_daemon_config(&root);
     ensure_relational_store_file(&root);
     (tmp, root)
 }
@@ -61,12 +62,13 @@ fn make_checkpoint_commit(
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_relational_store_file(repo_root: &std::path::Path) {
@@ -2307,8 +2309,8 @@ fn TestHasCodeChanges_FirstCommitReturnsTrue() {
 #[test]
 fn TestHasCodeChanges_OnlyMetadataChanges() {
     let changed = vec![
-        ".bitloops/checkpoint-artifacts/sessions/session-123/full.jsonl".to_string(),
-        ".bitloops/checkpoint-artifacts/sessions/session-123/prompt.txt".to_string(),
+        ".bitloops/internal/sessions/session-123/full.jsonl".to_string(),
+        ".bitloops/internal/sessions/session-123/prompt.txt".to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
@@ -2317,14 +2319,14 @@ fn TestHasCodeChanges_OnlyMetadataChanges() {
 }
 
 #[test]
-fn TestHasCodeChanges_OnlyLegacyMetadataChanges() {
+fn TestHasCodeChanges_OnlyCheckpointArtefactTaskChanges() {
     let changed = vec![
-        ".bitloops/metadata/session-123/full.jsonl".to_string(),
-        ".bitloops/metadata/session-123/prompt.txt".to_string(),
+        ".bitloops/internal/sessions/session-123/tasks/toolu_abc/context.json".to_string(),
+        ".bitloops/internal/sessions/session-123/tasks/toolu_abc/output.json".to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
-        "expected legacy metadata-only change set to be treated as non-code"
+        "expected checkpoint artefact-only change set to be treated as non-code"
     );
 }
 
@@ -2340,7 +2342,7 @@ fn TestHasCodeChanges_WithCodeChanges() {
 #[test]
 fn TestHasCodeChanges_MixedChanges() {
     let changed = vec![
-        ".bitloops/checkpoint-artifacts/sessions/session-123/full.jsonl".to_string(),
+        ".bitloops/internal/sessions/session-123/full.jsonl".to_string(),
         "src/main.rs".to_string(),
     ];
     assert!(

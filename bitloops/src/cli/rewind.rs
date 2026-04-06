@@ -769,7 +769,7 @@ mod tests {
         std::fs::create_dir_all(
             repo.path()
                 .join(".bitloops")
-                .join("checkpoint-artifacts")
+                .join("internal")
                 .join("sessions")
                 .join("session-1"),
         )
@@ -777,7 +777,7 @@ mod tests {
         std::fs::write(
             repo.path()
                 .join(".bitloops")
-                .join("checkpoint-artifacts")
+                .join("internal")
                 .join("sessions")
                 .join("session-1")
                 .join("ignored.txt"),
@@ -789,7 +789,7 @@ mod tests {
             &[
                 "add",
                 "src.rs",
-                ".bitloops/checkpoint-artifacts/sessions/session-1/ignored.txt",
+                ".bitloops/internal/sessions/session-1/ignored.txt",
             ],
         );
         git_ok(repo.path(), &["commit", "-m", "seed tree"]);
@@ -850,7 +850,18 @@ mod tests {
         let config_root = TempDir::new().expect("temp daemon config");
         let config_path = write_test_daemon_config(config_root.path());
         let config_path_string = config_path.to_string_lossy().to_string();
-        let sqlite_path = crate::utils::paths::default_relational_db_path(repo.path());
+        let cfg = crate::config::resolve_store_backend_config_for_repo(repo.path())
+            .expect("resolve backend config");
+        let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
+            repo.path(),
+            Some(
+                cfg.relational
+                    .sqlite_path
+                    .as_deref()
+                    .expect("test daemon config should set sqlite_path"),
+            ),
+        )
+        .expect("resolve configured sqlite path");
         let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
             .expect("create sqlite database");
         sqlite

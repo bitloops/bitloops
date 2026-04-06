@@ -32,6 +32,46 @@ struct AppPaths {
     xdg_state: PathBuf,
 }
 
+fn write_test_daemon_config(config_root: &Path) -> PathBuf {
+    let config_path = config_root.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let daemon_state_root = config_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| config_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            config_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        );
+    let sqlite_path = daemon_state_root
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
+    let duckdb_path = daemon_state_root
+        .join("stores")
+        .join("event")
+        .join("events.duckdb");
+    let blob_path = daemon_state_root.join("stores").join("blob");
+    let config_contents = format!(
+        r#"[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = {sqlite_path:?}
+
+[stores.events]
+duckdb_path = {duckdb_path:?}
+
+[stores.blob]
+local_path = {blob_path:?}
+"#,
+    );
+    fs::write(&config_path, config_contents).expect("write test daemon config");
+    config_path
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ListedArtefact {
     pub file_path: String,
@@ -116,6 +156,7 @@ pub fn prepare_graphql_workspace(workspace: &Workspace) {
 pub fn bootstrap_codex_workspace(workspace: &Workspace) {
     let repo_root = workspace.repo_dir();
     with_repo_app_env(repo_root, || {
+        write_test_daemon_config(repo_root);
         ensure_relational_store_file(repo_root);
         let policy_path = repo_root.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
         bitloops::config::settings::write_project_bootstrap_settings(
@@ -734,12 +775,13 @@ fn init_git_repo(repo_dir: &Path) {
 fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
     let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_relational_store_file(repo_root: &Path) {

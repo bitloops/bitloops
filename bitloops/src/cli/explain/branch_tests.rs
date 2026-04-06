@@ -12,12 +12,13 @@ fn git_ok(repo_root: &std::path::Path, args: &[&str]) -> String {
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_checkpoint_schema(repo_root: &std::path::Path) {
@@ -60,6 +61,7 @@ fn setup_git_repo() -> TempDir {
         dir.path(),
         &["config", "user.email", "explain-test@example.com"],
     );
+    crate::test_support::git_fixtures::write_test_daemon_config(dir.path());
     dir
 }
 

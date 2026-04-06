@@ -3,6 +3,20 @@ use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_sp
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{InteractionSession, InteractionTurn};
 
+fn daemon_state_root(repo_root: &Path) -> PathBuf {
+    repo_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            repo_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        )
+}
+
 pub(crate) fn open_test_spool(repo_root: &Path) -> SqliteInteractionSpool {
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .expect("resolve repo identity")
@@ -144,7 +158,10 @@ fn init_devql_schema_with_store_backend(
         .block_on(crate::host::devql::run_init(&cfg))
         .expect("initialise DevQL schema for post-commit test");
 
-    let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
+    let sqlite_path = daemon_state_root(repo_root)
+        .join("stores")
+        .join("relational")
+        .join("post-commit-devql.db");
     let sqlite = rusqlite::Connection::open(&sqlite_path)
         .expect("open relational sqlite after DevQL init for post-commit test");
     sqlite
@@ -227,9 +244,23 @@ fn write_post_commit_test_config(
     clickhouse_password: Option<&str>,
     clickhouse_database: Option<&str>,
 ) {
-    let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
-    let duckdb_path = repo_root.join(".bitloops/stores/events/post-commit-events.duckdb");
-    let blob_local_path = repo_root.join(".bitloops/stores/blobs/post-commit");
+    let state_root = daemon_state_root(repo_root);
+    let sqlite_path = state_root
+        .join("stores")
+        .join("relational")
+        .join("post-commit-devql.db");
+    let duckdb_path = state_root
+        .join("stores")
+        .join("event")
+        .join("post-commit-events.duckdb");
+    let blob_local_path = state_root.join("stores").join("blob").join("post-commit");
+    if let Some(parent) = sqlite_path.parent() {
+        fs::create_dir_all(parent).expect("create post-commit sqlite parent");
+    }
+    if let Some(parent) = duckdb_path.parent() {
+        fs::create_dir_all(parent).expect("create post-commit duckdb parent");
+    }
+    fs::create_dir_all(&blob_local_path).expect("create post-commit blob root");
     let postgres_line = postgres_dsn
         .map(|dsn| format!("postgres_dsn = {dsn:?}\n"))
         .unwrap_or_default();

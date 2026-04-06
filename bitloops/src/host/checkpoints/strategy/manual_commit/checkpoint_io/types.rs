@@ -187,12 +187,6 @@ pub(crate) struct WriteCommittedOptions {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LogicalCheckpointFile {
-    pub(crate) logical_path: String,
-    pub(crate) payload: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Default)]
 pub(crate) struct WriteTemporaryOptions {
     pub(crate) session_id: String,
     pub(crate) base_commit: String,
@@ -201,7 +195,6 @@ pub(crate) struct WriteTemporaryOptions {
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted_files: Vec<String>,
     pub(crate) session_metadata: Option<SessionMetadataBundle>,
-    pub(crate) metadata_entries: Vec<LogicalCheckpointFile>,
     pub(crate) commit_message: String,
     pub(crate) author_name: String,
     pub(crate) author_email: String,
@@ -226,7 +219,6 @@ pub(crate) struct WriteTemporaryTaskOptions {
     pub(crate) deleted_files: Vec<String>,
     pub(crate) session_metadata: Option<SessionMetadataBundle>,
     pub(crate) task_metadata: Option<TaskCheckpointMetadataBundle>,
-    pub(crate) metadata_entries: Vec<LogicalCheckpointFile>,
     pub(crate) is_incremental: bool,
     pub(crate) incremental_sequence: u32,
     pub(crate) incremental_type: String,

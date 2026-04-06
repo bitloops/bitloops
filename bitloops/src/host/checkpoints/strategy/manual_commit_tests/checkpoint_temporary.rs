@@ -21,7 +21,6 @@ pub(crate) fn first_checkpoint_opts(session_id: &str, base_commit: &str) -> Writ
         new_files: vec![],
         deleted_files: vec![],
         session_metadata: Some(create_checkpoint_metadata_bundle()),
-        metadata_entries: vec![],
         commit_message: "First checkpoint".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@test.com".to_string(),
@@ -311,7 +310,7 @@ pub(crate) fn write_temporary_first_checkpoint_filenames_with_spaces() {
 }
 
 #[test]
-pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
+pub(crate) fn write_temporary_task_incremental_persists_runtime_artefact_and_payload() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -341,7 +340,6 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
                 ),
                 prompt: None,
             }),
-            metadata_entries: vec![],
             is_incremental: true,
             incremental_sequence: 3,
             incremental_type: "TodoWrite".to_string(),
@@ -353,14 +351,21 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
     )
     .expect("write_temporary_task should persist incremental checkpoint");
 
-    let payload_path = ".bitloops/checkpoint-artifacts/sessions/temp-session/tasks/toolu_temp123/checkpoints/003-toolu_temp123.json";
-    let payload_raw = run_git(
-        dir.path(),
-        &["show", &format!("{}:{payload_path}", result.commit_hash)],
-    )
-    .expect("incremental checkpoint payload should be present in checkpoint tree");
+    let runtime_store = crate::host::runtime_store::RepoSqliteRuntimeStore::open(dir.path())
+        .expect("open repo runtime store");
+    let artefacts = runtime_store
+        .load_task_checkpoint_artefacts("temp-session", "toolu_temp123")
+        .expect("load runtime task artefacts");
+    let payload_raw = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.kind
+                == crate::host::runtime_store::RuntimeMetadataBlobType::IncrementalCheckpoint
+        })
+        .map(|artefact| artefact.payload.clone())
+        .expect("incremental checkpoint payload should be present in runtime store");
     let payload: serde_json::Value =
-        serde_json::from_str(&payload_raw).expect("incremental payload should be valid json");
+        serde_json::from_slice(&payload_raw).expect("incremental payload should be valid json");
     assert_eq!(payload["type"], "TodoWrite");
     assert_eq!(payload["tool_use_id"], "toolu_temp123");
     assert_eq!(payload["data"]["todo"], "document dependencies");
@@ -374,7 +379,7 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
         &[
             "show",
             &format!(
-                "{}:.bitloops/checkpoint-artifacts/sessions/temp-session/tasks/toolu_temp123/checkpoint.json",
+                "{}:.bitloops/internal/tasks/toolu_temp123/checkpoint.json",
                 result.commit_hash
             ),
         ],

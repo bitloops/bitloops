@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::utils::paths;
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionMetadataBundle {
     pub transcript: Vec<u8>,
@@ -15,37 +13,6 @@ impl SessionMetadataBundle {
     pub fn prompt_text(&self) -> String {
         self.prompts.join("\n\n---\n\n")
     }
-
-    pub fn logical_entries(&self, session_id: &str) -> Vec<(String, Vec<u8>)> {
-        let base = paths::checkpoint_artifacts_session_dir(session_id);
-        let mut entries = Vec::new();
-        if !self.transcript.is_empty() {
-            entries.push((
-                format!("{base}/{}", paths::TRANSCRIPT_FILE_NAME),
-                self.transcript.clone(),
-            ));
-        }
-        let prompt_text = self.prompt_text();
-        if !prompt_text.is_empty() {
-            entries.push((
-                format!("{base}/{}", paths::PROMPT_FILE_NAME),
-                prompt_text.into_bytes(),
-            ));
-        }
-        if !self.summary.trim().is_empty() {
-            entries.push((
-                format!("{base}/{}", paths::SUMMARY_FILE_NAME),
-                self.summary.clone().into_bytes(),
-            ));
-        }
-        if !self.context.is_empty() {
-            entries.push((
-                format!("{base}/{}", paths::CONTEXT_FILE_NAME),
-                self.context.clone(),
-            ));
-        }
-        entries
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,47 +21,6 @@ pub struct TaskCheckpointMetadataBundle {
     pub subagent_transcript: Option<Vec<u8>>,
     pub incremental_checkpoint: Option<Vec<u8>>,
     pub prompt: Option<Vec<u8>>,
-}
-
-impl TaskCheckpointMetadataBundle {
-    pub fn logical_entries(
-        &self,
-        session_id: &str,
-        tool_use_id: &str,
-        agent_id: &str,
-        incremental_sequence: u32,
-    ) -> Vec<(String, Vec<u8>)> {
-        let task_dir = paths::checkpoint_artifacts_task_dir(session_id, tool_use_id);
-        let mut entries = Vec::new();
-
-        if let Some(payload) = self.checkpoint_json.as_ref()
-            && !payload.is_empty()
-        {
-            entries.push((
-                format!("{task_dir}/{}", paths::CHECKPOINT_FILE_NAME),
-                payload.clone(),
-            ));
-        }
-
-        if let Some(payload) = self.subagent_transcript.as_ref()
-            && !payload.is_empty()
-            && !agent_id.trim().is_empty()
-        {
-            entries.push((
-                format!("{task_dir}/agent-{agent_id}.jsonl"),
-                payload.clone(),
-            ));
-        }
-
-        if let Some(payload) = self.incremental_checkpoint.as_ref()
-            && !payload.is_empty()
-        {
-            let name = format!("{incremental_sequence:03}-{tool_use_id}.json");
-            entries.push((format!("{task_dir}/checkpoints/{name}"), payload.clone()));
-        }
-
-        entries
-    }
 }
 
 pub fn build_session_metadata_bundle(
@@ -400,44 +326,5 @@ mod tests {
         let jsonl = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"first summary"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"final summary"},{"type":"tool_use","name":"Edit","input":{"file_path":"a.txt"}}]}}"#;
         assert_eq!(extract_summary_from_jsonl(jsonl), "final summary");
-    }
-
-    #[test]
-    fn logical_entries_use_checkpoint_artifact_namespace() {
-        let bundle = SessionMetadataBundle {
-            transcript: b"log".to_vec(),
-            prompts: vec!["prompt".to_string()],
-            summary: "summary".to_string(),
-            context: b"context".to_vec(),
-        };
-        let entries = bundle.logical_entries("sess-123");
-        assert!(entries.iter().any(|(path, _)| {
-            path == ".bitloops/checkpoint-artifacts/sessions/sess-123/full.jsonl"
-        }));
-        assert!(entries.iter().any(|(path, _)| {
-            path == ".bitloops/checkpoint-artifacts/sessions/sess-123/prompt.txt"
-        }));
-    }
-
-    #[test]
-    fn task_logical_entries_use_checkpoint_artifact_namespace() {
-        let bundle = TaskCheckpointMetadataBundle {
-            checkpoint_json: Some(b"checkpoint".to_vec()),
-            subagent_transcript: Some(b"subagent".to_vec()),
-            incremental_checkpoint: Some(b"incremental".to_vec()),
-            prompt: None,
-        };
-        let entries = bundle.logical_entries("sess-123", "toolu_1", "agent-1", 3);
-        assert!(entries.iter().any(|(path, _)| {
-            path == ".bitloops/checkpoint-artifacts/sessions/sess-123/tasks/toolu_1/checkpoint.json"
-        }));
-        assert!(entries.iter().any(|(path, _)| {
-            path
-                == ".bitloops/checkpoint-artifacts/sessions/sess-123/tasks/toolu_1/agent-agent-1.jsonl"
-        }));
-        assert!(entries.iter().any(|(path, _)| {
-            path
-                == ".bitloops/checkpoint-artifacts/sessions/sess-123/tasks/toolu_1/checkpoints/003-toolu_1.json"
-        }));
     }
 }

@@ -37,14 +37,20 @@ fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSetting
     Ok(Some((loaded.root, loaded.settings)))
 }
 
+fn discover_nearest_daemon_config(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .map(|directory| directory.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+        .find(|candidate| candidate.is_file())
+}
+
 fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
     if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
         return load_daemon_settings(Some(Path::new(&explicit_path)));
     }
 
-    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if repo_toml.is_file() {
-        return load_daemon_settings(Some(&repo_toml));
+    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
+        return load_daemon_settings(Some(&config_path));
     }
 
     #[cfg(not(test))]
@@ -69,9 +75,8 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
         return Ok(override_settings);
     }
 
-    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if repo_toml.is_file() {
-        let loaded = load_daemon_settings(Some(&repo_toml))?;
+    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
+        let loaded = load_daemon_settings(Some(&config_path))?;
         return Ok((loaded.root, loaded.settings));
     }
 
@@ -84,9 +89,8 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
         return Ok(override_settings);
     }
 
-    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if repo_toml.is_file() {
-        let loaded = load_daemon_settings(Some(&repo_toml))?;
+    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
+        let loaded = load_daemon_settings(Some(&config_path))?;
         return Ok((loaded.root, loaded.settings));
     }
 

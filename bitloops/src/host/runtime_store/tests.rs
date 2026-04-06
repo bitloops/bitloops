@@ -76,6 +76,29 @@ fn repo_runtime_store_fails_without_daemon_config() {
 }
 
 #[test]
+fn repo_runtime_store_uses_nearest_ancestor_daemon_config_root() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("bitloops");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    let expected = dir
+        .path()
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+
+    write_test_daemon_config(dir.path());
+
+    with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+        let actual = RepoSqliteRuntimeStore::open(&repo_root)
+            .expect("open runtime store")
+            .db_path
+            .clone();
+        assert_eq!(actual, expected);
+    });
+}
+
+#[test]
 fn repo_runtime_store_shares_runtime_sqlite_and_fences_rows_by_repo() {
     let dir = TempDir::new().expect("tempdir");
     let repo_a = dir.path().join("repo-a");

@@ -229,6 +229,48 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
 }
 
 #[test]
+fn resolve_store_backend_config_for_repo_reads_nearest_ancestor_daemon_config() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let repo_root = temp.path().join("bitloops");
+    fs::create_dir_all(&repo_root).expect("create nested repo root");
+
+    write_envelope_config(
+        temp.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/relational.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/events.duckdb"
+                }
+            }
+        }),
+    );
+
+    let _guard = enter_process_state(None, &[]);
+    let cfg = resolve_store_backend_config_for_repo(&repo_root).expect("store backend config");
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some(
+            temp.path()
+                .join("stores/relational/relational.db")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some(
+            temp.path()
+                .join("stores/event/events.duckdb")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
 fn resolve_store_backend_config_honours_explicit_daemon_config_override_inside_git_repo() {
     let temp = tempfile::tempdir().expect("temp dir");
     let status = git_command()

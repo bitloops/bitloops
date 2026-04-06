@@ -37,7 +37,7 @@ pub(crate) fn write_session_metadata_writes_prompt_and_summary_for_nested_claude
 {"type":"assistant","message":{"content":[{"type":"text","text":"Created test file"}]}}"#;
     fs::write(&transcript_path, jsonl).unwrap();
 
-    let written = with_env_var(
+    with_env_var(
         ENV_DAEMON_CONFIG_PATH_OVERRIDE,
         Some(config_path_string.as_str()),
         || {
@@ -48,18 +48,6 @@ pub(crate) fn write_session_metadata_writes_prompt_and_summary_for_nested_claude
             )
             .unwrap()
         },
-    );
-    assert!(
-        written.contains(
-            &".bitloops/checkpoint-artifacts/sessions/session-nested/prompt.txt".to_string()
-        ),
-        "prompt.txt should be part of written metadata files: {written:?}"
-    );
-    assert!(
-        written.contains(
-            &".bitloops/checkpoint-artifacts/sessions/session-nested/summary.txt".to_string()
-        ),
-        "summary.txt should be part of written metadata files: {written:?}"
     );
 
     let bundle = with_env_var(

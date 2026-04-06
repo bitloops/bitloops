@@ -51,7 +51,21 @@ fn executor_test_cfg_for_repo_root(repo_root: PathBuf) -> DevqlConfig {
 }
 
 fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
-    let sqlite_path = repo_root.join(".bitloops/stores/relational/relational.db");
+    let daemon_state_root = repo_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            repo_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        );
+    let sqlite_path = daemon_state_root
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
     if let Some(parent) = sqlite_path.parent() {
         std::fs::create_dir_all(parent).expect("create sqlite parent");
     }
