@@ -139,6 +139,10 @@ pub fn handle_lifecycle_turn_end(
         summary = s;
     }
 
+    if new_transcript_position <= transcript_offset && !transcript_data.is_empty() {
+        new_transcript_position = transcript_line_count(&transcript_data);
+    }
+
     let prompt_content = all_prompts.join("\n\n---\n\n");
     if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
         let prompt_file = meta_dir_abs.join(crate::utils::paths::PROMPT_FILE_NAME);
@@ -372,12 +376,46 @@ fn transcript_fragment_from_offsets(
     start_offset: usize,
     end_offset: usize,
 ) -> String {
-    let transcript_text = String::from_utf8_lossy(transcript_data);
-    let lines: Vec<&str> = transcript_text.split_inclusive('\n').collect();
-    if start_offset >= end_offset || end_offset > lines.len() {
+    if start_offset >= end_offset {
         return String::new();
     }
-    lines[start_offset..end_offset].concat()
+    if let Some(fragment) =
+        structured_transcript_fragment_from_offsets(transcript_data, start_offset, end_offset)
+    {
+        return fragment;
+    }
+    let transcript_text = String::from_utf8_lossy(transcript_data);
+    let lines: Vec<&str> = transcript_text.split_inclusive('\n').collect();
+    if start_offset >= lines.len() {
+        return String::new();
+    }
+    let bounded_end = end_offset.min(lines.len());
+    lines[start_offset..bounded_end].concat()
+}
+
+fn transcript_line_count(transcript_data: &[u8]) -> usize {
+    if transcript_data.is_empty() {
+        return 0;
+    }
+    String::from_utf8_lossy(transcript_data)
+        .split_inclusive('\n')
+        .count()
+}
+
+fn structured_transcript_fragment_from_offsets(
+    transcript_data: &[u8],
+    start_offset: usize,
+    end_offset: usize,
+) -> Option<String> {
+    let mut value = serde_json::from_slice::<serde_json::Value>(transcript_data).ok()?;
+    let messages = value.get_mut("messages")?.as_array_mut()?;
+    if start_offset >= messages.len() {
+        return Some(String::new());
+    }
+    let bounded_end = end_offset.min(messages.len());
+    let fragment_messages = messages[start_offset..bounded_end].to_vec();
+    *messages = fragment_messages;
+    serde_json::to_string(&value).ok()
 }
 
 /// Reads the transcript file with a brief retry window to handle agents that
