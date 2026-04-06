@@ -11,6 +11,7 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::config::resolve_repo_runtime_db_path_for_repo;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use bitloops::utils::paths;
 use rusqlite::{Connection, params};
@@ -791,6 +792,19 @@ fn ensure_relational_store_file(repo_root: &Path) {
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
+
+    let runtime_path = resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path for test workspace");
+    if let Some(parent) = runtime_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime = bitloops::storage::SqliteConnectionPool::connect(runtime_path)
+        .expect("create runtime sqlite file");
+    runtime
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema");
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {

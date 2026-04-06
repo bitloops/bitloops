@@ -1,6 +1,7 @@
 use super::*;
 use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
-use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::interaction_repository::create_interaction_repository;
+use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 use crate::host::interactions::types::{InteractionSession, InteractionTurn};
 
 fn daemon_state_root(repo_root: &Path) -> PathBuf {
@@ -15,6 +16,17 @@ fn daemon_state_root(repo_root: &Path) -> PathBuf {
                 .map(|name| name.to_os_string())
                 .unwrap_or_default(),
         )
+}
+
+fn open_test_event_repository(
+    repo_root: &Path,
+) -> impl crate::host::interactions::store::InteractionEventRepository + use<> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root)
+        .expect("resolve repo identity for interaction repository");
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve interaction repository backends");
+    create_interaction_repository(&backends.events, repo_root, repo.repo_id)
+        .expect("create interaction repository")
 }
 
 pub(crate) fn open_test_spool(repo_root: &Path) -> SqliteInteractionSpool {
@@ -51,6 +63,7 @@ pub(crate) fn seed_interaction_turn_with_fragment(
     transcript_fragment: &str,
 ) {
     let spool = open_test_spool(repo_root);
+    let event_repo = open_test_event_repository(repo_root);
     let transcript_path = repo_root.join("transcript.jsonl");
     if !transcript_path.exists() {
         std::fs::write(&transcript_path, "{}\n").expect("seed transcript");
@@ -93,6 +106,8 @@ pub(crate) fn seed_interaction_turn_with_fragment(
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()
     };
+    event_repo.upsert_session(&session).expect("record session");
+    event_repo.upsert_turn(&turn).expect("record turn");
     spool.record_session(&session).expect("record session");
     spool.record_turn(&turn).expect("record turn");
 }
@@ -158,10 +173,12 @@ fn init_devql_schema_with_store_backend(
         .block_on(crate::host::devql::run_init(&cfg))
         .expect("initialise DevQL schema for post-commit test");
 
-    let sqlite_path = daemon_state_root(repo_root)
-        .join("stores")
-        .join("relational")
-        .join("post-commit-devql.db");
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve post-commit test backends");
+    let sqlite_path = backends
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .expect("resolve relational sqlite path for post-commit test");
     let sqlite = rusqlite::Connection::open(&sqlite_path)
         .expect("open relational sqlite after DevQL init for post-commit test");
     sqlite
@@ -201,6 +218,20 @@ CREATE TABLE IF NOT EXISTS repositories (
     sqlite
         .execute_batch(crate::host::devql::sync::schema::sync_schema_sql())
         .expect("ensure DevQL sync tables exist for post-commit test");
+
+    let runtime_sqlite_path = crate::config::resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path for post-commit test");
+    if let Some(parent) = runtime_sqlite_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime_sqlite = crate::storage::SqliteConnectionPool::connect(runtime_sqlite_path)
+        .expect("open runtime sqlite after DevQL init for post-commit test");
+    runtime_sqlite
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema for post-commit test");
+
     let has_artefacts_current: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'artefacts_current'",

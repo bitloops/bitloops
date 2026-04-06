@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::config::resolve_repo_runtime_db_path_for_repo;
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_store_backend_config_for_repo};
 use crate::test_support::process_state::git_command;
 
@@ -106,4 +107,17 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
             .expect("resolve blob store path"),
     )
     .expect("create local blob store directory");
+
+    let runtime_path = resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path for test store backends");
+    if let Some(parent) = runtime_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime = crate::storage::SqliteConnectionPool::connect(runtime_path)
+        .expect("create runtime sqlite file");
+    runtime
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema");
 }

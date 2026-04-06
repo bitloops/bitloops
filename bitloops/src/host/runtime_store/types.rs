@@ -169,6 +169,14 @@ impl Default for PersistedSyncQueueState {
     }
 }
 
+impl PersistedSyncQueueState {
+    pub(crate) fn normalise_legacy_values(&mut self) {
+        for task in &mut self.tasks {
+            task.normalise_legacy_values();
+        }
+    }
+}
+
 impl SqliteRuntimeStore {
     pub fn new() -> Self {
         Self

@@ -30,6 +30,7 @@ use tempfile::TempDir;
 fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".git")).unwrap();
+    ensure_test_store_backends(dir.path());
     let backend = LocalFileBackend::new(dir.path());
     (dir, backend, NoOpStrategy)
 }

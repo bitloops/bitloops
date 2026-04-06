@@ -302,6 +302,90 @@ fn daemon_runtime_store_uses_legacy_sync_defaults_when_state_is_missing() {
 }
 
 #[test]
+fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+
+            let task = crate::daemon::SyncTaskRecord {
+                task_id: "sync-task-legacy".to_string(),
+                repo_id: "repo-1".to_string(),
+                repo_name: "bitloops".to_string(),
+                repo_provider: "local".to_string(),
+                repo_organisation: "local".to_string(),
+                repo_identity: "local/bitloops".to_string(),
+                daemon_config_root: PathBuf::from("/tmp/legacy-config"),
+                repo_root: PathBuf::from("/tmp/repo"),
+                source: crate::daemon::SyncTaskSource::ManualCli,
+                mode: crate::daemon::SyncTaskMode::Full,
+                status: crate::daemon::SyncTaskStatus::Queued,
+                submitted_at_unix: 1,
+                started_at_unix: None,
+                updated_at_unix: 1,
+                completed_at_unix: None,
+                queue_position: None,
+                tasks_ahead: None,
+                progress: crate::host::devql::SyncProgressUpdate::default(),
+                error: None,
+                summary: None,
+            };
+            let mut task_value = serde_json::to_value(&task).expect("serialise sync task");
+            let daemon_config_root = task_value
+                .as_object_mut()
+                .expect("sync task should serialise as object")
+                .remove("daemon_config_root")
+                .expect("daemon_config_root should be present");
+            task_value
+                .as_object_mut()
+                .expect("sync task should serialise as object")
+                .insert("config_root".to_string(), daemon_config_root);
+            let payload = serde_json::json!({
+                "version": 1,
+                "tasks": [task_value],
+                "last_action": "enqueue",
+                "updated_at_unix": 42
+            })
+            .to_string();
+
+            let sqlite =
+                crate::storage::SqliteConnectionPool::connect(store.db_path().to_path_buf())
+                    .expect("connect runtime sqlite");
+            sqlite
+                .with_connection(|conn| {
+                    conn.execute(
+                        "INSERT INTO runtime_documents (document_kind, payload, updated_at)
+                         VALUES (?1, ?2, datetime('now'))
+                         ON CONFLICT(document_kind) DO UPDATE SET
+                            payload = excluded.payload,
+                            updated_at = excluded.updated_at",
+                        rusqlite::params!["sync_queue_state", payload],
+                    )?;
+                    Ok::<_, anyhow::Error>(())
+                })
+                .expect("insert legacy sync queue payload");
+
+            let loaded = store
+                .load_sync_queue_state()
+                .expect("load sync queue state")
+                .expect("state should exist");
+            assert_eq!(loaded.tasks.len(), 1);
+            assert_eq!(
+                loaded.tasks[0].daemon_config_root,
+                PathBuf::from("/tmp/legacy-config")
+            );
+
+            let observed = store
+                .mutate_sync_queue_state(|state| Ok(state.tasks[0].daemon_config_root.clone()))
+                .expect("mutate legacy sync queue state");
+            assert_eq!(observed, PathBuf::from("/tmp/legacy-config"));
+        },
+    );
+}
+
+#[test]
 fn repo_runtime_store_persists_repo_watcher_registration() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().join("repo");
