@@ -520,6 +520,61 @@ fn claude_stop_persists_transcript_fragment_in_event_store() {
 }
 
 #[test]
+fn cursor_stop_persists_structured_transcript_fragment_in_event_store() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let transcript_path = transcript_dir.path().join("cursor-fragment.json");
+    let strategy = RecordingStrategy::default();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::BeforeSubmitPrompt,
+        &format!(
+            r#"{{"conversation_id":"cursor-fragment","transcript_path":"{}","prompt":"Update tracked file"}}"#,
+            transcript_path.to_string_lossy()
+        ),
+        &backend,
+        &strategy,
+        dir.path(),
+        "before-submit-prompt",
+    )
+    .unwrap();
+
+    fs::write(
+        &transcript_path,
+        r#"{"messages":[{"type":"user","content":"Update tracked file"},{"type":"assistant","content":"Implemented the change"}]}"#,
+    )
+    .unwrap();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::Stop,
+        &format!(
+            r#"{{"conversation_id":"cursor-fragment","transcript_path":"{}"}}"#,
+            transcript_path.to_string_lossy()
+        ),
+        &backend,
+        &strategy,
+        dir.path(),
+        "stop",
+    )
+    .unwrap();
+
+    let transcript_fragment = interaction_turn_fragment(dir.path());
+    assert!(
+        transcript_fragment.contains("Implemented the change"),
+        "turn row should persist the completed structured transcript fragment"
+    );
+
+    let payload = interaction_turn_end_payload(dir.path());
+    assert_eq!(
+        payload["transcript_fragment"].as_str().unwrap_or_default(),
+        transcript_fragment,
+        "turn_end event payload should mirror the persisted structured transcript fragment"
+    );
+}
+
+#[test]
 fn cursor_session_start_creates_or_updates_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

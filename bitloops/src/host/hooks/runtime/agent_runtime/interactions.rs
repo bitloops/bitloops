@@ -6,6 +6,7 @@ use crate::host::checkpoints::lifecycle::interaction::{
 };
 use crate::host::checkpoints::session::state::SessionState;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
+use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
@@ -52,18 +53,7 @@ fn interaction_event_id() -> String {
 }
 
 fn read_transcript_fragment(transcript_path: &str, start_offset: i64) -> (String, Option<i64>) {
-    if transcript_path.trim().is_empty() {
-        return (String::new(), None);
-    }
-    let Ok(transcript_text) = std::fs::read_to_string(transcript_path) else {
-        return (String::new(), None);
-    };
-    let lines: Vec<&str> = transcript_text.split_inclusive('\n').collect();
-    let start = start_offset.max(0) as usize;
-    if start > lines.len() {
-        return (String::new(), None);
-    }
-    (lines[start..].concat(), Some(lines.len() as i64))
+    read_transcript_fragment_from_path(transcript_path, start_offset)
 }
 
 pub(super) fn token_usage_metadata(token_usage: Option<&TokenUsage>) -> Option<TokenUsageMetadata> {

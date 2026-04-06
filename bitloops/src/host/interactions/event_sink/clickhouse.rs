@@ -209,7 +209,7 @@ impl ClickHouseInteractionRepository {
                     toString(max(sessions.updated_at)) AS updated_at
                 FROM interaction_sessions AS sessions
                 WHERE {}
-                GROUP BY sessions.session_id
+                GROUP BY sessions.repo_id, sessions.session_id
             )
             ORDER BY parseDateTime64BestEffortOrZero(if(last_event_at = '', started_at, last_event_at)) DESC,
                      session_id DESC
@@ -248,7 +248,7 @@ impl ClickHouseInteractionRepository {
                         toString(max(sessions.updated_at)) AS updated_at
                     FROM interaction_sessions AS sessions
                     WHERE sessions.repo_id = '{repo_id}' AND sessions.session_id = '{session_id}'
-                    GROUP BY sessions.session_id
+                    GROUP BY sessions.repo_id, sessions.session_id
                 )
                 LIMIT 1",
                 repo_id = esc_ch(&self.repo_id),
@@ -294,7 +294,7 @@ impl ClickHouseInteractionRepository {
                         toString(max(turns.updated_at)) AS updated_at
                     FROM interaction_turns AS turns
                     WHERE turns.repo_id = '{repo_id}' AND turns.session_id = '{session_id}'
-                    GROUP BY turns.turn_id
+                    GROUP BY turns.repo_id, turns.turn_id
                 ORDER BY turn_number ASC, started_at ASC
                 LIMIT {limit}",
                 repo_id = esc_ch(&self.repo_id),
@@ -337,7 +337,7 @@ impl ClickHouseInteractionRepository {
                     toString(max(turns.updated_at)) AS updated_at
                  FROM interaction_turns AS turns
                  WHERE turns.repo_id = '{repo_id}'
-                 GROUP BY turns.turn_id
+                 GROUP BY turns.repo_id, turns.turn_id
                  HAVING argMax(turns.checkpoint_id, turns.updated_at) = ''
                 ORDER BY session_id ASC, turn_number ASC, started_at ASC",
                 repo_id = esc_ch(&self.repo_id),
@@ -427,7 +427,7 @@ impl ClickHouseInteractionRepository {
                         toString(max(turns.updated_at)) AS updated_at
                     FROM interaction_turns AS turns
                     WHERE turns.repo_id = '{repo_id}' AND turns.turn_id IN ({ids})
-                    GROUP BY turns.turn_id
+                    GROUP BY turns.repo_id, turns.turn_id
                 )",
                 repo_id = esc_ch(&self.repo_id),
                 ids = ids,

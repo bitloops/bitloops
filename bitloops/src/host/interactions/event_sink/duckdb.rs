@@ -23,9 +23,7 @@ impl DuckDbInteractionRepository {
 
     pub(super) fn ensure_schema(&self) -> Result<()> {
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)
-            .context("ensuring DuckDB interaction schema")?;
-        ensure_turn_columns(&conn)?;
+        ensure_current_schema(&conn).context("ensuring DuckDB interaction schema")?;
         Ok(())
     }
 
@@ -43,7 +41,7 @@ impl DuckDbInteractionRepository {
     pub(super) fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
         super::ensure_repo_id(&self.repo_id, &session.repo_id, "interaction session")?;
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let sql = format!(
             "INSERT OR REPLACE INTO interaction_sessions (
                 session_id, repo_id, agent_type, model, first_prompt,
@@ -75,7 +73,7 @@ impl DuckDbInteractionRepository {
     pub(super) fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
         super::ensure_repo_id(&self.repo_id, &turn.repo_id, "interaction turn")?;
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let usage = turn.token_usage.clone().unwrap_or_default();
         let files_modified =
             serde_json::to_string(&turn.files_modified).context("serialising files_modified")?;
@@ -127,7 +125,7 @@ impl DuckDbInteractionRepository {
     pub(super) fn append_event(&self, event: &InteractionEvent) -> Result<()> {
         super::ensure_repo_id(&self.repo_id, &event.repo_id, "interaction event")?;
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
         let sql = format!(
             "INSERT OR IGNORE INTO interaction_events (
@@ -162,7 +160,7 @@ impl DuckDbInteractionRepository {
             return Ok(());
         }
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let quoted_ids = turn_ids
             .iter()
             .map(|turn_id| format!("'{}'", esc_pg(turn_id)))
@@ -187,7 +185,7 @@ impl DuckDbInteractionRepository {
         limit: usize,
     ) -> Result<Vec<InteractionSession>> {
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let mut sql = format!(
             "SELECT session_id, repo_id, agent_type, model, first_prompt,
                     transcript_path, worktree_path, worktree_id, started_at,
@@ -212,7 +210,7 @@ impl DuckDbInteractionRepository {
 
     pub(super) fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let sql = format!(
             "SELECT session_id, repo_id, agent_type, model, first_prompt,
                     transcript_path, worktree_path, worktree_id, started_at,
@@ -235,7 +233,7 @@ impl DuckDbInteractionRepository {
         limit: usize,
     ) -> Result<Vec<InteractionTurn>> {
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let sql = format!(
             "SELECT turn_id, session_id, repo_id, turn_number, prompt,
                     agent_type, model, started_at, ended_at, has_token_usage,
@@ -259,7 +257,7 @@ impl DuckDbInteractionRepository {
 
     pub(super) fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let sql = format!(
             "SELECT turn_id, session_id, repo_id, turn_number, prompt,
                     agent_type, model, started_at, ended_at, has_token_usage,
@@ -284,7 +282,7 @@ impl DuckDbInteractionRepository {
         limit: usize,
     ) -> Result<Vec<InteractionEvent>> {
         let conn = self.open_or_create()?;
-        conn.execute_batch(SCHEMA)?;
+        ensure_current_schema(&conn)?;
         let mut sql = format!(
             "SELECT event_id, session_id, turn_id, repo_id, event_type,
                     event_time, agent_type, model, payload
@@ -303,9 +301,9 @@ impl DuckDbInteractionRepository {
     }
 }
 
-const SCHEMA: &str = "\
+const INTERACTION_SESSIONS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
-    session_id VARCHAR PRIMARY KEY,
+    session_id VARCHAR,
     repo_id VARCHAR,
     agent_type VARCHAR,
     model VARCHAR,
@@ -316,13 +314,14 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     started_at VARCHAR,
     ended_at VARCHAR,
     last_event_at VARCHAR,
-    updated_at VARCHAR
-);
-CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
-    ON interaction_sessions (repo_id, last_event_at, started_at);
+    updated_at VARCHAR,
+    PRIMARY KEY (repo_id, session_id)
+)
+"#;
 
+const INTERACTION_TURNS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_turns (
-    turn_id VARCHAR PRIMARY KEY,
+    turn_id VARCHAR,
     session_id VARCHAR,
     repo_id VARCHAR,
     turn_number INTEGER,
@@ -344,13 +343,12 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     transcript_fragment VARCHAR,
     files_modified VARCHAR,
     checkpoint_id VARCHAR,
-    updated_at VARCHAR
-);
-CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
-    ON interaction_turns (session_id, turn_number, started_at);
-CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
-    ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
+    updated_at VARCHAR,
+    PRIMARY KEY (repo_id, turn_id)
+)
+"#;
 
+const INTERACTION_EVENTS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_events (
     event_id VARCHAR PRIMARY KEY,
     event_time VARCHAR,
@@ -361,14 +359,17 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     agent_type VARCHAR,
     model VARCHAR,
     payload VARCHAR
-);
-CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
-    ON interaction_events (repo_id, event_time);
-CREATE INDEX IF NOT EXISTS interaction_events_session_idx
-    ON interaction_events (session_id, event_time);
-CREATE INDEX IF NOT EXISTS interaction_events_type_idx
-    ON interaction_events (repo_id, event_type, event_time);
-";
+)
+"#;
+
+const INTERACTION_INDEX_SQL: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx ON interaction_sessions (repo_id, last_event_at, started_at)",
+    "CREATE INDEX IF NOT EXISTS interaction_turns_session_idx ON interaction_turns (repo_id, session_id, turn_number, started_at)",
+    "CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number)",
+    "CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx ON interaction_events (repo_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS interaction_events_session_idx ON interaction_events (repo_id, session_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS interaction_events_type_idx ON interaction_events (repo_id, event_type, event_time)",
+];
 
 fn quoted_nullable(value: &Option<String>) -> String {
     match value.as_deref().filter(|candidate| !candidate.is_empty()) {
@@ -382,6 +383,20 @@ fn quoted_nullable_i64(value: Option<i64>) -> String {
         Some(value) => value.to_string(),
         None => "NULL".to_string(),
     }
+}
+
+fn ensure_current_schema(conn: &duckdb::Connection) -> Result<()> {
+    conn.execute_batch(INTERACTION_SESSIONS_TABLE_SQL)
+        .context("creating DuckDB interaction_sessions table")?;
+    conn.execute_batch(INTERACTION_TURNS_TABLE_SQL)
+        .context("creating DuckDB interaction_turns table")?;
+    conn.execute_batch(INTERACTION_EVENTS_TABLE_SQL)
+        .context("creating DuckDB interaction_events table")?;
+    ensure_turn_columns(conn)?;
+    ensure_repo_scoped_primary_key(conn, "interaction_sessions", &["repo_id", "session_id"])?;
+    ensure_repo_scoped_primary_key(conn, "interaction_turns", &["repo_id", "turn_id"])?;
+    ensure_interaction_indexes(conn)?;
+    Ok(())
 }
 
 fn ensure_turn_columns(conn: &duckdb::Connection) -> Result<()> {
@@ -424,6 +439,149 @@ fn ensure_turn_columns(conn: &duckdb::Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn ensure_repo_scoped_primary_key(
+    conn: &duckdb::Connection,
+    table: &str,
+    expected_columns: &[&str],
+) -> Result<()> {
+    let actual_columns = duckdb_table_pk_columns(conn, table)?;
+    let expected_columns = expected_columns
+        .iter()
+        .map(|column| column.to_string())
+        .collect::<Vec<_>>();
+    if actual_columns == expected_columns {
+        return Ok(());
+    }
+
+    match table {
+        "interaction_sessions" => rebuild_interaction_sessions_table(conn),
+        "interaction_turns" => rebuild_interaction_turns_table(conn),
+        _ => Ok(()),
+    }
+}
+
+fn rebuild_interaction_sessions_table(conn: &duckdb::Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+BEGIN TRANSACTION;
+CREATE TABLE interaction_sessions__repo_scoped_migration (
+    session_id VARCHAR,
+    repo_id VARCHAR,
+    agent_type VARCHAR,
+    model VARCHAR,
+    first_prompt VARCHAR,
+    transcript_path VARCHAR,
+    worktree_path VARCHAR,
+    worktree_id VARCHAR,
+    started_at VARCHAR,
+    ended_at VARCHAR,
+    last_event_at VARCHAR,
+    updated_at VARCHAR,
+    PRIMARY KEY (repo_id, session_id)
+);
+INSERT INTO interaction_sessions__repo_scoped_migration (
+    session_id, repo_id, agent_type, model, first_prompt,
+    transcript_path, worktree_path, worktree_id, started_at,
+    ended_at, last_event_at, updated_at
+)
+SELECT
+    session_id, repo_id, agent_type, model, first_prompt,
+    transcript_path, worktree_path, worktree_id, started_at,
+    ended_at, last_event_at, updated_at
+FROM interaction_sessions;
+DROP TABLE interaction_sessions;
+ALTER TABLE interaction_sessions__repo_scoped_migration RENAME TO interaction_sessions;
+COMMIT;
+"#,
+    )
+    .context("rebuilding DuckDB interaction_sessions with repo-scoped primary key")?;
+    Ok(())
+}
+
+fn rebuild_interaction_turns_table(conn: &duckdb::Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+BEGIN TRANSACTION;
+CREATE TABLE interaction_turns__repo_scoped_migration (
+    turn_id VARCHAR,
+    session_id VARCHAR,
+    repo_id VARCHAR,
+    turn_number INTEGER,
+    prompt VARCHAR,
+    agent_type VARCHAR,
+    model VARCHAR,
+    started_at VARCHAR,
+    ended_at VARCHAR,
+    has_token_usage INTEGER,
+    input_tokens BIGINT,
+    cache_creation_tokens BIGINT,
+    cache_read_tokens BIGINT,
+    output_tokens BIGINT,
+    api_call_count BIGINT,
+    summary VARCHAR,
+    prompt_count INTEGER,
+    transcript_offset_start BIGINT,
+    transcript_offset_end BIGINT,
+    transcript_fragment VARCHAR,
+    files_modified VARCHAR,
+    checkpoint_id VARCHAR,
+    updated_at VARCHAR,
+    PRIMARY KEY (repo_id, turn_id)
+);
+INSERT INTO interaction_turns__repo_scoped_migration (
+    turn_id, session_id, repo_id, turn_number, prompt,
+    agent_type, model, started_at, ended_at, has_token_usage,
+    input_tokens, cache_creation_tokens, cache_read_tokens,
+    output_tokens, api_call_count, summary, prompt_count,
+    transcript_offset_start, transcript_offset_end, transcript_fragment,
+    files_modified, checkpoint_id, updated_at
+)
+SELECT
+    turn_id, session_id, repo_id, turn_number, prompt,
+    agent_type, model, started_at, ended_at, has_token_usage,
+    input_tokens, cache_creation_tokens, cache_read_tokens,
+    output_tokens, api_call_count, summary, prompt_count,
+    transcript_offset_start, transcript_offset_end, transcript_fragment,
+    files_modified, checkpoint_id, updated_at
+FROM interaction_turns;
+DROP TABLE interaction_turns;
+ALTER TABLE interaction_turns__repo_scoped_migration RENAME TO interaction_turns;
+COMMIT;
+"#,
+    )
+    .context("rebuilding DuckDB interaction_turns with repo-scoped primary key")?;
+    Ok(())
+}
+
+fn ensure_interaction_indexes(conn: &duckdb::Connection) -> Result<()> {
+    for sql in INTERACTION_INDEX_SQL {
+        conn.execute_batch(sql)
+            .with_context(|| format!("ensuring DuckDB interaction index: {sql}"))?;
+    }
+    Ok(())
+}
+
+fn duckdb_table_pk_columns(conn: &duckdb::Connection, table: &str) -> Result<Vec<String>> {
+    let sql = format!(
+        "SELECT kcu.column_name
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON tc.constraint_name = kcu.constraint_name
+          AND tc.constraint_schema = kcu.constraint_schema
+         WHERE tc.table_name = '{table}'
+           AND tc.constraint_type = 'PRIMARY KEY'
+         ORDER BY kcu.ordinal_position"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .with_context(|| format!("preparing DuckDB primary key metadata query for `{table}`"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .with_context(|| format!("querying DuckDB primary key metadata for `{table}`"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)
 }
 
 fn append_event_filter_sql(sql: &mut String, filter: &InteractionEventFilter) {
@@ -659,5 +817,73 @@ mod tests {
             .pop()
             .expect("one turn");
         assert_eq!(turn.checkpoint_id.as_deref(), Some("cp-1"));
+    }
+
+    #[test]
+    fn shared_duckdb_allows_same_session_and_turn_ids_across_repos() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let path = temp_dir.path().join("events.duckdb");
+        let repository_a = DuckDbInteractionRepository {
+            repo_id: "repo-a".into(),
+            path: path.clone(),
+        };
+        let repository_b = DuckDbInteractionRepository {
+            repo_id: "repo-b".into(),
+            path,
+        };
+
+        repository_a.ensure_schema().expect("schema repo a");
+        repository_b.ensure_schema().expect("schema repo b");
+
+        let pk_columns = duckdb_table_pk_columns(
+            &duckdb::Connection::open(temp_dir.path().join("events.duckdb")).expect("open duckdb"),
+            "interaction_sessions",
+        )
+        .expect("read session primary key columns");
+        assert_eq!(pk_columns, vec!["repo_id".to_string(), "session_id".to_string()]);
+
+        let mut session_a = sample_session();
+        session_a.repo_id = "repo-a".into();
+        session_a.first_prompt = "repo a".into();
+        let mut session_b = sample_session();
+        session_b.repo_id = "repo-b".into();
+        session_b.first_prompt = "repo b".into();
+
+        let mut turn_a = sample_turn();
+        turn_a.repo_id = "repo-a".into();
+        turn_a.prompt = "repo a turn".into();
+        let mut turn_b = sample_turn();
+        turn_b.repo_id = "repo-b".into();
+        turn_b.prompt = "repo b turn".into();
+
+        repository_a.upsert_session(&session_a).expect("upsert session a");
+        repository_b.upsert_session(&session_b).expect("upsert session b");
+        repository_a.upsert_turn(&turn_a).expect("upsert turn a");
+        repository_b.upsert_turn(&turn_b).expect("upsert turn b");
+
+        assert_eq!(
+            repository_a
+                .load_session("sess-1")
+                .expect("load session a")
+                .expect("session a")
+                .first_prompt,
+            "repo a"
+        );
+        assert_eq!(
+            repository_b
+                .load_session("sess-1")
+                .expect("load session b")
+                .expect("session b")
+                .first_prompt,
+            "repo b"
+        );
+        assert_eq!(
+            repository_a.list_turns_for_session("sess-1", 10).unwrap()[0].prompt,
+            "repo a turn"
+        );
+        assert_eq!(
+            repository_b.list_turns_for_session("sess-1", 10).unwrap()[0].prompt,
+            "repo b turn"
+        );
     }
 }

@@ -17,6 +17,9 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
+use crate::host::interactions::transcript_fragment::{
+    transcript_fragment_from_bytes, transcript_position_from_bytes,
+};
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
@@ -140,7 +143,7 @@ pub fn handle_lifecycle_turn_end(
     }
 
     if new_transcript_position <= transcript_offset && !transcript_data.is_empty() {
-        new_transcript_position = transcript_line_count(&transcript_data);
+        new_transcript_position = transcript_position_from_bytes(&transcript_data);
     }
 
     let prompt_content = all_prompts.join("\n\n---\n\n");
@@ -241,7 +244,7 @@ pub fn handle_lifecycle_turn_end(
             subagent_tokens: None,
         }
     });
-    let transcript_fragment = transcript_fragment_from_offsets(
+    let transcript_fragment = transcript_fragment_from_bytes(
         &transcript_data,
         transcript_offset,
         new_transcript_position,
@@ -369,53 +372,6 @@ pub fn handle_lifecycle_turn_end(
     let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
-}
-
-fn transcript_fragment_from_offsets(
-    transcript_data: &[u8],
-    start_offset: usize,
-    end_offset: usize,
-) -> String {
-    if start_offset >= end_offset {
-        return String::new();
-    }
-    if let Some(fragment) =
-        structured_transcript_fragment_from_offsets(transcript_data, start_offset, end_offset)
-    {
-        return fragment;
-    }
-    let transcript_text = String::from_utf8_lossy(transcript_data);
-    let lines: Vec<&str> = transcript_text.split_inclusive('\n').collect();
-    if start_offset >= lines.len() {
-        return String::new();
-    }
-    let bounded_end = end_offset.min(lines.len());
-    lines[start_offset..bounded_end].concat()
-}
-
-fn transcript_line_count(transcript_data: &[u8]) -> usize {
-    if transcript_data.is_empty() {
-        return 0;
-    }
-    String::from_utf8_lossy(transcript_data)
-        .split_inclusive('\n')
-        .count()
-}
-
-fn structured_transcript_fragment_from_offsets(
-    transcript_data: &[u8],
-    start_offset: usize,
-    end_offset: usize,
-) -> Option<String> {
-    let mut value = serde_json::from_slice::<serde_json::Value>(transcript_data).ok()?;
-    let messages = value.get_mut("messages")?.as_array_mut()?;
-    if start_offset >= messages.len() {
-        return Some(String::new());
-    }
-    let bounded_end = end_offset.min(messages.len());
-    let fragment_messages = messages[start_offset..bounded_end].to_vec();
-    *messages = fragment_messages;
-    serde_json::to_string(&value).ok()
 }
 
 /// Reads the transcript file with a brief retry window to handle agents that

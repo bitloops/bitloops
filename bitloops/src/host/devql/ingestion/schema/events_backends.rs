@@ -144,7 +144,7 @@ ON checkpoint_events (repo_id, branch, event_type, event_time);
 
     let interaction_sql = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
-    session_id VARCHAR PRIMARY KEY,
+    session_id VARCHAR,
     repo_id VARCHAR,
     agent_type VARCHAR,
     model VARCHAR,
@@ -155,14 +155,15 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     started_at VARCHAR,
     ended_at VARCHAR,
     last_event_at VARCHAR,
-    updated_at VARCHAR
+    updated_at VARCHAR,
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
 ON interaction_sessions (repo_id, last_event_at, started_at);
 
 CREATE TABLE IF NOT EXISTS interaction_turns (
-    turn_id VARCHAR PRIMARY KEY,
+    turn_id VARCHAR,
     session_id VARCHAR,
     repo_id VARCHAR,
     turn_number INTEGER,
@@ -177,13 +178,19 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     cache_read_tokens BIGINT,
     output_tokens BIGINT,
     api_call_count BIGINT,
+    summary VARCHAR,
+    prompt_count INTEGER,
+    transcript_offset_start BIGINT,
+    transcript_offset_end BIGINT,
+    transcript_fragment VARCHAR,
     files_modified VARCHAR,
     checkpoint_id VARCHAR,
-    updated_at VARCHAR
+    updated_at VARCHAR,
+    PRIMARY KEY (repo_id, turn_id)
 );
 
 CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
-ON interaction_turns (session_id, turn_number, started_at);
+ON interaction_turns (repo_id, session_id, turn_number, started_at);
 
 CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
 ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
@@ -204,7 +211,7 @@ CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
 ON interaction_events (repo_id, event_time);
 
 CREATE INDEX IF NOT EXISTS interaction_events_session_idx
-ON interaction_events (session_id, event_time);
+ON interaction_events (repo_id, session_id, event_time);
 
 CREATE INDEX IF NOT EXISTS interaction_events_type_idx
 ON interaction_events (repo_id, event_type, event_time);
