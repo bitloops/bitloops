@@ -40,10 +40,12 @@ use axum::{
     extract::State,
     extract::WebSocketUpgrade,
     http::HeaderMap,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Response as AxumResponse},
 };
-use serde_json::json;
-use std::time::Instant;
+use serde_json::{Value as JsonValue, json};
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use crate::devql_transport::{parse_slim_cli_scope_headers, upsert_repo_path_registry_scope};
 
@@ -140,16 +142,44 @@ pub(crate) async fn slim_graphql_handler(
     State(state): State<crate::api::DashboardState>,
     headers: HeaderMap,
     request: GraphQLRequest,
-) -> GraphQLResponse {
+) -> AxumResponse {
+    let started = Instant::now();
     let request = request.into_inner();
+    let signature = graphql_request_signature(&request);
     let scope = match parse_slim_cli_scope_headers(&headers) {
         Ok(scope) => scope,
-        Err(err) => return graphql_error_response(err),
+        Err(err) => {
+            let response = graphql_error_response(err).into_response();
+            track_devql_action(DevqlGraphqlTelemetry {
+                repo_root: state.repo_root.as_path(),
+                event: "bitloops devql slim http",
+                scope: "slim",
+                transport: "http",
+                request_kind: &signature.0,
+                operation_family: &signature.1,
+                success: false,
+                status: response.status(),
+                duration: started.elapsed(),
+            });
+            return response;
+        }
     };
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
-        return graphql_error_response(err);
+        let response = graphql_error_response(err).into_response();
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: state.repo_root.as_path(),
+            event: "bitloops devql slim http",
+            scope: "slim",
+            transport: "http",
+            request_kind: &signature.0,
+            operation_family: &signature.1,
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
+        return response;
     }
     let repo_root = scope
         .as_ref()
@@ -157,7 +187,7 @@ pub(crate) async fn slim_graphql_handler(
         .unwrap_or_else(|| state.repo_root.clone());
     let context = DevqlGraphqlContext::for_slim_request(
         state.config_root.clone(),
-        repo_root,
+        repo_root.clone(),
         scope.as_ref().map(|scope| scope.branch_name.clone()),
         scope.as_ref().and_then(|scope| scope.project_path.clone()),
         state.repo_registry_path().map(std::path::Path::to_path_buf),
@@ -165,15 +195,31 @@ pub(crate) async fn slim_graphql_handler(
         state.db.clone(),
     )
     .with_subscription_hub(state.subscription_hub());
-    execute_graphql_request(state.devql_slim_schema(), request.data(context), &headers).await
+    let (response, success) =
+        execute_graphql_request(state.devql_slim_schema(), request.data(context), &headers).await;
+    let response = response.into_response();
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: repo_root.as_path(),
+        event: "bitloops devql slim http",
+        scope: "slim",
+        transport: "http",
+        request_kind: &signature.0,
+        operation_family: &signature.1,
+        success,
+        status: response.status(),
+        duration: started.elapsed(),
+    });
+    response
 }
 
 pub(crate) async fn global_graphql_handler(
     State(state): State<crate::api::DashboardState>,
     headers: HeaderMap,
     request: GraphQLRequest,
-) -> GraphQLResponse {
+) -> AxumResponse {
+    let started = Instant::now();
     let request = request.into_inner();
+    let signature = graphql_request_signature(&request);
     let context = DevqlGraphqlContext::for_global_request(
         state.config_root.clone(),
         state.repo_root.clone(),
@@ -181,7 +227,21 @@ pub(crate) async fn global_graphql_handler(
         state.db.clone(),
     )
     .with_subscription_hub(state.subscription_hub());
-    execute_graphql_request(state.devql_global_schema(), request.data(context), &headers).await
+    let (response, success) =
+        execute_graphql_request(state.devql_global_schema(), request.data(context), &headers).await;
+    let response = response.into_response();
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: state.repo_root.as_path(),
+        event: "bitloops devql global http",
+        scope: "global",
+        transport: "http",
+        request_kind: &signature.0,
+        operation_family: &signature.1,
+        success,
+        status: response.status(),
+        duration: started.elapsed(),
+    });
+    response
 }
 
 pub(crate) async fn slim_graphql_ws_handler(
@@ -190,14 +250,41 @@ pub(crate) async fn slim_graphql_ws_handler(
     upgrade: WebSocketUpgrade,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let started = Instant::now();
     let scope = match parse_slim_cli_scope_headers(&headers) {
         Ok(scope) => scope,
-        Err(err) => return graphql_error_response(err).into_response(),
+        Err(err) => {
+            let response = graphql_error_response(err).into_response();
+            track_devql_action(DevqlGraphqlTelemetry {
+                repo_root: state.repo_root.as_path(),
+                event: "bitloops devql slim ws",
+                scope: "slim",
+                transport: "ws",
+                request_kind: "subscription",
+                operation_family: "anonymous",
+                success: false,
+                status: response.status(),
+                duration: started.elapsed(),
+            });
+            return response;
+        }
     };
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
-        return graphql_error_response(err).into_response();
+        let response = graphql_error_response(err).into_response();
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: state.repo_root.as_path(),
+            event: "bitloops devql slim ws",
+            scope: "slim",
+            transport: "ws",
+            request_kind: "subscription",
+            operation_family: "anonymous",
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
+        return response;
     }
 
     let repo_root = scope
@@ -206,7 +293,7 @@ pub(crate) async fn slim_graphql_ws_handler(
         .unwrap_or_else(|| state.repo_root.clone());
     let context = DevqlGraphqlContext::for_slim_request(
         state.config_root.clone(),
-        repo_root,
+        repo_root.clone(),
         scope.as_ref().map(|scope| scope.branch_name.clone()),
         scope.as_ref().and_then(|scope| scope.project_path.clone()),
         state.repo_registry_path().map(std::path::Path::to_path_buf),
@@ -215,11 +302,23 @@ pub(crate) async fn slim_graphql_ws_handler(
     )
     .with_subscription_hub(state.subscription_hub());
     let schema = build_slim_schema(context);
-
-    upgrade
+    let response = upgrade
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| GraphQLWebSocket::new(stream, schema, protocol).serve())
-        .into_response()
+        .into_response();
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: repo_root.as_path(),
+        event: "bitloops devql slim ws",
+        scope: "slim",
+        transport: "ws",
+        request_kind: "subscription",
+        operation_family: "anonymous",
+        success: response.status().is_success()
+            || response.status() == axum::http::StatusCode::SWITCHING_PROTOCOLS,
+        status: response.status(),
+        duration: started.elapsed(),
+    });
+    response
 }
 
 pub(crate) async fn global_graphql_ws_handler(
@@ -227,6 +326,7 @@ pub(crate) async fn global_graphql_ws_handler(
     protocol: GraphQLProtocol,
     upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    let started = Instant::now();
     let context = DevqlGraphqlContext::for_global_request(
         state.config_root.clone(),
         state.repo_root.clone(),
@@ -236,24 +336,39 @@ pub(crate) async fn global_graphql_ws_handler(
     .with_subscription_hub(state.subscription_hub());
     let schema = build_global_schema(context);
 
-    upgrade
+    let response = upgrade
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| GraphQLWebSocket::new(stream, schema, protocol).serve())
-        .into_response()
+        .into_response();
+    track_devql_action(DevqlGraphqlTelemetry {
+        repo_root: state.repo_root.as_path(),
+        event: "bitloops devql global ws",
+        scope: "global",
+        transport: "ws",
+        request_kind: "subscription",
+        operation_family: "anonymous",
+        success: response.status().is_success()
+            || response.status() == axum::http::StatusCode::SWITCHING_PROTOCOLS,
+        status: response.status(),
+        duration: started.elapsed(),
+    });
+    response
 }
 
 async fn execute_graphql_request<Query, Mutation, Subscription>(
     schema: &Schema<Query, Mutation, Subscription>,
     request: Request,
     headers: &HeaderMap,
-) -> GraphQLResponse
+) -> (GraphQLResponse, bool)
 where
     Query: async_graphql::ObjectType + Send + Sync + 'static,
     Mutation: async_graphql::ObjectType + Send + Sync + 'static,
     Subscription: async_graphql::SubscriptionType + Send + Sync + 'static,
 {
     if !crate::devql_timing::timings_requested(headers) {
-        return schema.execute(request).await.into();
+        let response = schema.execute(request).await;
+        let success = response.errors.is_empty();
+        return (response.into(), success);
     }
 
     let query_bytes = request.query.len();
@@ -262,6 +377,7 @@ where
     let execute_started = Instant::now();
     let response = crate::devql_timing::scope_trace(trace.clone(), schema.execute(request)).await;
     let error_count = response.errors.len();
+    let success = error_count == 0;
     trace.record(
         "server.graphql.execute",
         execute_started.elapsed(),
@@ -275,9 +391,115 @@ where
     let timing_value = async_graphql::Value::from_json(trace.summary_value())
         .unwrap_or(async_graphql::Value::Null);
 
-    response
-        .extension(crate::devql_timing::DEVQL_TIMINGS_EXTENSION, timing_value)
-        .into()
+    (
+        response
+            .extension(crate::devql_timing::DEVQL_TIMINGS_EXTENSION, timing_value)
+            .into(),
+        success,
+    )
+}
+
+fn graphql_request_signature(request: &Request) -> (String, String) {
+    let request_kind = graphql_request_kind(request.query.as_str()).to_string();
+    let raw_operation_name = request
+        .operation_name
+        .clone()
+        .or_else(|| extract_operation_name(request.query.as_str()).map(str::to_string));
+    let operation_name = raw_operation_name
+        .as_deref()
+        .and_then(graphql_operation_family)
+        .unwrap_or_else(|| {
+            if raw_operation_name.is_some() {
+                "custom".to_string()
+            } else {
+                "anonymous".to_string()
+            }
+        });
+    (request_kind, operation_name)
+}
+
+fn graphql_request_kind(query: &str) -> &'static str {
+    let trimmed = query.trim_start();
+    if trimmed.starts_with("mutation") {
+        "mutation"
+    } else if trimmed.starts_with("subscription") {
+        "subscription"
+    } else if trimmed.starts_with("query") || trimmed.starts_with('{') {
+        "query"
+    } else {
+        "unknown"
+    }
+}
+
+fn extract_operation_name(query: &str) -> Option<&str> {
+    let trimmed = query.trim_start();
+    let prefix = ["query", "mutation", "subscription"]
+        .into_iter()
+        .find(|prefix| trimmed.starts_with(prefix))?;
+    let remainder = trimmed.strip_prefix(prefix)?.trim_start();
+    let name_end = remainder
+        .find(|ch: char| ch == '(' || ch == '{' || ch.is_whitespace())
+        .unwrap_or(remainder.len());
+    let name = remainder[..name_end].trim();
+    (!name.is_empty()).then_some(name)
+}
+
+fn graphql_operation_family(name: &str) -> Option<String> {
+    match name {
+        "InitSchema" | "Ingest" | "EnqueueSync" | "SyncTask" | "SyncProgress" => {
+            Some(name.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Inputs for [`track_devql_action`]: DevQL GraphQL/WS request telemetry (HTTP or WebSocket).
+struct DevqlGraphqlTelemetry<'a> {
+    repo_root: &'a Path,
+    event: &'a str,
+    scope: &'a str,
+    transport: &'a str,
+    request_kind: &'a str,
+    operation_family: &'a str,
+    success: bool,
+    status: axum::http::StatusCode,
+    duration: Duration,
+}
+
+fn track_devql_action(t: DevqlGraphqlTelemetry<'_>) {
+    let mut properties = HashMap::new();
+    properties.insert("scope".to_string(), JsonValue::String(t.scope.to_string()));
+    properties.insert(
+        "transport".to_string(),
+        JsonValue::String(t.transport.to_string()),
+    );
+    properties.insert(
+        "request_kind".to_string(),
+        JsonValue::String(t.request_kind.to_string()),
+    );
+    properties.insert(
+        "operation_family".to_string(),
+        JsonValue::String(t.operation_family.to_string()),
+    );
+    properties.insert(
+        "status_code_class".to_string(),
+        JsonValue::String(crate::api::status_code_class(t.status).to_string()),
+    );
+
+    crate::api::track_repo_action(
+        t.repo_root,
+        crate::telemetry::analytics::ActionDescriptor {
+            event: t.event.to_string(),
+            surface: if t.transport == "ws" {
+                "devql_ws"
+            } else {
+                "devql_http"
+            },
+            properties,
+        },
+        t.success,
+        t.duration,
+    );
 }
 
 pub(crate) async fn slim_graphql_playground_handler() -> impl IntoResponse {
@@ -339,4 +561,58 @@ fn graphql_error_response(err: anyhow::Error) -> GraphQLResponse {
         bad_user_input_error(err.to_string()).into_server_error(Pos::default()),
     ])
     .into()
+}
+
+#[cfg(test)]
+mod analytics_signature_tests {
+    use super::*;
+
+    #[test]
+    fn graphql_request_signature_whitelists_known_operation_names() {
+        let request = Request::new(
+            "mutation EnqueueSync($input: EnqueueSyncInput!) { enqueueSync(input: $input) { merged } }",
+        );
+        let signature = graphql_request_signature(&request);
+
+        assert_eq!(signature.0, "mutation");
+        assert_eq!(signature.1, "EnqueueSync");
+    }
+
+    #[test]
+    fn graphql_request_signature_marks_custom_operations_without_query_text_leakage() {
+        let request = Request::new("query DashboardBranches { repositories { name } }");
+        let signature = graphql_request_signature(&request);
+
+        assert_eq!(signature.0, "query");
+        assert_eq!(signature.1, "custom");
+    }
+
+    #[test]
+    fn graphql_request_signature_marks_anonymous_requests() {
+        let request = Request::new("{ repositories { name } }");
+        let signature = graphql_request_signature(&request);
+
+        assert_eq!(signature.0, "query");
+        assert_eq!(signature.1, "anonymous");
+    }
+}
+
+#[cfg(test)]
+mod schema_template_tests {
+    use super::{build_global_schema_template, build_slim_schema_template};
+
+    #[test]
+    fn global_and_slim_schema_templates_expose_non_empty_sdl() {
+        let global_sdl = build_global_schema_template().sdl();
+        assert!(global_sdl.len() > 500);
+        assert!(global_sdl.contains("type Mutation"));
+
+        let slim_sdl = build_slim_schema_template().sdl();
+        assert!(slim_sdl.len() > 500);
+        assert!(slim_sdl.contains("type Mutation"));
+        assert_ne!(
+            global_sdl, slim_sdl,
+            "slim schema should differ from global SDL"
+        );
+    }
 }

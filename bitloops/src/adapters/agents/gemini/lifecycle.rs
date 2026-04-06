@@ -19,6 +19,18 @@ struct SessionHookRaw {
     session_id: String,
     #[serde(default)]
     transcript_path: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -29,6 +41,18 @@ struct AgentHookRaw {
     transcript_path: String,
     #[serde(default)]
     prompt: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
 }
 
 /// Translates a Gemini hook into a normalized lifecycle LifecycleEvent.
@@ -41,6 +65,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 event_type: Some(LifecycleEventType::SessionStart),
                 session_id: raw.session_id,
                 session_ref: raw.transcript_path,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -51,6 +76,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_id: raw.session_id,
                 session_ref: raw.transcript_path,
                 prompt: raw.prompt,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -60,6 +86,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 event_type: Some(LifecycleEventType::TurnEnd),
                 session_id: raw.session_id,
                 session_ref: raw.transcript_path,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -69,6 +96,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 event_type: Some(LifecycleEventType::SessionEnd),
                 session_id: raw.session_id,
                 session_ref: raw.transcript_path,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -78,6 +106,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 event_type: Some(LifecycleEventType::Compaction),
                 session_id: raw.session_id,
                 session_ref: raw.transcript_path,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -119,7 +148,7 @@ mod tests {
     #[test]
     fn parse_before_agent_maps_turn_start_with_prompt() {
         let mut input = std::io::Cursor::new(
-            br#"{"session_id":"s1","transcript_path":"/tmp/t.json","prompt":"hello world"}"#
+            br#"{"session_id":"s1","transcript_path":"/tmp/t.json","prompt":"hello world","model":"gemini-2.5-pro"}"#
                 .as_slice(),
         );
         let event = parse_hook_event(HOOK_NAME_BEFORE_AGENT, &mut input)
@@ -129,6 +158,7 @@ mod tests {
         assert_eq!(event.session_id, "s1");
         assert_eq!(event.session_ref, "/tmp/t.json");
         assert_eq!(event.prompt, "hello world");
+        assert_eq!(event.model, "gemini-2.5-pro");
     }
 
     #[test]

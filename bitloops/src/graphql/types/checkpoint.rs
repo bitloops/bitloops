@@ -1,11 +1,23 @@
 use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 
-use crate::graphql::{backend_error, loaders::DataLoaders};
+use crate::graphql::{ResolverScope, backend_error, loaders::DataLoaders};
 use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 
 use super::{Commit, DateTimeScalar, JsonScalar};
 
 const UNIX_EPOCH_RFC3339: &str = "1970-01-01T00:00:00+00:00";
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct CheckpointFileRelation {
+    pub filepath: String,
+    pub change_kind: String,
+    pub path_before: Option<String>,
+    pub path_after: Option<String>,
+    pub blob_sha_before: Option<String>,
+    pub blob_sha_after: Option<String>,
+    pub copied_from_path: Option<String>,
+    pub copied_from_blob_sha: Option<String>,
+}
 
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
@@ -27,6 +39,8 @@ pub struct Checkpoint {
     pub created_at: Option<String>,
     pub is_task: bool,
     pub tool_use_id: Option<String>,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -80,11 +94,17 @@ impl Checkpoint {
             created_at: non_empty(info.created_at.as_str()),
             is_task: info.is_task,
             tool_use_id: non_empty(info.tool_use_id.as_str()),
+            scope: ResolverScope::default(),
         }
     }
 
     pub fn cursor(&self) -> String {
         self.id.to_string()
+    }
+
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
     }
 }
 
@@ -111,6 +131,18 @@ impl Checkpoint {
             commit.branch = self.branch.clone();
         }
         Ok(commit)
+    }
+
+    async fn file_relations(&self, ctx: &Context<'_>) -> Result<Vec<CheckpointFileRelation>> {
+        ctx.data_unchecked::<crate::graphql::DevqlGraphqlContext>()
+            .list_checkpoint_file_relations(self.id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve file provenance for checkpoint {:?}: {err:#}",
+                    self.id
+                ))
+            })
     }
 }
 

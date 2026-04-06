@@ -584,6 +584,15 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[test]
+    fn sync_tables_need_rebuild_true_for_empty_database() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory sqlite");
+        assert!(
+            sync_tables_need_rebuild(&conn).expect("inspect empty schema"),
+            "missing DevQL sync tables should require rebuild"
+        );
+    }
+
     #[tokio::test]
     async fn init_sqlite_schema_preserves_sync_state_on_repeated_runs() {
         let temp = TempDir::new().expect("temp dir");

@@ -2,7 +2,7 @@ use super::*;
 
 // Symbol record building, content hashing, and artefact DB upserts.
 
-pub(super) fn artefact_source_slice<'a>(content: &'a str, item: &LanguageArtefact) -> &'a str {
+pub(crate) fn artefact_source_slice<'a>(content: &'a str, item: &LanguageArtefact) -> &'a str {
     let len = content.len();
     let start = usize::try_from(item.start_byte)
         .unwrap_or_default()

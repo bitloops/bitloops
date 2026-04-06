@@ -5,8 +5,8 @@ use anyhow::Result;
 use crate::host::checkpoints::session::backend::SessionBackend;
 use crate::host::checkpoints::strategy::Strategy;
 use crate::host::hooks::runtime::agent_runtime::{
-    CURSOR_HOOK_AGENT_PROFILE, SessionInfoInput, UserPromptSubmitInput, handle_session_end,
-    handle_session_start, handle_stop_with_profile,
+    CURSOR_HOOK_AGENT_PROFILE, SessionInfoInput, UserPromptSubmitInput,
+    handle_session_end_with_profile, handle_session_start_with_profile, handle_stop_with_profile,
     handle_user_prompt_submit_with_strategy_and_profile,
 };
 
@@ -15,7 +15,7 @@ pub fn handle_session_start_cursor(
     backend: &dyn SessionBackend,
     repo_root: Option<&Path>,
 ) -> Result<()> {
-    handle_session_start(input, backend, repo_root)
+    handle_session_start_with_profile(input, backend, repo_root, Some(CURSOR_HOOK_AGENT_PROFILE))
 }
 
 pub fn handle_before_submit_prompt_cursor(
@@ -51,6 +51,7 @@ pub fn handle_stop_cursor(
 pub fn handle_session_end_cursor(
     input: SessionInfoInput,
     backend: &dyn SessionBackend,
+    repo_root: Option<&Path>,
 ) -> Result<()> {
-    handle_session_end(input, backend)
+    handle_session_end_with_profile(input, backend, repo_root, Some(CURSOR_HOOK_AGENT_PROFILE))
 }

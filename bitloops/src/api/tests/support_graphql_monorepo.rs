@@ -589,6 +589,63 @@ pub(super) fn seed_graphql_monorepo_repo_with_duckdb_events() -> TempDir {
     let repo = seed_graphql_monorepo_repo();
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
 
+    seed_checkpoint_storage_for_dashboard(
+        repo.path(),
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-api",
+            branch: "main",
+            files_touched: &["packages/api/src/caller.ts", "packages/api/src/target.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({
+                "input_tokens": 50,
+                "output_tokens": 20,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "api_call_count": 1
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-api",
+                agent: "codex",
+                created_at: "2026-03-26T10:20:00Z",
+                checkpoints_count: 1,
+                transcript: "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"API checkpoint\"}]}}\n",
+                prompts: "API checkpoint",
+                context: "API checkpoint context",
+            }],
+            insert_mapping: true,
+        },
+    );
+    seed_checkpoint_storage_for_dashboard(
+        repo.path(),
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-web",
+            branch: "main",
+            files_touched: &["packages/web/src/page.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({
+                "input_tokens": 25,
+                "output_tokens": 10,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "api_call_count": 1
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-web",
+                agent: "codex",
+                created_at: "2026-03-26T10:25:00Z",
+                checkpoints_count: 1,
+                transcript: "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Web checkpoint\"}]}}\n",
+                prompts: "Web checkpoint",
+                context: "Web checkpoint context",
+            }],
+            insert_mapping: true,
+        },
+    );
+
     seed_duckdb_events(
         repo.path(),
         &[

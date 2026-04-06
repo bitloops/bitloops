@@ -113,7 +113,7 @@ VALUES ('{}', '{}', '{}', 'blob-b', 'src/a.ts', 'typescript', 'function', 'funct
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
-async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
+async fn init_postgres_schema_creates_checkpoint_provenance_tables() {
     let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
     tokio::spawn(async move {
@@ -125,24 +125,21 @@ async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
     init_postgres_schema(&cfg, &client).await.unwrap();
 
     let table_name: Option<String> = client
-        .query_one(
-            "SELECT to_regclass('public.checkpoint_file_snapshots')",
-            &[],
-        )
+        .query_one("SELECT to_regclass('public.checkpoint_files')", &[])
         .await
         .unwrap()
         .get(0);
     assert_eq!(
         table_name.as_deref(),
-        Some("checkpoint_file_snapshots"),
-        "expected init_postgres_schema to create checkpoint_file_snapshots"
+        Some("checkpoint_files"),
+        "expected init_postgres_schema to create checkpoint_files"
     );
 
     let index_rows = client
         .query(
             "SELECT indexname
              FROM pg_indexes
-             WHERE schemaname = 'public' AND tablename = 'checkpoint_file_snapshots'
+             WHERE schemaname = 'public' AND tablename = 'checkpoint_files'
              ORDER BY indexname",
             &[],
         )
@@ -152,14 +149,41 @@ async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
     assert_eq!(
         index_names,
         vec![
-            "checkpoint_file_snapshots_agent_time_idx".to_string(),
-            "checkpoint_file_snapshots_checkpoint_idx".to_string(),
-            "checkpoint_file_snapshots_commit_idx".to_string(),
-            "checkpoint_file_snapshots_event_time_idx".to_string(),
-            "checkpoint_file_snapshots_lookup_idx".to_string(),
-            "checkpoint_file_snapshots_pkey".to_string(),
+            "checkpoint_files_agent_time_idx".to_string(),
+            "checkpoint_files_change_kind_idx".to_string(),
+            "checkpoint_files_checkpoint_idx".to_string(),
+            "checkpoint_files_commit_idx".to_string(),
+            "checkpoint_files_copy_source_idx".to_string(),
+            "checkpoint_files_event_time_idx".to_string(),
+            "checkpoint_files_lookup_idx".to_string(),
+            "checkpoint_files_pkey".to_string(),
         ],
-        "expected init_postgres_schema to create the projection indexes"
+        "expected init_postgres_schema to create the checkpoint_files indexes"
+    );
+
+    let artefact_table_name: Option<String> = client
+        .query_one("SELECT to_regclass('public.checkpoint_artefacts')", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        artefact_table_name.as_deref(),
+        Some("checkpoint_artefacts"),
+        "expected init_postgres_schema to create checkpoint_artefacts"
+    );
+
+    let lineage_table_name: Option<String> = client
+        .query_one(
+            "SELECT to_regclass('public.checkpoint_artefact_lineage')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        lineage_table_name.as_deref(),
+        Some("checkpoint_artefact_lineage"),
+        "expected init_postgres_schema to create checkpoint_artefact_lineage"
     );
 }
 

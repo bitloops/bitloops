@@ -2,13 +2,16 @@
 name = "bitloops"
 version = "0.0.12"
 edition = "2024"
+autotests = false
 
 [features]
-default = ["duckdb-bundled"]
+default = []
 # Compile libduckdb from C++ (slow; offline or targets without official prebuilts, e.g. linux-musl cross builds).
 duckdb-bundled = ["duckdb/bundled"]
 # Opt-in integration-style tests that require local Postgres tooling (initdb/pg_ctl).
 postgres-tests = []
+# Opt-in end-to-end and heavy integration suites.
+slow-tests = []
 
 [lib]
 path = "src/lib.rs"
@@ -16,6 +19,61 @@ path = "src/lib.rs"
 [[bin]]
 name = "bitloops"
 path = "src/main.rs"
+
+[[test]]
+name = "documentation_regression"
+path = "tests/documentation_regression.rs"
+
+[[test]]
+name = "production_seed"
+path = "tests/production_seed.rs"
+
+[[test]]
+name = "testlens_gherkin"
+path = "tests/testlens_gherkin.rs"
+
+[[test]]
+name = "testlens_sqlite_acceptance"
+path = "tests/testlens_sqlite_acceptance.rs"
+
+[[test]]
+name = "claude_git_hooks_integration"
+path = "tests/claude_git_hooks_integration.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "copilot_integration"
+path = "tests/copilot_integration.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "cursor_e2e_scenarios"
+path = "tests/cursor_e2e_scenarios.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "dashboard_bundle_lifecycle_e2e"
+path = "tests/dashboard_bundle_lifecycle_e2e.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "e2e_scenario_groups"
+path = "tests/e2e_scenario_groups.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "graphql"
+path = "tests/graphql.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "performance"
+path = "tests/performance.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "qat_acceptance"
+path = "tests/qat_acceptance.rs"
 
 [dependencies]
 anyhow = "1"
@@ -39,6 +97,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.24.1"
 tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
 sha2 = "0.11"
 sha1 = "0.11"
 hex = "0.4"
@@ -73,6 +132,7 @@ libc = "0.2"
 cucumber = "0.22.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

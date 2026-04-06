@@ -467,7 +467,7 @@ fn copilot_basic_workflow() {
         .expect("load copilot session")
         .expect("copilot session should exist");
     assert_eq!(state.phase, SessionPhase::Ended);
-    assert_eq!(state.step_count, 0);
+    assert_eq!(state.pending.step_count, 0);
     assert!(state.turn_checkpoint_ids.is_empty());
     assert!(
         !state.last_checkpoint_id.is_empty(),

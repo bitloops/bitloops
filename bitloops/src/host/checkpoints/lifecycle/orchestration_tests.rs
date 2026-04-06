@@ -30,9 +30,10 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    ensure_test_store_backends(dir.path());
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
-    ensure_test_store_backends(dir.path());
 }
 
 /// Fails until capture_pre_prompt_state uses the agent's get_transcript_position and persists it.
@@ -162,7 +163,8 @@ fn turn_end_includes_token_usage_in_step() {
 
         let state = state.expect("session state should exist after turn end");
         assert!(
-            state.token_usage.is_some() && state.token_usage.as_ref().unwrap().api_call_count > 0,
+            state.pending.token_usage.is_some()
+                && state.pending.token_usage.as_ref().unwrap().api_call_count > 0,
             "session state should include token usage from transcript after turn end"
         );
     });

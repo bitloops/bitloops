@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 use super::helpers::{commit_file, init_devql_schema};
 
@@ -23,16 +24,29 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
             session_id: "projection-session".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
             agent_type: "claude-code".to_string(),
-            files_touched: vec![
-                "src/projection_a.ts".to_string(),
-                "src/projection_b.ts".to_string(),
-                "src/projection_missing.ts".to_string(),
-            ],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec![
+                    "src/projection_a.ts".to_string(),
+                    "src/projection_b.ts".to_string(),
+                    "src/projection_missing.ts".to_string(),
+                ],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "projection-session",
+        "projection-session-turn",
+        &[
+            "src/projection_a.ts",
+            "src/projection_b.ts",
+            "src/projection_missing.ts",
+        ],
+    );
 
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(
@@ -45,7 +59,10 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
         "export const projectionB = () => 2;\n",
     )
     .unwrap();
-    git_ok(dir.path(), &["add", "."]);
+    git_ok(
+        dir.path(),
+        &["add", "src/projection_a.ts", "src/projection_b.ts"],
+    );
     git_ok(dir.path(), &["commit", "-m", "project snapshot rows"]);
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
 
@@ -71,7 +88,7 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
     let sqlite = rusqlite::Connection::open(&devql_sqlite_path).unwrap();
     let projected_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+            "SELECT COUNT(*) FROM checkpoint_files
              WHERE checkpoint_id = ?1 AND commit_sha = ?2",
             rusqlite::params![checkpoint_id.as_str(), head_sha.as_str()],
             |row| row.get(0),
@@ -84,8 +101,8 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
 
     let projection_a_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots
-             WHERE checkpoint_id = ?1 AND path = ?2 AND blob_sha = ?3",
+            "SELECT COUNT(*) FROM checkpoint_files
+             WHERE checkpoint_id = ?1 AND path_after = ?2 AND blob_sha_after = ?3",
             rusqlite::params![
                 checkpoint_id.as_str(),
                 "src/projection_a.ts",
@@ -96,8 +113,8 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
         .unwrap();
     let projection_b_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots
-             WHERE checkpoint_id = ?1 AND path = ?2 AND blob_sha = ?3",
+            "SELECT COUNT(*) FROM checkpoint_files
+             WHERE checkpoint_id = ?1 AND path_after = ?2 AND blob_sha_after = ?3",
             rusqlite::params![
                 checkpoint_id.as_str(),
                 "src/projection_b.ts",
@@ -108,8 +125,8 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
         .unwrap();
     let missing_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots
-             WHERE checkpoint_id = ?1 AND path = ?2",
+            "SELECT COUNT(*) FROM checkpoint_files
+             WHERE checkpoint_id = ?1 AND path_after = ?2",
             rusqlite::params![checkpoint_id.as_str(), "src/projection_missing.ts"],
             |row| row.get(0),
         )
@@ -134,7 +151,7 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
     let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
     let replayed_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+            "SELECT COUNT(*) FROM checkpoint_files
              WHERE checkpoint_id = ?1 AND commit_sha = ?2",
             rusqlite::params![checkpoint_id.as_str(), head_sha.as_str()],
             |row| row.get(0),

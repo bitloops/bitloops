@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use anyhow::Result;
+use chrono::Utc;
 use tokio::sync::Notify;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
@@ -104,19 +105,39 @@ impl SyncObserver for CoordinatorObserver {
 
 impl SyncCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
-        static INSTANCE: OnceLock<Arc<SyncCoordinator>> = OnceLock::new();
-        Arc::clone(INSTANCE.get_or_init(|| {
-            let coordinator = Arc::new(Self {
-                state_path: sync_state_path(),
-                state_lock_path: sync_state_lock_path(),
-                lock: Mutex::new(()),
-                notify: Notify::new(),
-                worker_started: AtomicBool::new(false),
-                subscription_hub: Mutex::new(None),
-            });
-            coordinator.ensure_state_file();
-            coordinator
-        }))
+        let state_path = sync_state_path();
+        let state_lock_path = sync_state_lock_path();
+        static INSTANCE: OnceLock<Mutex<Arc<SyncCoordinator>>> = OnceLock::new();
+        let slot = INSTANCE.get_or_init(|| {
+            Mutex::new(Self::new_shared_instance(
+                state_path.clone(),
+                state_lock_path.clone(),
+            ))
+        });
+        let coordinator = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        #[cfg(test)]
+        let mut coordinator = coordinator;
+
+        #[cfg(test)]
+        if coordinator.state_path != state_path || coordinator.state_lock_path != state_lock_path {
+            *coordinator = Self::new_shared_instance(state_path, state_lock_path);
+        }
+
+        Arc::clone(&coordinator)
+    }
+
+    fn new_shared_instance(state_path: PathBuf, state_lock_path: PathBuf) -> Arc<Self> {
+        let coordinator = Arc::new(Self {
+            state_path,
+            state_lock_path,
+            lock: Mutex::new(()),
+            notify: Notify::new(),
+            worker_started: AtomicBool::new(false),
+            subscription_hub: Mutex::new(None),
+        });
+        coordinator.ensure_state_file();
+        coordinator
     }
 
     pub(crate) fn activate_worker(self: &Arc<Self>, hub: Option<Arc<SubscriptionHub>>) {
@@ -300,14 +321,58 @@ impl SyncCoordinator {
             progress_state: Mutex::new(ProgressPersistState::default()),
         };
 
-        match crate::host::devql::run_sync_with_summary_and_observer(
+        let host = match crate::host::devql::build_capability_host(&cfg.repo_root, cfg.repo.clone())
+        {
+            Ok(host) => Some(host),
+            Err(err) => {
+                log::warn!(
+                    "failed to build capability host for sync event dispatch (task_id={}): {err:#}",
+                    task.task_id
+                );
+                None
+            }
+        };
+
+        match crate::host::devql::run_sync_with_summary_and_observer_and_diffs(
             &cfg,
             effective_mode,
             Some(&observer),
         )
         .await
         {
-            Ok(summary) => self.finish_task_completed(&task.task_id, summary)?,
+            Ok((summary, file_diff, artefact_diff)) => {
+                if summary.success
+                    && summary.mode != "validate"
+                    && let Some(host) = host.as_ref()
+                {
+                    match host.build_event_handler_context() {
+                        Ok(handler_context) => {
+                            let payload = crate::host::capability_host::SyncCompletedPayload {
+                                repo_id: cfg.repo.repo_id.clone(),
+                                repo_root: cfg.repo_root.clone(),
+                                active_branch: summary.active_branch.clone(),
+                                head_commit_sha: summary.head_commit_sha.clone(),
+                                sync_mode: summary.mode.clone(),
+                                sync_completed_at: Utc::now().to_rfc3339(),
+                                files: file_diff,
+                                artefacts: artefact_diff,
+                            };
+                            crate::host::capability_host::dispatch_event(
+                                crate::host::capability_host::HostEvent::SyncCompleted(payload),
+                                host.event_handlers(),
+                                Arc::new(handler_context),
+                            );
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "failed to build sync event context (task_id={}): {err:#}",
+                                task.task_id
+                            );
+                        }
+                    }
+                }
+                self.finish_task_completed(&task.task_id, summary)?
+            }
             Err(err) => self.finish_task_failed(&task.task_id, err)?,
         }
 

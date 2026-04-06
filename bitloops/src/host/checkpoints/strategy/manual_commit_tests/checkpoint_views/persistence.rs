@@ -245,6 +245,15 @@ pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
 pub(crate) fn write_committed_three_sessions() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    commit_files(
+        dir.path(),
+        &[
+            ("s0.rs", "pub fn s0() {}\n"),
+            ("s1.rs", "pub fn s1() {}\n"),
+            ("s2.rs", "pub fn s2() {}\n"),
+        ],
+        "prepare three-session provenance",
+    );
     let checkpoint_id = "515253545556";
 
     for i in 0..3 {
@@ -311,6 +320,15 @@ pub(crate) fn write_committed_three_sessions() {
     assert_eq!(
         top_metadata["token_usage"]["input_tokens"], 600,
         "expected aggregated input tokens across sessions"
+    );
+    assert_eq!(
+        query_checkpoint_file_session_ids(dir.path(), checkpoint_id),
+        vec![
+            "three-session-0".to_string(),
+            "three-session-1".to_string(),
+            "three-session-2".to_string()
+        ],
+        "expected checkpoint provenance rows for all sessions"
     );
 
     for i in 0..3 {

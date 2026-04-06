@@ -64,7 +64,11 @@ jobs:
 
       - name: Build (musl targets)
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
-        run: cross build --release --target ${{ matrix.target }} -p bitloops -p bitloops-embeddings
+        env:
+          DUCKDB_DOWNLOAD_LIB: "0"
+        run: |
+          cross build --release --target ${{ matrix.target }} -p bitloops --features duckdb-bundled
+          cross build --release --target ${{ matrix.target }} -p bitloops-embeddings
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}

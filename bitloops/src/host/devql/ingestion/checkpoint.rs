@@ -311,81 +311,34 @@ pub(super) async fn insert_checkpoint_event(
         .await
 }
 
-fn build_select_file_state_blob_sha_sql(repo_id: &str, commit_sha: &str, path: &str) -> String {
-    format!(
-        "SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND path = '{}' LIMIT 1",
-        esc_pg(repo_id),
-        esc_pg(commit_sha),
-        esc_pg(path),
-    )
-}
-
-struct CheckpointFileSnapshotUpsert<'a> {
-    repo_id: &'a str,
-    checkpoint_id: &'a str,
-    session_id: &'a str,
-    event_time: &'a str,
-    agent: &'a str,
-    branch: &'a str,
-    strategy: &'a str,
-    commit_sha: &'a str,
-    path: &'a str,
-    blob_sha: &'a str,
-}
-
-fn build_upsert_checkpoint_file_snapshot_sql(row: CheckpointFileSnapshotUpsert<'_>) -> String {
-    format!(
-        "INSERT INTO checkpoint_file_snapshots (
-            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha, path, blob_sha
-        ) VALUES (
-            '{repo_id}', '{checkpoint_id}', '{session_id}', '{event_time}', '{agent}', '{branch}', '{strategy}', '{commit_sha}', '{path}', '{blob_sha}'
-        )
-        ON CONFLICT (repo_id, checkpoint_id, path, blob_sha) DO UPDATE SET
-            session_id = EXCLUDED.session_id,
-            event_time = EXCLUDED.event_time,
-            agent = EXCLUDED.agent,
-            branch = EXCLUDED.branch,
-            strategy = EXCLUDED.strategy,
-            commit_sha = EXCLUDED.commit_sha",
-        repo_id = esc_pg(row.repo_id),
-        checkpoint_id = esc_pg(row.checkpoint_id),
-        session_id = esc_pg(row.session_id),
-        event_time = esc_pg(row.event_time),
-        agent = esc_pg(row.agent),
-        branch = esc_pg(row.branch),
-        strategy = esc_pg(row.strategy),
-        commit_sha = esc_pg(row.commit_sha),
-        path = esc_pg(row.path),
-        blob_sha = esc_pg(row.blob_sha),
-    )
-}
-
-async fn load_file_state_blob_sha(
+pub(super) async fn upsert_commit_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    commit_sha: &str,
-    path: &str,
-) -> Result<Option<String>> {
-    let sql = build_select_file_state_blob_sha_sql(&cfg.repo.repo_id, commit_sha, path);
-    let rows = relational.query_rows(&sql).await?;
-    Ok(rows
-        .first()
-        .and_then(|row| row.get("blob_sha"))
-        .and_then(Value::as_str)
-        .map(str::to_string))
-}
+    cp: &CommittedInfo,
+    commit_info: &CheckpointCommitInfo,
+) -> Result<()> {
+    let committed_at_sql = match relational.dialect() {
+        RelationalDialect::Postgres => format!("to_timestamp({})", commit_info.commit_unix),
+        RelationalDialect::Sqlite => {
+            format!("datetime({}, 'unixepoch')", commit_info.commit_unix)
+        }
+    };
+    let sql = format!(
+        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) VALUES ('{}', '{}', '{}', '{}', '{}', {}) \
+ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name = EXCLUDED.author_name, author_email = EXCLUDED.author_email, commit_message = EXCLUDED.commit_message, committed_at = EXCLUDED.committed_at",
+        esc_pg(&commit_info.commit_sha),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&commit_info.author_name),
+        esc_pg(&commit_info.author_email),
+        esc_pg(if commit_info.subject.is_empty() {
+            &cp.checkpoint_id
+        } else {
+            &commit_info.subject
+        }),
+        committed_at_sql,
+    );
 
-async fn resolve_projection_blob_sha(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    commit_sha: &str,
-    path: &str,
-) -> Result<Option<String>> {
-    if let Some(blob_sha) = load_file_state_blob_sha(cfg, relational, commit_sha, path).await? {
-        return Ok(Some(blob_sha));
-    }
-
-    Ok(git_blob_sha_at_commit(&cfg.repo_root, commit_sha, path))
+    relational.exec(&sql).await
 }
 
 pub(super) async fn upsert_checkpoint_file_snapshot_rows(
@@ -401,47 +354,131 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
     }
 
     let event_time = checkpoint_event_time_rfc3339(cp, commit_info);
-    let mut projected_paths = std::collections::BTreeSet::new();
-    let mut statements = Vec::new();
+    let context = crate::host::devql::checkpoint_provenance::CheckpointProvenanceContext {
+        repo_id: &cfg.repo.repo_id,
+        checkpoint_id: &cp.checkpoint_id,
+        session_id: &cp.session_id,
+        event_time: &event_time,
+        agent: &cp.agent,
+        branch: &cp.branch,
+        strategy: &cp.strategy,
+        commit_sha,
+    };
+    let file_rows =
+        crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
+            &cfg.repo_root,
+            context,
+        )?;
+    let artefact_provenance =
+        crate::host::devql::checkpoint_provenance::collect_checkpoint_artefact_provenance(
+            &cfg.repo_root,
+            context,
+            &file_rows,
+        )?;
 
-    for raw_path in &cp.files_touched {
-        let path = normalize_repo_path(raw_path);
-        if path.is_empty() || !projected_paths.insert(path.clone()) {
-            continue;
-        }
+    let mut sqlite_statements = Vec::with_capacity(
+        3 + file_rows.len()
+            + artefact_provenance.semantic_rows.len()
+            + artefact_provenance.lineage_rows.len(),
+    );
+    sqlite_statements.push(
+        crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+            &cfg.repo.repo_id,
+            &cp.checkpoint_id,
+        ),
+    );
+    sqlite_statements.push(
+        crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
+            &cfg.repo.repo_id,
+            &cp.checkpoint_id,
+        ),
+    );
+    sqlite_statements.push(
+        crate::host::devql::checkpoint_provenance::delete_checkpoint_file_rows_sql(
+            &cfg.repo.repo_id,
+            &cp.checkpoint_id,
+        ),
+    );
+    for row in &file_rows {
+        sqlite_statements.push(
+            crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
+                row,
+                RelationalDialect::Sqlite,
+            ),
+        );
+    }
+    for row in &artefact_provenance.semantic_rows {
+        sqlite_statements.push(
+            crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                row,
+                RelationalDialect::Sqlite,
+            ),
+        );
+    }
+    for row in &artefact_provenance.lineage_rows {
+        sqlite_statements.push(
+            crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                row,
+                RelationalDialect::Sqlite,
+            ),
+        );
+    }
+    relational
+        .exec_batch_transactional(&sqlite_statements)
+        .await?;
 
-        let Some(blob_sha) =
-            resolve_projection_blob_sha(cfg, relational, commit_sha, &path).await?
-        else {
-            log::warn!(
-                "skipping checkpoint snapshot projection: unresolved blob for commit path (checkpoint_id={}, commit_sha={}, path={})",
-                cp.checkpoint_id,
-                commit_sha,
-                path
+    if relational.remote.is_some() {
+        let mut postgres_statements = Vec::with_capacity(
+            3 + file_rows.len()
+                + artefact_provenance.semantic_rows.len()
+                + artefact_provenance.lineage_rows.len(),
+        );
+        postgres_statements.push(
+            crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
+                &cfg.repo.repo_id,
+                &cp.checkpoint_id,
+            ),
+        );
+        postgres_statements.push(
+            crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
+                &cfg.repo.repo_id,
+                &cp.checkpoint_id,
+            ),
+        );
+        postgres_statements.push(
+            crate::host::devql::checkpoint_provenance::delete_checkpoint_file_rows_sql(
+                &cfg.repo.repo_id,
+                &cp.checkpoint_id,
+            ),
+        );
+        for row in &file_rows {
+            postgres_statements.push(
+                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
+                    row,
+                    RelationalDialect::Postgres,
+                ),
             );
-            continue;
-        };
-
-        statements.push(build_upsert_checkpoint_file_snapshot_sql(
-            CheckpointFileSnapshotUpsert {
-                repo_id: &cfg.repo.repo_id,
-                checkpoint_id: &cp.checkpoint_id,
-                session_id: &cp.session_id,
-                event_time: &event_time,
-                agent: &cp.agent,
-                branch: &cp.branch,
-                strategy: &cp.strategy,
-                commit_sha,
-                path: &path,
-                blob_sha: &blob_sha,
-            },
-        ));
+        }
+        for row in &artefact_provenance.semantic_rows {
+            postgres_statements.push(
+                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
+                    row,
+                    RelationalDialect::Postgres,
+                ),
+            );
+        }
+        for row in &artefact_provenance.lineage_rows {
+            postgres_statements.push(
+                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
+                    row,
+                    RelationalDialect::Postgres,
+                ),
+            );
+        }
+        relational
+            .exec_remote_batch_transactional(&postgres_statements)
+            .await?;
     }
 
-    if statements.is_empty() {
-        return Ok(0);
-    }
-
-    relational.exec_batch_transactional(&statements).await?;
-    Ok(statements.len())
+    Ok(file_rows.len())
 }

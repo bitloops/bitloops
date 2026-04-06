@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 #[test]
 pub(crate) fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
@@ -134,14 +135,14 @@ pub(crate) fn save_step_skips_when_no_changes() {
 
     strategy.save_step(&ctx).unwrap();
     let s1 = backend.load_session("s3").unwrap().unwrap();
-    let count1 = s1.step_count;
+    let count1 = s1.pending.step_count;
 
     // Second call with same context — tree is identical → skip.
     strategy.save_step(&ctx).unwrap();
     let s2 = backend.load_session("s3").unwrap().unwrap();
 
     assert_eq!(
-        s2.step_count, count1,
+        s2.pending.step_count, count1,
         "step_count should not increase for identical tree"
     );
 }
@@ -159,7 +160,7 @@ pub(crate) fn save_step_increments_step_count() {
         session_id: "s4".to_string(),
         base_commit: head.clone(),
         phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
-        step_count: 0,
+        pending: PendingCheckpointState::default(),
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -184,7 +185,7 @@ pub(crate) fn save_step_increments_step_count() {
 
     let loaded = backend.load_session("s4").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 1,
+        loaded.pending.step_count, 1,
         "step_count should be 1 after first save_step"
     );
 }

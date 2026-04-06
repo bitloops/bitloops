@@ -85,12 +85,12 @@ pub fn load_required_settings(repo_root: &Path) -> Result<BitloopsSettings> {
 }
 
 fn load_settings_from_policy(policy: super::RepoPolicySnapshot) -> Result<BitloopsSettings> {
-    let daemon = load_daemon_settings(None)?;
+    let daemon_cli = daemon_cli_settings();
 
     let mut settings = BitloopsSettings {
-        local_dev: daemon.cli.local_dev,
-        log_level: daemon.cli.log_level,
-        telemetry: daemon.cli.telemetry,
+        local_dev: daemon_cli.local_dev,
+        log_level: daemon_cli.log_level,
+        telemetry: daemon_cli.telemetry,
         ..BitloopsSettings::default()
     };
 
@@ -114,6 +114,26 @@ fn load_settings_from_policy(policy: super::RepoPolicySnapshot) -> Result<Bitloo
     }
 
     Ok(settings)
+}
+
+#[cfg(test)]
+fn daemon_cli_settings() -> super::daemon_config::DaemonCliSettings {
+    if std::env::var_os(crate::test_support::process_state::SUPPRESS_HOST_DAEMON_CONFIG_ENV)
+        .is_some()
+    {
+        super::daemon_config::DaemonCliSettings::default()
+    } else {
+        load_daemon_settings(None)
+            .map(|loaded| loaded.cli)
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(not(test))]
+fn daemon_cli_settings() -> super::daemon_config::DaemonCliSettings {
+    load_daemon_settings(None)
+        .map(|loaded| loaded.cli)
+        .unwrap_or_default()
 }
 
 pub fn current_config_fingerprint(repo_root: &Path) -> Result<String> {

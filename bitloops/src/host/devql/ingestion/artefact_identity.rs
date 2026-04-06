@@ -3,7 +3,7 @@ use super::*;
 // Artefact symbol identity helpers: normalisation, semantic IDs, and the
 // legacy regex-based function extractor (test-only).
 
-pub(super) fn normalize_identity_fragment(input: &str) -> String {
+pub(crate) fn normalize_identity_fragment(input: &str) -> String {
     let normalized = input
         .chars()
         .filter(|ch| !ch.is_whitespace())
@@ -25,7 +25,7 @@ pub(super) fn source_path_from_symbol_fqn(symbol_fqn: &str) -> &str {
     symbol_fqn.split("::").next().unwrap_or(symbol_fqn)
 }
 
-pub(super) fn semantic_name_for_artefact(item: &LanguageArtefact) -> String {
+pub(crate) fn semantic_name_for_artefact(item: &LanguageArtefact) -> String {
     if has_positional_identity_name(&item.name) {
         normalize_identity_fragment(&identity_signature_for_artefact(item))
     } else {
@@ -33,7 +33,7 @@ pub(super) fn semantic_name_for_artefact(item: &LanguageArtefact) -> String {
     }
 }
 
-pub(super) fn identity_signature_for_artefact(item: &LanguageArtefact) -> String {
+pub(crate) fn identity_signature_for_artefact(item: &LanguageArtefact) -> String {
     let mut signature = item.signature.clone();
     let mut modifiers = item
         .modifiers
@@ -52,7 +52,7 @@ pub(super) fn identity_signature_for_artefact(item: &LanguageArtefact) -> String
     signature
 }
 
-pub(super) fn structural_symbol_id_for_artefact(
+pub(crate) fn structural_symbol_id_for_artefact(
     item: &LanguageArtefact,
     parent_symbol_id: Option<&str>,
 ) -> String {
@@ -67,11 +67,11 @@ pub(super) fn structural_symbol_id_for_artefact(
     ))
 }
 
-pub(super) fn file_symbol_id(path: &str) -> String {
+pub(crate) fn file_symbol_id(path: &str) -> String {
     deterministic_uuid(&format!("{path}|file"))
 }
 
-pub(super) fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
+pub(crate) fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
     let provenance = CanonicalProvenanceRef::for_blob(repo_id, blob_sha);
     deterministic_uuid(&format!(
         "{}|{symbol_id}",

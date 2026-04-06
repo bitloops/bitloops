@@ -15,6 +15,7 @@ pub enum CanonicalLifecycleEventKind {
     SessionEnd,
     SubagentStart,
     SubagentEnd,
+    TodoCheckpoint,
     Unknown(i32),
 }
 
@@ -28,6 +29,7 @@ impl CanonicalLifecycleEventKind {
             Self::SessionEnd => "session_end",
             Self::SubagentStart => "subagent_start",
             Self::SubagentEnd => "subagent_end",
+            Self::TodoCheckpoint => "todo_checkpoint",
             Self::Unknown(_) => "unknown",
         }
     }
@@ -43,6 +45,7 @@ impl From<&LifecycleEventType> for CanonicalLifecycleEventKind {
             LifecycleEventType::SessionEnd => Self::SessionEnd,
             LifecycleEventType::SubagentStart => Self::SubagentStart,
             LifecycleEventType::SubagentEnd => Self::SubagentEnd,
+            LifecycleEventType::TodoCheckpoint => Self::TodoCheckpoint,
             LifecycleEventType::Unknown(code) => Self::Unknown(*code),
         }
     }

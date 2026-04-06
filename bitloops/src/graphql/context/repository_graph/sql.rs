@@ -707,10 +707,10 @@ mod tests {
         let sql = build_current_artefacts_count_sql(&activity_spec());
 
         assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
-        assert!(sql.contains("cfs.path = a.path"));
-        assert!(sql.contains("cfs.blob_sha = a.content_id"));
-        assert!(sql.contains("cfs.agent = 'codex'"));
+        assert!(sql.contains("FROM checkpoint_files cf"));
+        assert!(sql.contains("cf.path_after = a.path"));
+        assert!(sql.contains("cf.blob_sha_after = a.content_id"));
+        assert!(sql.contains("cf.agent = 'codex'"));
         assert!(sql.contains("SELECT COUNT(*) AS total_count FROM filtered"));
         assert!(!sql.contains("blob_sha IN"));
     }
@@ -720,7 +720,7 @@ mod tests {
         let sql = build_current_artefacts_cursor_exists_sql(&activity_spec(), "cursor-1");
 
         assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("FROM checkpoint_files cf"));
         assert!(sql.contains("FROM filtered"));
         assert!(sql.contains("WHERE artefact_id = 'cursor-1'"));
         assert!(!sql.contains("blob_sha IN"));
@@ -731,7 +731,7 @@ mod tests {
         let sql = build_current_artefacts_window_sql(&activity_spec());
 
         assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("FROM checkpoint_files cf"));
         assert!(sql.contains("FROM filtered"));
         assert!(sql.contains("ORDER BY path, kind_rank, start_line, end_line, artefact_id"));
         assert!(sql.contains("LIMIT 11"));

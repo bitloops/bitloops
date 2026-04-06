@@ -475,21 +475,15 @@ async fn devql_graphql_chat_history_surfaces_backend_error_when_events_store_is_
         ))
         .await;
 
-    assert_eq!(response.errors.len(), 1, "expected one graphql error");
-    let extensions = response.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        extensions.get("code"),
-        Some(&async_graphql::Value::from("BACKEND_ERROR"))
-    );
     assert!(
-        response.errors[0]
-            .message
-            .contains("DuckDB database file not found"),
-        "unexpected error: {:?}",
+        response.errors.is_empty(),
+        "chat-history should no longer depend on the events store: {:?}",
         response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["chatHistory"]["totalCount"],
+        0
     );
 }
 
@@ -1044,22 +1038,13 @@ async fn devql_event_resolvers_surface_backend_errors_when_duckdb_store_is_missi
         ))
         .await;
 
-    assert_eq!(response.errors.len(), 1, "expected one graphql error");
-    let extensions = response.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        extensions.get("code"),
-        Some(&async_graphql::Value::from("BACKEND_ERROR"))
-    );
     assert!(
-        response.errors[0]
-            .message
-            .contains("DuckDB database file not found"),
-        "unexpected error: {:?}",
+        response.errors.is_empty(),
+        "checkpoint queries should no longer depend on the events store: {:?}",
         response.errors
     );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["checkpoints"]["totalCount"], 0);
 }
 
 #[tokio::test]

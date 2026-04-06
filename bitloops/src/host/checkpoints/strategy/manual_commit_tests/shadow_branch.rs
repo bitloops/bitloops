@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 #[test]
 pub(crate) fn hash_worktree_id_is_six_chars() {
@@ -240,7 +241,7 @@ pub(crate) fn list_orphaned_session_states_recent_session_not_orphaned() {
             session_id: "recent-session-123".to_string(),
             base_commit: head,
             started_at: now_secs.to_string(),
-            step_count: 0,
+            pending: PendingCheckpointState::default(),
             ..Default::default()
         })
         .unwrap();
@@ -269,7 +270,10 @@ pub(crate) fn list_orphaned_session_states_shadow_branch_matching() {
             base_commit: head.clone(),
             worktree_id: "".to_string(),
             started_at: old_secs.to_string(),
-            step_count: 1,
+            pending: PendingCheckpointState {
+                step_count: 1,
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();

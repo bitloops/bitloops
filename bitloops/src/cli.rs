@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
+use std::time::Instant;
 
 pub mod checkpoints;
 pub mod clean;
@@ -149,8 +150,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             bail!("`--version` cannot be combined with `--connection-status`");
         }
 
+        let started = Instant::now();
+        let telemetry_action = root::telemetry_action_for_version(cli.check);
         let result = root::run_version_command(cli.check);
-        root::run_persistent_post_run(&[], "version");
+        root::run_persistent_post_run(Some(&telemetry_action), started.elapsed(), result.is_ok());
         return result;
     }
 
@@ -158,8 +161,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         if cli.command.is_some() {
             bail!("`--connection-status` cannot be combined with a subcommand");
         }
+        let started = Instant::now();
+        let telemetry_action = root::telemetry_action_for_connection_status();
         let result = devql::run_connection_status().await;
-        root::run_persistent_post_run(&[], "connection-status");
+        root::run_persistent_post_run(Some(&telemetry_action), started.elapsed(), result.is_ok());
         return result;
     }
 
@@ -178,8 +183,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");
     }
 
-    let command_name = root::command_name(&command);
-    let hidden_chain = root::hidden_chain_for_command(&command);
+    let telemetry_action = root::telemetry_action_for_command(&command);
+    let started = Instant::now();
 
     let result = match command {
         Commands::Daemon(args) => daemon::run(args).await,
@@ -217,7 +222,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Help(args) => root::run_help_command(&args),
     };
 
-    root::run_persistent_post_run(&hidden_chain, command_name);
+    root::run_persistent_post_run(telemetry_action.as_ref(), started.elapsed(), result.is_ok());
     result
 }
 

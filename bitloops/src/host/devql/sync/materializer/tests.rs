@@ -1,6 +1,6 @@
 use crate::host::devql::sync::content_cache::{CachedArtefact, CachedEdge, CachedExtraction};
 use crate::host::devql::sync::types::{DesiredFileState, EffectiveSource};
-use crate::host::language_adapter::{GoKind, LanguageKind, TsJsKind};
+use crate::host::language_adapter::{GoKind, JavaKind, LanguageKind, TsJsKind};
 use rusqlite::Connection;
 use serde_json::json;
 use tempfile::tempdir;
@@ -271,5 +271,9 @@ fn parse_cached_language_kind_uses_language_specific_resolution_for_ambiguous_ki
     assert_eq!(
         parse_cached_language_kind("go", "function_declaration").expect("parse go kind"),
         LanguageKind::go(GoKind::FunctionDeclaration)
+    );
+    assert_eq!(
+        parse_cached_language_kind("java", "class_declaration").expect("parse java kind"),
+        LanguageKind::java(JavaKind::Class)
     );
 }

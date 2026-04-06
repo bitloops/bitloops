@@ -98,7 +98,10 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
     let file = match fs::read_to_string(&path) {
         Ok(data) => parse_daemon_config_text(&data, &path)?,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && explicit_path.is_none() => {
-            DaemonTomlFile::default()
+            bail!(
+                "Bitloops daemon config not found at {}. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`.",
+                path.display()
+            );
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             bail!("Bitloops daemon config not found at {}", path.display());

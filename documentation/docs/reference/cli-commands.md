@@ -101,12 +101,12 @@ Key flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--full` | Remove all Bitloops-managed artefacts, including legacy locations |
+| `--full` | Remove all Bitloops-managed artefacts, including repository-local cleanup |
 | `--binaries` | Remove recognised `bitloops` binaries |
 | `--service` | Remove the daemon service and daemon state metadata |
-| `--data` | Remove global data and legacy repo-local `.bitloops/` data |
+| `--data` | Remove global data and repo-local `.bitloops/` data |
 | `--caching` | Remove the global cache directory |
-| `--config` | Remove the global config directory and legacy TLS artefacts |
+| `--config` | Remove the global config directory and TLS artefacts |
 | `--agent-hooks` | Remove supported agent hooks |
 | `--git-hooks` | Remove Bitloops git hooks |
 | `--shell` | Remove managed shell completion integration |
@@ -199,8 +199,6 @@ PID: 12345
 Supervisor service: com.bitloops.daemon (launchd, installed)
 Supervisor state: running
 ```
-
-If Bitloops finds legacy repo-local data such as old store directories, `status` also prints a warning that those paths are ignored unless explicitly configured.
 
 When you run `status` inside a repository, it also reports the active or most recent sync task for that repo, including phase and progress when available.
 

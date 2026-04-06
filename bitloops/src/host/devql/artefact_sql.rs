@@ -271,12 +271,12 @@ mod tests {
 
         assert!(sql.contains("WITH filtered AS"));
         assert!(sql.contains("FROM artefacts_current a"));
-        assert!(sql.contains("EXISTS (SELECT 1 FROM checkpoint_file_snapshots cfs WHERE"));
-        assert!(sql.contains("cfs.repo_id = 'repo-1'"));
-        assert!(sql.contains("cfs.path = a.path"));
-        assert!(sql.contains("cfs.blob_sha = a.content_id"));
-        assert!(sql.contains("cfs.agent = 'codex'"));
-        assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00Z'"));
+        assert!(sql.contains("EXISTS (SELECT 1 FROM checkpoint_files cf WHERE"));
+        assert!(sql.contains("cf.repo_id = 'repo-1'"));
+        assert!(sql.contains("cf.path_after = a.path"));
+        assert!(sql.contains("cf.blob_sha_after = a.content_id"));
+        assert!(sql.contains("cf.agent = 'codex'"));
+        assert!(sql.contains("cf.event_time >= '2026-03-20T00:00:00Z'"));
         assert!(sql.contains("a.path = './packages/api/src/lib.rs'"));
         assert!(sql.contains("a.path = 'packages/api/src/lib.rs'"));
         assert!(sql.contains("a.symbol_fqn = 'packages/api/src/lib.rs::run'"));

@@ -1088,12 +1088,10 @@ fn devql_run_projection_checkpoint_file_snapshots_succeeds_for_empty_repo() {
 
     let conn = Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let projection_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots",
-            [],
-            |row| row.get(0),
-        )
-        .expect("count checkpoint_file_snapshots rows");
+        .query_row("SELECT COUNT(*) FROM checkpoint_files", [], |row| {
+            row.get(0)
+        })
+        .expect("count checkpoint_files rows");
     assert_eq!(projection_count, 0);
 }
 

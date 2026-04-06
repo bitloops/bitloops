@@ -486,6 +486,25 @@ fn install_scripts_contain_marker() {
 }
 
 #[test]
+fn install_scripts_clear_inherited_git_env() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
+    install_git_hooks(dir.path(), false).unwrap();
+
+    let hooks_dir = get_hooks_dir(dir.path()).unwrap();
+    for name in expected_hooks {
+        let content = fs::read_to_string(hooks_dir.join(name)).unwrap();
+        for key in HOOK_GIT_ENV_KEYS {
+            assert!(
+                content.contains(&format!("unset {key}")),
+                "{name} should unset inherited {key}"
+            );
+        }
+    }
+}
+
+#[test]
 fn install_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

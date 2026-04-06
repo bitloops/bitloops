@@ -4,8 +4,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use super::resolve::{
-    resolve_blob_local_path, resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path,
-    resolve_sqlite_db_path_for_repo,
+    resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_duckdb_db_path_for_repo,
+    resolve_sqlite_db_path, resolve_sqlite_db_path_for_repo,
 };
 use super::store_config_utils::current_repo_root_or_cwd;
 
@@ -222,6 +222,10 @@ impl BlobStorageConfig {
     #[allow(dead_code)]
     pub fn local_path_or_default(&self) -> Result<PathBuf> {
         resolve_blob_local_path(self.local_path.as_deref())
+    }
+
+    pub fn resolve_local_path_for_repo(&self, repo_root: &Path) -> Result<PathBuf> {
+        resolve_blob_local_path_for_repo(repo_root, self.local_path.as_deref())
     }
 }
 

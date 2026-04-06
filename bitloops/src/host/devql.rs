@@ -39,6 +39,8 @@ use crate::utils::terminal::print_db_status_table;
 pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]
 pub(crate) mod checkpoint_file_snapshots;
+#[path = "devql/checkpoint_provenance.rs"]
+pub(crate) mod checkpoint_provenance;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
 #[path = "devql/commands_projection.rs"]
@@ -78,6 +80,7 @@ pub use self::commands_refresh::{
 pub use self::commands_sync::{
     SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
     SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
+    run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
@@ -90,6 +93,8 @@ pub mod watch;
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync_validation;
+#[allow(unused_imports)]
+pub(crate) use self::commands_sync::execute_sync_with_observer_and_stats_and_diffs;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::execute_sync_with_stats;
@@ -112,6 +117,8 @@ const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 #[cfg(test)]
 const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
+#[cfg(test)]
+const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -145,7 +152,7 @@ pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
         summary.symbol_embedding_rows_upserted,
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
-        summary.symbol_clone_sources_scored
+        summary.symbol_clone_sources_scored,
     )
 }
 
