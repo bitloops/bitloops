@@ -29,6 +29,7 @@ qat = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance -- qat_onb
 qat-devql-sync = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_devql_sync -- --ignored"
 qat-onboarding = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_onboarding -- --ignored"
 
+
 # Explicit bundled-DuckDB aliases for release/offline/exotic targets.
 dev-check-bundled = "check --manifest-path bitloops/Cargo.toml --features duckdb-bundled"
 dev-build-bundled = "build --manifest-path bitloops/Cargo.toml --features duckdb-bundled"
