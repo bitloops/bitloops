@@ -145,6 +145,17 @@ pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeCo
     resolve_watch_from_unified(&settings, |key| env::var(key).ok())
 }
 
+#[cfg(test)]
+pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
+    if let Some((config_root, settings)) = explicit_daemon_settings_override()? {
+        return resolve_store_backend_from_unified(&settings, &config_root);
+    }
+
+    let repo_root = current_repo_root_or_cwd_result()?;
+    resolve_store_backend_config_for_repo(&repo_root)
+}
+
+#[cfg(not(test))]
 pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
     let repo_root = current_repo_root_or_cwd_result()?;
     resolve_store_backend_config_for_repo(&repo_root)
