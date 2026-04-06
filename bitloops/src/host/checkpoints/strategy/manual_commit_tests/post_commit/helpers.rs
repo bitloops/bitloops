@@ -218,6 +218,9 @@ CREATE TABLE IF NOT EXISTS repositories (
     sqlite
         .execute_batch(crate::host::devql::sync::schema::sync_schema_sql())
         .expect("ensure DevQL sync tables exist for post-commit test");
+    sqlite
+        .execute_batch(crate::host::devql::sync::schema::sync_artefacts_current_migration_sql())
+        .expect("ensure DevQL artefacts_current table exists for post-commit test");
 
     let runtime_sqlite_path = crate::config::resolve_repo_runtime_db_path_for_repo(repo_root)
         .expect("resolve runtime sqlite path for post-commit test");
