@@ -10,6 +10,7 @@ async fn repo_sync_state_write_helpers_track_lifecycle() {
     let sqlite_path = temp.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let cfg = sync_test_cfg();
+    let expected_repo_root = cfg.repo_root.to_string_lossy().to_string();
     seed_sync_repository_catalog_row(&relational, &cfg).await;
 
     crate::host::devql::sync::lock::write_sync_started(
@@ -37,7 +38,7 @@ FROM repo_sync_state WHERE repo_id = '{}'",
         .expect("started row");
     assert_eq!(
         started.get("repo_root").and_then(|v| v.as_str()),
-        Some("/tmp/repo")
+        Some(expected_repo_root.as_str())
     );
     assert_eq!(started.get("active_branch").and_then(|v| v.as_str()), None);
     assert_eq!(
@@ -101,7 +102,7 @@ FROM repo_sync_state WHERE repo_id = '{}'",
         .expect("completed row");
     assert_eq!(
         completed.get("repo_root").and_then(|v| v.as_str()),
-        Some("/tmp/repo")
+        Some(expected_repo_root.as_str())
     );
     assert_eq!(
         completed.get("active_branch").and_then(|v| v.as_str()),
