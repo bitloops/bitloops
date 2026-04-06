@@ -544,13 +544,13 @@ fn cursor_session_start_creates_or_updates_session_state() {
 
 #[test]
 fn cursor_session_start_rejects_empty_conversation_id() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
     let err = dispatch_cursor_hook(
         &CursorHookVerb::SessionStart,
         r#"{"conversation_id":"  ","transcript_path":"/tmp/cursor-empty.jsonl"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "session-start",
     )
     .expect_err("expected validation error");
@@ -609,14 +609,14 @@ fn cursor_stop_persists_interactions_before_save_step_failure() {
 
 #[test]
 fn cursor_before_submit_prompt_creates_pre_prompt_state() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
 
     dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
         r#"{"conversation_id":"cursor-s2","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "before-submit-prompt",
     )
     .unwrap();
@@ -631,13 +631,13 @@ fn cursor_before_submit_prompt_creates_pre_prompt_state() {
 
 #[test]
 fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
     let err = dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
         r#"{"conversation_id":" ","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "before-submit-prompt",
     )
     .expect_err("expected validation error");
@@ -649,14 +649,14 @@ fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
 
 #[test]
 fn cursor_before_shell_execution_creates_shell_fallback_pre_prompt() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
 
     dispatch_cursor_hook(
         &CursorHookVerb::BeforeShellExecution,
         r#"{"conversation_id":"cursor-shell-1","transcript_path":"/tmp/cursor-shell-1.jsonl","command":"npm test"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "before-shell-execution",
     )
     .unwrap();
@@ -887,7 +887,7 @@ fn claude_before_submit_prompt_sets_claude_agent_type() {
 
 #[test]
 fn cursor_session_end_marks_session_ended() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
     backend
         .save_session(&SessionState {
             session_id: "cursor-s3".to_string(),
@@ -901,7 +901,7 @@ fn cursor_session_end_marks_session_ended() {
         r#"{"conversation_id":"cursor-s3","transcript_path":"/tmp/cursor-s3.jsonl"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "session-end",
     )
     .unwrap();
