@@ -9,15 +9,28 @@ use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
 use sha2::{Digest, Sha256};
 
 use super::constants::{
-    BITLOOPS_METADATA_DIR, EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME,
+    BITLOOPS_CHECKPOINT_ARTEFACTS_DIR, EVENTS_DB_FILE_NAME, LEGACY_BITLOOPS_METADATA_DIR,
+    RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME,
 };
 
 fn platform_path_fallback(category: &str) -> PathBuf {
     std::env::temp_dir().join("bitloops").join(category)
 }
 
-pub fn session_metadata_dir_from_session_id(session_id: &str) -> String {
-    format!("{BITLOOPS_METADATA_DIR}/{session_id}")
+pub fn legacy_session_metadata_dir_from_session_id(session_id: &str) -> String {
+    format!("{LEGACY_BITLOOPS_METADATA_DIR}/{session_id}")
+}
+
+pub fn checkpoint_artifacts_session_dir(session_id: &str) -> String {
+    format!("{BITLOOPS_CHECKPOINT_ARTEFACTS_DIR}/sessions/{session_id}")
+}
+
+pub fn checkpoint_artifacts_task_dir(session_id: &str, tool_use_id: &str) -> String {
+    format!(
+        "{}/tasks/{}",
+        checkpoint_artifacts_session_dir(session_id),
+        tool_use_id
+    )
 }
 
 #[cfg(test)]

@@ -1,4 +1,7 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::{
+    extract_summary_from_jsonl, extract_user_prompts_from_jsonl,
+};
 
 #[test]
 pub(crate) fn extract_user_prompts_supports_nested_message_and_human_type() {
@@ -35,30 +38,22 @@ pub(crate) fn write_session_metadata_writes_prompt_and_summary_for_nested_claude
     )
     .unwrap();
     assert!(
-        written.contains(&".bitloops/metadata/session-nested/prompt.txt".to_string()),
+        written.contains(
+            &".bitloops/checkpoint-artifacts/sessions/session-nested/prompt.txt".to_string()
+        ),
         "prompt.txt should be part of written metadata files: {written:?}"
     );
     assert!(
-        written.contains(&".bitloops/metadata/session-nested/summary.txt".to_string()),
+        written.contains(
+            &".bitloops/checkpoint-artifacts/sessions/session-nested/summary.txt".to_string()
+        ),
         "summary.txt should be part of written metadata files: {written:?}"
     );
 
-    let prompt = fs::read_to_string(
-        dir.path()
-            .join(".bitloops")
-            .join("metadata")
-            .join("session-nested")
-            .join("prompt.txt"),
-    )
-    .unwrap();
-    let summary = fs::read_to_string(
-        dir.path()
-            .join(".bitloops")
-            .join("metadata")
-            .join("session-nested")
-            .join("summary.txt"),
-    )
-    .unwrap();
+    let bundle = read_session_metadata_bundle(dir.path(), "session-nested")
+        .expect("session metadata bundle should be persisted in runtime store");
+    let prompt = bundle.prompt_text();
+    let summary = bundle.summary;
 
     assert_eq!(prompt.trim(), "Create test file");
     assert_eq!(summary.trim(), "Created test file");

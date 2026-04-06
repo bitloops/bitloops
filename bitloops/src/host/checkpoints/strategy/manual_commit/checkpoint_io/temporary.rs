@@ -180,27 +180,23 @@ pub(crate) fn write_temporary(
         &resolved_new_files,
         &resolved_deleted_files,
     )?;
-    let metadata_entries = if !opts.metadata_dir_abs.is_empty() && !opts.metadata_dir.is_empty() {
-        copy_metadata_dir(Path::new(&opts.metadata_dir_abs), &opts.metadata_dir)?
-    } else {
-        BTreeMap::new()
-    };
+    let mut metadata_entries = opts.metadata_entries;
+    if metadata_entries.is_empty()
+        && let Some(session_metadata) = opts.session_metadata.as_ref()
+    {
+        metadata_entries.extend(
+            session_metadata
+                .logical_entries(&opts.session_id)
+                .into_iter()
+                .map(|(logical_path, payload)| LogicalCheckpointFile {
+                    logical_path,
+                    payload,
+                }),
+        );
+    }
     let mut tree = tree;
     if !metadata_entries.is_empty() {
-        let staging_dir = paths::default_session_tmp_dir(repo_root)
-            .join(format!("temp-metadata-{}", uuid::Uuid::new_v4().simple()));
-        fs::create_dir_all(&staging_dir).context("creating temporary metadata staging dir")?;
-
-        let mut file_pairs: Vec<(PathBuf, String)> = Vec::new();
-        for (idx, (tree_path, content)) in metadata_entries.into_iter().enumerate() {
-            let disk_path = staging_dir.join(format!("metadata-{idx}.txt"));
-            fs::write(&disk_path, content)
-                .with_context(|| format!("writing staged metadata file {tree_path}"))?;
-            file_pairs.push((disk_path, tree_path));
-        }
-        let result = build_tree_with_explicit_paths(repo_root, Some(&tree), &file_pairs);
-        let _ = fs::remove_dir_all(&staging_dir);
-        tree = result?;
+        tree = stage_logical_checkpoint_files(repo_root, Some(&tree), metadata_entries)?;
     }
 
     if latest_tree_hash.as_deref() == Some(tree.as_str()) {
@@ -267,92 +263,41 @@ pub(crate) fn write_temporary_task(
         &opts.new_files,
         &opts.deleted_files,
     )?;
-
-    let session_metadata_dir = paths::session_metadata_dir_from_session_id(&opts.session_id);
-    let task_metadata_dir = format!("{session_metadata_dir}/tasks/{}", opts.tool_use_id);
-    let staging_dir = paths::default_session_tmp_dir(repo_root)
-        .join(format!("task-metadata-{}", uuid::Uuid::new_v4().simple()));
-    fs::create_dir_all(&staging_dir).context("creating task metadata staging directory")?;
-    let mut file_pairs: Vec<(PathBuf, String)> = Vec::new();
-
-    if opts.is_incremental {
-        let data_value = if opts.incremental_data.trim().is_empty() {
-            serde_json::Value::Null
-        } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&opts.incremental_data)
+    let mut metadata_entries = opts.metadata_entries;
+    if metadata_entries.is_empty() {
+        if !opts.is_incremental
+            && let Some(session_metadata) = opts.session_metadata.as_ref()
         {
-            redact_json_value(&parsed)
-        } else {
-            serde_json::Value::String(redact_text(&opts.incremental_data))
-        };
-        let incremental_payload = serde_json::json!({
-            "type": opts.incremental_type,
-            "tool_use_id": opts.tool_use_id,
-            "timestamp": now_rfc3339(),
-            "data": data_value,
-        });
-        let incremental_file = staging_dir.join("incremental-checkpoint.json");
-        fs::write(
-            &incremental_file,
-            serde_json::to_string_pretty(&incremental_payload)
-                .context("serializing incremental task checkpoint payload")?,
-        )
-        .context("writing incremental task checkpoint payload")?;
-        let checkpoint_name = format!("{:03}-{}.json", opts.incremental_sequence, opts.tool_use_id);
-        file_pairs.push((
-            incremental_file,
-            format!("{task_metadata_dir}/checkpoints/{checkpoint_name}"),
-        ));
-    } else {
-        if !opts.transcript_path.trim().is_empty()
-            && let Ok(content) = fs::read(&opts.transcript_path)
-        {
-            let transcript_file = staging_dir.join(paths::TRANSCRIPT_FILE_NAME);
-            fs::write(&transcript_file, redact_jsonl_bytes_with_fallback(&content))
-                .context("writing redacted task session transcript")?;
-            file_pairs.push((
-                transcript_file,
-                format!("{session_metadata_dir}/{}", paths::TRANSCRIPT_FILE_NAME),
-            ));
+            metadata_entries.extend(
+                session_metadata
+                    .logical_entries(&opts.session_id)
+                    .into_iter()
+                    .map(|(logical_path, payload)| LogicalCheckpointFile {
+                        logical_path,
+                        payload,
+                    }),
+            );
         }
-
-        let checkpoint_payload = serde_json::json!({
-            "session_id": opts.session_id,
-            "tool_use_id": opts.tool_use_id,
-            "checkpoint_uuid": opts.checkpoint_uuid,
-            "agent_id": opts.agent_id,
-        });
-        let checkpoint_file = staging_dir.join(paths::CHECKPOINT_FILE_NAME);
-        fs::write(
-            &checkpoint_file,
-            serde_json::to_string_pretty(&checkpoint_payload)
-                .context("serializing task checkpoint payload")?,
-        )
-        .context("writing task checkpoint payload")?;
-        file_pairs.push((
-            checkpoint_file,
-            format!("{task_metadata_dir}/{}", paths::CHECKPOINT_FILE_NAME),
-        ));
-
-        if !opts.subagent_transcript_path.is_empty()
-            && !opts.agent_id.is_empty()
-            && let Ok(content) = fs::read(&opts.subagent_transcript_path)
-        {
-            let agent_file = staging_dir.join("subagent-transcript.jsonl");
-            fs::write(&agent_file, redact_jsonl_bytes_with_fallback(&content))
-                .context("writing redacted task subagent transcript")?;
-            file_pairs.push((
-                agent_file,
-                format!("{task_metadata_dir}/agent-{}.jsonl", opts.agent_id),
-            ));
+        if let Some(task_metadata) = opts.task_metadata.as_ref() {
+            metadata_entries.extend(
+                task_metadata
+                    .logical_entries(
+                        &opts.session_id,
+                        &opts.tool_use_id,
+                        &opts.agent_id,
+                        opts.incremental_sequence,
+                    )
+                    .into_iter()
+                    .map(|(logical_path, payload)| LogicalCheckpointFile {
+                        logical_path,
+                        payload,
+                    }),
+            );
         }
     }
 
-    if !file_pairs.is_empty() {
-        let result = build_tree_with_explicit_paths(repo_root, Some(&tree), &file_pairs);
-        let _ = fs::remove_dir_all(&staging_dir);
-        tree = result?;
-    } else {
-        let _ = fs::remove_dir_all(&staging_dir);
+    if !metadata_entries.is_empty() {
+        tree = stage_logical_checkpoint_files(repo_root, Some(&tree), metadata_entries)?;
     }
 
     insert_temporary_checkpoint_record(
@@ -400,4 +345,36 @@ pub(crate) fn write_temporary_task(
         skipped: false,
         commit_hash: tree,
     })
+}
+
+fn stage_logical_checkpoint_files(
+    repo_root: &Path,
+    parent_tree: Option<&str>,
+    files: Vec<LogicalCheckpointFile>,
+) -> Result<String> {
+    let staging_dir = paths::default_session_tmp_dir(repo_root).join(format!(
+        "checkpoint-artifacts-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    fs::create_dir_all(&staging_dir).context("creating checkpoint artefact staging directory")?;
+
+    let mut file_pairs: Vec<(PathBuf, String)> = Vec::new();
+    for (idx, file) in files.into_iter().enumerate() {
+        if file.logical_path.trim().is_empty() || file.payload.is_empty() {
+            continue;
+        }
+        let disk_path = staging_dir.join(format!("artefact-{idx}.bin"));
+        let payload = if file.logical_path.ends_with(".jsonl") {
+            redact_jsonl_bytes_with_fallback(&file.payload)
+        } else {
+            redact_bytes(&file.payload)
+        };
+        fs::write(&disk_path, payload)
+            .with_context(|| format!("writing staged checkpoint artefact {}", file.logical_path))?;
+        file_pairs.push((disk_path, file.logical_path));
+    }
+
+    let result = build_tree_with_explicit_paths(repo_root, parent_tree, &file_pairs);
+    let _ = fs::remove_dir_all(&staging_dir);
+    result
 }

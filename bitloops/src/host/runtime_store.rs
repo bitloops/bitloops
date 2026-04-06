@@ -1,9 +1,12 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::daemon::{
@@ -12,11 +15,19 @@ use crate::daemon::{
 };
 use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::host::checkpoints::session::DbSessionBackend;
+use crate::host::checkpoints::transcript::metadata::{
+    SessionMetadataBundle, build_context_markdown, build_session_metadata_bundle,
+    extract_prompts_from_transcript_bytes, extract_summary_from_transcript_bytes,
+};
 use crate::host::interactions::db_store::{
     SqliteInteractionSpool, legacy_interaction_spool_db_path,
 };
 use crate::storage::SqliteConnectionPool;
-use crate::utils::paths::{default_global_runtime_db_path, default_repo_runtime_db_path};
+use crate::utils::paths;
+use crate::utils::paths::{
+    LEGACY_BITLOOPS_METADATA_DIR, TRANSCRIPT_FILE_NAME, default_global_runtime_db_path,
+    default_repo_runtime_db_path,
+};
 
 const RUNTIME_DOCUMENTS_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS runtime_documents (
@@ -55,6 +66,119 @@ pub struct PersistedSyncQueueState {
     pub tasks: Vec<SyncTaskRecord>,
     pub last_action: Option<String>,
     pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeMetadataBlobType {
+    Transcript,
+    Prompts,
+    Summary,
+    Context,
+    TaskCheckpoint,
+    SubagentTranscript,
+    IncrementalCheckpoint,
+    Prompt,
+}
+
+impl RuntimeMetadataBlobType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Transcript => "transcript",
+            Self::Prompts => "prompts",
+            Self::Summary => "summary",
+            Self::Context => "context",
+            Self::TaskCheckpoint => "task_checkpoint",
+            Self::SubagentTranscript => "subagent_transcript",
+            Self::IncrementalCheckpoint => "incremental_checkpoint",
+            Self::Prompt => "prompt",
+        }
+    }
+
+    pub const fn default_file_name(self) -> &'static str {
+        match self {
+            Self::Transcript => "full.jsonl",
+            Self::Prompts => "prompt.txt",
+            Self::Summary => "summary.txt",
+            Self::Context => "context.md",
+            Self::TaskCheckpoint => "checkpoint.json",
+            Self::SubagentTranscript => "agent.jsonl",
+            Self::IncrementalCheckpoint => "incremental-checkpoint.json",
+            Self::Prompt => "prompt.txt",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "transcript" => Some(Self::Transcript),
+            "prompts" => Some(Self::Prompts),
+            "summary" => Some(Self::Summary),
+            "context" => Some(Self::Context),
+            "task_checkpoint" => Some(Self::TaskCheckpoint),
+            "subagent_transcript" => Some(Self::SubagentTranscript),
+            "incremental_checkpoint" => Some(Self::IncrementalCheckpoint),
+            "prompt" => Some(Self::Prompt),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMetadataSnapshot {
+    pub snapshot_id: String,
+    pub session_id: String,
+    pub turn_id: String,
+    pub transcript_identifier: String,
+    pub transcript_path: String,
+    pub bundle: SessionMetadataBundle,
+}
+
+impl SessionMetadataSnapshot {
+    pub fn new(session_id: impl Into<String>, bundle: SessionMetadataBundle) -> Self {
+        Self {
+            snapshot_id: Uuid::new_v4().simple().to_string(),
+            session_id: session_id.into(),
+            turn_id: String::new(),
+            transcript_identifier: String::new(),
+            transcript_path: String::new(),
+            bundle,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCheckpointArtefact {
+    pub artefact_id: String,
+    pub session_id: String,
+    pub tool_use_id: String,
+    pub agent_id: String,
+    pub checkpoint_uuid: String,
+    pub kind: RuntimeMetadataBlobType,
+    pub incremental_sequence: Option<u32>,
+    pub incremental_type: String,
+    pub is_incremental: bool,
+    pub payload: Vec<u8>,
+}
+
+impl TaskCheckpointArtefact {
+    pub fn new(
+        session_id: impl Into<String>,
+        tool_use_id: impl Into<String>,
+        kind: RuntimeMetadataBlobType,
+        payload: Vec<u8>,
+    ) -> Self {
+        Self {
+            artefact_id: Uuid::new_v4().simple().to_string(),
+            session_id: session_id.into(),
+            tool_use_id: tool_use_id.into(),
+            agent_id: String::new(),
+            checkpoint_uuid: String::new(),
+            kind,
+            incremental_sequence: None,
+            incremental_type: String::new(),
+            is_incremental: matches!(kind, RuntimeMetadataBlobType::IncrementalCheckpoint),
+            payload,
+        }
+    }
 }
 
 impl Default for PersistedSyncQueueState {
@@ -102,6 +226,7 @@ impl RepoSqliteRuntimeStore {
         };
         store.import_legacy_checkpoint_runtime_if_needed()?;
         store.import_legacy_interaction_spool_if_needed()?;
+        store.import_legacy_checkpoint_metadata_if_needed()?;
         Ok(store)
     }
 
@@ -121,6 +246,350 @@ impl RepoSqliteRuntimeStore {
         let sqlite = SqliteConnectionPool::connect(self.db_path.clone())
             .with_context(|| format!("opening repo runtime database {}", self.db_path.display()))?;
         SqliteInteractionSpool::new(sqlite, self.repo_id.clone())
+    }
+
+    pub fn save_session_metadata_snapshot(&self, snapshot: &SessionMetadataSnapshot) -> Result<()> {
+        let sqlite = SqliteConnectionPool::connect(self.db_path.clone())
+            .with_context(|| format!("opening repo runtime database {}", self.db_path.display()))?;
+        let prompt_text = snapshot.bundle.prompt_text();
+        let entries = [
+            (
+                RuntimeMetadataBlobType::Transcript,
+                snapshot.bundle.transcript.clone(),
+            ),
+            (
+                RuntimeMetadataBlobType::Prompts,
+                prompt_text.as_bytes().to_vec(),
+            ),
+            (
+                RuntimeMetadataBlobType::Summary,
+                snapshot.bundle.summary.as_bytes().to_vec(),
+            ),
+            (
+                RuntimeMetadataBlobType::Context,
+                snapshot.bundle.context.clone(),
+            ),
+        ];
+
+        for (blob_type, payload) in entries {
+            if payload.is_empty() {
+                continue;
+            }
+            let (storage_backend, storage_path, content_hash, size_bytes) = self
+                .write_runtime_blob(
+                    &session_snapshot_blob_key(
+                        &self.repo_id,
+                        &snapshot.session_id,
+                        &snapshot.snapshot_id,
+                        blob_type,
+                    ),
+                    &payload,
+                )?;
+            sqlite.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO session_metadata_snapshots (
+                        snapshot_id, session_id, repo_id, turn_id, transcript_identifier,
+                        transcript_path, blob_type, storage_backend, storage_path,
+                        content_hash, size_bytes, created_at
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5,
+                        ?6, ?7, ?8, ?9,
+                        ?10, ?11, datetime('now')
+                    )
+                    ON CONFLICT(repo_id, snapshot_id, blob_type) DO UPDATE SET
+                        session_id = excluded.session_id,
+                        turn_id = excluded.turn_id,
+                        transcript_identifier = excluded.transcript_identifier,
+                        transcript_path = excluded.transcript_path,
+                        storage_backend = excluded.storage_backend,
+                        storage_path = excluded.storage_path,
+                        content_hash = excluded.content_hash,
+                        size_bytes = excluded.size_bytes",
+                    rusqlite::params![
+                        snapshot.snapshot_id,
+                        snapshot.session_id,
+                        self.repo_id.as_str(),
+                        snapshot.turn_id,
+                        snapshot.transcript_identifier,
+                        snapshot.transcript_path,
+                        blob_type.as_str(),
+                        storage_backend,
+                        storage_path,
+                        content_hash,
+                        size_bytes,
+                    ],
+                )
+                .context("upserting session_metadata_snapshots row")?;
+                Ok(())
+            })?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load_latest_session_metadata_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionMetadataSnapshot>> {
+        let sqlite = SqliteConnectionPool::connect(self.db_path.clone())
+            .with_context(|| format!("opening repo runtime database {}", self.db_path.display()))?;
+        let header = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT snapshot_id,
+                        COALESCE(MAX(turn_id), ''),
+                        COALESCE(MAX(transcript_identifier), ''),
+                        COALESCE(MAX(transcript_path), '')
+                 FROM session_metadata_snapshots
+                 WHERE repo_id = ?1 AND session_id = ?2
+                 GROUP BY snapshot_id
+                 ORDER BY MAX(created_at) DESC, snapshot_id DESC
+                 LIMIT 1",
+                rusqlite::params![self.repo_id.as_str(), session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })?;
+        let Some((snapshot_id, turn_id, transcript_identifier, transcript_path)) = header else {
+            return Ok(None);
+        };
+
+        let blob_store = self.open_repo_blob_store()?;
+        let rows = sqlite.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT blob_type, storage_path
+                 FROM session_metadata_snapshots
+                 WHERE repo_id = ?1 AND session_id = ?2 AND snapshot_id = ?3",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![
+                self.repo_id.as_str(),
+                session_id,
+                snapshot_id.as_str()
+            ])?;
+            let mut values = Vec::new();
+            while let Some(row) = rows.next()? {
+                values.push((row.get::<_, String>(0)?, row.get::<_, String>(1)?));
+            }
+            Ok::<_, anyhow::Error>(values)
+        })?;
+
+        let mut bundle = SessionMetadataBundle::default();
+        for (blob_type, storage_path) in rows {
+            let payload = blob_store
+                .store
+                .read(&storage_path)
+                .with_context(|| format!("reading runtime metadata blob `{storage_path}`"))?;
+            match RuntimeMetadataBlobType::from_str(&blob_type) {
+                Some(RuntimeMetadataBlobType::Transcript) => bundle.transcript = payload,
+                Some(RuntimeMetadataBlobType::Prompts) => {
+                    bundle.prompts = String::from_utf8_lossy(&payload)
+                        .split("\n\n---\n\n")
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                }
+                Some(RuntimeMetadataBlobType::Summary) => {
+                    bundle.summary = String::from_utf8_lossy(&payload).to_string();
+                }
+                Some(RuntimeMetadataBlobType::Context) => bundle.context = payload,
+                _ => {}
+            }
+        }
+
+        Ok(Some(SessionMetadataSnapshot {
+            snapshot_id,
+            session_id: session_id.to_string(),
+            turn_id,
+            transcript_identifier,
+            transcript_path,
+            bundle,
+        }))
+    }
+
+    pub fn save_task_checkpoint_artefact(&self, artefact: &TaskCheckpointArtefact) -> Result<()> {
+        let sqlite = SqliteConnectionPool::connect(self.db_path.clone())
+            .with_context(|| format!("opening repo runtime database {}", self.db_path.display()))?;
+        let (storage_backend, storage_path, content_hash, size_bytes) = self.write_runtime_blob(
+            &task_artefact_blob_key(&self.repo_id, artefact),
+            &artefact.payload,
+        )?;
+
+        sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO task_checkpoint_artefacts (
+                    artefact_id, session_id, repo_id, tool_use_id, agent_id,
+                    checkpoint_uuid, artefact_kind, incremental_sequence, incremental_type,
+                    is_incremental, storage_backend, storage_path, content_hash, size_bytes,
+                    created_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5,
+                    ?6, ?7, ?8, ?9,
+                    ?10, ?11, ?12, ?13, ?14,
+                    datetime('now')
+                )",
+                rusqlite::params![
+                    artefact.artefact_id,
+                    artefact.session_id,
+                    self.repo_id.as_str(),
+                    artefact.tool_use_id,
+                    artefact.agent_id,
+                    artefact.checkpoint_uuid,
+                    artefact.kind.as_str(),
+                    artefact.incremental_sequence.map(i64::from),
+                    artefact.incremental_type,
+                    if artefact.is_incremental {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    storage_backend,
+                    storage_path,
+                    content_hash,
+                    size_bytes,
+                ],
+            )
+            .context("inserting task_checkpoint_artefacts row")?;
+            Ok(())
+        })
+    }
+
+    pub fn load_task_checkpoint_artefacts(
+        &self,
+        session_id: &str,
+        tool_use_id: &str,
+    ) -> Result<Vec<TaskCheckpointArtefact>> {
+        let sqlite = SqliteConnectionPool::connect(self.db_path.clone())
+            .with_context(|| format!("opening repo runtime database {}", self.db_path.display()))?;
+        let blob_store = self.open_repo_blob_store()?;
+        let rows = sqlite.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT artefact_id, agent_id, checkpoint_uuid, artefact_kind,
+                        incremental_sequence, incremental_type, is_incremental, storage_path
+                 FROM task_checkpoint_artefacts
+                 WHERE repo_id = ?1 AND session_id = ?2 AND tool_use_id = ?3
+                 ORDER BY created_at ASC, artefact_id ASC",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![
+                self.repo_id.as_str(),
+                session_id,
+                tool_use_id
+            ])?;
+            let mut values = Vec::new();
+            while let Some(row) = rows.next()? {
+                values.push((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                ));
+            }
+            Ok::<_, anyhow::Error>(values)
+        })?;
+
+        let mut artefacts = Vec::new();
+        for (
+            artefact_id,
+            agent_id,
+            checkpoint_uuid,
+            kind_raw,
+            incremental_sequence,
+            incremental_type,
+            is_incremental,
+            storage_path,
+        ) in rows
+        {
+            let Some(kind) = RuntimeMetadataBlobType::from_str(&kind_raw) else {
+                continue;
+            };
+            let payload = blob_store
+                .store
+                .read(&storage_path)
+                .with_context(|| format!("reading runtime task blob `{storage_path}`"))?;
+            artefacts.push(TaskCheckpointArtefact {
+                artefact_id,
+                session_id: session_id.to_string(),
+                tool_use_id: tool_use_id.to_string(),
+                agent_id,
+                checkpoint_uuid,
+                kind,
+                incremental_sequence: incremental_sequence
+                    .and_then(|value| u32::try_from(value).ok()),
+                incremental_type,
+                is_incremental: is_incremental != 0,
+                payload,
+            });
+        }
+
+        Ok(artefacts)
+    }
+
+    pub fn next_task_incremental_sequence(
+        &self,
+        session_id: &str,
+        tool_use_id: &str,
+    ) -> Result<u32> {
+        let sqlite = SqliteConnectionPool::connect(self.db_path.clone())
+            .with_context(|| format!("opening repo runtime database {}", self.db_path.display()))?;
+        let max_sequence = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT MAX(incremental_sequence)
+                 FROM task_checkpoint_artefacts
+                 WHERE repo_id = ?1
+                   AND session_id = ?2
+                   AND tool_use_id = ?3
+                   AND is_incremental = 1
+                   AND artefact_kind = ?4",
+                rusqlite::params![
+                    self.repo_id.as_str(),
+                    session_id,
+                    tool_use_id,
+                    RuntimeMetadataBlobType::IncrementalCheckpoint.as_str(),
+                ],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        Ok(max_sequence
+            .and_then(|value| u32::try_from(value).ok())
+            .map(|value| value.saturating_add(1))
+            .unwrap_or(1))
+    }
+
+    fn open_repo_blob_store(&self) -> Result<crate::storage::blob::ResolvedBlobStore> {
+        let cfg = resolve_store_backend_config_for_repo(&self.repo_root)
+            .context("resolving backend config for repo runtime metadata")?;
+        crate::storage::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, &self.repo_root)
+            .context("initialising blob storage for repo runtime metadata")
+    }
+
+    fn write_runtime_blob(
+        &self,
+        key: &str,
+        payload: &[u8],
+    ) -> Result<(String, String, String, i64)> {
+        let resolved = self.open_repo_blob_store()?;
+        resolved
+            .store
+            .write(key, payload)
+            .with_context(|| format!("writing runtime metadata blob `{key}`"))?;
+        Ok((
+            resolved.backend.to_string(),
+            key.to_string(),
+            format!("sha256:{}", sha256_hex(payload)),
+            payload.len() as i64,
+        ))
     }
 
     fn import_legacy_checkpoint_runtime_if_needed(&self) -> Result<()> {
@@ -284,6 +753,292 @@ impl RepoSqliteRuntimeStore {
             detach_if_needed(conn, "legacy_spool")?;
             result
         })
+    }
+
+    fn import_legacy_checkpoint_metadata_if_needed(&self) -> Result<()> {
+        let legacy_root = self.repo_root.join(LEGACY_BITLOOPS_METADATA_DIR);
+        if !legacy_root.is_dir() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(&legacy_root)
+            .with_context(|| format!("reading legacy metadata root {}", legacy_root.display()))?
+        {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    eprintln!("[bitloops] Warning: failed reading legacy metadata entry: {err}");
+                    continue;
+                }
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let session_id = entry.file_name().to_string_lossy().to_string();
+            let session_dir = entry.path();
+            let removable = self.import_legacy_session_metadata_dir(&session_id, &session_dir);
+            match removable {
+                Ok(true) => {
+                    let _ = fs::remove_dir_all(&session_dir);
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    eprintln!(
+                        "[bitloops] Warning: failed importing legacy metadata for session `{session_id}`: {err:#}"
+                    );
+                }
+            }
+        }
+
+        if fs::read_dir(&legacy_root)
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .is_none()
+        {
+            let _ = fs::remove_dir_all(&legacy_root);
+        }
+
+        Ok(())
+    }
+
+    fn import_legacy_session_metadata_dir(
+        &self,
+        session_id: &str,
+        session_dir: &Path,
+    ) -> Result<bool> {
+        let mut removable = true;
+        let transcript_path = session_dir.join(paths::TRANSCRIPT_FILE_NAME);
+        let prompt_path = session_dir.join(paths::PROMPT_FILE_NAME);
+        let summary_path = session_dir.join(paths::SUMMARY_FILE_NAME);
+        let context_path = session_dir.join(paths::CONTEXT_FILE_NAME);
+
+        if transcript_path.exists()
+            || prompt_path.exists()
+            || summary_path.exists()
+            || context_path.exists()
+        {
+            let transcript = fs::read(&transcript_path).unwrap_or_default();
+            let prompt_text = fs::read_to_string(&prompt_path).unwrap_or_default();
+            let summary_text = fs::read_to_string(&summary_path).unwrap_or_default();
+            let context = fs::read(&context_path).unwrap_or_default();
+            let prompts_from_prompt_file = prompt_text
+                .split("\n\n---\n\n")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let derived_prompts = if !prompts_from_prompt_file.is_empty() {
+                prompts_from_prompt_file
+            } else {
+                extract_prompts_from_transcript_bytes(&transcript)
+            };
+            let commit_message = derived_prompts.last().cloned().unwrap_or_default();
+            let mut bundle = if !transcript.is_empty() {
+                build_session_metadata_bundle(session_id, &commit_message, &transcript)?
+            } else {
+                SessionMetadataBundle::default()
+            };
+            if !derived_prompts.is_empty() {
+                bundle.prompts = derived_prompts;
+            }
+            if !summary_text.trim().is_empty() {
+                bundle.summary = summary_text;
+            } else if bundle.summary.trim().is_empty() {
+                bundle.summary = extract_summary_from_transcript_bytes(&transcript);
+            }
+            if !context.is_empty() {
+                bundle.context = context;
+            } else if bundle.context.is_empty() {
+                bundle.context = build_context_markdown(
+                    session_id,
+                    &commit_message,
+                    &bundle.prompts,
+                    &bundle.summary,
+                )
+                .into_bytes();
+            }
+            if bundle.transcript.is_empty() {
+                bundle.transcript = transcript;
+            }
+
+            if !bundle.transcript.is_empty()
+                || !bundle.prompts.is_empty()
+                || !bundle.summary.trim().is_empty()
+                || !bundle.context.is_empty()
+            {
+                let mut snapshot = SessionMetadataSnapshot::new(session_id.to_string(), bundle);
+                snapshot.snapshot_id = format!(
+                    "legacy-{}",
+                    &sha256_hex(session_dir.to_string_lossy().as_bytes())[..16]
+                );
+                snapshot.transcript_path = transcript_path.to_string_lossy().to_string();
+                self.save_session_metadata_snapshot(&snapshot)?;
+            }
+        }
+
+        let tasks_dir = session_dir.join("tasks");
+        if tasks_dir.exists() {
+            for task_entry in fs::read_dir(&tasks_dir)
+                .with_context(|| format!("reading legacy tasks dir {}", tasks_dir.display()))?
+            {
+                let task_entry = match task_entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        eprintln!("[bitloops] Warning: failed reading legacy task entry: {err}");
+                        removable = false;
+                        continue;
+                    }
+                };
+                let Ok(task_file_type) = task_entry.file_type() else {
+                    removable = false;
+                    continue;
+                };
+                if !task_file_type.is_dir() {
+                    removable = false;
+                    continue;
+                }
+                if !self.import_legacy_task_metadata_dir(
+                    session_id,
+                    &task_entry.file_name().to_string_lossy(),
+                    &task_entry.path(),
+                )? {
+                    removable = false;
+                }
+            }
+        }
+
+        Ok(removable)
+    }
+
+    fn import_legacy_task_metadata_dir(
+        &self,
+        session_id: &str,
+        tool_use_id: &str,
+        task_dir: &Path,
+    ) -> Result<bool> {
+        let mut removable = true;
+        for entry in fs::read_dir(task_dir)
+            .with_context(|| format!("reading legacy task metadata dir {}", task_dir.display()))?
+        {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    eprintln!(
+                        "[bitloops] Warning: failed reading legacy task metadata file: {err}"
+                    );
+                    removable = false;
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(file_type) = entry.file_type() else {
+                removable = false;
+                continue;
+            };
+            if file_type.is_dir() {
+                if name == "checkpoints" {
+                    for checkpoint_entry in fs::read_dir(&path).with_context(|| {
+                        format!("reading legacy incremental checkpoints {}", path.display())
+                    })? {
+                        let checkpoint_entry = match checkpoint_entry {
+                            Ok(entry) => entry,
+                            Err(err) => {
+                                eprintln!(
+                                    "[bitloops] Warning: failed reading legacy incremental checkpoint: {err}"
+                                );
+                                removable = false;
+                                continue;
+                            }
+                        };
+                        let checkpoint_path = checkpoint_entry.path();
+                        let checkpoint_name =
+                            checkpoint_entry.file_name().to_string_lossy().to_string();
+                        if checkpoint_path.extension().and_then(|ext| ext.to_str()) != Some("json")
+                        {
+                            removable = false;
+                            continue;
+                        }
+                        let payload = match fs::read(&checkpoint_path) {
+                            Ok(payload) => payload,
+                            Err(err) => {
+                                eprintln!(
+                                    "[bitloops] Warning: failed reading legacy incremental checkpoint {}: {err}",
+                                    checkpoint_path.display()
+                                );
+                                removable = false;
+                                continue;
+                            }
+                        };
+                        let mut artefact = TaskCheckpointArtefact::new(
+                            session_id.to_string(),
+                            tool_use_id.to_string(),
+                            RuntimeMetadataBlobType::IncrementalCheckpoint,
+                            payload,
+                        );
+                        artefact.artefact_id = format!(
+                            "legacy-{}",
+                            &sha256_hex(checkpoint_path.to_string_lossy().as_bytes())[..16]
+                        );
+                        artefact.incremental_sequence =
+                            parse_incremental_sequence_from_name(&checkpoint_name);
+                        artefact.is_incremental = true;
+                        self.save_task_checkpoint_artefact(&artefact)?;
+                    }
+                } else {
+                    removable = false;
+                }
+                continue;
+            }
+
+            let kind = if name == paths::CHECKPOINT_FILE_NAME {
+                Some(RuntimeMetadataBlobType::TaskCheckpoint)
+            } else if name == paths::PROMPT_FILE_NAME {
+                Some(RuntimeMetadataBlobType::Prompt)
+            } else if name.starts_with("agent-") && name.ends_with(".jsonl") {
+                Some(RuntimeMetadataBlobType::SubagentTranscript)
+            } else {
+                None
+            };
+            let Some(kind) = kind else {
+                removable = false;
+                continue;
+            };
+
+            let payload = match fs::read(&path) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    eprintln!(
+                        "[bitloops] Warning: failed reading legacy task metadata {}: {err}",
+                        path.display()
+                    );
+                    removable = false;
+                    continue;
+                }
+            };
+            let mut artefact = TaskCheckpointArtefact::new(
+                session_id.to_string(),
+                tool_use_id.to_string(),
+                kind,
+                payload,
+            );
+            artefact.artefact_id = format!(
+                "legacy-{}",
+                &sha256_hex(path.to_string_lossy().as_bytes())[..16]
+            );
+            if kind == RuntimeMetadataBlobType::SubagentTranscript {
+                artefact.agent_id = name
+                    .trim_start_matches("agent-")
+                    .trim_end_matches(".jsonl")
+                    .to_string();
+            }
+            self.save_task_checkpoint_artefact(&artefact)?;
+        }
+
+        Ok(removable)
     }
 }
 
@@ -510,6 +1265,57 @@ impl DaemonSqliteRuntimeStore {
             result
         })
     }
+}
+
+fn session_snapshot_blob_key(
+    repo_id: &str,
+    session_id: &str,
+    snapshot_id: &str,
+    blob_type: RuntimeMetadataBlobType,
+) -> String {
+    format!(
+        "runtime/{repo_id}/session-metadata/{session_id}/{snapshot_id}/{}",
+        blob_type.default_file_name()
+    )
+}
+
+fn task_artefact_blob_key(repo_id: &str, artefact: &TaskCheckpointArtefact) -> String {
+    let file_name = match artefact.kind {
+        RuntimeMetadataBlobType::TaskCheckpoint => paths::CHECKPOINT_FILE_NAME.to_string(),
+        RuntimeMetadataBlobType::Prompt => paths::PROMPT_FILE_NAME.to_string(),
+        RuntimeMetadataBlobType::SubagentTranscript => {
+            if artefact.agent_id.trim().is_empty() {
+                "agent.jsonl".to_string()
+            } else {
+                format!("agent-{}.jsonl", artefact.agent_id)
+            }
+        }
+        RuntimeMetadataBlobType::IncrementalCheckpoint => {
+            if let Some(sequence) = artefact.incremental_sequence {
+                format!("{sequence:03}-{}.json", artefact.tool_use_id)
+            } else {
+                "incremental-checkpoint.json".to_string()
+            }
+        }
+        RuntimeMetadataBlobType::Transcript => TRANSCRIPT_FILE_NAME.to_string(),
+        RuntimeMetadataBlobType::Prompts => paths::PROMPT_FILE_NAME.to_string(),
+        RuntimeMetadataBlobType::Summary => paths::SUMMARY_FILE_NAME.to_string(),
+        RuntimeMetadataBlobType::Context => paths::CONTEXT_FILE_NAME.to_string(),
+    };
+
+    format!(
+        "runtime/{repo_id}/task-checkpoint-artefacts/{}/{}/{}/{}",
+        artefact.session_id, artefact.tool_use_id, artefact.artefact_id, file_name
+    )
+}
+
+fn parse_incremental_sequence_from_name(name: &str) -> Option<u32> {
+    name.split('-').next()?.parse::<u32>().ok()
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn initialise_repo_runtime_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
@@ -825,6 +1631,92 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "session-1");
+    }
+
+    #[test]
+    fn repo_runtime_store_imports_legacy_checkpoint_metadata_and_removes_files() {
+        let dir = TempDir::new().expect("tempdir");
+        init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
+
+        let session_dir = dir
+            .path()
+            .join(".bitloops")
+            .join("metadata")
+            .join("session-legacy");
+        let task_dir = session_dir.join("tasks").join("toolu_legacy");
+        let incremental_dir = task_dir.join("checkpoints");
+        fs::create_dir_all(&incremental_dir).expect("create legacy metadata directories");
+
+        fs::write(
+            session_dir.join(paths::TRANSCRIPT_FILE_NAME),
+            r#"{"type":"user","message":{"content":"Create foo"}}
+{"type":"assistant","message":{"content":"Done"}}"#,
+        )
+        .expect("write legacy transcript");
+        fs::write(session_dir.join(paths::PROMPT_FILE_NAME), "Create foo")
+            .expect("write legacy prompt");
+        fs::write(session_dir.join(paths::SUMMARY_FILE_NAME), "Done")
+            .expect("write legacy summary");
+        fs::write(
+            session_dir.join(paths::CONTEXT_FILE_NAME),
+            "# Session Context\n\nLegacy context",
+        )
+        .expect("write legacy context");
+        fs::write(
+            task_dir.join(paths::CHECKPOINT_FILE_NAME),
+            r#"{"checkpoint_uuid":"legacy-checkpoint"}"#,
+        )
+        .expect("write legacy task checkpoint");
+        fs::write(
+            task_dir.join("agent-agent-1.jsonl"),
+            r#"{"type":"assistant","message":{"content":"subagent"}}"#,
+        )
+        .expect("write legacy subagent transcript");
+        fs::write(
+            incremental_dir.join("003-toolu_legacy.json"),
+            r#"{"type":"TodoWrite","data":{"todo":"document storage"}}"#,
+        )
+        .expect("write legacy incremental checkpoint");
+
+        let store = RepoSqliteRuntimeStore::open(dir.path()).expect("open repo runtime store");
+        let snapshot = store
+            .load_latest_session_metadata_snapshot("session-legacy")
+            .expect("load imported metadata snapshot")
+            .expect("legacy metadata snapshot should be imported");
+        assert_eq!(snapshot.bundle.prompts, vec!["Create foo".to_string()]);
+        assert_eq!(snapshot.bundle.summary, "Done");
+        assert!(
+            String::from_utf8_lossy(&snapshot.bundle.context).contains("Legacy context"),
+            "legacy context should be preserved during import"
+        );
+
+        let artefacts = store
+            .load_task_checkpoint_artefacts("session-legacy", "toolu_legacy")
+            .expect("load imported task artefacts");
+        assert!(
+            artefacts
+                .iter()
+                .any(|artefact| artefact.kind == RuntimeMetadataBlobType::TaskCheckpoint),
+            "task checkpoint artefact should be imported"
+        );
+        assert!(
+            artefacts
+                .iter()
+                .any(|artefact| artefact.kind == RuntimeMetadataBlobType::SubagentTranscript),
+            "subagent transcript artefact should be imported"
+        );
+        assert!(
+            artefacts.iter().any(|artefact| {
+                artefact.kind == RuntimeMetadataBlobType::IncrementalCheckpoint
+                    && artefact.incremental_sequence == Some(3)
+            }),
+            "incremental checkpoint artefact should be imported with its sequence"
+        );
+
+        assert!(
+            !session_dir.exists(),
+            "legacy metadata directory should be removed after successful import"
+        );
     }
 
     fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {

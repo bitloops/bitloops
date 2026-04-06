@@ -130,7 +130,7 @@ Bitloops uses platform app directories by default:
 | Cache | `${XDG_CACHE_HOME:-~/.cache}/bitloops/` | Embedding model downloads, dashboard bundle |
 | State | `${XDG_STATE_HOME:-~/.local/state}/bitloops/` | Daemon runtime metadata, supervisor state, daemon runtime SQLite, hook scratch |
 
-Bitloops also keeps repo-scoped workflow runtime state in a dedicated local SQLite database at `<repo>/.bitloops/stores/runtime/runtime.sqlite`.
+Bitloops also keeps repo-scoped workflow runtime state in a dedicated local runtime SQLite database derived from the repository root.
 
 If you want to remove these platform directories again, use `bitloops uninstall` with explicit targets or `bitloops uninstall --full`.
 
@@ -146,7 +146,7 @@ The runtime store paths are derived by the host and are not configured under `[s
 | Runtime surface | Default path | Purpose |
 | --- | --- | --- |
 | Daemon runtime store | `<state dir>/daemon/runtime.sqlite` | daemon runtime state, service metadata, supervisor metadata, sync queue state, enrichment queue state |
-| Repo runtime store | `<repo>/.bitloops/stores/runtime/runtime.sqlite` | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
+| Repo runtime store | derived from the repository root | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
 
 Configured relational, events, and blob stores still come from the daemon config:
 

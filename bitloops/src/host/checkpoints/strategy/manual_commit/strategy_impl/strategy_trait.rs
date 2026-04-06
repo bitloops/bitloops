@@ -93,22 +93,10 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let default_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
-        let mut metadata_dir = ctx.metadata_dir.trim().to_string();
-        let mut metadata_dir_abs = ctx.metadata_dir_abs.trim().to_string();
-
-        if metadata_dir.is_empty() {
-            metadata_dir = default_metadata_dir.clone();
-        }
-        if metadata_dir_abs.is_empty() && !metadata_dir.is_empty() {
-            metadata_dir_abs = self
-                .repo_root
-                .join(&metadata_dir)
-                .to_string_lossy()
-                .to_string();
-        }
-        if metadata_dir == default_metadata_dir && !transcript_path.trim().is_empty() {
+        let mut session_metadata = ctx.metadata.clone();
+        if session_metadata.is_none() && !transcript_path.trim().is_empty() {
             let _ = write_session_metadata(&self.repo_root, &ctx.session_id, &transcript_path);
+            session_metadata = read_session_metadata_bundle(&self.repo_root, &ctx.session_id);
         }
 
         let author_name = if ctx.author_name.trim().is_empty() {
@@ -139,8 +127,8 @@ impl Strategy for ManualCommitStrategy {
                 modified_files: modified.clone(),
                 new_files: new_files.clone(),
                 deleted_files: deleted.clone(),
-                metadata_dir,
-                metadata_dir_abs,
+                session_metadata,
+                metadata_entries: vec![],
                 commit_message: commit_msg,
                 author_name,
                 author_email,
@@ -275,9 +263,20 @@ impl Strategy for ManualCommitStrategy {
                 modified_files: ctx.modified_files.clone(),
                 new_files: ctx.new_files.clone(),
                 deleted_files: ctx.deleted_files.clone(),
-                transcript_path: ctx.transcript_path.clone(),
-                subagent_transcript_path: ctx.subagent_transcript_path.clone(),
-                checkpoint_uuid: ctx.checkpoint_uuid.clone(),
+                session_metadata: if ctx.session_metadata.is_some() {
+                    ctx.session_metadata.clone()
+                } else if !ctx.transcript_path.trim().is_empty() {
+                    let _ = write_session_metadata(
+                        &self.repo_root,
+                        &ctx.session_id,
+                        &ctx.transcript_path,
+                    );
+                    read_session_metadata_bundle(&self.repo_root, &ctx.session_id)
+                } else {
+                    None
+                },
+                task_metadata: ctx.task_metadata.clone(),
+                metadata_entries: vec![],
                 is_incremental: ctx.is_incremental,
                 incremental_sequence: ctx.incremental_sequence,
                 incremental_type: ctx.incremental_type.clone(),

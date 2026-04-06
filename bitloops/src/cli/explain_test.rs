@@ -2307,8 +2307,8 @@ fn TestHasCodeChanges_FirstCommitReturnsTrue() {
 #[test]
 fn TestHasCodeChanges_OnlyMetadataChanges() {
     let changed = vec![
-        ".bitloops/metadata/session-123/full.jsonl".to_string(),
-        ".bitloops/metadata/session-123/prompt.txt".to_string(),
+        ".bitloops/checkpoint-artifacts/sessions/session-123/full.jsonl".to_string(),
+        ".bitloops/checkpoint-artifacts/sessions/session-123/prompt.txt".to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
@@ -2340,7 +2340,7 @@ fn TestHasCodeChanges_WithCodeChanges() {
 #[test]
 fn TestHasCodeChanges_MixedChanges() {
     let changed = vec![
-        ".bitloops/metadata/session-123/full.jsonl".to_string(),
+        ".bitloops/checkpoint-artifacts/sessions/session-123/full.jsonl".to_string(),
         "src/main.rs".to_string(),
     ];
     assert!(

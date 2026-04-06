@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::TaskCheckpointMetadataBundle;
 
 #[test]
 pub(crate) fn write_committed_duplicate_session_id_clears_stale_files() {
@@ -505,7 +506,7 @@ pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
     let transcript_path = dir.path().join("agent-transcript.jsonl");
     let invalid_jsonl =
         format!("this is not valid JSON but has a secret {HIGH_ENTROPY_SECRET} in it");
-    fs::write(&transcript_path, invalid_jsonl).unwrap();
+    fs::write(&transcript_path, &invalid_jsonl).unwrap();
 
     let result = write_temporary_task(
         dir.path(),
@@ -518,9 +519,14 @@ pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
             modified_files: vec![],
             new_files: vec![],
             deleted_files: vec![],
-            transcript_path: String::new(),
-            subagent_transcript_path: transcript_path.to_string_lossy().to_string(),
-            checkpoint_uuid: "test-uuid".to_string(),
+            session_metadata: None,
+            task_metadata: Some(TaskCheckpointMetadataBundle {
+                checkpoint_json: None,
+                subagent_transcript: Some(invalid_jsonl.into_bytes()),
+                incremental_checkpoint: None,
+                prompt: None,
+            }),
+            metadata_entries: vec![],
             is_incremental: false,
             incremental_sequence: 0,
             incremental_type: String::new(),
@@ -550,7 +556,8 @@ pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
     );
 
     let agent_path =
-        ".bitloops/metadata/test-session/tasks/toolu_test456/agent-agent1.jsonl".to_string();
+        ".bitloops/checkpoint-artifacts/sessions/test-session/tasks/toolu_test456/agent-agent1.jsonl"
+            .to_string();
     let content = run_git(
         dir.path(),
         &["show", &format!("{}:{agent_path}", result.commit_hash)],
@@ -578,15 +585,17 @@ pub(crate) fn add_directory_to_entries_path_traversal() {
     fs::create_dir_all(&sub_dir).unwrap();
     fs::write(sub_dir.join("data.txt"), "safe content").unwrap();
 
-    let result =
-        add_directory_to_entries_with_abs_path(&metadata_dir, ".bitloops/metadata/session");
+    let result = add_directory_to_entries_with_abs_path(
+        &metadata_dir,
+        ".bitloops/checkpoint-artifacts/sessions/session",
+    );
     assert!(
         result.is_ok(),
         "add_directory_to_entries_with_abs_path should include regular files: {result:?}"
     );
 
     let entries = result.unwrap();
-    let expected = ".bitloops/metadata/session/sub/data.txt";
+    let expected = ".bitloops/checkpoint-artifacts/sessions/session/sub/data.txt";
     assert!(
         entries.contains_key(expected),
         "expected entry {expected}, got {entries:?}"

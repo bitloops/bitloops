@@ -1,6 +1,7 @@
 pub const BITLOOPS_DIR: &str = ".bitloops";
 pub const BITLOOPS_TMP_DIR: &str = ".bitloops/tmp";
-pub const BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
+pub const LEGACY_BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
+pub const BITLOOPS_CHECKPOINT_ARTEFACTS_DIR: &str = ".bitloops/checkpoint-artifacts";
 pub const BITLOOPS_STORES_DIR: &str = ".bitloops/stores";
 pub const BITLOOPS_RELATIONAL_STORE_DIR: &str = ".bitloops/stores/relational";
 pub const BITLOOPS_RUNTIME_STORE_DIR: &str = ".bitloops/stores/runtime";

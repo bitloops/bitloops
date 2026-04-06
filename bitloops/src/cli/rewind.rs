@@ -764,19 +764,31 @@ mod tests {
     fn list_checkpoint_tree_entries_filters_infrastructure_files() {
         let repo = init_git_repo();
         std::fs::write(repo.path().join("src.rs"), "fn main() {}\n").expect("write source");
-        std::fs::create_dir_all(repo.path().join(".bitloops").join("metadata"))
-            .expect("create metadata dir");
+        std::fs::create_dir_all(
+            repo.path()
+                .join(".bitloops")
+                .join("checkpoint-artifacts")
+                .join("sessions")
+                .join("session-1"),
+        )
+        .expect("create metadata dir");
         std::fs::write(
             repo.path()
                 .join(".bitloops")
-                .join("metadata")
+                .join("checkpoint-artifacts")
+                .join("sessions")
+                .join("session-1")
                 .join("ignored.txt"),
             "ignored",
         )
         .expect("write metadata file");
         git_ok(
             repo.path(),
-            &["add", "src.rs", ".bitloops/metadata/ignored.txt"],
+            &[
+                "add",
+                "src.rs",
+                ".bitloops/checkpoint-artifacts/sessions/session-1/ignored.txt",
+            ],
         );
         git_ok(repo.path(), &["commit", "-m", "seed tree"]);
         let head = git_ok(repo.path(), &["rev-parse", "HEAD"]);

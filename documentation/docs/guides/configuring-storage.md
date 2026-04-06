@@ -25,7 +25,7 @@ By default Bitloops uses platform app directories:
 - blob store in the data directory
 - embedding model downloads in the cache directory
 - daemon runtime SQLite in the state directory
-- repo runtime SQLite in `.bitloops/stores/runtime/runtime.sqlite`
+- repo runtime SQLite in a derived repository-local runtime path
 
 Linux examples:
 
@@ -38,10 +38,10 @@ Linux examples:
 ~/.local/state/bitloops/daemon/runtime.sqlite
 ```
 
-Repo-scoped runtime state lives in:
+Repo-scoped runtime state lives in a derived repository-local runtime database, for example:
 
 ```text
-<repo>/.bitloops/stores/runtime/runtime.sqlite
+<repo runtime directory>/runtime.sqlite
 ```
 
 ## Local SQLite, DuckDB, And Blob Defaults
@@ -112,7 +112,7 @@ These SQLite files are not configured under `[stores]`:
 | Runtime surface | Default path | Purpose |
 | --- | --- | --- |
 | Daemon runtime store | `<state dir>/daemon/runtime.sqlite` | daemon runtime state, service metadata, supervisor metadata, sync queue state, enrichment queue state |
-| Repo runtime store | `<repo>/.bitloops/stores/runtime/runtime.sqlite` | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
+| Repo runtime store | derived from the repository root | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
 
 `RuntimeStore` is always local SQLite. `RelationalStore` is configured through `[stores.relational]` and can use SQLite or Postgres.
 

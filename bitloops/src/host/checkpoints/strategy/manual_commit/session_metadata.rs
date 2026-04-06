@@ -1,15 +1,12 @@
 use super::*;
 
+use crate::host::checkpoints::transcript::metadata::{
+    SessionMetadataBundle, build_session_metadata_bundle, extract_user_prompts_from_jsonl,
+};
+use crate::host::runtime_store::{RepoSqliteRuntimeStore, SessionMetadataSnapshot};
+
 // ── Session metadata helpers ──────────────────────────────────────────────────
 
-/// Writes a snapshot of the session transcript to `.bitloops/metadata/<session_id>/`.
-///
-/// Files written:
-/// - `full.jsonl` — copy of the live transcript
-/// - `prompt.txt` — user prompts extracted from the JSONL
-///
-/// Returns the list of repo-relative paths written (for inclusion in the shadow branch tree).
-///
 pub(crate) fn write_session_metadata(
     repo_root: &Path,
     session_id: &str,
@@ -25,55 +22,32 @@ pub(crate) fn write_session_metadata(
         anyhow::bail!("refusing symlink transcript path: {transcript_path}");
     }
 
-    // Claude writes transcript entries asynchronously; retry briefly before giving up.
     let transcript = match read_transcript_with_retry(transcript_path) {
-        Some(t) => t,
-        None => return Ok(vec![]), // transcript not available yet — skip silently
+        Some(transcript) => transcript,
+        None => return Ok(vec![]),
     };
 
-    let rel_base = paths::session_metadata_dir_from_session_id(session_id);
-    let meta_dir = repo_root.join(&rel_base);
-    fs::create_dir_all(&meta_dir).context("creating session metadata directory")?;
+    let prompts = extract_user_prompts_from_jsonl(&transcript);
+    let last_prompt = prompts.last().cloned().unwrap_or_default();
+    let bundle = build_session_metadata_bundle(
+        session_id,
+        &generate_commit_message(&last_prompt),
+        transcript.as_bytes(),
+    )?;
 
-    // Write transcript snapshot.
-    fs::write(meta_dir.join(paths::TRANSCRIPT_FILE_NAME), &transcript)
-        .context("writing session full.jsonl")?;
+    let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
+        .context("opening runtime store for session metadata snapshot")?;
+    let mut snapshot = SessionMetadataSnapshot::new(session_id.to_string(), bundle.clone());
+    snapshot.transcript_path = transcript_path.to_string();
+    runtime_store
+        .save_session_metadata_snapshot(&snapshot)
+        .context("saving session metadata snapshot to runtime store")?;
 
-    let prompt_path = meta_dir.join(paths::PROMPT_FILE_NAME);
-    let summary_path = meta_dir.join(paths::SUMMARY_FILE_NAME);
-    let context_path = meta_dir.join(paths::CONTEXT_FILE_NAME);
-
-    // Preserve lifecycle-authored metadata if already present.
-    // Lifecycle writes prompt/summary/context before strategy SaveStep.
-    if !prompt_path.exists() || !summary_path.exists() || !context_path.exists() {
-        let prompts = extract_user_prompts_from_jsonl(&transcript);
-        let prompt_txt = prompts.join("\n\n---\n\n");
-        let summary_txt = extract_summary_from_jsonl(&transcript);
-
-        if !prompt_path.exists() {
-            fs::write(&prompt_path, &prompt_txt).context("writing session prompt.txt")?;
-        }
-        if !summary_path.exists() {
-            fs::write(&summary_path, &summary_txt).context("writing session summary.txt")?;
-        }
-        if !context_path.exists() {
-            let last_prompt = prompts.last().cloned().unwrap_or_default();
-            let context_md = build_context_md(
-                session_id,
-                &generate_commit_message(&last_prompt),
-                &prompts,
-                &summary_txt,
-            );
-            fs::write(&context_path, context_md).context("writing session context.md")?;
-        }
-    }
-
-    Ok(vec![
-        format!("{rel_base}/{}", paths::TRANSCRIPT_FILE_NAME),
-        format!("{rel_base}/{}", paths::PROMPT_FILE_NAME),
-        format!("{rel_base}/{}", paths::SUMMARY_FILE_NAME),
-        format!("{rel_base}/{}", paths::CONTEXT_FILE_NAME),
-    ])
+    Ok(bundle
+        .logical_entries(session_id)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect())
 }
 
 /// Retries transcript reads briefly to handle asynchronous transcript flushing.
@@ -83,8 +57,8 @@ pub(crate) fn read_transcript_with_retry(transcript_path: &str) -> Option<String
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if let Ok(t) = fs::read_to_string(transcript_path) {
-            return Some(t);
+        if let Ok(transcript) = fs::read_to_string(transcript_path) {
+            return Some(transcript);
         }
         if Instant::now() >= deadline {
             return None;
@@ -93,158 +67,26 @@ pub(crate) fn read_transcript_with_retry(transcript_path: &str) -> Option<String
     }
 }
 
-/// Falls back to reading the transcript from the metadata directory on disk.
-pub(crate) fn read_transcript_from_disk(repo_root: &Path, session_id: &str) -> Option<String> {
-    let path = repo_root
-        .join(paths::session_metadata_dir_from_session_id(session_id))
-        .join(paths::TRANSCRIPT_FILE_NAME);
-    fs::read_to_string(path).ok().filter(|s| !s.is_empty())
-}
-
-/// Extracts user-role prompt text from a Claude Code JSONL transcript.
-///
-/// Each line of a Claude Code transcript is a JSON object. We look for lines
-/// where `role == "user"` and extract `content` as text.
-///
-pub(crate) fn extract_user_prompts_from_jsonl(jsonl: &str) -> Vec<String> {
-    let mut prompts = Vec::new();
-    for line in jsonl.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if !is_user_role(transcript_line_role(&val)) {
-            continue;
-        }
-        let Some(content) = transcript_line_content(&val) else {
-            continue;
-        };
-        let text = content_to_text(content);
-        if !text.trim().is_empty() {
-            prompts.push(text);
-        }
-    }
-    prompts
-}
-
-pub(crate) fn is_user_role(role: Option<&str>) -> bool {
-    matches!(role, Some("user") | Some("human") | Some("user.message"))
-}
-
-/// Extracts the last assistant text block as a session summary.
-pub(crate) fn extract_summary_from_jsonl(jsonl: &str) -> String {
-    let mut last_summary = String::new();
-    for line in jsonl.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if !matches!(
-            transcript_line_role(&val),
-            Some("assistant") | Some("assistant.message")
-        ) {
-            continue;
-        }
-        let Some(content) = transcript_line_content(&val) else {
-            continue;
-        };
-        let text = content_to_text(content);
-        if !text.trim().is_empty() {
-            last_summary = text;
-        }
-    }
-    last_summary
-}
-
-pub(crate) fn transcript_line_role(val: &serde_json::Value) -> Option<&str> {
-    val.get("message")
-        .and_then(|m| m.get("role"))
-        .and_then(|r| r.as_str())
-        .or_else(|| val.get("role").and_then(|r| r.as_str()))
-        .or_else(|| val.get("type").and_then(|r| r.as_str()))
-}
-
-pub(crate) fn transcript_line_content(val: &serde_json::Value) -> Option<&serde_json::Value> {
-    let message_content = val.get("message").and_then(|m| m.get("content"));
-    if message_content.is_some() {
-        return message_content;
-    }
-
-    let data_content = val.get("data").and_then(|d| d.get("content"));
-    if let Some(content) = data_content {
-        let text = content_to_text(content);
-        if !text.is_empty() {
-            return Some(content);
-        }
-    }
-
-    val.get("data")
-        .and_then(|d| d.get("transformedContent"))
-        .or_else(|| val.get("content"))
-}
-
-pub(crate) fn content_to_text(content: &serde_json::Value) -> String {
-    match content {
-        serde_json::Value::String(s) => s.trim().to_string(),
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .filter_map(|item| {
-                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    item.get("text").and_then(|t| t.as_str()).map(str::to_owned)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_string(),
-        _ => String::new(),
-    }
-}
-
-/// Builds a context markdown file mirroring the lifecycle output structure.
-pub(crate) fn build_context_md(
+pub(crate) fn read_session_metadata_bundle(
+    repo_root: &Path,
     session_id: &str,
-    commit_message: &str,
-    prompts: &[String],
-    summary: &str,
-) -> String {
-    let mut out = String::new();
-    out.push_str("# Session Context\n\n");
-    out.push_str(&format!("Session ID: {session_id}\n"));
-    out.push_str(&format!("Commit Message: {commit_message}\n\n"));
-
-    if !prompts.is_empty() {
-        out.push_str("## Prompts\n\n");
-        for (idx, prompt) in prompts.iter().enumerate() {
-            out.push_str(&format!("### Prompt {}\n\n{}\n\n", idx + 1, prompt));
-        }
-    }
-
-    if !summary.trim().is_empty() {
-        out.push_str("## Summary\n\n");
-        out.push_str(summary);
-        out.push('\n');
-    }
-
-    out
+) -> Option<SessionMetadataBundle> {
+    RepoSqliteRuntimeStore::open(repo_root)
+        .ok()?
+        .load_latest_session_metadata_snapshot(session_id)
+        .ok()?
+        .map(|snapshot| snapshot.bundle)
 }
 
-/// Generates a commit message from a user prompt.
 pub(crate) fn generate_commit_message(prompt: &str) -> String {
     commit_message::generate_commit_message(prompt)
 }
 
 #[cfg(test)]
 mod session_metadata_inline_tests {
-    use super::{extract_summary_from_jsonl, extract_user_prompts_from_jsonl};
+    use crate::host::checkpoints::transcript::metadata::{
+        extract_summary_from_jsonl, extract_user_prompts_from_jsonl,
+    };
 
     #[test]
     fn extract_user_prompts_supports_copilot_user_message_payloads() {
@@ -258,9 +100,9 @@ mod session_metadata_inline_tests {
     }
 
     #[test]
-    fn extract_summary_supports_copilot_assistant_messages() {
-        let jsonl = r#"{"type":"assistant.message","data":{"content":"Created hello.txt"}}
-"#;
-        assert_eq!(extract_summary_from_jsonl(jsonl), "Created hello.txt");
+    fn extract_summary_supports_assistant_message_payloads() {
+        let jsonl = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"First"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Final summary"}]}}"#;
+        assert_eq!(extract_summary_from_jsonl(jsonl), "Final summary");
     }
 }
