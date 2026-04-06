@@ -76,6 +76,16 @@ impl DefaultRelationalStore {
         Self::open_local_for_roots(repo_root, repo_root)
     }
 
+    pub fn open_local_for_backend_config(
+        repo_root: &Path,
+        relational: &RelationalBackendConfig,
+    ) -> Result<Self> {
+        let path = relational
+            .resolve_sqlite_db_path_for_repo(repo_root)
+            .context("resolving sqlite path for relational store")?;
+        Ok(Self::local_only(path))
+    }
+
     pub fn open_local_for_roots(config_root: &Path, repo_root: &Path) -> Result<Self> {
         let backends = resolve_store_backend_config_for_repo(config_root)
             .context("resolving backend config for relational store")?;

@@ -190,8 +190,11 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         if self.backends.relational.has_postgres() {
             return Ok(());
         }
-        let relational = DefaultRelationalStore::open_local_for_repo_root(self.repo_root)
-            .context("opening local relational store for DevQL DDL")?;
+        let relational = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root,
+            &self.backends.relational,
+        )
+        .context("opening local relational store for DevQL DDL")?;
         relational.execute_local_sqlite_batch_allow_create(sql)
     }
 }
