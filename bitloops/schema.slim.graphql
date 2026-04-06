@@ -22,7 +22,7 @@ type Artefact {
 	symbolId: String!
 	path: String!
 	language: String!
-	canonicalKind: CanonicalKind!
+	canonicalKind: CanonicalKind
 	languageKind: String
 	symbolFqn: String
 	parentArtefactId: ID
@@ -789,6 +789,8 @@ type TestHarnessCoveringTest {
 	testName: String!
 	suiteName: String
 	filePath: String!
+	startLine: Int!
+	endLine: Int!
 	confidence: Float!
 	discoverySource: String!
 	linkageSource: String!

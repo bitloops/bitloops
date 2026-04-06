@@ -450,6 +450,8 @@ pub struct StageCoveringTestRecord {
     pub test_name: String,
     pub suite_name: Option<String>,
     pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
     pub confidence: f64,
     pub discovery_source: String,
     pub linkage_source: String,
