@@ -3,8 +3,8 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use bitloops::adapters::agents::AGENT_NAME_CLAUDE_CODE;
 use bitloops::config::settings::load_settings;
 use bitloops::config::{
-    resolve_duckdb_db_path_for_repo,
-    resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
+    resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
+    resolve_store_backend_config_for_repo,
 };
 use bitloops::daemon::resolve_daemon_config;
 use bitloops::host::checkpoints::session::create_session_backend_or_local;

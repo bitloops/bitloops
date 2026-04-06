@@ -22,7 +22,7 @@ type Artefact {
 	symbolId: String!
 	path: String!
 	language: String!
-	canonicalKind: CanonicalKind!
+	canonicalKind: CanonicalKind
 	languageKind: String
 	symbolFqn: String
 	parentArtefactId: ID

@@ -1103,10 +1103,12 @@ fn resolve_qat_sync_state_path(world: &QatWorld) -> Result<std::path::PathBuf> {
     )
 }
 
+type CompletedHeadTasks = (String, std::path::PathBuf, Vec<(String, QatSyncTaskSummarySnapshot)>);
+
 fn completed_tasks_for_current_head(
     world: &QatWorld,
     repo_name: &str,
-) -> Result<(String, std::path::PathBuf, Vec<(String, QatSyncTaskSummarySnapshot)>)> {
+) -> Result<CompletedHeadTasks> {
     ensure_bitloops_repo_name(repo_name)?;
     let head_output = run_command_capture(
         world,
