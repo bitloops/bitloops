@@ -546,7 +546,9 @@ impl EmptyFallback for String {
 mod tests {
     use super::*;
     use crate::cli::explain::RewindPoint;
+    use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
     use crate::config::settings::{self, BitloopsSettings};
+    use crate::test_support::git_fixtures::write_test_daemon_config;
     use crate::test_support::process_state::with_env_var;
     use tempfile::TempDir;
 
@@ -845,6 +847,9 @@ mod tests {
     #[test]
     fn helper_paths_tolerate_missing_session_state() {
         let repo = init_git_repo();
+        let config_root = TempDir::new().expect("temp daemon config");
+        let config_path = write_test_daemon_config(config_root.path());
+        let config_path_string = config_path.to_string_lossy().to_string();
         let sqlite_path = crate::utils::paths::default_relational_db_path(repo.path());
         let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
             .expect("create sqlite database");
@@ -860,8 +865,14 @@ mod tests {
         let preserved = load_preserved_untracked_files(repo.path(), &point);
         assert!(preserved.is_empty());
 
-        reset_shadow_branch_to_checkpoint(repo.path(), &point)
-            .expect("missing session backend state should be a no-op");
+        with_env_var(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(config_path_string.as_str()),
+            || {
+                reset_shadow_branch_to_checkpoint(repo.path(), &point)
+                    .expect("missing session backend state should be a no-op");
+            },
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ fn isolated_executor_repo_root() -> PathBuf {
 fn executor_test_cfg() -> DevqlConfig {
     let repo_root = isolated_executor_repo_root();
     DevqlConfig {
-        config_root: repo_root.clone(),
+        daemon_config_root: repo_root.clone(),
         repo_root,
         repo: RepoIdentity {
             provider: "local".to_string(),
@@ -45,7 +45,7 @@ fn executor_events_cfg() -> EventsBackendConfig {
 
 fn executor_test_cfg_for_repo_root(repo_root: PathBuf) -> DevqlConfig {
     let mut cfg = executor_test_cfg();
-    cfg.config_root = repo_root.clone();
+    cfg.daemon_config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     cfg
 }

@@ -20,7 +20,7 @@ fn isolated_test_repo_root() -> PathBuf {
 fn test_cfg() -> DevqlConfig {
     let repo_root = isolated_test_repo_root();
     DevqlConfig {
-        config_root: repo_root.clone(),
+        daemon_config_root: repo_root.clone(),
         repo_root,
         repo: RepoIdentity {
             provider: "github".to_string(),
@@ -189,7 +189,7 @@ async fn checkpoint_provenance_projection_is_idempotent_for_commit_diff_rows() {
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 
     let mut cfg = test_cfg();
-    cfg.config_root = repo.path().to_path_buf();
+    cfg.daemon_config_root = repo.path().to_path_buf();
     cfg.repo_root = repo.path().to_path_buf();
     cfg.repo = resolve_repo_identity(repo.path()).expect("resolve repo identity");
 

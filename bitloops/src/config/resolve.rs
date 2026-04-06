@@ -130,10 +130,14 @@ pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBa
 
 pub fn resolve_repo_runtime_db_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
     let config_root = resolve_daemon_config_root_for_repo(repo_root)?;
-    Ok(config_root
+    Ok(resolve_repo_runtime_db_path_for_config_root(&config_root))
+}
+
+pub fn resolve_repo_runtime_db_path_for_config_root(config_root: &Path) -> PathBuf {
+    config_root
         .join("stores")
         .join("runtime")
-        .join("runtime.sqlite"))
+        .join("runtime.sqlite")
 }
 
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {

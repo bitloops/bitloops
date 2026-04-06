@@ -1,7 +1,10 @@
 use super::*;
+use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
 use crate::host::checkpoints::transcript::metadata::{
     extract_summary_from_jsonl, extract_user_prompts_from_jsonl,
 };
+use crate::test_support::git_fixtures::write_test_daemon_config;
+use crate::test_support::process_state::with_env_var;
 
 #[test]
 pub(crate) fn extract_user_prompts_supports_nested_message_and_human_type() {
@@ -26,17 +29,26 @@ pub(crate) fn extract_summary_supports_nested_message_content() {
 #[test]
 pub(crate) fn write_session_metadata_writes_prompt_and_summary_for_nested_claude_jsonl() {
     let dir = tempfile::tempdir().unwrap();
+    let config_root = tempfile::tempdir().unwrap();
+    let config_path = write_test_daemon_config(config_root.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
     let transcript_path = dir.path().join("transcript.jsonl");
     let jsonl = r#"{"type":"user","message":{"content":[{"type":"text","text":"Create test file"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Created test file"}]}}"#;
     fs::write(&transcript_path, jsonl).unwrap();
 
-    let written = write_session_metadata(
-        dir.path(),
-        "session-nested",
-        &transcript_path.to_string_lossy(),
-    )
-    .unwrap();
+    let written = with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            write_session_metadata(
+                dir.path(),
+                "session-nested",
+                &transcript_path.to_string_lossy(),
+            )
+            .unwrap()
+        },
+    );
     assert!(
         written.contains(
             &".bitloops/checkpoint-artifacts/sessions/session-nested/prompt.txt".to_string()
@@ -50,8 +62,14 @@ pub(crate) fn write_session_metadata_writes_prompt_and_summary_for_nested_claude
         "summary.txt should be part of written metadata files: {written:?}"
     );
 
-    let bundle = read_session_metadata_bundle(dir.path(), "session-nested")
-        .expect("session metadata bundle should be persisted in runtime store");
+    let bundle = with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            read_session_metadata_bundle(dir.path(), "session-nested")
+                .expect("session metadata bundle should be persisted in runtime store")
+        },
+    );
     let prompt = bundle.prompt_text();
     let summary = bundle.summary;
 

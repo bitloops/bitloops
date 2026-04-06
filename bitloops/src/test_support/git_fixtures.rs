@@ -35,10 +35,12 @@ pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
         .expect("resolve test blob path")
 }
 
-#[allow(dead_code)]
-pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
-    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let config_contents = r#"[stores.relational]
+pub(crate) fn write_test_daemon_config(config_root: &Path) -> PathBuf {
+    let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config_contents = r#"[runtime]
+local_dev = false
+
+[stores.relational]
 sqlite_path = "stores/relational/relational.db"
 
 [stores.events]
@@ -48,6 +50,12 @@ duckdb_path = "stores/event/events.duckdb"
 local_path = "stores/blob"
 "#;
     std::fs::write(&config_path, config_contents).expect("write test daemon config");
+    config_path
+}
+
+#[allow(dead_code)]
+pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
+    write_test_daemon_config(repo_root);
 
     let backends = resolve_store_backend_config_for_repo(repo_root).expect("resolve test stores");
 

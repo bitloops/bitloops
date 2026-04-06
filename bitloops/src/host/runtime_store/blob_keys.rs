@@ -2,8 +2,6 @@ use crate::utils::paths;
 use crate::utils::paths::TRANSCRIPT_FILE_NAME;
 
 use super::types::{RuntimeMetadataBlobType, TaskCheckpointArtefact};
-use super::util::sha256_hex;
-
 pub(crate) fn session_snapshot_blob_key(
     repo_id: &str,
     session_id: &str,
@@ -43,17 +41,5 @@ pub(crate) fn task_artefact_blob_key(repo_id: &str, artefact: &TaskCheckpointArt
     format!(
         "runtime/{repo_id}/task-checkpoint-artefacts/{}/{}/{}/{}",
         artefact.session_id, artefact.tool_use_id, artefact.artefact_id, file_name
-    )
-}
-
-pub(crate) fn parse_incremental_sequence_from_name(name: &str) -> Option<u32> {
-    name.split('-').next()?.parse::<u32>().ok()
-}
-
-/// Stable id for legacy-imported paths (tests assert deterministic removal of legacy dirs).
-pub(crate) fn legacy_id_from_path(path: &std::path::Path) -> String {
-    format!(
-        "legacy-{}",
-        &sha256_hex(path.to_string_lossy().as_bytes())[..16]
     )
 }

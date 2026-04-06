@@ -131,6 +131,15 @@ ON task_checkpoint_artefacts (
     is_incremental,
     incremental_sequence
 );
+
+CREATE TABLE IF NOT EXISTS repo_watcher_registrations (
+    repo_id TEXT PRIMARY KEY,
+    repo_root TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    restart_token TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 "#;
 
 const CHECKPOINT_RELATIONAL_SCHEMA_SQL_SQLITE: &str = r#"

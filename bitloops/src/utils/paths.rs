@@ -582,13 +582,17 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         let result = bitloops_project_root(&app_dir).unwrap();
         assert_eq!(
             canonical(&result),
             canonical(&app_dir),
-            "should find nearest .bitloops at packages/app, not git root"
+            "should find nearest repo policy at packages/app, not git root"
         );
     }
 
@@ -604,7 +608,7 @@ mod tests {
         assert_eq!(
             canonical(&result),
             canonical(root.path()),
-            "should fall back to git root when no .bitloops marker"
+            "should fall back to git root when no repo policy marker"
         );
     }
 
@@ -614,7 +618,11 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
         let deep_dir = app_dir.join("src/components");
         fs::create_dir_all(&deep_dir).unwrap();
 
@@ -631,15 +639,23 @@ mod tests {
         let root = tempdir().expect("create monorepo root");
         init_git_repo(root.path());
 
-        fs::create_dir_all(root.path().join(".bitloops")).unwrap();
+        fs::write(
+            root.path().join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         let result = bitloops_project_root(&app_dir).unwrap();
         assert_eq!(
             canonical(&result),
             canonical(&app_dir),
-            "should prefer nearest .bitloops over git-root .bitloops"
+            "should prefer nearest repo policy over git-root policy"
         );
     }
 
@@ -649,7 +665,11 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         with_cwd(&app_dir, || {
             clear_repo_root_cache();
@@ -667,7 +687,11 @@ mod tests {
         let root = tempdir().expect("create single repo");
         init_git_repo(root.path());
 
-        fs::create_dir_all(root.path().join(".bitloops")).unwrap();
+        fs::write(
+            root.path().join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         let result = bitloops_project_root(root.path()).unwrap();
         assert_eq!(

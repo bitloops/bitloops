@@ -223,9 +223,11 @@ fn is_valid_cleanup_id(id: &str) -> bool {
 #[allow(non_snake_case)]
 mod tests {
     use super::{CleanupItem, CleanupType, run_clean, run_clean_with_items};
+    use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
     use crate::host::checkpoints::session::state::SessionState;
     use crate::storage::SqliteConnectionPool;
+    use crate::test_support::git_fixtures::write_test_daemon_config;
     use crate::test_support::process_state::{git_command, with_process_state};
     use std::io::Cursor;
     use std::path::Path;
@@ -245,11 +247,31 @@ mod tests {
     }
 
     fn with_legacy_local_backend<T>(f: impl FnOnce() -> T) -> T {
-        f()
+        let config_dir = TempDir::new().expect("temp daemon config");
+        let config_path = write_test_daemon_config(config_dir.path());
+        let config_path_string = config_path.to_string_lossy().to_string();
+        with_process_state(
+            None,
+            &[(
+                ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+                Some(config_path_string.as_str()),
+            )],
+            f,
+        )
     }
 
     fn with_legacy_local_backend_at<T>(cwd: &Path, f: impl FnOnce() -> T) -> T {
-        with_process_state(Some(cwd), &[], f)
+        let config_dir = TempDir::new().expect("temp daemon config");
+        let config_path = write_test_daemon_config(config_dir.path());
+        let config_path_string = config_path.to_string_lossy().to_string();
+        with_process_state(
+            Some(cwd),
+            &[(
+                ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+                Some(config_path_string.as_str()),
+            )],
+            f,
+        )
     }
 
     fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {

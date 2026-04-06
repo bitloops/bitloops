@@ -375,7 +375,7 @@ pub struct SyncTaskRecord {
     pub repo_provider: String,
     pub repo_organisation: String,
     pub repo_identity: String,
-    pub config_root: PathBuf,
+    pub daemon_config_root: PathBuf,
     pub repo_root: PathBuf,
     pub source: SyncTaskSource,
     pub mode: SyncTaskMode,

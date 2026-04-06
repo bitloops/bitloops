@@ -24,6 +24,14 @@ pub struct RepoSqliteRuntimeStore {
     pub(crate) db_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoWatcherRegistration {
+    pub repo_id: String,
+    pub repo_root: PathBuf,
+    pub pid: u32,
+    pub restart_token: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct DaemonSqliteRuntimeStore {
     pub(crate) db_path: PathBuf,
