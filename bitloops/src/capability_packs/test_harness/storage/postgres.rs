@@ -105,8 +105,7 @@ impl PostgresTestHarnessRepository {
 }
 
 impl TestHarnessRepository for PostgresTestHarnessRepository {
-    fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
-        let commit_sha = commit_sha.to_string();
+    fn load_test_scenarios(&self, _commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
         self.with_client(move |client| {
             Box::pin(async move {
                 let rows = client
@@ -117,11 +116,10 @@ FROM test_artefacts_current ts
 LEFT JOIN test_artefacts_current parent
   ON parent.repo_id = ts.repo_id
  AND parent.symbol_id = ts.parent_symbol_id
-WHERE ts.commit_sha = $1
-  AND ts.canonical_kind = 'test_scenario'
+WHERE ts.canonical_kind = 'test_scenario'
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
-                        &[&commit_sha],
+                        &[],
                     )
                     .await
                     .context("failed querying test scenarios")?;
