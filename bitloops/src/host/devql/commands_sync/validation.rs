@@ -58,10 +58,8 @@ pub(crate) async fn execute_sync_validation(
     init_sqlite_schema(&sqlite_path)
         .await
         .context("initialising temporary SQLite schema for sync validation")?;
-    let expected_store = crate::host::relational_store::DefaultRelationalStore::local_only(
-        sqlite_path,
-    )
-    .into_inner();
+    let expected_store =
+        crate::host::relational_store::DefaultRelationalStore::local_only(sqlite_path).into_inner();
     let expected_projection =
         super::orchestrator::execute_sync(cfg, &expected_store, sync::types::SyncMode::Full)
             .await?;

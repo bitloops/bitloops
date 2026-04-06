@@ -817,10 +817,8 @@ mod tests {
             "SqliteConnectionPool::connect_existing(",
             "rusqlite::Connection::open_with_flags(",
         ];
-        let allowed_relational_internal_modules = [
-            "host/relational_store.rs",
-            "host/devql/types.rs",
-        ];
+        let allowed_relational_internal_modules =
+            ["host/relational_store.rs", "host/devql/types.rs"];
         let banned_relational_internal_patterns = [".local.path", "RelationalStorage::local_only("];
 
         for file in files {
