@@ -22,9 +22,12 @@ In a packaged release, both CLIs should be installed together. In a source check
 
 ```bash
 cargo build
-cargo install --path bitloops --force
+cargo dev-install
 cargo install --path bitloops-embeddings --force
 ```
+
+On macOS, prefer `cargo dev-install` over plain `cargo install --path bitloops --force` so the
+DuckDB runtime is staged correctly for the installed `bitloops` binary.
 
 ## Config Location
 
@@ -127,6 +130,12 @@ The easiest user-facing proof that embeddings were written and used is a clone q
 
 ```bash
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.6)->limit(5)'
+```
+
+If you need the low-level clone payload for debugging, add `raw:true`:
+
+```bash
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.6,raw:true)->limit(5)'
 ```
 
 ## Useful Commands

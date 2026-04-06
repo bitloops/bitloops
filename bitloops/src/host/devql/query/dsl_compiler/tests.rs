@@ -94,6 +94,82 @@ fn compile_file_artefacts_with_chat_history_enrichment() {
 }
 
 #[test]
+fn compile_artefact_clones_pipeline_uses_user_facing_default_selection() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.8)->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          clones(filter: { minScore: 0.8 }, first: 10) {
+            edges {
+              node {
+                relationKind
+                score
+                sourceArtefact {
+                  path
+                  symbolFqn
+                }
+                targetArtefact {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_artefact_clones_pipeline_keeps_raw_mode_opt_in() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",raw:true)->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          clones(filter: { relationKind: "similar_implementation" }, first: 10) {
+            edges {
+              node {
+                id
+                sourceArtefactId
+                targetArtefactId
+                relationKind
+                score
+                metadata
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_project_deps_pipeline() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->project("packages/api")->deps(kind:"imports",direction:"out")->limit(100)"#,

@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6)->limit(5)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6,raw:true)->limit(5)"#,
     )
     .unwrap();
 
@@ -13,6 +13,7 @@ fn parse_devql_clones_stage_basic() {
         Some("similar_implementation")
     );
     assert_eq!(parsed.clones.min_score, Some(0.6));
+    assert!(parsed.clones.raw);
 }
 
 #[tokio::test]

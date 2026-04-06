@@ -8,10 +8,13 @@ pub async fn run_query(
     raw_graphql: bool,
 ) -> Result<()> {
     let use_raw_graphql = use_raw_graphql_mode(query, raw_graphql);
+    let parsed = (!use_raw_graphql)
+        .then(|| parse_devql_query(query))
+        .transpose()?;
     let document = compile_query_document(query, raw_graphql)?;
     let data =
         crate::graphql::execute_in_process(cfg.repo_root.clone(), &document, json!({})).await?;
-    let output = format_query_output(&data, compact, use_raw_graphql)?;
+    let output = format_query_output(&data, compact, use_raw_graphql, parsed.as_ref())?;
     println!("{output}");
 
     Ok(())
@@ -91,6 +94,7 @@ pub(crate) fn format_query_output(
     data: &Value,
     compact: bool,
     raw_graphql: bool,
+    parsed: Option<&ParsedDevqlQuery>,
 ) -> Result<String> {
     if raw_graphql {
         return if compact {
@@ -100,7 +104,7 @@ pub(crate) fn format_query_output(
         };
     }
 
-    let payload = extract_cli_payload(data);
+    let payload = transform_cli_payload(extract_cli_payload(data), parsed);
     if compact {
         return Ok(serde_json::to_string(&payload)?);
     }
@@ -138,6 +142,104 @@ fn extract_connection_nodes(map: &serde_json::Map<String, Value>) -> Option<Vec<
         .iter()
         .map(|edge| edge.as_object()?.get("node").cloned())
         .collect()
+}
+
+fn transform_cli_payload(payload: Value, parsed: Option<&ParsedDevqlQuery>) -> Value {
+    let Some(parsed) = parsed else {
+        return payload;
+    };
+
+    if parsed.has_clones_stage {
+        return flatten_clone_payload(payload, parsed.clones.raw);
+    }
+
+    payload
+}
+
+fn flatten_clone_payload(payload: Value, raw: bool) -> Value {
+    let Value::Array(rows) = payload else {
+        return payload;
+    };
+
+    let flattened = rows
+        .into_iter()
+        .flat_map(|row| {
+            if let Some(nodes) = extract_nested_clone_nodes(&row) {
+                nodes
+                    .into_iter()
+                    .map(|node| if raw { node } else { present_clone_row(node) })
+                    .collect::<Vec<_>>()
+            } else if raw {
+                vec![row]
+            } else {
+                vec![present_clone_row(row)]
+            }
+        })
+        .collect();
+
+    Value::Array(flattened)
+}
+
+fn extract_nested_clone_nodes(row: &Value) -> Option<Vec<Value>> {
+    let clones = row.as_object()?.get("clones")?.as_object()?;
+    extract_connection_nodes(clones)
+}
+
+fn present_clone_row(row: Value) -> Value {
+    let Some(row_obj) = row.as_object() else {
+        return row;
+    };
+
+    let from = clone_artefact_label(row_obj.get("sourceArtefact"))
+        .or_else(|| clone_string_field(row_obj.get("sourceArtefactId")));
+    let to = clone_artefact_label(row_obj.get("targetArtefact"))
+        .or_else(|| clone_string_field(row_obj.get("targetArtefactId")));
+    let relation_kind = row_obj.get("relationKind").cloned();
+    let score = row_obj.get("score").cloned();
+
+    if from.is_none() && to.is_none() && relation_kind.is_none() && score.is_none() {
+        return row;
+    }
+
+    let mut presented = serde_json::Map::new();
+    if let Some(from) = from {
+        presented.insert("from".to_string(), Value::String(from));
+    }
+    if let Some(to) = to {
+        presented.insert("to".to_string(), Value::String(to));
+    }
+    if let Some(relation_kind) = relation_kind {
+        presented.insert("relationKind".to_string(), relation_kind);
+    }
+    if let Some(score) = score {
+        presented.insert("score".to_string(), score);
+    }
+
+    Value::Object(presented)
+}
+
+fn clone_artefact_label(value: Option<&Value>) -> Option<String> {
+    let artefact = value?.as_object()?;
+
+    artefact
+        .get("symbolFqn")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            artefact
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn clone_string_field(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn render_cli_payload(payload: &Value) -> Result<String> {
@@ -486,6 +588,7 @@ mod tests {
             }),
             false,
             false,
+            None,
         )
         .expect("dsl results should render");
 
@@ -515,6 +618,7 @@ mod tests {
             }),
             true,
             false,
+            None,
         )
         .expect("compact output should render");
 
@@ -542,10 +646,136 @@ mod tests {
             }),
             false,
             true,
+            None,
         )
         .expect("raw graphql should render as json");
 
         assert!(rendered.contains("\"pageInfo\""));
         assert!(rendered.contains("\"hasNextPage\": false"));
+    }
+
+    #[test]
+    fn format_query_output_flattens_clone_results_to_user_facing_rows() {
+        let parsed = parse_devql_query(
+            r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->limit(5)"#,
+        )
+        .expect("query parses");
+
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "artefacts": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "clones": {
+                                        "edges": [
+                                            {
+                                                "node": {
+                                                    "relationKind": "similar_implementation",
+                                                    "score": 0.91,
+                                                    "sourceArtefact": {
+                                                        "path": "src/pdf.ts",
+                                                        "symbolFqn": "src/pdf.ts::createInvoicePdf"
+                                                    },
+                                                    "targetArtefact": {
+                                                        "path": "src/render.ts",
+                                                        "symbolFqn": "src/render.ts::renderInvoiceDocument"
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+            true,
+            false,
+            Some(&parsed),
+        )
+        .expect("clone output should render");
+
+        let value: Value = serde_json::from_str(&rendered).expect("compact clone output is json");
+        assert_eq!(
+            value,
+            json!([
+                {
+                    "from": "src/pdf.ts::createInvoicePdf",
+                    "to": "src/render.ts::renderInvoiceDocument",
+                    "relationKind": "similar_implementation",
+                    "score": 0.91
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn format_query_output_keeps_clone_raw_mode_opted_in() {
+        let parsed = parse_devql_query(
+            r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(raw:true)->limit(5)"#,
+        )
+        .expect("query parses");
+
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "artefacts": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "clones": {
+                                        "edges": [
+                                            {
+                                                "node": {
+                                                    "id": "clone::a::b::similar_implementation",
+                                                    "sourceArtefactId": "artefact::invoice_pdf",
+                                                    "targetArtefactId": "artefact::invoice_doc",
+                                                    "relationKind": "similar_implementation",
+                                                    "score": 0.91,
+                                                    "metadata": {
+                                                        "semanticScore": 0.95,
+                                                        "explanation": {
+                                                            "labels": ["similar_implementation"]
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+            true,
+            false,
+            Some(&parsed),
+        )
+        .expect("raw clone output should render");
+
+        let value: Value =
+            serde_json::from_str(&rendered).expect("compact raw clone output is json");
+        assert_eq!(
+            value,
+            json!([
+                {
+                    "id": "clone::a::b::similar_implementation",
+                    "sourceArtefactId": "artefact::invoice_pdf",
+                    "targetArtefactId": "artefact::invoice_doc",
+                    "relationKind": "similar_implementation",
+                    "score": 0.91,
+                    "metadata": {
+                        "semanticScore": 0.95,
+                        "explanation": {
+                            "labels": ["similar_implementation"]
+                        }
+                    }
+                }
+            ])
+        );
     }
 }
