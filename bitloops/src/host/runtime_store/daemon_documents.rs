@@ -117,7 +117,7 @@ impl DaemonSqliteRuntimeStore {
     }
 
     pub fn load_sync_queue_state(&self) -> Result<Option<PersistedSyncQueueState>> {
-        let mut state =
+        let mut state: Option<PersistedSyncQueueState> =
             self.load_document(document_key_sync_state(), Some(sync_state_legacy_path()))?;
         if let Some(state) = state.as_mut() {
             state.normalise_legacy_values();
