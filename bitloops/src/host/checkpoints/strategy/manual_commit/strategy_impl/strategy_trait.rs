@@ -1,6 +1,6 @@
 use super::*;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
-use crate::host::interactions::event_sink::create_event_repository;
+use crate::host::interactions::interaction_repository::create_interaction_repository;
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 
 // ── Strategy trait impl ───────────────────────────────────────────────────────
@@ -365,8 +365,9 @@ impl Strategy for ManualCommitStrategy {
             .as_ref()
             .map(|spool| spool as &dyn InteractionSpool);
         let spool_pending_work = interaction_spool_ref.is_some_and(spool_has_pending_work);
-        let interaction_repository = match resolve_event_repository_for_post_commit(&self.repo_root)
-        {
+        let interaction_repository = match resolve_interaction_repository_for_post_commit(
+            &self.repo_root,
+        ) {
             Ok(repository) => repository,
             Err(err) => {
                 let context = format_post_commit_derivation_context(
@@ -647,15 +648,15 @@ impl ManualCommitStrategy {
     }
 }
 
-fn resolve_event_repository_for_post_commit(
+fn resolve_interaction_repository_for_post_commit(
     repo_root: &Path,
-) -> Result<impl InteractionEventRepository> {
+) -> Result<impl InteractionEventRepository + use<>> {
     let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving store backend config for interaction event repository")?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for interaction event repository")?
         .repo_id;
-    create_event_repository(&backends.events, repo_root, repo_id)
+    create_interaction_repository(&backends.events, repo_root, repo_id)
 }
 
 fn spool_has_pending_work(spool: &dyn InteractionSpool) -> bool {

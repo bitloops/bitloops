@@ -203,6 +203,7 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
             }
         }),
     );
+    let _guard = enter_process_state(None, &[]);
 
     let cfg = resolve_store_backend_config_for_repo(temp.path()).expect("store backend config");
     assert!(!cfg.relational.has_postgres());
