@@ -190,26 +190,19 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
         };
         conn.execute(
             "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
-                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, '2026-03-26T09:00:00Z'
+                ?1, ?2, ?3, 'typescript', ?4,
+                ?5, ?6, NULL, ?7, ?8, ?9, '2026-03-26T09:00:00Z'
             )",
             rusqlite::params![
                 artefact_id,
                 symbol_id,
                 repo_id.as_str(),
-                blob_sha,
-                path,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                end_line * 10,
                 if canonical_kind == "file" {
                     "[]"
                 } else {
@@ -224,6 +217,26 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
             ],
         )
         .expect("insert artefact row");
+        conn.execute(
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, 0, ?8, '2026-03-26T09:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                blob_sha,
+                path,
+                artefact_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert artefact snapshot row");
         conn.execute(
             "INSERT INTO artefacts_current (
                 repo_id, path, content_id, symbol_id, artefact_id,

@@ -2,13 +2,14 @@ use anyhow::{Result, bail};
 
 use super::args::{
     compile_artefact_args, compile_checkpoint_args, compile_clone_summary_args,
-    compile_clones_args, compile_coverage_args, compile_deps_args, compile_knowledge_args,
-    compile_telemetry_args, compile_tests_args, connection_field, first_arg,
+    compile_clones_args, compile_coverage_args, compile_deps_args, compile_deps_summary_args,
+    compile_knowledge_args, compile_telemetry_args, compile_tests_args, connection_field,
+    first_arg,
 };
 use super::document_builder::{GraphqlArgument, GraphqlField};
 use super::field_mapping::{
     KNOWLEDGE_STAGE_NAME, SelectableLeaf, clone_result_selections, clone_summary_selections,
-    compile_as_of_input, coverage_result_selections, quote_graphql_string,
+    compile_as_of_input, coverage_result_selections, deps_summary_selections, quote_graphql_string,
     scalar_selections_for_leaf, tests_result_selections, tests_summary_result_selections,
 };
 use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall, RegisteredStageKind};
@@ -61,6 +62,11 @@ pub(super) fn compile_project_stage_leaf(
     match registered_stage {
         RegisteredStageKind::CloneSummary => {
             bail!("summary() is not a project-level registered stage in the GraphQL compiler")
+        }
+        RegisteredStageKind::DepsSummary(_) => {
+            bail!(
+                "summary(deps:true, ...) is not a project-level registered stage in the GraphQL compiler"
+            )
         }
         RegisteredStageKind::Tests(stage) => Ok(GraphqlField::new(
             "tests",
@@ -197,6 +203,14 @@ fn compile_artefacts_leaf(
             RegisteredStageKind::CloneSummary => {
                 bail!("summary() cannot be nested under artefacts() in the GraphQL compiler")
             }
+            RegisteredStageKind::DepsSummary(spec) => node_selections.push(
+                GraphqlField::new(
+                    "depsSummary",
+                    compile_deps_summary_args(spec),
+                    deps_summary_selections(),
+                )
+                .into(),
+            ),
             RegisteredStageKind::TestsSummary => {
                 bail!("test_harness_tests_summary() cannot be nested under artefacts()")
             }

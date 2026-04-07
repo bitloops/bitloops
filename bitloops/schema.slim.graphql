@@ -40,6 +40,7 @@ type Artefact {
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	depsSummary(filter: DepsSummaryFilterInput): DepsSummary!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
@@ -299,6 +300,28 @@ input DepsFilterInput {
 	includeUnresolved: Boolean! = false
 }
 
+type DepsSummary {
+	totalCount: Int!
+	incomingCount: Int!
+	outgoingCount: Int!
+	kindCounts: DepsSummaryKindCounts!
+}
+
+input DepsSummaryFilterInput {
+	kind: EdgeKind
+	direction: DepsDirection
+	unresolved: Boolean! = false
+}
+
+type DepsSummaryKindCounts {
+	imports: Int!
+	calls: Int!
+	references: Int!
+	extends: Int!
+	implements: Int!
+	exports: Int!
+}
+
 enum EdgeKind {
 	IMPORTS
 	CALLS
@@ -509,7 +532,7 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest(input: IngestInput!): IngestResult!
+	ingest(input: IngestInput): IngestResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!

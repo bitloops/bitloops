@@ -10,8 +10,9 @@ use crate::graphql::{
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
     CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult,
-    TestHarnessTestsResult, paginate_items,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
+    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -294,6 +295,52 @@ impl Artefact {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[graphql(name = "depsSummary")]
+    async fn deps_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<DepsSummaryFilterInput>,
+    ) -> Result<DepsSummary> {
+        let filter = filter.unwrap_or_default();
+        let direction = filter.direction.unwrap_or(DepsDirection::Both);
+        let deps_filter = DepsFilterInput {
+            kind: filter.kind,
+            direction,
+            include_unresolved: filter.unresolved,
+        };
+
+        let loaders = ctx.data_unchecked::<DataLoaders>();
+        let outgoing = if matches!(direction, DepsDirection::Out | DepsDirection::Both) {
+            loaders
+                .load_outgoing_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve outgoing dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
+
+        let incoming = if matches!(direction, DepsDirection::In | DepsDirection::Both) {
+            loaders
+                .load_incoming_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve incoming dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
+
+        Ok(DepsSummary::from_edges(&incoming, &outgoing))
     }
 
     async fn clones(
