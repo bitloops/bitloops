@@ -342,29 +342,6 @@ fn write_transcript(path: &Path, prompt: &str, response: &str) {
     append_transcript(path, &payload);
 }
 
-fn write_transcript_with_tool_use(
-    path: &Path,
-    prompt: &str,
-    response: &str,
-    tool_name: &str,
-    file_path: &str,
-) {
-    let user_uuid = next_transcript_uuid("user");
-    let assistant_uuid = next_transcript_uuid("assistant");
-    let payload = format!(
-        r#"{{"type":"user","uuid":{user_uuid_json},"message":{{"content":[{{"type":"text","text":{prompt_json}}}]}}}}
-{{"type":"assistant","uuid":{assistant_uuid_json},"message":{{"content":[{{"type":"tool_use","name":{tool_name_json},"input":{{"file_path":{file_path_json}}}}},{{"type":"text","text":{response_json}}}]}}}}
-"#,
-        prompt_json = serde_json::to_string(prompt).unwrap(),
-        response_json = serde_json::to_string(response).unwrap(),
-        tool_name_json = serde_json::to_string(tool_name).unwrap(),
-        file_path_json = serde_json::to_string(file_path).unwrap(),
-        user_uuid_json = serde_json::to_string(&user_uuid).unwrap(),
-        assistant_uuid_json = serde_json::to_string(&assistant_uuid).unwrap(),
-    );
-    append_transcript(path, &payload);
-}
-
 fn append_transcript(path: &Path, payload: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();

@@ -4,7 +4,7 @@ use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::session::phase::SessionPhase;
 use bitloops::host::checkpoints::session::state::{PrePromptState, SessionState};
 use bitloops::host::checkpoints::strategy::manual_commit::{
-    read_commit_checkpoint_mappings, read_committed, read_session_content,
+    read_commit_checkpoint_mappings, read_committed,
 };
 use serde_json::Value;
 use std::env;
@@ -100,12 +100,6 @@ fn run_git_output(repo: &Path, args: &[&str]) -> Output {
     cmd.args(args).current_dir(repo).env("PATH", path);
     test_command_support::apply_repo_app_env(&mut cmd, repo);
     cmd.output().expect("failed to run git")
-}
-
-fn git_ref_exists(repo: &Path, reference: &str) -> bool {
-    run_git_output(repo, &["show-ref", "--verify", "--quiet", reference])
-        .status
-        .success()
 }
 
 fn ensure_relational_store_file(repo_root: &Path) {
@@ -215,16 +209,6 @@ fn committed_summary(repo: &Path, checkpoint_id: &str) -> Option<serde_json::Val
         read_committed(repo, checkpoint_id)
             .expect("reading committed checkpoint should succeed")
             .map(|summary| serde_json::to_value(summary).expect("serialize committed summary"))
-    })
-}
-
-fn committed_content(repo: &Path, checkpoint_id: &str, session_index: usize) -> serde_json::Value {
-    test_command_support::with_repo_app_env(repo, || {
-        serde_json::to_value(
-            read_session_content(repo, checkpoint_id, session_index)
-                .expect("session content should exist"),
-        )
-        .expect("serialize committed session content")
     })
 }
 

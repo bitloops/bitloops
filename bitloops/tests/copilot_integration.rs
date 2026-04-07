@@ -2,7 +2,6 @@ use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::config::resolve_sqlite_db_path_for_repo;
 use bitloops::config::resolve_store_backend_config_for_repo;
 use bitloops::host::checkpoints::session::create_session_backend_or_local;
-use bitloops::host::checkpoints::session::phase::SessionPhase;
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
@@ -222,10 +221,6 @@ fn run_git_without_hooks_expect_success(
     prefixed_args.extend_from_slice(args);
 
     run_git_expect_success(repo, home, &prefixed_args, context)
-}
-
-fn git_commit_message(repo: &Path, home: &Path, rev: &str) -> String {
-    run_git(repo, home, &["show", "-s", "--format=%B", rev])
 }
 
 fn write_repo_config(repo: &Path) {

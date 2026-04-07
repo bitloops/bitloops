@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
