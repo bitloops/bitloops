@@ -346,6 +346,13 @@ impl EnrichmentCoordinator {
         state
             .active_branch_by_repo
             .insert(target.repo_id.clone(), target.branch.clone());
+        if Self::has_pending_or_running_semantic_jobs(&state, &target.repo_id)
+            || Self::has_pending_or_running_embedding_jobs(&state, &target.repo_id)
+        {
+            state.last_action = Some("defer_clone_edges_rebuild".to_string());
+            self.save_state(&mut state)?;
+            return Ok(());
+        }
         let has_existing = state.jobs.iter().any(|job| {
             job.repo_id == target.repo_id
                 && matches!(
@@ -375,6 +382,32 @@ impl EnrichmentCoordinator {
             self.notify.notify_waiters();
         }
         Ok(())
+    }
+
+    fn has_pending_or_running_semantic_jobs(state: &EnrichmentQueueState, repo_id: &str) -> bool {
+        state.jobs.iter().any(|job| {
+            job.repo_id == repo_id
+                && matches!(
+                    (&job.status, &job.job),
+                    (
+                        EnrichmentJobStatus::Pending | EnrichmentJobStatus::Running,
+                        EnrichmentJobKind::SemanticSummaries { .. }
+                    )
+                )
+        })
+    }
+
+    fn has_pending_or_running_embedding_jobs(state: &EnrichmentQueueState, repo_id: &str) -> bool {
+        state.jobs.iter().any(|job| {
+            job.repo_id == repo_id
+                && matches!(
+                    (&job.status, &job.job),
+                    (
+                        EnrichmentJobStatus::Pending | EnrichmentJobStatus::Running,
+                        EnrichmentJobKind::SymbolEmbeddings { .. }
+                    )
+                )
+        })
     }
 
     fn ensure_state_file(&self) {
@@ -673,7 +706,10 @@ fn build_batch_key(artefact_ids: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::runtime_store::DaemonSqliteRuntimeStore;
     use serde_json::json;
+    use tempfile::TempDir;
+    use tokio::sync::{Mutex, Notify};
 
     fn sample_input() -> semantic_features::SemanticFeatureInput {
         semantic_features::SemanticFeatureInput {
@@ -739,5 +775,175 @@ mod tests {
             }
             other => panic!("expected semantic summaries job, got {other:?}"),
         }
+    }
+
+    fn sample_target(repo_id: &str) -> EnrichmentJobTarget {
+        EnrichmentJobTarget::new(
+            PathBuf::from("/tmp/config"),
+            PathBuf::from("/tmp/repo"),
+            repo_id.to_string(),
+            "main".to_string(),
+        )
+    }
+
+    fn sample_embedding_job(
+        repo_id: &str,
+        status: EnrichmentJobStatus,
+        batch_key: &str,
+    ) -> EnrichmentJob {
+        EnrichmentJob {
+            id: format!("embedding-{batch_key}"),
+            repo_id: repo_id.to_string(),
+            repo_root: PathBuf::from("/tmp/repo"),
+            config_root: PathBuf::from("/tmp/config"),
+            branch: "main".to_string(),
+            status,
+            attempts: 0,
+            error: None,
+            created_at_unix: 1,
+            updated_at_unix: 1,
+            job: EnrichmentJobKind::SymbolEmbeddings {
+                artefact_ids: vec![format!("artefact-{batch_key}")],
+                input_hashes: BTreeMap::from([(
+                    format!("artefact-{batch_key}"),
+                    "hash".to_string(),
+                )]),
+                batch_key: batch_key.to_string(),
+                embedding_mode: SemanticCloneEmbeddingMode::Deterministic,
+            },
+        }
+    }
+
+    fn sample_semantic_job(
+        repo_id: &str,
+        status: EnrichmentJobStatus,
+        batch_key: &str,
+    ) -> EnrichmentJob {
+        EnrichmentJob {
+            id: format!("semantic-{batch_key}"),
+            repo_id: repo_id.to_string(),
+            repo_root: PathBuf::from("/tmp/repo"),
+            config_root: PathBuf::from("/tmp/config"),
+            branch: "main".to_string(),
+            status,
+            attempts: 0,
+            error: None,
+            created_at_unix: 1,
+            updated_at_unix: 1,
+            job: EnrichmentJobKind::SemanticSummaries {
+                artefact_ids: vec![format!("artefact-{batch_key}")],
+                input_hashes: BTreeMap::from([(
+                    format!("artefact-{batch_key}"),
+                    "hash".to_string(),
+                )]),
+                batch_key: batch_key.to_string(),
+                embedding_mode: SemanticCloneEmbeddingMode::Deterministic,
+            },
+        }
+    }
+
+    fn new_test_coordinator(runtime_db_path: PathBuf) -> EnrichmentCoordinator {
+        EnrichmentCoordinator {
+            runtime_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
+                .expect("open test daemon runtime store"),
+            lock: Mutex::new(()),
+            notify: Notify::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn enqueue_clone_edges_rebuild_waits_for_embedding_and_semantic_jobs_to_drain() {
+        let temp = TempDir::new().expect("temp dir");
+        let runtime_db_path = temp.path().join("runtime.sqlite");
+        let coordinator = new_test_coordinator(runtime_db_path);
+        let repo_id = "repo-1";
+
+        let mut initial_state = default_state();
+        initial_state.jobs = vec![
+            sample_semantic_job(repo_id, EnrichmentJobStatus::Pending, "semantic-a"),
+            sample_embedding_job(repo_id, EnrichmentJobStatus::Pending, "embedding-a"),
+            sample_embedding_job(repo_id, EnrichmentJobStatus::Running, "embedding-b"),
+        ];
+        coordinator
+            .runtime_store
+            .save_enrichment_queue_state(&initial_state)
+            .expect("write initial enrichment state");
+
+        coordinator
+            .enqueue_clone_edges_rebuild(
+                sample_target(repo_id),
+                SemanticCloneEmbeddingMode::Deterministic,
+            )
+            .await
+            .expect("defer clone rebuild while embedding producers remain");
+
+        let deferred_state = coordinator
+            .runtime_store
+            .load_enrichment_queue_state()
+            .expect("read deferred state")
+            .expect("state exists");
+        assert!(
+            deferred_state
+                .jobs
+                .iter()
+                .all(|job| !matches!(job.job, EnrichmentJobKind::CloneEdgesRebuild { .. }))
+        );
+        assert_eq!(
+            deferred_state.last_action.as_deref(),
+            Some("defer_clone_edges_rebuild")
+        );
+
+        let mut drained_state = deferred_state.clone();
+        for job in &mut drained_state.jobs {
+            job.status = EnrichmentJobStatus::Completed;
+        }
+        coordinator
+            .runtime_store
+            .save_enrichment_queue_state(&drained_state)
+            .expect("write drained state");
+
+        coordinator
+            .enqueue_clone_edges_rebuild(
+                sample_target(repo_id),
+                SemanticCloneEmbeddingMode::Deterministic,
+            )
+            .await
+            .expect("enqueue clone rebuild after producers drain");
+
+        let enqueued_state = coordinator
+            .runtime_store
+            .load_enrichment_queue_state()
+            .expect("read enqueued state")
+            .expect("state exists");
+        assert_eq!(
+            enqueued_state
+                .jobs
+                .iter()
+                .filter(|job| matches!(job.job, EnrichmentJobKind::CloneEdgesRebuild { .. }))
+                .count(),
+            1
+        );
+
+        coordinator
+            .enqueue_clone_edges_rebuild(
+                sample_target(repo_id),
+                SemanticCloneEmbeddingMode::Deterministic,
+            )
+            .await
+            .expect("dedupe clone rebuild jobs");
+
+        let deduped_state = coordinator
+            .runtime_store
+            .load_enrichment_queue_state()
+            .expect("read deduped state")
+            .expect("state exists");
+        assert_eq!(
+            deduped_state
+                .jobs
+                .iter()
+                .filter(|job| matches!(job.job, EnrichmentJobKind::CloneEdgesRebuild { .. }))
+                .count(),
+            1
+        );
     }
 }

@@ -9,8 +9,10 @@ use crate::capability_packs::semantic_clones::extension_descriptor::{
 use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::capability_packs::semantic_clones::features::SemanticSummaryProviderConfig;
 use crate::capability_packs::semantic_clones::{
-    clear_repo_symbol_embedding_rows, load_semantic_feature_inputs_for_artefacts,
-    load_semantic_summary_snapshot, persist_semantic_summary_row, upsert_symbol_embedding_rows,
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+    determine_repo_embedding_sync_action, load_semantic_feature_inputs_for_artefacts,
+    load_semantic_summary_snapshot, persist_active_embedding_setup, persist_semantic_summary_row,
+    refresh_current_repo_symbol_embeddings_and_clone_edges, upsert_symbol_embedding_rows,
 };
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, SemanticCloneEmbeddingMode,
@@ -205,14 +207,6 @@ async fn execute_embedding_job(
         };
     }
 
-    let current_inputs = match filter_current_inputs(relational, inputs, input_hashes).await {
-        Ok(filtered) => filtered,
-        Err(err) => return JobExecutionOutcome::failed(err),
-    };
-    if current_inputs.is_empty() {
-        return JobExecutionOutcome::ok();
-    }
-
     let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
     let provider_config = EmbeddingProviderConfig {
         daemon_config_path: job.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
@@ -243,6 +237,46 @@ async fn execute_embedding_job(
             Err(err) => JobExecutionOutcome::failed(err),
         };
     };
+
+    let setup = match crate::capability_packs::semantic_clones::embeddings::resolve_embedding_setup(
+        provider.as_ref(),
+    ) {
+        Ok(setup) => setup,
+        Err(err) => return JobExecutionOutcome::failed(err),
+    };
+    let sync_action =
+        match determine_repo_embedding_sync_action(relational, &job.repo_id, &setup).await {
+            Ok(action) => action,
+            Err(err) => return JobExecutionOutcome::failed(err),
+        };
+
+    if sync_action == RepoEmbeddingSyncAction::RefreshCurrentRepo {
+        return match refresh_current_repo_symbol_embeddings_and_clone_edges(
+            relational,
+            &job.repo_root,
+            &job.repo_id,
+            provider,
+        )
+        .await
+        {
+            Ok(_) => JobExecutionOutcome::ok(),
+            Err(err) => JobExecutionOutcome::failed(err),
+        };
+    }
+
+    if sync_action == RepoEmbeddingSyncAction::AdoptExisting
+        && let Err(err) = persist_active_embedding_setup(relational, &job.repo_id, &setup).await
+    {
+        return JobExecutionOutcome::failed(err);
+    }
+
+    let current_inputs = match filter_current_inputs(relational, inputs, input_hashes).await {
+        Ok(filtered) => filtered,
+        Err(err) => return JobExecutionOutcome::failed(err),
+    };
+    if current_inputs.is_empty() {
+        return JobExecutionOutcome::ok();
+    }
 
     if let Err(err) = upsert_symbol_embedding_rows(relational, &current_inputs, provider).await {
         let error = format!("{err:#}");
@@ -320,6 +354,7 @@ fn clone_edges_rebuild_follow_up(
 
 async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {
     clear_repo_symbol_embedding_rows(relational, repo_id).await?;
+    clear_repo_active_embedding_setup(relational, repo_id).await?;
     crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
         relational, repo_id,
     )
@@ -361,3 +396,6 @@ async fn load_enrichment_job_inputs(
             )
         })
 }
+
+#[cfg(test)]
+mod execution_tests;

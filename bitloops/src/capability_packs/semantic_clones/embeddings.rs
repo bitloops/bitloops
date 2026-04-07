@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -88,6 +88,28 @@ pub struct SymbolEmbeddingRow {
     pub dimension: usize,
     pub embedding_input_hash: String,
     pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EmbeddingSetup {
+    pub provider: String,
+    pub model: String,
+    pub dimension: usize,
+    pub setup_fingerprint: String,
+}
+
+impl EmbeddingSetup {
+    pub fn new(provider: impl Into<String>, model: impl Into<String>, dimension: usize) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        let setup_fingerprint = build_embedding_setup_fingerprint(&provider, &model, dimension);
+        Self {
+            provider,
+            model,
+            dimension,
+            setup_fingerprint,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -204,6 +226,17 @@ pub fn symbol_embeddings_require_reindex(
     state.embedding_hash.as_deref() != Some(next_input_hash)
 }
 
+pub fn resolve_embedding_setup(provider: &dyn EmbeddingProvider) -> Result<EmbeddingSetup> {
+    let dimension = provider
+        .output_dimension()
+        .ok_or_else(|| anyhow!("embedding provider did not expose an output dimension"))?;
+    Ok(EmbeddingSetup::new(
+        provider.provider_name(),
+        provider.model_name(),
+        dimension,
+    ))
+}
+
 pub fn build_symbol_embedding_row(
     input: &SymbolEmbeddingInput,
     provider: &dyn EmbeddingProvider,
@@ -249,6 +282,17 @@ fn sha256_hex(input: &str) -> String {
     out
 }
 
+fn build_embedding_setup_fingerprint(provider: &str, model: &str, dimension: usize) -> String {
+    sha256_hex(
+        &json!({
+            "provider": provider,
+            "model": model,
+            "dimension": dimension,
+        })
+        .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +319,32 @@ mod tests {
 
         fn embed(&self, _input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
             assert_eq!(input_type, EmbeddingInputType::Document);
+            Ok(vec![0.1, 0.2, 0.3])
+        }
+    }
+
+    struct MockEmbeddingSetupProvider {
+        cache_key: String,
+    }
+
+    impl EmbeddingProvider for MockEmbeddingSetupProvider {
+        fn provider_name(&self) -> &str {
+            "openai"
+        }
+
+        fn model_name(&self) -> &str {
+            "text-embedding-3-large"
+        }
+
+        fn output_dimension(&self) -> Option<usize> {
+            Some(3072)
+        }
+
+        fn cache_key(&self) -> String {
+            self.cache_key.clone()
+        }
+
+        fn embed(&self, _input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
             Ok(vec![0.1, 0.2, 0.3])
         }
     }
@@ -538,5 +608,19 @@ mod tests {
             &SymbolEmbeddingIndexState::default(),
             "hash-1"
         ));
+    }
+
+    #[test]
+    fn resolve_embedding_setup_ignores_cache_key_and_profile_name() {
+        let left = resolve_embedding_setup(&MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-a::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        })
+        .expect("left setup");
+        let right = resolve_embedding_setup(&MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-b::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        })
+        .expect("right setup");
+
+        assert_eq!(left, right);
     }
 }
