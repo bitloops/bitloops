@@ -522,24 +522,11 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     };
     use crate::models::{
         CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
-        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     };
 
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     let mut repository = open_repository_for_repo(repo_root).expect("open test harness repository");
-    let discovery_run = TestDiscoveryRunRecord {
-        discovery_run_id: format!("discovery:{commit_sha}"),
-        repo_id: repo_id.clone(),
-        sync_mode: "full".to_string(),
-        language: Some("typescript".to_string()),
-        started_at: "2026-03-26T11:00:00Z".to_string(),
-        finished_at: Some("2026-03-26T11:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("complete".to_string()),
-        notes_json: None,
-        stats_json: None,
-    };
-
     let mut test_artefacts = Vec::<TestArtefactCurrentRecord>::new();
     let mut test_edges = Vec::<TestArtefactEdgeCurrentRecord>::new();
     let mut coverage_captures = Vec::<CoverageCaptureRecord>::new();
@@ -667,13 +654,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     }
 
     repository
-        .replace_test_discovery(
-            commit_sha,
-            &test_artefacts,
-            &test_edges,
-            &discovery_run,
-            &[],
-        )
+        .replace_test_discovery(commit_sha, &test_artefacts, &test_edges)
         .expect("replace test discovery");
     for capture in &coverage_captures {
         repository

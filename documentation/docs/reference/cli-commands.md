@@ -310,6 +310,10 @@ Highlights:
 ### Query and diagnostics
 
 ```bash
+bitloops devql schema
+bitloops devql schema --global
+bitloops devql schema --human > bitloops/schema.slim.graphql
+bitloops devql schema --global --human > bitloops/schema.graphql
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
 bitloops devql query '{ health { relational { backend connected } } }'
 bitloops devql connection-status
@@ -318,6 +322,11 @@ bitloops devql packs --with-health
 
 Highlights:
 
+- `devql schema` is daemon-backed and fetches SDL from the running DevQL daemon
+- `devql schema` without `--global` requires running the command from within a Git repository
+- `devql schema --global` can be used outside a repository
+- `devql schema` defaults to minified SDL so the output is easier to pass to LLMs and other prompt-driven tooling
+- `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
@@ -337,14 +346,13 @@ There is no `bitloops devql knowledge ingest` command in the current CLI.
 ## Test Harness
 
 ```bash
-bitloops testlens init
-bitloops testlens ingest-tests --commit <sha>
-bitloops testlens ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
-bitloops testlens ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
-bitloops testlens ingest-results --jest-json reports/jest.json --commit <sha>
+bitloops devql test-harness ingest-tests --commit <sha>
+bitloops devql test-harness ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
+bitloops devql test-harness ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
+bitloops devql test-harness ingest-results --jest-json reports/jest.json --commit <sha>
 ```
 
-Use `testlens` to initialise and ingest test-linkage, coverage, and results data for the test-harness capability pack.
+Use `devql test-harness` to ingest test-linkage, coverage, and results data for the test-harness capability pack. Schema initialisation is handled automatically by the daemon on `bitloops start`.
 
 ## Embeddings
 

@@ -408,7 +408,7 @@ pub(super) fn given_testlens_ingest_tests(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run TestLens ingest-tests",
+            "I run TestHarness ingest-tests",
             helpers::run_testlens_ingest_tests(world, &repo_name),
         );
     })
@@ -421,7 +421,7 @@ pub(super) fn given_testlens_ingest_coverage(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run TestLens ingest-coverage",
+            "I run TestHarness ingest-coverage",
             helpers::run_testlens_ingest_coverage(world, &repo_name),
         );
     })
@@ -434,7 +434,7 @@ pub(super) fn given_testlens_ingest_results_failing(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run TestLens ingest-results with a failing test",
+            "I run TestHarness ingest-results with a failing test",
             helpers::run_testlens_ingest_results(
                 world,
                 &repo_name,
@@ -635,6 +635,20 @@ pub(super) fn given_delete_a_source_file(
             "I delete a source file",
             helpers::ensure_bitloops_repo_name(&repo_name)
                 .and_then(|_| helpers::delete_rust_source_file(world)),
+        );
+    })
+}
+
+pub(super) fn given_delete_test_file(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I delete a test file",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::delete_test_file(world)),
         );
     })
 }

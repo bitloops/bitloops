@@ -12,14 +12,10 @@ pub(super) const TESTS_SUMMARY_STAGE_NAME: &str =
 
 pub(super) fn is_tests_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ALIAS_ID
 }
 
 pub(super) fn is_coverage_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +183,45 @@ pub(super) fn coverage_result_selections() -> Vec<GraphqlSelection> {
         )
         .into(),
     ]
+}
+
+pub(super) fn clone_result_selections(raw: bool) -> Result<Vec<GraphqlSelection>> {
+    if raw {
+        return scalar_selections_for_leaf(
+            SelectableLeaf::Clone,
+            &[
+                "id".to_string(),
+                "source_artefact_id".to_string(),
+                "target_artefact_id".to_string(),
+                "relation_kind".to_string(),
+                "score".to_string(),
+                "metadata".to_string(),
+            ],
+        );
+    }
+
+    Ok(vec![
+        GraphqlSelection::scalar("relationKind"),
+        GraphqlSelection::scalar("score"),
+        GraphqlField::new(
+            "sourceArtefact",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("path"),
+                GraphqlSelection::scalar("symbolFqn"),
+            ],
+        )
+        .into(),
+        GraphqlField::new(
+            "targetArtefact",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("path"),
+                GraphqlSelection::scalar("symbolFqn"),
+            ],
+        )
+        .into(),
+    ])
 }
 
 pub(super) fn tests_summary_result_selections() -> Vec<GraphqlSelection> {

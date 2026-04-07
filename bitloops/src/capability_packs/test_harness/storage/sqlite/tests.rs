@@ -8,8 +8,7 @@ use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::models::ScopeKind;
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestRunRecord,
+    TestArtefactEdgeCurrentRecord, TestRunRecord,
 };
 use crate::storage::init::init_database;
 
@@ -33,13 +32,7 @@ fn load_test_scenarios_uses_test_domain_rows_only() {
 
     let mut repository = SqliteTestHarnessRepository::open_existing(&db_path).expect("open db");
     repository
-        .replace_test_discovery(
-            COMMIT_SHA,
-            &test_artefacts(),
-            &[],
-            &test_discovery_run(),
-            &[],
-        )
+        .replace_test_discovery(COMMIT_SHA, &test_artefacts(), &[])
         .expect("replace test discovery");
 
     let scenarios = repository
@@ -61,13 +54,7 @@ fn replace_test_discovery_clears_stale_runs_coverage_and_classifications() {
 
     let mut repository = SqliteTestHarnessRepository::open_existing(&db_path).expect("open db");
     repository
-        .replace_test_discovery(
-            COMMIT_SHA,
-            &stale_test_artefacts(),
-            &stale_test_edges(),
-            &stale_discovery_run(),
-            &[stale_diagnostic()],
-        )
+        .replace_test_discovery(COMMIT_SHA, &stale_test_artefacts(), &stale_test_edges())
         .expect("replace stale test discovery");
     repository
         .replace_test_runs(COMMIT_SHA, &[test_run_record()])
@@ -91,13 +78,7 @@ fn replace_test_discovery_clears_stale_runs_coverage_and_classifications() {
     assert_eq!(table_count(&db_path, "test_classifications"), 1);
 
     repository
-        .replace_test_discovery(
-            COMMIT_SHA,
-            &test_artefacts(),
-            &test_edges(),
-            &test_discovery_run(),
-            &[],
-        )
+        .replace_test_discovery(COMMIT_SHA, &test_artefacts(), &test_edges())
         .expect("replace fresh test discovery");
 
     assert_eq!(table_count(&db_path, "test_runs"), 0);
@@ -187,50 +168,6 @@ fn stale_test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
         end_line: Some(5),
         metadata: "{\"imports\":[\"create_user\"]}".to_string(),
     }]
-}
-
-fn stale_discovery_run() -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: "discovery:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        sync_mode: "full".to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-24T00:00:00Z".to_string(),
-        finished_at: Some("2026-03-24T00:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("static_only".to_string()),
-        notes_json: Some("{\"note\":\"stale\"}".to_string()),
-        stats_json: Some("{\"files\":1}".to_string()),
-    }
-}
-
-fn stale_diagnostic() -> TestDiscoveryDiagnosticRecord {
-    TestDiscoveryDiagnosticRecord {
-        diagnostic_id: "diag:stale".to_string(),
-        discovery_run_id: "discovery:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        path: Some("tests/stale.rs".to_string()),
-        line: Some(1),
-        severity: "warning".to_string(),
-        code: "stale".to_string(),
-        message: "stale diagnostic".to_string(),
-        metadata_json: Some("{\"stale\":true}".to_string()),
-    }
-}
-
-fn test_discovery_run() -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: "discovery:user-service".to_string(),
-        repo_id: REPO_ID.to_string(),
-        sync_mode: "full".to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-24T00:00:00Z".to_string(),
-        finished_at: Some("2026-03-24T00:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("static_only".to_string()),
-        notes_json: None,
-        stats_json: None,
-    }
 }
 
 fn test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {

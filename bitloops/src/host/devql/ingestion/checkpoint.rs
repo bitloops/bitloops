@@ -311,36 +311,6 @@ pub(super) async fn insert_checkpoint_event(
         .await
 }
 
-pub(super) async fn upsert_commit_row(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    cp: &CommittedInfo,
-    commit_info: &CheckpointCommitInfo,
-) -> Result<()> {
-    let committed_at_sql = match relational.dialect() {
-        RelationalDialect::Postgres => format!("to_timestamp({})", commit_info.commit_unix),
-        RelationalDialect::Sqlite => {
-            format!("datetime({}, 'unixepoch')", commit_info.commit_unix)
-        }
-    };
-    let sql = format!(
-        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) VALUES ('{}', '{}', '{}', '{}', '{}', {}) \
-ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name = EXCLUDED.author_name, author_email = EXCLUDED.author_email, commit_message = EXCLUDED.commit_message, committed_at = EXCLUDED.committed_at",
-        esc_pg(&commit_info.commit_sha),
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(&commit_info.author_name),
-        esc_pg(&commit_info.author_email),
-        esc_pg(if commit_info.subject.is_empty() {
-            &cp.checkpoint_id
-        } else {
-            &commit_info.subject
-        }),
-        committed_at_sql,
-    );
-
-    relational.exec(&sql).await
-}
-
 pub(super) async fn upsert_checkpoint_file_snapshot_rows(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,

@@ -62,22 +62,18 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
                 world.daemon_url = Some(runtime_state.url.clone());
                 world.daemon_runtime_state_path = Some(runtime_state_path.clone());
                 world.daemon_stderr_log_path = Some(stderr_log_path.clone());
-                world.daemon_process = Some(
-                    crate::qat_support::world::ScenarioDaemonProcess {
-                        child,
-                        requested_port: port,
-                        stderr_log_path,
-                        runtime_state_path,
-                    },
-                );
+                world.daemon_process = Some(crate::qat_support::world::ScenarioDaemonProcess {
+                    child,
+                    requested_port: port,
+                    stderr_log_path,
+                    runtime_state_path,
+                });
                 return Ok(());
             }
             Err(err) => {
                 append_world_log(
                     world,
-                    &format!(
-                        "Daemon startup attempt failed for port candidate {port}: {err:#}\n"
-                    ),
+                    &format!("Daemon startup attempt failed for port candidate {port}: {err:#}\n"),
                 )?;
                 let _ = child.kill();
                 let _ = child.wait();
@@ -366,6 +362,7 @@ fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -
 
     let sync_choice = sync.unwrap_or(false);
     args.push(format!("--sync={sync_choice}"));
+    args.push("--ingest=false".to_string());
 
     if force {
         args.push("--force".to_string());
@@ -1230,7 +1227,9 @@ fn completed_tasks_for_current_head(
     )?;
     ensure_success(&head_output, "git rev-parse HEAD (sync history assertion)")?;
 
-    let head_sha = String::from_utf8_lossy(&head_output.stdout).trim().to_string();
+    let head_sha = String::from_utf8_lossy(&head_output.stdout)
+        .trim()
+        .to_string();
     ensure!(
         !head_sha.is_empty(),
         "expected non-empty HEAD SHA for sync history assertion"
@@ -1264,17 +1263,28 @@ fn format_task_diagnostics(head_tasks: &[(String, bitloops::host::devql::SyncSum
         .map(|(source, summary)| {
             format!(
                 "source={} mode={} added={} changed={} removed={} unchanged={}",
-                source, summary.mode, summary.paths_added, summary.paths_changed, summary.paths_removed, summary.paths_unchanged
+                source,
+                summary.mode,
+                summary.paths_added,
+                summary.paths_changed,
+                summary.paths_removed,
+                summary.paths_unchanged
             )
         })
         .collect::<Vec<_>>()
         .join("; ")
 }
 
-pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_sync_history_has_added_for_current_head(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
 
-    if head_tasks.iter().any(|(_, summary)| summary.paths_added > 0) {
+    if head_tasks
+        .iter()
+        .any(|(_, summary)| summary.paths_added > 0)
+    {
         return Ok(());
     }
     bail!(
@@ -1283,10 +1293,16 @@ pub fn assert_sync_history_has_added_for_current_head(world: &QatWorld, repo_nam
     )
 }
 
-pub fn assert_sync_history_has_changed_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_sync_history_has_changed_for_current_head(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
 
-    if head_tasks.iter().any(|(_, summary)| summary.paths_changed > 0) {
+    if head_tasks
+        .iter()
+        .any(|(_, summary)| summary.paths_changed > 0)
+    {
         return Ok(());
     }
     bail!(
@@ -1295,10 +1311,16 @@ pub fn assert_sync_history_has_changed_for_current_head(world: &QatWorld, repo_n
     )
 }
 
-pub fn assert_sync_history_has_removed_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_sync_history_has_removed_for_current_head(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
 
-    if head_tasks.iter().any(|(_, summary)| summary.paths_removed > 0) {
+    if head_tasks
+        .iter()
+        .any(|(_, summary)| summary.paths_removed > 0)
+    {
         return Ok(());
     }
     bail!(
@@ -1307,10 +1329,16 @@ pub fn assert_sync_history_has_removed_for_current_head(world: &QatWorld, repo_n
     )
 }
 
-pub fn assert_sync_history_has_artefacts_for_current_head(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_sync_history_has_artefacts_for_current_head(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     let (head_sha, _, head_tasks) = completed_tasks_for_current_head(world, repo_name)?;
 
-    if head_tasks.iter().any(|(_, summary)| summary.paths_added + summary.paths_unchanged > 0) {
+    if head_tasks
+        .iter()
+        .any(|(_, summary)| summary.paths_added + summary.paths_unchanged > 0)
+    {
         return Ok(());
     }
     bail!(
@@ -1502,8 +1530,9 @@ pub fn assert_agent_session_exists_for_repo(
 
 pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-        .context("reading Bitloops checkpoint mappings")?;
+    let mappings =
+        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+            .context("reading Bitloops checkpoint mappings")?;
     if mappings.is_empty() && claude_fallback_marker_exists(world) {
         append_world_log(
             world,
@@ -1530,8 +1559,9 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-        .context("reading Bitloops checkpoint mappings")?;
+    let mappings =
+        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+            .context("reading Bitloops checkpoint mappings")?;
     if mappings.len() < min_count && claude_fallback_marker_exists(world) {
         append_world_log(
             world,

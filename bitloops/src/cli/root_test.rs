@@ -229,6 +229,7 @@ fn TestRootCommand_WatcherAutostartMatrix() {
             ["bitloops", "devql", "query", "repo(\"bitloops\")"].as_slice(),
             true,
         ),
+        (["bitloops", "devql", "schema"].as_slice(), false),
     ];
 
     for (argv, expected) in cases {
@@ -884,5 +885,43 @@ fn TestTelemetryAction_DevqlQueryTracksDslStageSequence() {
     assert!(
         !rendered.contains("\"x\"") && !rendered.contains("limit(5)"),
         "telemetry should not include raw DevQL literals"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlSchemaTracksModeAndOutput() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--global", "--human"])
+        .expect("devql schema should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql schema");
+    assert_eq!(
+        action.properties.get("schema_mode").and_then(Value::as_str),
+        Some("global")
+    );
+    assert_eq!(
+        action.properties.get("output_mode").and_then(Value::as_str),
+        Some("human")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlSchemaDefaultsToMinifiedSlim() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "devql", "schema"]).expect("devql schema should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql schema");
+    assert_eq!(
+        action.properties.get("schema_mode").and_then(Value::as_str),
+        Some("slim")
+    );
+    assert_eq!(
+        action.properties.get("output_mode").and_then(Value::as_str),
+        Some("minified")
     );
 }

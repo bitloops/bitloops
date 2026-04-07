@@ -350,33 +350,6 @@ pub struct CoverageHitRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct TestDiscoveryRunRecord {
-    pub discovery_run_id: String,
-    pub repo_id: String,
-    pub sync_mode: String,
-    pub language: Option<String>,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub status: String,
-    pub enumeration_status: Option<String>,
-    pub notes_json: Option<String>,
-    pub stats_json: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TestDiscoveryDiagnosticRecord {
-    pub diagnostic_id: String,
-    pub discovery_run_id: String,
-    pub repo_id: String,
-    pub path: Option<String>,
-    pub line: Option<i64>,
-    pub severity: String,
-    pub code: String,
-    pub message: String,
-    pub metadata_json: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct CoverageDiagnosticRecord {
     pub diagnostic_id: String,
     pub capture_id: String,

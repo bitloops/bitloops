@@ -3,7 +3,7 @@ use rusqlite::{Connection, params};
 
 use crate::models::{
     TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestClassificationRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestRunRecord,
+    TestRunRecord,
 };
 
 pub(super) fn clear_existing_test_discovery_data(
@@ -34,10 +34,6 @@ pub(super) fn clear_existing_test_discovery_data(
         params![commit_sha],
     )
     .context("failed clearing existing test runs for commit")?;
-    conn.execute("DELETE FROM test_discovery_diagnostics", params![])
-        .context("failed clearing existing discovery diagnostics")?;
-    conn.execute("DELETE FROM test_discovery_runs", params![])
-        .context("failed clearing existing discovery runs")?;
     conn.execute("DELETE FROM test_artefacts_current", params![])
         .context("failed clearing existing test artefacts")?;
     Ok(())
@@ -207,78 +203,5 @@ ON CONFLICT(classification_id) DO UPDATE SET
         ],
     )
     .with_context(|| format!("failed writing classification {}", record.classification_id))?;
-    Ok(())
-}
-
-pub(super) fn upsert_test_discovery_run(
-    conn: &Connection,
-    run: &TestDiscoveryRunRecord,
-) -> Result<()> {
-    conn.execute(
-        r#"
-INSERT INTO test_discovery_runs (
-  discovery_run_id, repo_id, sync_mode, language, started_at, finished_at, status,
-  enumeration_status, notes_json, stats_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-ON CONFLICT(discovery_run_id) DO UPDATE SET
-  repo_id = excluded.repo_id,
-  sync_mode = excluded.sync_mode,
-  language = excluded.language,
-  started_at = excluded.started_at,
-  finished_at = excluded.finished_at,
-  status = excluded.status,
-  enumeration_status = excluded.enumeration_status,
-  notes_json = excluded.notes_json,
-  stats_json = excluded.stats_json
-"#,
-        params![
-            run.discovery_run_id,
-            run.repo_id,
-            run.sync_mode,
-            run.language,
-            run.started_at,
-            run.finished_at,
-            run.status,
-            run.enumeration_status,
-            run.notes_json,
-            run.stats_json
-        ],
-    )
-    .with_context(|| format!("failed upserting discovery run {}", run.discovery_run_id))?;
-    Ok(())
-}
-
-pub(super) fn upsert_test_discovery_diagnostic(
-    conn: &Connection,
-    diagnostic: &TestDiscoveryDiagnosticRecord,
-) -> Result<()> {
-    conn.execute(
-        r#"
-INSERT INTO test_discovery_diagnostics (
-  diagnostic_id, discovery_run_id, repo_id, path, line, severity, code, message, metadata_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-ON CONFLICT(diagnostic_id) DO UPDATE SET
-  discovery_run_id = excluded.discovery_run_id,
-  repo_id = excluded.repo_id,
-  path = excluded.path,
-  line = excluded.line,
-  severity = excluded.severity,
-  code = excluded.code,
-  message = excluded.message,
-  metadata_json = excluded.metadata_json
-"#,
-        params![
-            diagnostic.diagnostic_id,
-            diagnostic.discovery_run_id,
-            diagnostic.repo_id,
-            diagnostic.path,
-            diagnostic.line,
-            diagnostic.severity,
-            diagnostic.code,
-            diagnostic.message,
-            diagnostic.metadata_json
-        ],
-    )
-    .with_context(|| format!("failed upserting diagnostic {}", diagnostic.diagnostic_id))?;
     Ok(())
 }

@@ -1,9 +1,15 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
+use std::io::Write;
 use std::time::Instant;
 
 use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
-use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
+use crate::config::{
+    SemanticCloneEmbeddingMode, SemanticSummaryMode, resolve_embedding_capability_config_for_repo,
+};
+use crate::devql_transport::{
+    SlimCliRepoScope, discover_slim_cli_repo_scope, is_repo_root_discovery_error,
+};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
     SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
@@ -14,6 +20,7 @@ use crate::host::devql::{
 mod args;
 pub(crate) mod graphql;
 mod knowledge;
+mod test_harness;
 
 #[cfg(test)]
 mod tests;
@@ -23,21 +30,187 @@ pub use args::{
     DevqlArgs, DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs,
     DevqlIngestArgs, DevqlInitArgs, DevqlKnowledgeAddArgs, DevqlKnowledgeArgs,
     DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand, DevqlKnowledgeRefArgs, DevqlPacksArgs,
-    DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSyncArgs,
+    DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSchemaArgs, DevqlSyncArgs,
+    DevqlTestHarnessArgs, DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
+    DevqlTestHarnessIngestCoverageBatchArgs, DevqlTestHarnessIngestResultsArgs,
+    DevqlTestHarnessIngestTestsArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
+const SCHEMA_SCOPE_REQUIRED_MESSAGE: &str = "`bitloops devql schema` requires a Git repository scope. Run it from within a repository or use `bitloops devql schema --global`.";
 
-pub async fn run(args: DevqlArgs) -> Result<()> {
+fn format_schema_sdl_output(args: &DevqlSchemaArgs, sdl: &str) -> String {
+    if args.human {
+        sdl.to_string()
+    } else {
+        minify_schema_sdl(sdl)
+    }
+}
+
+async fn write_schema_sdl<F, W>(
+    args: &DevqlSchemaArgs,
+    writer: &mut W,
+    discover_scope: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<SlimCliRepoScope>,
+    W: Write,
+{
+    let sdl = if args.global {
+        graphql::fetch_global_schema_sdl_via_daemon().await?
+    } else {
+        let scope = discover_scope().map_err(map_schema_scope_error)?;
+        graphql::fetch_slim_schema_sdl_via_daemon(&scope).await?
+    };
+
+    writer
+        .write_all(format_schema_sdl_output(args, &sdl).as_bytes())
+        .context("writing DevQL schema SDL")
+}
+
+fn map_schema_scope_error(err: anyhow::Error) -> anyhow::Error {
+    if is_repo_root_discovery_error(&err) {
+        anyhow!(SCHEMA_SCOPE_REQUIRED_MESSAGE)
+    } else {
+        err
+    }
+}
+
+fn minify_schema_sdl(sdl: &str) -> String {
+    #[derive(Copy, Clone, Eq, PartialEq)]
+    enum State {
+        Normal,
+        String,
+        BlockString,
+    }
+
+    fn starts_with_triple_quotes(chars: &[char], index: usize) -> bool {
+        chars.get(index) == Some(&'"')
+            && chars.get(index + 1) == Some(&'"')
+            && chars.get(index + 2) == Some(&'"')
+    }
+
+    fn push_pending_space(
+        output: &mut String,
+        next: char,
+        pending_space: &mut bool,
+        last_emitted: &mut Option<char>,
+    ) {
+        if !*pending_space || last_emitted.is_none() {
+            *pending_space = false;
+            return;
+        }
+
+        let previous = *last_emitted;
+        if previous == Some('{')
+            || next == '}'
+            || matches!(previous, Some(' ' | '\n' | '\r' | '\t'))
+        {
+            *pending_space = false;
+            return;
+        }
+
+        output.push(' ');
+        *last_emitted = Some(' ');
+        *pending_space = false;
+    }
+
+    let chars = sdl.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(sdl.len());
+    let mut state = State::Normal;
+    let mut pending_space = false;
+    let mut last_emitted = None;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        match state {
+            State::Normal => {
+                if starts_with_triple_quotes(&chars, index) {
+                    push_pending_space(&mut output, '"', &mut pending_space, &mut last_emitted);
+                    output.push_str("\"\"\"");
+                    last_emitted = Some('"');
+                    index += 3;
+                    state = State::BlockString;
+                } else if chars[index] == '"' {
+                    push_pending_space(&mut output, '"', &mut pending_space, &mut last_emitted);
+                    output.push('"');
+                    last_emitted = Some('"');
+                    index += 1;
+                    state = State::String;
+                } else if chars[index].is_whitespace() {
+                    pending_space = true;
+                    index += 1;
+                } else {
+                    push_pending_space(
+                        &mut output,
+                        chars[index],
+                        &mut pending_space,
+                        &mut last_emitted,
+                    );
+                    output.push(chars[index]);
+                    last_emitted = Some(chars[index]);
+                    index += 1;
+                }
+            }
+            State::String => {
+                let ch = chars[index];
+                output.push(ch);
+                last_emitted = Some(ch);
+                index += 1;
+                if ch == '\\' {
+                    if let Some(next) = chars.get(index) {
+                        output.push(*next);
+                        last_emitted = Some(*next);
+                        index += 1;
+                    }
+                } else if ch == '"' {
+                    state = State::Normal;
+                }
+            }
+            State::BlockString => {
+                if starts_with_triple_quotes(&chars, index) {
+                    output.push_str("\"\"\"");
+                    last_emitted = Some('"');
+                    index += 3;
+                    state = State::Normal;
+                } else {
+                    output.push(chars[index]);
+                    last_emitted = Some(chars[index]);
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+
+    output
+}
+
+async fn run_with_scope_discovery<F, W>(
+    args: DevqlArgs,
+    schema_writer: &mut W,
+    discover_scope: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<SlimCliRepoScope>,
+    W: Write,
+{
     let Some(command) = args.command else {
         bail!(MISSING_SUBCOMMAND_MESSAGE);
     };
 
-    if matches!(&command, DevqlCommand::ConnectionStatus(_)) {
-        return run_connection_status().await;
-    }
+    let command = match command {
+        DevqlCommand::Schema(args) => {
+            return write_schema_sdl(&args, schema_writer, discover_scope).await;
+        }
+        DevqlCommand::ConnectionStatus(_) => return run_connection_status().await,
+        command => command,
+    };
 
-    let scope = discover_slim_cli_repo_scope(None)?;
+    let scope = discover_scope()?;
     let repo_root = scope.repo_root.clone();
     let repo = scope.repo.clone();
 
@@ -64,11 +237,31 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         };
     }
 
+    if let DevqlCommand::TestHarness(args) = command {
+        return test_harness::run(args, &repo_root).await;
+    }
+
     let cfg = DevqlConfig::from_env(repo_root, repo)?;
+    let enrichment_capability = resolve_embedding_capability_config_for_repo(&cfg.repo_root);
+    let enrichment_enabled = enrichment_capability.semantic_clones.summary_mode
+        != SemanticSummaryMode::Off
+        || (enrichment_capability.semantic_clones.embedding_mode
+            != SemanticCloneEmbeddingMode::Off
+            && enrichment_capability
+                .semantic_clones
+                .embedding_profile
+                .is_some());
+
     match command {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
         DevqlCommand::Ingest(args) => {
-            graphql::run_ingest_via_graphql(&scope, args.max_checkpoints).await
+            if enrichment_enabled {
+                graphql::run_ingest_via_graphql(&scope, None, args.require_daemon).await
+            } else {
+                let _ = args;
+                crate::daemon::require_current_repo_runtime(&cfg.repo_root, "`devql ingest`")?;
+                crate::host::devql::run_ingest(&cfg).await
+            }
         }
         DevqlCommand::Sync(args) => {
             let (task, merged) = graphql::enqueue_sync_via_graphql(
@@ -78,6 +271,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
                 args.repair,
                 args.validate,
                 "manual_cli",
+                args.require_daemon,
             )
             .await?;
             if args.status {
@@ -108,6 +302,9 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         },
         DevqlCommand::Query(args) => {
             let use_raw_graphql = use_raw_graphql_mode(&args.query, args.graphql);
+            let parsed_query = (!use_raw_graphql)
+                .then(|| parse_devql_query(&args.query))
+                .transpose()?;
             let trace = crate::devql_timing::timings_enabled_from_env()
                 .then(crate::devql_timing::TimingTrace::new);
 
@@ -159,7 +356,12 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             };
 
             let format_started = Instant::now();
-            let output = match format_query_output(&data, args.compact, use_raw_graphql) {
+            let output = match format_query_output(
+                &data,
+                args.compact,
+                use_raw_graphql,
+                parsed_query.as_ref(),
+            ) {
                 Ok(output) => {
                     if let Some(trace) = trace.as_ref() {
                         trace.record(
@@ -201,9 +403,23 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             args.with_health,
             args.with_extensions,
         ),
+        DevqlCommand::Schema(_) => unreachable!("handled before repo setup"),
         DevqlCommand::ConnectionStatus(_) => unreachable!("handled before repo setup"),
         DevqlCommand::Knowledge(_) => unreachable!("handled before cfg setup"),
+        DevqlCommand::TestHarness(_) => unreachable!("handled before cfg setup"),
     }
+}
+
+pub async fn run(args: DevqlArgs) -> Result<()> {
+    if matches!(args.command.as_ref(), Some(DevqlCommand::Schema(_))) {
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+        return run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None))
+            .await;
+    }
+
+    let mut writer = std::io::stdout();
+    run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None)).await
 }
 
 pub(crate) fn format_sync_queue_submission(

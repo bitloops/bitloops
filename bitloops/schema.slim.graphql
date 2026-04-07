@@ -344,16 +344,15 @@ type HealthStatus {
 }
 
 input IngestInput {
-	maxCheckpoints: Int! = 500
+	backfill: Int = null
 }
 
 type IngestResult {
 	success: Boolean!
-	checkpointsProcessed: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 	semanticFeatureRowsUpserted: Int!
 	semanticFeatureRowsSkipped: Int!
 	symbolEmbeddingRowsUpserted: Int!
@@ -372,14 +371,13 @@ enum IngestionPhase {
 
 type IngestionProgressEvent {
 	phase: IngestionPhase!
-	checkpointsTotal: Int!
-	checkpointsProcessed: Int!
+	commitsTotal: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	currentCheckpointId: String
 	currentCommitSha: String
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 }
 
 type InitSchemaResult {
@@ -513,7 +511,6 @@ type MutationRoot {
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
-	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!

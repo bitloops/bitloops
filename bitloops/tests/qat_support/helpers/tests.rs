@@ -120,16 +120,37 @@ fn text_has_missing_production_artefacts_error_detects_relational_materializatio
 #[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
+    assert_eq!(args, vec!["init", "--agent", "claude-code", "--sync=false"]);
+}
+
+#[ignore = "QAT: requires full QAT environment"]
+fn build_init_bitloops_args_supports_no_sync_choice() {
+    let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(
         args,
-        vec!["init", "--agent", "claude-code", "--sync=false"]
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=false",
+            "--ingest=false",
+        ]
     );
 }
 
 #[test]
 fn build_init_bitloops_args_supports_sync_false_choice() {
     let args = build_init_bitloops_args("claude-code", false, Some(false));
-    assert_eq!(args, vec!["init", "--agent", "claude-code", "--sync=false"]);
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=false",
+            "--ingest=false",
+        ]
+    );
 }
 
 #[test]
@@ -137,7 +158,14 @@ fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
     let args = build_init_bitloops_args("codex", true, Some(true));
     assert_eq!(
         args,
-        vec!["init", "--agent", "codex", "--sync=true", "--force"]
+        vec![
+            "init",
+            "--agent",
+            "codex",
+            "--sync=true",
+            "--ingest=false",
+            "--force",
+        ]
     );
 }
 
@@ -250,7 +278,10 @@ fn daemon_start_args_use_foreground_http_mode() {
 
 #[test]
 fn normalise_onboarding_agent_name_supports_aliases() {
-    assert_eq!(normalise_onboarding_agent_name("claude"), AGENT_NAME_CLAUDE_CODE);
+    assert_eq!(
+        normalise_onboarding_agent_name("claude"),
+        AGENT_NAME_CLAUDE_CODE
+    );
     assert_eq!(
         normalise_onboarding_agent_name("open-code"),
         AGENT_NAME_OPEN_CODE
@@ -268,7 +299,10 @@ fn normalise_smoke_agent_name_supports_canonical_agents_and_aliases() {
     assert_eq!(normalise_smoke_agent_name("gemini"), AGENT_NAME_GEMINI);
     assert_eq!(normalise_smoke_agent_name("copilot"), AGENT_NAME_COPILOT);
     assert_eq!(normalise_smoke_agent_name("codex"), AGENT_NAME_CODEX);
-    assert_eq!(normalise_smoke_agent_name("open-code"), AGENT_NAME_OPEN_CODE);
+    assert_eq!(
+        normalise_smoke_agent_name("open-code"),
+        AGENT_NAME_OPEN_CODE
+    );
     assert_eq!(normalise_smoke_agent_name("opencode"), AGENT_NAME_OPEN_CODE);
 }
 

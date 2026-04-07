@@ -290,8 +290,6 @@ pub(crate) fn has_non_tests_or_coverage_registered_stage(parsed: &ParsedDevqlQue
 
 pub(crate) fn is_tests_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ALIAS_ID
 }
 
 pub(crate) fn is_clone_summary_stage_name(stage_name: &str) -> bool {
@@ -300,6 +298,4 @@ pub(crate) fn is_clone_summary_stage_name(stage_name: &str) -> bool {
 
 pub(crate) fn is_coverage_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
 }

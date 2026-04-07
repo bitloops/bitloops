@@ -193,6 +193,10 @@ bitloops devql query 'repo("bitloops")->asOf(ref:"main")->artefacts(kind:"functi
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.8)->limit(10)'
 ```
 
+`clones()` now defaults to a user-facing projection that highlights the source artefact, the
+matched artefact, the clone relation kind, and the score. Use `clones(raw:true)` when you want the
+low-level ids and debug metadata instead.
+
 ### Raw GraphQL
 
 ```graphql
@@ -278,4 +282,4 @@ Use `cloneSummary(...)` for one aggregate result over the filtered artefacts. Us
 - Re-ingest after significant changes so relational, events, and blob-backed enrichments stay in sync
 - Use `asOf(...)` when you need reproducible answers against a commit or save state
 - Use `/devql/playground` to inspect the live schema before writing a client
-- Export `bitloops/schema.graphql` when you need client code generation or schema review
+- Use `bitloops devql schema --global --human > bitloops/schema.graphql` when you need client code generation or schema review
