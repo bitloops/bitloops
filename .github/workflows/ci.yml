@@ -5,10 +5,10 @@ on:
     branches:
       - main
     paths:
-      - "bitloops/**"
-      - "xtask/**"
-      - ".cargo/config.toml"
-      - ".github/workflows/ci.yml"
+      - 'bitloops/**'
+      - 'xtask/**'
+      - '.cargo/config.toml'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
@@ -22,11 +22,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Check Rust file size limits
         run: cargo dev-file-size
+  qat:
+    name: QAT
+    runs-on: self-hosted
+    timeout-minutes: 180
+    env:
+      DUCKDB_DOWNLOAD_LIB: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: ci
+
+      - name: Run QAT acceptance suites
+        run: cargo qat
   test:
     name: Test compile (Ubuntu)
     runs-on: self-hosted
     env:
-      DUCKDB_DOWNLOAD_LIB: "1"
+      DUCKDB_DOWNLOAD_LIB: '1'
     steps:
       - uses: actions/checkout@v5
 
@@ -84,7 +102,7 @@ jobs:
       - name: Build (musl targets)
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         env:
-          DUCKDB_DOWNLOAD_LIB: "0"
+          DUCKDB_DOWNLOAD_LIB: '0'
         run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }} --features duckdb-bundled
 
       - name: Build (non-musl targets)
