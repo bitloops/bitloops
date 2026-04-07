@@ -340,11 +340,9 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
     assert_eq!(watermark, head_sha);
 
     let checkpoint_projection_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM checkpoint_files",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM checkpoint_files", [], |row| {
+            row.get(0)
+        })
         .expect("count checkpoint projections");
     assert_eq!(
         checkpoint_projection_rows, 0,
