@@ -72,7 +72,7 @@ impl SqliteRelationalGateway {
                     r#"
 SELECT DISTINCT a.artefact_id, a.symbol_id, COALESCE(a.symbol_fqn, ''), a.path, a.start_line
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
@@ -116,7 +116,7 @@ ORDER BY a.path ASC, a.start_line ASC
                     r#"
 SELECT DISTINCT a.artefact_id, a.start_line, a.end_line
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
