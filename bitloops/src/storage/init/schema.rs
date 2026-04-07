@@ -341,34 +341,4 @@ ON coverage_diagnostics (repo_id, commit_sha);
 CREATE INDEX IF NOT EXISTS coverage_diagnostics_capture_idx
 ON coverage_diagnostics (capture_id);
 
-CREATE TABLE IF NOT EXISTS test_discovery_runs (
-    discovery_run_id TEXT PRIMARY KEY,
-    repo_id TEXT NOT NULL,
-    sync_mode TEXT NOT NULL,
-    language TEXT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    status TEXT NOT NULL,
-    enumeration_status TEXT,
-    notes_json TEXT,
-    stats_json TEXT
-);
-
-CREATE INDEX IF NOT EXISTS test_discovery_runs_sync_mode_idx
-ON test_discovery_runs (repo_id, sync_mode);
-
-CREATE TABLE IF NOT EXISTS test_discovery_diagnostics (
-    diagnostic_id TEXT PRIMARY KEY,
-    discovery_run_id TEXT REFERENCES test_discovery_runs(discovery_run_id) ON DELETE CASCADE,
-    repo_id TEXT NOT NULL,
-    path TEXT,
-    line INTEGER,
-    severity TEXT NOT NULL,
-    code TEXT NOT NULL,
-    message TEXT NOT NULL,
-    metadata_json TEXT
-);
-
-CREATE INDEX IF NOT EXISTS test_discovery_diagnostics_run_idx
-ON test_discovery_diagnostics (discovery_run_id);
 "#;

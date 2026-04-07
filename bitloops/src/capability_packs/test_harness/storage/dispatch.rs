@@ -13,7 +13,7 @@ use crate::models::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
+    TestHarnessCommitCounts, TestRunRecord,
 };
 pub enum BitloopsTestHarnessRepository {
     Sqlite(SqliteTestHarnessRepository),
@@ -86,24 +86,14 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         match self {
-            Self::Sqlite(repository) => repository.replace_test_discovery(
-                commit_sha,
-                test_artefacts,
-                test_edges,
-                discovery_run,
-                diagnostics,
-            ),
-            Self::Postgres(repository) => repository.replace_test_discovery(
-                commit_sha,
-                test_artefacts,
-                test_edges,
-                discovery_run,
-                diagnostics,
-            ),
+            Self::Sqlite(repository) => {
+                repository.replace_test_discovery(commit_sha, test_artefacts, test_edges)
+            }
+            Self::Postgres(repository) => {
+                repository.replace_test_discovery(commit_sha, test_artefacts, test_edges)
+            }
         }
     }
 
@@ -426,7 +416,6 @@ mod tests {
             "test_artefact_edges_current",
             "coverage_captures",
             "coverage_hits",
-            "test_discovery_runs",
         ] {
             let exists: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",

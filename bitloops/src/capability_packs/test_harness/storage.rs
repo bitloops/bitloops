@@ -13,7 +13,7 @@ use crate::models::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
+    TestHarnessCommitCounts, TestRunRecord,
 };
 
 pub mod dispatch;
@@ -40,8 +40,6 @@ pub trait TestHarnessRepository {
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()>;
     fn replace_test_runs(&mut self, commit_sha: &str, runs: &[TestRunRecord]) -> Result<()>;
     fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()>;

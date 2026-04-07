@@ -54,7 +54,6 @@ fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
         "test_links",
         "coverage_captures",
         "coverage_hits",
-        "test_discovery_runs",
     ] {
         let count: i64 = conn
             .query_row(
