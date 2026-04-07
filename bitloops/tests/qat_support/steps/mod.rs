@@ -93,6 +93,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I make a first change using (\S+) to (\S+)$"),
+            step_fn(given_first_agent_change),
+        )
+        .given(
+            None,
             regex(r#"^I ask Claude Code to "([^"]+)" in (\S+)$"#),
             step_fn(given_claude_code_prompt),
         )
@@ -100,6 +105,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I make a second change using Claude Code to (\S+)$"),
             step_fn(given_second_claude_change),
+        )
+        .given(
+            None,
+            regex(r"^I make a second change using (\S+) to (\S+)$"),
+            step_fn(given_second_agent_change),
         )
         .given(
             None,
@@ -335,6 +345,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^claude-code session exists in (\S+)$"),
             step_fn(then_claude_session_exists),
+        )
+        .then(
+            None,
+            regex(r"^(cursor|gemini|copilot|codex|opencode|open-code) session exists in (\S+)$"),
+            step_fn(then_agent_session_exists),
         )
         .then(
             None,

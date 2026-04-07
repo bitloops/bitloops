@@ -214,6 +214,20 @@ pub(super) fn then_claude_session_exists(
     })
 }
 
+pub(super) fn then_agent_session_exists(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "agent session exists",
+            helpers::assert_agent_session_exists_for_repo(world, &repo_name, &agent_name),
+        );
+    })
+}
+
 pub(super) fn then_checkpoint_mapping_exists(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

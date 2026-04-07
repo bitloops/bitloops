@@ -12,9 +12,9 @@ Cargo aliases are configured in `.cargo/config.toml` and only resolve from this 
 
 ## Implemented test suites
 
-### Onboarding + DevQL sync (CI bundle)
+### Onboarding + DevQL sync + Smoke (CI bundle)
 
-Runs both suites below in parallel (28 scenarios total).
+Runs onboarding + DevQL sync in parallel, then smoke after that (41 scenarios total).
 
 - PRs targeting `main`: runs automatically in `.github/workflows/ci.yml`
 - For develop-target work: run `.github/workflows/develop-qat.yml` manually from the GitHub Actions UI and select the branch you want to test
@@ -25,7 +25,34 @@ cargo qat
 
 Works from both the `bitloops/` crate directory and the repository root.
 
-### 1. Onboarding (13 scenarios)
+### 1. Smoke (13 scenarios)
+
+Exercises the deterministic hook-driven agent lifecycle for `claude-code`, `cursor`,
+`gemini`, `copilot`, `codex`, and `opencode` with `open-code` accepted as an alias.
+This suite validates the Bitloops golden path without requiring any external agent CLIs
+to be installed on the machine or CI runner.
+
+```bash
+cargo qat-smoke
+```
+
+Or equivalently:
+
+```bash
+cargo test --test qat_acceptance qat_smoke -- --ignored
+```
+
+**Scenarios:**
+
+- First agent-driven Bitloops session is captured for each supported agent.
+- Follow-up agent edits create progression for each supported agent.
+- Preserve relative-day commit timeline.
+
+The agent outlines cover the same setup for each supported agent: clean start, daemon
+start, Vite scaffold, init commit, `bitloops init --agent <agent> --sync=false`, enable,
+agent change, commit, session assertion, and checkpoint mapping assertion.
+
+### 2. Onboarding (13 scenarios)
 
 Covers the full first-time developer experience: install verification, daemon config,
 repository enablement, agent hook installation for every supported agent, disable, and uninstall.
@@ -58,7 +85,7 @@ cargo test --test qat_acceptance qat_onboarding -- --ignored
 | 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
 | 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
 
-### 2. DevQL Sync (15 scenarios)
+### 3. DevQL Sync (15 scenarios)
 
 Exercises the `devql sync` workspace reconciliation flow: full indexing, incremental
 add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
@@ -142,7 +169,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 ## Environment variables
 
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
-- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the onboarding + DevQL sync bundle running in parallel under `cargo qat`)
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the onboarding + DevQL sync + smoke bundle running in parallel under `cargo qat`)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)

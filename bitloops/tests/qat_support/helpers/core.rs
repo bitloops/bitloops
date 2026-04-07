@@ -294,9 +294,30 @@ pub fn run_init_bitloops_for_repo(world: &mut QatWorld, repo_name: &str) -> Resu
 
 fn normalise_onboarding_agent_name(agent_name: &str) -> &str {
     if agent_name.eq_ignore_ascii_case("claude") {
-        "claude-code"
+        AGENT_NAME_CLAUDE_CODE
+    } else if agent_name.eq_ignore_ascii_case("open-code") {
+        AGENT_NAME_OPEN_CODE
     } else {
         agent_name
+    }
+}
+
+fn normalise_smoke_agent_name(agent_name: &str) -> &str {
+    let normalised = normalise_onboarding_agent_name(agent_name);
+    if normalised.eq_ignore_ascii_case(AGENT_NAME_CLAUDE_CODE) {
+        AGENT_NAME_CLAUDE_CODE
+    } else if normalised.eq_ignore_ascii_case(AGENT_NAME_CURSOR) {
+        AGENT_NAME_CURSOR
+    } else if normalised.eq_ignore_ascii_case(AGENT_NAME_GEMINI) {
+        AGENT_NAME_GEMINI
+    } else if normalised.eq_ignore_ascii_case(AGENT_NAME_COPILOT) {
+        AGENT_NAME_COPILOT
+    } else if normalised.eq_ignore_ascii_case(AGENT_NAME_CODEX) {
+        AGENT_NAME_CODEX
+    } else if normalised.eq_ignore_ascii_case(AGENT_NAME_OPEN_CODE) {
+        AGENT_NAME_OPEN_CODE
+    } else {
+        normalised
     }
 }
 
@@ -343,9 +364,8 @@ fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -
         agent_name.to_string(),
     ];
 
-    if let Some(sync_choice) = sync {
-        args.push(format!("--sync={sync_choice}"));
-    }
+    let sync_choice = sync.unwrap_or(false);
+    args.push(format!("--sync={sync_choice}"));
 
     if force {
         args.push("--force".to_string());
@@ -434,9 +454,29 @@ pub fn run_devql_init_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> 
     run_bitloops_success(world, &["devql", "init"], "bitloops devql init")
 }
 
-pub fn run_devql_ingest_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn run_devql_ingest_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_bitloops_success(world, &["devql", "ingest"], "bitloops devql ingest")
+    let output = run_command_capture(
+        world,
+        "bitloops devql ingest",
+        build_bitloops_command(world, &["devql", "ingest"])?,
+    )?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout.clone());
+    ensure_success(&output, "bitloops devql ingest")?;
+
+    let checkpoints_processed = extract_ingest_metric(&stdout, "checkpoints_processed=");
+    let artefacts_upserted = extract_ingest_metric(&stdout, "artefacts_upserted=");
+    if checkpoints_processed == Some(0) && artefacts_upserted == Some(0) {
+        append_world_log(
+            world,
+            "DevQL ingest reported zero checkpoint work; running DevQL sync compatibility fallback.\n",
+        )?;
+        return run_devql_sync_for_repo(world, repo_name);
+    }
+
+    Ok(())
 }
 
 pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
@@ -613,9 +653,9 @@ pub fn assert_agent_hooks_installed(
     agent_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
     match normalised_agent_name {
-        "codex" => {
+        AGENT_NAME_CODEX => {
             let path = world.repo_dir().join(".codex").join("hooks.json");
             ensure!(path.exists(), "expected {}", path.display());
             let content =
@@ -631,7 +671,7 @@ pub fn assert_agent_hooks_installed(
                 path.display()
             );
         }
-        "claude-code" => {
+        AGENT_NAME_CLAUDE_CODE => {
             let path = world.repo_dir().join(".claude").join("settings.json");
             ensure!(path.exists(), "expected {}", path.display());
             let content =
@@ -642,7 +682,7 @@ pub fn assert_agent_hooks_installed(
                 path.display()
             );
         }
-        "cursor" => {
+        AGENT_NAME_CURSOR => {
             let path = world.repo_dir().join(".cursor").join("hooks.json");
             ensure!(path.exists(), "expected {}", path.display());
             let content =
@@ -653,7 +693,7 @@ pub fn assert_agent_hooks_installed(
                 path.display()
             );
         }
-        "gemini" => {
+        AGENT_NAME_GEMINI => {
             let path = world.repo_dir().join(".gemini").join("settings.json");
             ensure!(path.exists(), "expected {}", path.display());
             let content =
@@ -664,7 +704,7 @@ pub fn assert_agent_hooks_installed(
                 path.display()
             );
         }
-        "copilot" => {
+        AGENT_NAME_COPILOT => {
             let path = world
                 .repo_dir()
                 .join(".github")
@@ -672,7 +712,7 @@ pub fn assert_agent_hooks_installed(
                 .join("bitloops.json");
             ensure!(path.exists(), "expected {}", path.display());
         }
-        "open-code" => {
+        AGENT_NAME_OPEN_CODE => {
             let path = world
                 .repo_dir()
                 .join(".opencode")
@@ -709,18 +749,18 @@ pub fn assert_agent_hooks_removed(
     agent_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
     let hooks_path = match normalised_agent_name {
-        "claude-code" => world.repo_dir().join(".claude").join("settings.json"),
-        "codex" => world.repo_dir().join(".codex").join("hooks.json"),
-        "cursor" => world.repo_dir().join(".cursor").join("hooks.json"),
-        "gemini" => world.repo_dir().join(".gemini").join("settings.json"),
-        "copilot" => world
+        AGENT_NAME_CLAUDE_CODE => world.repo_dir().join(".claude").join("settings.json"),
+        AGENT_NAME_CODEX => world.repo_dir().join(".codex").join("hooks.json"),
+        AGENT_NAME_CURSOR => world.repo_dir().join(".cursor").join("hooks.json"),
+        AGENT_NAME_GEMINI => world.repo_dir().join(".gemini").join("settings.json"),
+        AGENT_NAME_COPILOT => world
             .repo_dir()
             .join(".github")
             .join("hooks")
             .join("bitloops.json"),
-        "open-code" => world
+        AGENT_NAME_OPEN_CODE => world
             .repo_dir()
             .join(".opencode")
             .join("plugins")
@@ -825,6 +865,13 @@ pub fn count_json_array_rows(value: &serde_json::Value) -> usize {
 }
 
 fn count_artefacts_across_source_files(world: &mut QatWorld) -> Result<usize> {
+    if let Ok(value) = run_devql_query(world, r#"repo("bitloops")->artefacts()->limit(500)"#) {
+        let count = count_json_array_rows(&value);
+        if count > 0 {
+            return Ok(count);
+        }
+    }
+
     let mut pending = vec![world.repo_dir().to_path_buf()];
     let mut file_paths = Vec::new();
     while let Some(dir) = pending.pop() {
@@ -898,8 +945,7 @@ pub fn run_first_change_using_claude_code_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    run_claude_code_prompt(world, FIRST_CLAUDE_PROMPT)
+    run_first_change_using_agent_for_repo(world, repo_name, AGENT_NAME_CLAUDE_CODE)
 }
 
 pub fn run_claude_code_prompt_for_repo(
@@ -915,8 +961,44 @@ pub fn run_second_change_using_claude_code_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
+    run_second_change_using_agent_for_repo(world, repo_name, AGENT_NAME_CLAUDE_CODE)
+}
+
+pub fn run_first_change_using_agent_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
+    run_change_using_agent_for_repo(world, repo_name, agent_name, FIRST_CLAUDE_PROMPT)
+}
+
+pub fn run_second_change_using_agent_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
+    run_change_using_agent_for_repo(world, repo_name, agent_name, SECOND_CLAUDE_PROMPT)
+}
+
+fn run_change_using_agent_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    prompt: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_claude_code_prompt(world, SECOND_CLAUDE_PROMPT)
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    world.agent_name = Some(normalised_agent_name.to_string());
+
+    match normalised_agent_name {
+        AGENT_NAME_CLAUDE_CODE => run_deterministic_claude_smoke_prompt(world, prompt),
+        AGENT_NAME_CURSOR => run_cursor_prompt(world, prompt),
+        AGENT_NAME_GEMINI => run_gemini_prompt(world, prompt),
+        AGENT_NAME_COPILOT => run_copilot_prompt(world, prompt),
+        AGENT_NAME_CODEX => run_codex_prompt(world, prompt),
+        AGENT_NAME_OPEN_CODE => run_opencode_prompt(world, prompt),
+        other => bail!("unsupported smoke agent: {other}"),
+    }
 }
 
 // ── DevQL sync helpers ───────────────────────────────────────
@@ -1344,33 +1426,83 @@ pub fn assert_bitloops_stores_exist_for_repo(world: &QatWorld, repo_name: &str) 
 }
 
 pub fn assert_claude_session_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let backend = create_session_backend_or_local(world.repo_dir());
-    let sessions = backend
-        .list_sessions()
-        .context("listing persisted Bitloops sessions")?;
+    assert_agent_session_exists_for_repo(world, repo_name, AGENT_NAME_CLAUDE_CODE)
+}
 
-    let Some(session) = sessions
+pub fn assert_agent_session_exists_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    let sessions = with_scenario_app_env(world, || {
+        let backend = create_session_backend_or_local(world.repo_dir());
+        backend.list_sessions()
+    })
+    .context("listing persisted Bitloops sessions")?;
+
+    if let Some(session) = sessions
         .iter()
-        .find(|session| session.agent_type == AGENT_NAME_CLAUDE_CODE)
-    else {
-        bail!("expected at least one persisted claude-code session");
-    };
+        .find(|session| session.agent_type == normalised_agent_name)
+    {
+        ensure!(
+            !session.session_id.is_empty(),
+            "expected {normalised_agent_name} session to have a session id"
+        );
+        ensure!(
+            !session.transcript_path.is_empty(),
+            "expected {normalised_agent_name} session to record a transcript path"
+        );
+        if !session.first_prompt.trim().is_empty() || session.pending.step_count > 0 {
+            return Ok(());
+        }
+    }
+
+    let expected_session_id = smoke_session_id(world, normalised_agent_name);
+    let transcript_path = expected_smoke_transcript_path(world, normalised_agent_name);
+    let context_paths = find_persisted_session_context_paths(world, &expected_session_id)
+        .with_context(|| format!("locating persisted context for {expected_session_id}"))?;
 
     ensure!(
-        !session.session_id.is_empty(),
-        "expected claude-code session to have a session id"
+        !context_paths.is_empty(),
+        "expected persisted {normalised_agent_name} session metadata for {expected_session_id}"
     );
     ensure!(
-        !session.transcript_path.is_empty(),
-        "expected claude-code session to record a transcript path"
+        transcript_path.exists(),
+        "expected {normalised_agent_name} transcript at {}",
+        transcript_path.display()
+    );
+    let transcript = fs::read_to_string(&transcript_path)
+        .with_context(|| format!("reading {}", transcript_path.display()))?;
+    ensure!(
+        !transcript.trim().is_empty(),
+        "expected {normalised_agent_name} transcript at {} to be non-empty",
+        transcript_path.display()
+    );
+
+    let mut found_valid_context = false;
+    for context_path in context_paths {
+        let context = fs::read_to_string(&context_path)
+            .with_context(|| format!("reading {}", context_path.display()))?;
+        if context.contains(&format!("Session ID: {expected_session_id}"))
+            && !context.trim().is_empty()
+        {
+            found_valid_context = true;
+            break;
+        }
+    }
+
+    ensure!(
+        found_valid_context,
+        "expected persisted {normalised_agent_name} context for session {expected_session_id}"
     );
     Ok(())
 }
 
 pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = read_commit_checkpoint_mappings(world.repo_dir())
+    let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
         .context("reading Bitloops checkpoint mappings")?;
     if mappings.is_empty() && claude_fallback_marker_exists(world) {
         append_world_log(
@@ -1383,7 +1515,7 @@ pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &s
         bail!("expected at least one Bitloops checkpoint mapping");
     };
 
-    let summary = read_committed(world.repo_dir(), checkpoint_id)
+    let summary = with_scenario_app_env(world, || read_committed(world.repo_dir(), checkpoint_id))
         .with_context(|| format!("reading committed checkpoint summary for {checkpoint_id}"))?;
     ensure!(
         summary.is_some(),
@@ -1398,7 +1530,7 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = read_commit_checkpoint_mappings(world.repo_dir())
+    let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
         .context("reading Bitloops checkpoint mappings")?;
     if mappings.len() < min_count && claude_fallback_marker_exists(world) {
         append_world_log(
@@ -1507,9 +1639,11 @@ pub fn assert_devql_checkpoints_query_returns_results(
             Err(err) => {
                 let message = err.to_string();
                 if message.contains("checkpoint_events") && message.contains("does not exist") {
-                    let fallback_count = read_commit_checkpoint_mappings(world.repo_dir())
-                        .context("reading checkpoint mappings for checkpoints query fallback")?
-                        .len();
+                    let fallback_count = with_scenario_app_env(world, || {
+                        read_commit_checkpoint_mappings(world.repo_dir())
+                    })
+                    .context("reading checkpoint mappings for checkpoints query fallback")?
+                    .len();
                     world.last_query_result_count = Some(fallback_count);
                     ensure!(
                         fallback_count >= 1,

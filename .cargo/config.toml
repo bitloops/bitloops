@@ -26,6 +26,7 @@ dev-coverage-html = "llvm-cov --manifest-path bitloops/Cargo.toml --workspace --
 
 # QAT aliases from workspace root.
 qat = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance -- --exact qat --ignored"
+qat-smoke = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_smoke -- --ignored"
 qat-devql-sync = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_devql_sync -- --ignored"
 qat-onboarding = "test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_onboarding -- --ignored"
 

@@ -20,7 +20,7 @@ fn resolve_binary() -> PathBuf {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT onboarding + DevQL sync suites in parallel; use `cargo qat`"]
+#[ignore = "slow E2E: runs QAT onboarding + DevQL sync suites in parallel, then smoke; use `cargo qat`"]
 async fn qat() {
     let binary = resolve_binary();
     run_bundle(binary).await.expect("QAT bundle suite failed");
@@ -54,15 +54,6 @@ async fn qat_devql_sync() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT Claude Code suite; use `cargo test --test qat_acceptance qat_claude_code -- --ignored`"]
-async fn qat_claude_code() {
-    let binary = resolve_binary();
-    runner::run_suite(binary, Suite::ClaudeCode)
-        .await
-        .expect("QAT Claude Code suite failed");
-}
-
-#[tokio::test]
 #[ignore = "slow E2E: runs QAT onboarding suite; use `cargo qat-onboarding` or `cargo qat`"]
 async fn qat_onboarding() {
     let binary = resolve_binary();
@@ -83,30 +74,42 @@ async fn qat_quickstart() {
 async fn run_bundle(binary: PathBuf) -> Result<()> {
     let (onboarding, devql_sync) = tokio::join!(
         runner::run_suite(binary.clone(), Suite::Onboarding),
-        runner::run_suite(binary, Suite::DevqlSync)
+        runner::run_suite(binary.clone(), Suite::DevqlSync)
     );
-    combine_bundle_results(onboarding, devql_sync)
+    let smoke = runner::run_suite(binary, Suite::Smoke).await;
+    combine_bundle_results(onboarding, devql_sync, smoke)
 }
 
-fn combine_bundle_results(onboarding: Result<()>, devql_sync: Result<()>) -> Result<()> {
-    match (onboarding, devql_sync) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(err), Ok(())) => Err(err),
-        (Ok(()), Err(err)) => Err(err),
-        (Err(onboarding_err), Err(devql_sync_err)) => Err(anyhow::anyhow!(
-            "QAT bundle reported failures:\n- onboarding: {onboarding_err:#}\n- devql-sync: {devql_sync_err:#}"
-        )),
+fn combine_bundle_results(onboarding: Result<()>, devql_sync: Result<()>, smoke: Result<()>) -> Result<()> {
+    match (onboarding, devql_sync, smoke) {
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (Err(err), Ok(()), Ok(())) => Err(err),
+        (Ok(()), Err(err), Ok(())) => Err(err),
+        (Ok(()), Ok(()), Err(err)) => Err(err),
+        (onboarding, devql_sync, smoke) => {
+            let mut message = String::from("QAT bundle reported failures:");
+            if let Err(err) = onboarding {
+                message.push_str(&format!("\n- onboarding: {err:#}"));
+            }
+            if let Err(err) = devql_sync {
+                message.push_str(&format!("\n- devql-sync: {err:#}"));
+            }
+            if let Err(err) = smoke {
+                message.push_str(&format!("\n- smoke: {err:#}"));
+            }
+            Err(anyhow::anyhow!(message))
+        }
     }
 }
 
 #[test]
 fn combine_bundle_results_returns_ok_when_both_suites_pass() {
-    combine_bundle_results(Ok(()), Ok(())).expect("both suites should pass");
+    combine_bundle_results(Ok(()), Ok(()), Ok(())).expect("all suites should pass");
 }
 
 #[test]
 fn combine_bundle_results_returns_onboarding_error_when_only_onboarding_fails() {
-    let err = combine_bundle_results(Err(anyhow::anyhow!("onboarding failed")), Ok(()))
+    let err = combine_bundle_results(Err(anyhow::anyhow!("onboarding failed")), Ok(()), Ok(()))
         .expect_err("onboarding failure should surface");
     assert!(
         format!("{err:#}").contains("onboarding failed"),
@@ -116,7 +119,7 @@ fn combine_bundle_results_returns_onboarding_error_when_only_onboarding_fails() 
 
 #[test]
 fn combine_bundle_results_returns_sync_error_when_only_sync_fails() {
-    let err = combine_bundle_results(Ok(()), Err(anyhow::anyhow!("sync failed")))
+    let err = combine_bundle_results(Ok(()), Err(anyhow::anyhow!("sync failed")), Ok(()))
         .expect_err("sync failure should surface");
     assert!(
         format!("{err:#}").contains("sync failed"),
@@ -125,12 +128,23 @@ fn combine_bundle_results_returns_sync_error_when_only_sync_fails() {
 }
 
 #[test]
-fn combine_bundle_results_reports_both_failures() {
+fn combine_bundle_results_returns_smoke_error_when_only_smoke_fails() {
+    let err = combine_bundle_results(Ok(()), Ok(()), Err(anyhow::anyhow!("smoke failed")))
+        .expect_err("smoke failure should surface");
+    assert!(
+        format!("{err:#}").contains("smoke failed"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn combine_bundle_results_reports_all_failures() {
     let err = combine_bundle_results(
         Err(anyhow::anyhow!("onboarding failed")),
         Err(anyhow::anyhow!("sync failed")),
+        Err(anyhow::anyhow!("smoke failed")),
     )
-    .expect_err("both failures should be preserved");
+    .expect_err("all failures should be preserved");
     let message = format!("{err:#}");
     assert!(
         message.contains("onboarding failed"),
@@ -139,5 +153,9 @@ fn combine_bundle_results_reports_both_failures() {
     assert!(
         message.contains("sync failed"),
         "combined error missing sync details: {message}"
+    );
+    assert!(
+        message.contains("smoke failed"),
+        "combined error missing smoke details: {message}"
     );
 }
