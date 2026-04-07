@@ -302,71 +302,77 @@ fn session_start_resets_ended_session() {
 
 #[test]
 fn user_prompt_submit_transitions_to_active() {
-    let (_dir, backend, _strat) = setup();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
 
-    let input = UserPromptSubmitInput {
-        session_id: "s3".to_string(),
-        transcript_path: "/tmp/t.jsonl".to_string(),
-        prompt: "Fix the bug".to_string(),
-    };
-    handle_user_prompt_submit(input, &backend, None).unwrap();
+        let input = UserPromptSubmitInput {
+            session_id: "s3".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            prompt: "Fix the bug".to_string(),
+        };
+        handle_user_prompt_submit(input, &backend, None).unwrap();
 
-    let state = backend.load_session("s3").unwrap().unwrap();
-    assert_eq!(state.phase, SessionPhase::Active);
-    assert_eq!(state.turn_id.len(), 12);
-    assert!(
-        state
-            .turn_id
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-        "turn_id should be 12 lowercase hex chars, got {}",
-        state.turn_id
-    );
+        let state = backend.load_session("s3").unwrap().unwrap();
+        assert_eq!(state.phase, SessionPhase::Active);
+        assert_eq!(state.turn_id.len(), 12);
+        assert!(
+            state
+                .turn_id
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "turn_id should be 12 lowercase hex chars, got {}",
+            state.turn_id
+        );
 
-    // Pre-prompt state should be saved.
-    let pp = backend.load_pre_prompt("s3").unwrap();
-    assert!(pp.is_some());
-    assert_eq!(pp.unwrap().prompt, "Fix the bug");
+        // Pre-prompt state should be saved.
+        let pp = backend.load_pre_prompt("s3").unwrap();
+        assert!(pp.is_some());
+        assert_eq!(pp.unwrap().prompt, "Fix the bug");
+    });
 }
 
 #[test]
 fn user_prompt_submit_rejects_empty_session_id() {
-    let (_dir, backend, _strat) = setup();
-    let err = handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: " ".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            prompt: "Fix the bug".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .expect_err("expected validation error");
-    assert!(
-        err.to_string()
-            .contains("turn-start requires non-empty session_id"),
-        "unexpected error: {err:#}"
-    );
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let err = handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: " ".to_string(),
+                transcript_path: "/tmp/t.jsonl".to_string(),
+                prompt: "Fix the bug".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .expect_err("expected validation error");
+        assert!(
+            err.to_string()
+                .contains("turn-start requires non-empty session_id"),
+            "unexpected error: {err:#}"
+        );
+    });
 }
 
 #[test]
 fn user_prompt_submit_records_first_prompt() {
-    let (_dir, backend, _strat) = setup();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
 
-    let long_prompt = "A".repeat(200);
-    let input = UserPromptSubmitInput {
-        session_id: "s4".to_string(),
-        transcript_path: "/tmp/t.jsonl".to_string(),
-        prompt: long_prompt,
-    };
-    handle_user_prompt_submit(input, &backend, None).unwrap();
+        let long_prompt = "A".repeat(200);
+        let input = UserPromptSubmitInput {
+            session_id: "s4".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            prompt: long_prompt,
+        };
+        handle_user_prompt_submit(input, &backend, None).unwrap();
 
-    let state = backend.load_session("s4").unwrap().unwrap();
-    assert_eq!(
-        state.first_prompt.chars().count(),
-        100,
-        "first_prompt truncated to 100 chars"
-    );
+        let state = backend.load_session("s4").unwrap().unwrap();
+        assert_eq!(
+            state.first_prompt.chars().count(),
+            100,
+            "first_prompt truncated to 100 chars"
+        );
+    });
 }
 
 #[test]
@@ -697,14 +703,16 @@ fn cursor_stop_persists_interactions_before_save_step_failure() {
 fn cursor_before_submit_prompt_creates_pre_prompt_state() {
     let (dir, backend, strat) = setup();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::BeforeSubmitPrompt,
-        r#"{"conversation_id":"cursor-s2","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
-        &backend,
-        &strat,
-        dir.path(),
-        "before-submit-prompt",
-    )
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeSubmitPrompt,
+            r#"{"conversation_id":"cursor-s2","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "before-submit-prompt",
+        )
+    })
     .unwrap();
 
     let state = backend.load_session("cursor-s2").unwrap().unwrap();
@@ -2415,115 +2423,123 @@ fn hook_command_sets_current_hook_agent_name() {
 
 #[test]
 fn pre_prompt_state_with_transcript_position() {
-    let (_dir, backend, _strat) = setup();
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript.jsonl");
-    fs::write(
-        &transcript_path,
-        "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n",
-    )
-    .unwrap();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript.jsonl");
+        fs::write(
+            &transcript_path,
+            "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n",
+        )
+        .unwrap();
 
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-123".to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-123".to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-123")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 3);
+        let state = backend
+            .load_pre_prompt("test-session-123")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 3);
+    });
 }
 
 // Capture transcript position AND last transcript identifier at turn start.
 #[test]
 fn pre_prompt_state_captures_last_transcript_identifier() {
-    let (_dir, backend, _strat) = setup();
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript.jsonl");
-    fs::write(
-        &transcript_path,
-        r#"{"uuid":"user-1","type":"user","message":{"content":"first"}}
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript.jsonl");
+        fs::write(
+            &transcript_path,
+            r#"{"uuid":"user-1","type":"user","message":{"content":"first"}}
 {"uuid":"assistant-1","type":"assistant","message":{"content":"ok"}}
 {"uuid":"user-2","type":"user","message":{"content":"second"}}
 "#,
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-last-uuid".to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-last-uuid".to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-last-uuid")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 3);
-    assert_eq!(state.last_transcript_identifier, "user-2");
+        let state = backend
+            .load_pre_prompt("test-session-last-uuid")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 3);
+        assert_eq!(state.last_transcript_identifier, "user-2");
+    });
 }
 
 #[test]
 fn pre_prompt_state_with_empty_transcript_path() {
-    let (_dir, backend, _strat) = setup();
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-empty-transcript".to_string(),
-            transcript_path: String::new(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-empty-transcript".to_string(),
+                transcript_path: String::new(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-empty-transcript")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 0);
+        let state = backend
+            .load_pre_prompt("test-session-empty-transcript")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 0);
+    });
 }
 
 #[test]
 fn pre_prompt_state_with_summary_only_transcript() {
-    let (_dir, backend, _strat) = setup();
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript-summary.jsonl");
-    fs::write(
-        &transcript_path,
-        "{\"type\":\"summary\",\"leafUuid\":\"leaf-1\"}\n{\"type\":\"summary\",\"leafUuid\":\"leaf-2\"}\n",
-    )
-    .unwrap();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript-summary.jsonl");
+        fs::write(
+            &transcript_path,
+            "{\"type\":\"summary\",\"leafUuid\":\"leaf-1\"}\n{\"type\":\"summary\",\"leafUuid\":\"leaf-2\"}\n",
+        )
+        .unwrap();
 
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-summary-only".to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-summary-only".to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-summary-only")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 2);
+        let state = backend
+            .load_pre_prompt("test-session-summary-only")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 2);
+    });
 }
 
 #[test]

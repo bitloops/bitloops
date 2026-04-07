@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
 
 use super::field_mapping::{
-    KNOWLEDGE_STAGE_NAME, TESTS_SUMMARY_STAGE_NAME, is_coverage_stage_name, is_tests_stage_name,
+    CLONE_SUMMARY_STAGE_NAME, KNOWLEDGE_STAGE_NAME, TESTS_SUMMARY_STAGE_NAME,
+    is_coverage_stage_name, is_tests_stage_name,
 };
 use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageKind};
 
@@ -18,6 +19,9 @@ pub(super) fn resolve_registered_stage(
         return Ok(None);
     };
 
+    if stage.stage_name == CLONE_SUMMARY_STAGE_NAME {
+        return Ok(Some(RegisteredStageKind::CloneSummary));
+    }
     if is_tests_stage_name(&stage.stage_name) {
         return Ok(Some(RegisteredStageKind::Tests(stage)));
     }
@@ -85,8 +89,18 @@ pub(super) fn validate_graphql_compiler_support(
 
     let has_tests_stage = matches!(registered_stage, Some(RegisteredStageKind::Tests(_)));
     let has_coverage_stage = matches!(registered_stage, Some(RegisteredStageKind::Coverage));
+    let has_clone_summary_stage =
+        matches!(registered_stage, Some(RegisteredStageKind::CloneSummary));
     let has_tests_summary_stage =
         matches!(registered_stage, Some(RegisteredStageKind::TestsSummary));
+
+    if has_clone_summary_stage && !parsed.has_clones_stage {
+        bail!("summary() requires a clones() stage in the query");
+    }
+
+    if has_clone_summary_stage && !parsed.select_fields.is_empty() {
+        bail!("summary() does not support select() in the GraphQL compiler yet");
+    }
 
     if has_tests_stage && !parsed.has_artefacts_stage {
         bail!("tests() requires an artefacts() stage in the query");
@@ -238,6 +252,7 @@ pub(super) fn should_compile_project_stage(
     }
 
     match registered_stage {
+        RegisteredStageKind::CloneSummary => false,
         RegisteredStageKind::Tests(_)
         | RegisteredStageKind::Coverage
         | RegisteredStageKind::TestsSummary => parsed.project_path.is_some(),

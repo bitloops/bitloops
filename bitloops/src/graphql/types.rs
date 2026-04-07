@@ -21,7 +21,7 @@ pub mod test_harness;
 pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
-pub use clone::{ClonesFilterInput, SemanticClone};
+pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,

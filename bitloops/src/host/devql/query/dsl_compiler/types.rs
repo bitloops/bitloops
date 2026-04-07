@@ -6,6 +6,7 @@ pub(crate) enum GraphqlCompileMode {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RegisteredStageKind<'a> {
+    CloneSummary,
     Tests(&'a super::RegisteredStageCall),
     Coverage,
     TestsSummary,
