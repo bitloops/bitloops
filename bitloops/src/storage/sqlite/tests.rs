@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use tempfile::TempDir;
 
 use super::SqliteConnectionPool;
-use super::introspection::sqlite_table_pk_columns;
+use super::introspection::{sqlite_table_has_column, sqlite_table_pk_columns};
 
 #[test]
 fn sqlite_connection_pool_initialises_devql_schema_workspace_revisions_table() -> Result<()> {
@@ -579,6 +579,89 @@ fn initialise_devql_schema_assigns_legacy_current_state_rows_to_repository_defau
     assert_eq!(
         migrated_edge_rows, 1,
         "legacy artefact_edges_current rows should migrate to the repository default branch"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn initialise_devql_schema_cuts_over_legacy_historical_artefacts_shape() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+    sqlite.execute_batch(
+        "CREATE TABLE artefacts (
+            artefact_id TEXT PRIMARY KEY,
+            symbol_id TEXT,
+            repo_id TEXT NOT NULL,
+            blob_sha TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            canonical_kind TEXT,
+            language_kind TEXT,
+            symbol_fqn TEXT,
+            parent_artefact_id TEXT,
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            signature TEXT,
+            modifiers TEXT NOT NULL DEFAULT '[]',
+            docstring TEXT,
+            content_hash TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind,
+            symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature,
+            modifiers, docstring, content_hash
+        ) VALUES (
+            'legacy-a1', 'legacy-s1', 'repo-legacy', 'blob-1', 'src/main.rs', 'rust', 'function',
+            'function', 'src::main::f', NULL, 10, 20, 100, 200, 'f()', '[]', 'docs', 'hash-1'
+        );",
+    )?;
+
+    sqlite.initialise_devql_schema()?;
+
+    let has_legacy_blob_sha =
+        sqlite.with_connection(|conn| sqlite_table_has_column(conn, "artefacts", "blob_sha"))?;
+    assert!(
+        !has_legacy_blob_sha,
+        "artefacts.blob_sha should be removed after cutover"
+    );
+
+    let has_legacy_start_line =
+        sqlite.with_connection(|conn| sqlite_table_has_column(conn, "artefacts", "start_line"))?;
+    assert!(
+        !has_legacy_start_line,
+        "artefacts.start_line should be removed after cutover"
+    );
+
+    let snapshots_row_count: i64 = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM artefact_snapshots WHERE repo_id = 'repo-legacy' AND artefact_id = 'legacy-a1' AND blob_sha = 'blob-1'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(
+        snapshots_row_count, 1,
+        "cutover should backfill one artefact snapshot row from legacy artefacts placement columns"
+    );
+
+    let historical_view_sql: String = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'artefacts_historical'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert!(
+        !historical_view_sql.contains("UNION ALL"),
+        "artefacts_historical should be recreated as join-only view after cutover"
     );
 
     Ok(())

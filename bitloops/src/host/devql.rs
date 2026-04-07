@@ -783,7 +783,7 @@ use self::ingestion_schema::*;
 pub(crate) use self::ingestion_schema::{
     checkpoint_relational_schema_sql_postgres, checkpoint_relational_schema_sql_sqlite,
     checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite, knowledge_schema_sql_duckdb,
-    knowledge_schema_sql_sqlite,
+    knowledge_schema_sql_sqlite, historical_artefacts_cutover_sqlite_sql,
 };
 #[cfg(test)]
 pub(crate) use self::ingestion_schema::{

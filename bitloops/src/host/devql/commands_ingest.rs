@@ -327,7 +327,7 @@ async fn execute_ingest_inner(
                     })?;
                     if let Some(enrichment) = enrichment.as_ref() {
                         let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                            cfg.config_root.clone(),
+                            cfg.daemon_config_root.clone(),
                             cfg.repo_root.clone(),
                             cfg.repo.repo_id.clone(),
                             active_branch_for_enqueue.clone(),

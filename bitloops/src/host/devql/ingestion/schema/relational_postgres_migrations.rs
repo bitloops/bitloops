@@ -139,6 +139,7 @@ INSERT INTO artefact_snapshots (
 SELECT
     repo_id, blob_sha, path, artefact_id, parent_artefact_id, start_line, end_line, start_byte, end_byte
 FROM artefacts
+WHERE 1 = 1
 ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
     path = excluded.path,
     parent_artefact_id = excluded.parent_artefact_id,
