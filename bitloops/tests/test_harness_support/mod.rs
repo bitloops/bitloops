@@ -96,6 +96,17 @@ pub fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {
 }
 
 pub fn prepare_graphql_workspace(workspace: &Workspace) {
+    fs::write(
+        workspace
+            .repo_dir()
+            .join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            "[stores.relational]\nsqlite_path = {:?}\n",
+            workspace.db_path()
+        ),
+    )
+    .expect("write GraphQL workspace store config");
+
     bootstrap_codex_workspace(workspace);
 
     with_repo_app_env(workspace.repo_dir(), || {

@@ -363,6 +363,17 @@ fn persist_production_rows(
     commit: &CommitRecord,
     batch: &ProductionBatchBuilder,
 ) -> Result<()> {
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed creating parent directory for sqlite database at {}",
+                db_path.display()
+            )
+        })?;
+    }
+
     let mut conn = Connection::open(db_path)
         .with_context(|| format!("failed opening sqlite database at {}", db_path.display()))?;
     let tx = conn
