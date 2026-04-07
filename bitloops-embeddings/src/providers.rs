@@ -210,7 +210,7 @@ fn build_http_provider(
         model: model.to_string(),
         api_key: api_key.cloned(),
         endpoint,
-        output_dimension: default_output_dimension(provider),
+        output_dimension: default_output_dimension(provider, model),
         client,
     }))
 }
@@ -315,9 +315,18 @@ fn resolve_http_endpoint(provider: &str, base_url: Option<&str>) -> Result<Strin
     }
 }
 
-fn default_output_dimension(provider: &str) -> Option<usize> {
+fn default_output_dimension(provider: &str, model: &str) -> Option<usize> {
     match provider {
+        "openai" => default_openai_output_dimension(model),
         "voyage" => Some(1024),
+        _ => None,
+    }
+}
+
+fn default_openai_output_dimension(model: &str) -> Option<usize> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "text-embedding-3-large" => Some(3072),
+        "text-embedding-3-small" | "text-embedding-ada-002" => Some(1536),
         _ => None,
     }
 }
@@ -445,6 +454,30 @@ mod tests {
         assert_eq!(payload["input_type"], "document");
         assert_eq!(payload["output_dimension"], 1024);
         assert_eq!(payload["truncation"], true);
+    }
+
+    #[test]
+    fn default_output_dimension_infers_known_openai_models() {
+        assert_eq!(
+            default_output_dimension("openai", "text-embedding-3-large"),
+            Some(3072)
+        );
+        assert_eq!(
+            default_output_dimension("openai", "text-embedding-3-small"),
+            Some(1536)
+        );
+        assert_eq!(
+            default_output_dimension("openai", "text-embedding-ada-002"),
+            Some(1536)
+        );
+    }
+
+    #[test]
+    fn default_output_dimension_keeps_unknown_openai_models_unset() {
+        assert_eq!(
+            default_output_dimension("openai", "custom-openai-model"),
+            None
+        );
     }
 
     #[test]

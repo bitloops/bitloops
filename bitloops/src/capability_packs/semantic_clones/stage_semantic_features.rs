@@ -269,7 +269,52 @@ pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
         .query_rows(&build_semantic_get_artefacts_by_ids_sql(artefact_ids))
         .await?;
     let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
+    hydrate_semantic_feature_inputs(
+        relational,
+        repo_root,
+        target_artefacts,
+        &requested_ids,
+        &requested_order,
+    )
+    .await
+}
 
+pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    let target_rows = relational
+        .query_rows(&build_current_repo_artefacts_sql(repo_id))
+        .await?;
+    let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
+    let requested_ids = target_artefacts
+        .iter()
+        .map(|row| row.artefact_id.clone())
+        .collect::<BTreeSet<_>>();
+    let requested_order = target_artefacts
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.artefact_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    hydrate_semantic_feature_inputs(
+        relational,
+        repo_root,
+        target_artefacts,
+        &requested_ids,
+        &requested_order,
+    )
+    .await
+}
+
+async fn hydrate_semantic_feature_inputs(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    target_artefacts: Vec<semantic::PreStageArtefactRow>,
+    requested_ids: &BTreeSet<String>,
+    requested_order: &HashMap<String, usize>,
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
     let groups = target_artefacts
         .iter()
         .map(|row| (row.repo_id.clone(), row.blob_sha.clone(), row.path.clone()))
@@ -303,26 +348,6 @@ pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
     });
     hydrated_inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
     Ok(hydrated_inputs)
-}
-
-pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
-    relational: &RelationalStorage,
-    repo_root: &Path,
-    repo_id: &str,
-) -> Result<Vec<semantic::SemanticFeatureInput>> {
-    let rows = relational
-        .query_rows(&build_current_repo_artefact_ids_sql(repo_id))
-        .await?;
-    let artefact_ids = rows
-        .into_iter()
-        .filter_map(|row| {
-            row.get("artefact_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect::<Vec<_>>();
-
-    load_semantic_feature_inputs_for_artefacts(relational, repo_root, &artefact_ids).await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,12 +463,16 @@ ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
     )
 }
 
-fn build_current_repo_artefact_ids_sql(repo_id: &str) -> String {
+fn build_current_repo_artefacts_sql(repo_id: &str) -> String {
     format!(
-        "SELECT artefact_id \
-FROM artefacts_current \
-WHERE repo_id = '{repo_id}' \
-ORDER BY path, start_line, symbol_id",
+        "SELECT a.artefact_id, a.symbol_id, a.repo_id, a.blob_sha, a.path, a.language, \
+COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol')) AS canonical_kind, \
+COALESCE(a.language_kind, COALESCE(a.canonical_kind, 'symbol')) AS language_kind, \
+COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, a.parent_artefact_id, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.modifiers, a.docstring, a.content_hash \
+FROM artefacts_current current \
+JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
+WHERE current.repo_id = '{repo_id}' \
+ORDER BY current.path, current.start_line, current.symbol_id, coalesce(a.start_byte, 0), a.artefact_id",
         repo_id = esc_pg(repo_id),
     )
 }
@@ -731,6 +760,15 @@ mod semantic_feature_persistence_tests {
         ]);
         assert!(sql.contains("WHERE artefact_id IN ('artefact''1', 'artefact-2')"));
         assert!(sql.contains("ORDER BY repo_id, blob_sha, path"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_builds_current_repo_artefacts_sql_without_id_in_clause() {
+        let sql = build_current_repo_artefacts_sql("repo'1");
+        assert!(sql.contains("FROM artefacts_current current"));
+        assert!(sql.contains("JOIN artefacts a ON a.repo_id = current.repo_id"));
+        assert!(sql.contains("WHERE current.repo_id = 'repo''1'"));
+        assert!(!sql.contains("WHERE artefact_id IN"));
     }
 
     #[test]
