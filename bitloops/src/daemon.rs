@@ -64,11 +64,13 @@ pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueu
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
 pub use self::types::{
-    DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
-    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
-    EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
-    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+    CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
+    CapabilityEventRunStatus, DaemonHealthSummary, DaemonMode, DaemonProcessModeArg,
+    DaemonRuntimeState, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, InternalDaemonProcessArgs,
+    InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind,
+    SupervisorRuntimeState, SupervisorServiceMetadata, SyncQueueState, SyncQueueStatus,
+    SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,

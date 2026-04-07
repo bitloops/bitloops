@@ -217,6 +217,7 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         service,
         service_running,
         health,
+        capability_events: None,
         enrichment,
         sync,
     })

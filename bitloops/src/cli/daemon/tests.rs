@@ -513,6 +513,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
         }),
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: Some(EnrichmentQueueStatus {
             state: EnrichmentQueueState {
                 version: 1,
@@ -605,6 +606,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         service: None,
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: None,
         sync: None,
     };
@@ -633,6 +635,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         service: None,
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: None,
         sync: None,
     };
@@ -683,6 +686,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
         service: None,
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: None,
         sync: Some(SyncQueueStatus {
             state: SyncQueueState {

@@ -330,6 +330,92 @@ fn daemon_runtime_store_persists_sync_state_in_sqlite() {
 }
 
 #[test]
+fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            assert!(
+                !store
+                    .capability_event_state_exists()
+                    .expect("check capability event state exists before save")
+            );
+
+            let output = store
+                .mutate_capability_event_queue_state(|state| {
+                    state.version = 3;
+                    state.last_action = Some("enqueue".to_string());
+                    state.runs.push(crate::daemon::CapabilityEventRunRecord {
+                        run_id: "event-run-1".to_string(),
+                        repo_id: "repo-1".to_string(),
+                        capability_id: "test_harness".to_string(),
+                        handler_id: "sync_completed".to_string(),
+                        event_kind: "sync_completed".to_string(),
+                        lane_key: "repo-1:test_harness:sync_completed".to_string(),
+                        status: crate::daemon::CapabilityEventRunStatus::Queued,
+                        attempts: 0,
+                        submitted_at_unix: 1,
+                        started_at_unix: None,
+                        updated_at_unix: 1,
+                        completed_at_unix: None,
+                        error: None,
+                    });
+                    Ok(state.version)
+                })
+                .expect("mutate capability event queue state");
+            assert_eq!(output, 3);
+
+            assert!(
+                store
+                    .capability_event_state_exists()
+                    .expect("check capability event state exists after save")
+            );
+
+            let loaded = store
+                .load_capability_event_queue_state()
+                .expect("load capability event queue state")
+                .expect("state exists");
+            assert_eq!(loaded.version, 3);
+            assert_eq!(loaded.last_action.as_deref(), Some("enqueue"));
+            assert_eq!(loaded.runs.len(), 1);
+            assert_eq!(loaded.runs[0].run_id, "event-run-1");
+            assert_eq!(loaded.runs[0].lane_key, "repo-1:test_harness:sync_completed");
+        },
+    );
+}
+
+#[test]
+fn persisted_capability_event_queue_state_default_preserves_legacy_values() {
+    let default = PersistedCapabilityEventQueueState::default();
+    assert_eq!(default.version, 1);
+    assert!(default.runs.is_empty());
+    assert_eq!(default.last_action.as_deref(), Some("initialized"));
+    assert_eq!(default.updated_at_unix, 0);
+}
+
+#[test]
+fn daemon_runtime_store_uses_legacy_capability_event_defaults_when_state_is_missing() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            let observed = store
+                .mutate_capability_event_queue_state(|state| {
+                    Ok((state.version, state.last_action.clone(), state.runs.len()))
+                })
+                .expect("load default capability event queue state");
+            assert_eq!(observed.0, 1);
+            assert_eq!(observed.1.as_deref(), Some("initialized"));
+            assert_eq!(observed.2, 0);
+        },
+    );
+}
+
+#[test]
 fn persisted_sync_queue_state_default_preserves_legacy_values() {
     let default = PersistedSyncQueueState::default();
     assert_eq!(default.version, 1);
