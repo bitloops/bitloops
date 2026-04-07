@@ -22,6 +22,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Check Rust file size limits
         run: cargo dev-file-size
+  qat:
+    name: QAT
+    runs-on: self-hosted
+    timeout-minutes: 180
+    env:
+      DUCKDB_DOWNLOAD_LIB: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: ci
+
+      - name: Run QAT acceptance suites
+        run: cargo qat
   test:
     name: Test compile (Ubuntu)
     runs-on: self-hosted
