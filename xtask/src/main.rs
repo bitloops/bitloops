@@ -993,8 +993,7 @@ mod tests {
 
     use super::{
         BITLOOPS_MANIFEST, DEFAULT_FAST_TEST_THREADS, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS,
-        SLOW_TEST_TARGETS,
-        collect_rs_files, count_lines, env_u64, is_regression, is_test_file,
+        SLOW_TEST_TARGETS, collect_rs_files, count_lines, env_u64, is_regression, is_test_file,
         llvm_cov_lcov_cargo_args, llvm_cov_lcov_display_command, llvm_cov_report_html_cargo_args,
         llvm_cov_report_html_display_command, otool_list_output_links_libduckdb,
         otool_load_output_contains_rpath, parse_compare_options, parse_coverage_all_paths,
