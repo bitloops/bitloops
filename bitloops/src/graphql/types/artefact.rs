@@ -9,9 +9,9 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, ClonesFilterInput, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -335,11 +335,13 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
+        let summary = CloneSummary::from_clones(&clones);
         let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
+            summary,
         ))
     }
 

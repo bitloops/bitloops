@@ -398,6 +398,120 @@ pub(super) fn seed_graphql_clone_data(repo_root: &Path) {
     }
 }
 
+pub(super) fn seed_graphql_same_file_method_clone_data(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open method clone sqlite");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .expect("initialise clone sqlite schema");
+
+    let path = "packages/api/src/change-path.ts";
+    let blob_sha = "blob-api-change-path";
+
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, language,
+            head_content_id, index_content_id, worktree_content_id,
+            effective_content_id, effective_source,
+            parser_version, extractor_version,
+            exists_in_head, exists_in_index, exists_in_worktree,
+            last_synced_at
+        ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T10:00:00Z')",
+        rusqlite::params![repo_id.as_str(), path, blob_sha],
+    )
+    .expect("insert method current_file_state row");
+
+    for (
+        symbol_id,
+        artefact_id,
+        symbol_fqn,
+        parent_symbol_id,
+        parent_artefact_id,
+        start_line,
+        end_line,
+    ) in [
+        (
+            "class::change-path",
+            "artefact::class-change-path",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            1_i64,
+            40_i64,
+        ),
+        (
+            "method::execute",
+            "artefact::method-execute",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute",
+            Some("class::change-path"),
+            Some("artefact::class-change-path"),
+            10_i64,
+            24_i64,
+        ),
+        (
+            "method::command",
+            "artefact::method-command",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command",
+            Some("class::change-path"),
+            Some("artefact::class-change-path"),
+            26_i64,
+            34_i64,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                0, ?13, NULL, '[\"public\"]', 'Method docstring', '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                path,
+                blob_sha,
+                symbol_id,
+                artefact_id,
+                if symbol_id == "class::change-path" {
+                    "type"
+                } else {
+                    "method"
+                },
+                if symbol_id == "class::change-path" {
+                    "class_declaration"
+                } else {
+                    "method_definition"
+                },
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert method artefact current row");
+    }
+
+    conn.execute(
+        "INSERT INTO symbol_clone_edges (
+            repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+            relation_kind, score, semantic_score, lexical_score, structural_score,
+            clone_input_hash, explanation_json
+        ) VALUES (
+            ?1, 'method::execute', 'artefact::method-execute', 'method::command', 'artefact::method-command',
+            'weak_clone_candidate', 0.61, 0.58, 0.44, 0.73,
+            'clone-hash-method-same-file', '{\"reason\":\"same file helper overlap\"}'
+        )",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert same-file method clone edge");
+}
+
 pub(super) fn seed_graphql_test_harness_stage_data(
     repo_root: &Path,
     commit_sha: &str,

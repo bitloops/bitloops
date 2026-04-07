@@ -220,6 +220,59 @@ bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_s
 }
 ```
 
+### Raw GraphQL summary across the filtered artefact set
+
+```graphql
+{
+  repo(name: "bitloops") {
+    cloneSummary(
+      filter: { kind: FUNCTION, symbolFqn: "packages/api/src/caller.ts::caller" }
+      cloneFilter: { minScore: 0.75 }
+    ) {
+      totalCount
+      groups {
+        relationKind
+        count
+      }
+    }
+  }
+}
+```
+
+### Raw GraphQL summary for one resolved artefact
+
+```graphql
+{
+  repo(name: "bitloops") {
+    file(path: "packages/api/src/caller.ts") {
+      artefacts(
+        filter: { kind: FUNCTION, symbolFqn: "packages/api/src/caller.ts::caller" }
+        first: 1
+      ) {
+        edges {
+          node {
+            path
+            symbolFqn
+            clones(first: 10, filter: { minScore: 0.75 }) {
+              totalCount
+              summary {
+                totalCount
+                groups {
+                  relationKind
+                  count
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Use `cloneSummary(...)` for one aggregate result over the filtered artefacts. Use nested `clones { summary }` when you need the summary attached to a specific artefact node.
+
 ## Tips
 
 - Re-ingest after significant changes so relational, events, and blob-backed enrichments stay in sync
