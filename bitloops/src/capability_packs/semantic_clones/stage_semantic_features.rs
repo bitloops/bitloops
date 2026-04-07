@@ -465,14 +465,14 @@ ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
 
 fn build_current_repo_artefacts_sql(repo_id: &str) -> String {
     format!(
-        "SELECT a.artefact_id, a.symbol_id, a.repo_id, a.blob_sha, a.path, a.language, \
-COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol')) AS canonical_kind, \
-COALESCE(a.language_kind, COALESCE(a.canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, a.parent_artefact_id, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.modifiers, a.docstring, a.content_hash \
+        "SELECT current.artefact_id, current.symbol_id, current.repo_id, current.content_id AS blob_sha, current.path, current.language, \
+COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS canonical_kind, \
+COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
+COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
 FROM artefacts_current current \
-JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
+LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
 WHERE current.repo_id = '{repo_id}' \
-ORDER BY current.path, current.start_line, current.symbol_id, coalesce(a.start_byte, 0), a.artefact_id",
+ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
         repo_id = esc_pg(repo_id),
     )
 }
@@ -766,7 +766,8 @@ mod semantic_feature_persistence_tests {
     fn semantic_feature_persistence_builds_current_repo_artefacts_sql_without_id_in_clause() {
         let sql = build_current_repo_artefacts_sql("repo'1");
         assert!(sql.contains("FROM artefacts_current current"));
-        assert!(sql.contains("JOIN artefacts a ON a.repo_id = current.repo_id"));
+        assert!(sql.contains("LEFT JOIN artefacts a ON a.repo_id = current.repo_id"));
+        assert!(sql.contains("current.content_id AS blob_sha"));
         assert!(sql.contains("WHERE current.repo_id = 'repo''1'"));
         assert!(!sql.contains("WHERE artefact_id IN"));
     }

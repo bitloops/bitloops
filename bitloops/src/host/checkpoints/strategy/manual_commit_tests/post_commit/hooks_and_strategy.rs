@@ -1,5 +1,71 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
+fn insert_historical_artefact_row(
+    conn: &rusqlite::Connection,
+    artefact_id: &str,
+    symbol_id: &str,
+    repo_id: &str,
+    blob_sha: &str,
+    path: &str,
+    language: &str,
+    canonical_kind: &str,
+    language_kind: &str,
+    symbol_fqn: &str,
+    start_line: i64,
+    end_line: i64,
+    start_byte: i64,
+    end_byte: i64,
+    signature: &str,
+    modifiers: &str,
+    docstring: Option<&str>,
+    content_hash: &str,
+) {
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9, ?10, ?11
+        )",
+        rusqlite::params![
+            artefact_id,
+            symbol_id,
+            repo_id,
+            language,
+            canonical_kind,
+            language_kind,
+            symbol_fqn,
+            signature,
+            modifiers,
+            docstring,
+            content_hash,
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte
+        ) VALUES (
+            ?1, ?2, ?3, ?4, NULL,
+            ?5, ?6, ?7, ?8
+        )",
+        rusqlite::params![
+            repo_id,
+            blob_sha,
+            path,
+            artefact_id,
+            start_line,
+            end_line,
+            start_byte,
+            end_byte,
+        ],
+    )
+    .unwrap();
+}
+
 #[test]
 pub(crate) fn pre_push_does_not_push_checkpoints_branch() {
     let base = tempfile::tempdir().unwrap();
@@ -98,20 +164,28 @@ pub(crate) fn pre_push_without_postgres_prunes_historical_rows_by_retention() {
                 ],
             )
             .unwrap();
-        sqlite
-            .execute(
-                "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function', ?2, NULL, 1, 1, 0, 1, 'fn()', '[]', NULL, ?6)",
-                rusqlite::params![
-                    artefact_id.as_str(),
-                    format!("symbol-{idx:03}"),
-                    repo_id.as_str(),
-                    blob_sha.as_str(),
-                    path.as_str(),
-                    format!("hash-{idx:03}")
-                ],
-            )
-            .unwrap();
+        let symbol_id = format!("symbol-{idx:03}");
+        let content_hash = format!("hash-{idx:03}");
+        insert_historical_artefact_row(
+            &sqlite,
+            artefact_id.as_str(),
+            symbol_id.as_str(),
+            repo_id.as_str(),
+            blob_sha.as_str(),
+            path.as_str(),
+            "typescript",
+            "function",
+            "function",
+            symbol_id.as_str(),
+            1,
+            1,
+            0,
+            1,
+            "fn()",
+            "[]",
+            None,
+            content_hash.as_str(),
+        );
         sqlite
             .execute(
                 "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, metadata) \
@@ -234,20 +308,28 @@ pub(crate) fn pre_push_retention_pruning_preserves_current_state_tables() {
                 ],
             )
             .unwrap();
-        sqlite
-            .execute(
-                "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function', ?2, NULL, 1, 1, 0, 1, 'fn()', '[]', NULL, ?6)",
-                rusqlite::params![
-                    artefact_id.as_str(),
-                    format!("symbol-{idx:03}"),
-                    repo_id.as_str(),
-                    blob_sha.as_str(),
-                    path.as_str(),
-                    format!("hash-{idx:03}")
-                ],
-            )
-            .unwrap();
+        let symbol_id = format!("symbol-{idx:03}");
+        let content_hash = format!("hash-{idx:03}");
+        insert_historical_artefact_row(
+            &sqlite,
+            artefact_id.as_str(),
+            symbol_id.as_str(),
+            repo_id.as_str(),
+            blob_sha.as_str(),
+            path.as_str(),
+            "typescript",
+            "function",
+            "function",
+            symbol_id.as_str(),
+            1,
+            1,
+            0,
+            1,
+            "fn()",
+            "[]",
+            None,
+            content_hash.as_str(),
+        );
         sqlite
             .execute(
                 "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, metadata) \

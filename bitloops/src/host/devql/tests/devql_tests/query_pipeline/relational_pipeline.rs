@@ -426,106 +426,90 @@ async fn execute_relational_pipeline_reads_commit_asof_deps_from_historical_tabl
     )
     .expect("insert file_state for new commit");
 
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::caller-old",
-            "sym::caller-old",
-            cfg.repo.repo_id.as_str(),
-            "blob-old",
-            "src/caller.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/caller.ts::callerOld",
-            1,
-            5,
-            0,
-            50,
-            "[]",
-            "hash-caller-old",
-        ],
-    )
-    .expect("insert historical caller old");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::target-old",
-            "sym::target-old",
-            cfg.repo.repo_id.as_str(),
-            "blob-target-old",
-            "src/target-old.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/target-old.ts::targetOld",
-            1,
-            3,
-            0,
-            30,
-            "[]",
-            "hash-target-old",
-        ],
-    )
-    .expect("insert historical target old");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::caller-new",
-            "sym::caller-new",
-            cfg.repo.repo_id.as_str(),
-            "blob-new",
-            "src/caller.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/caller.ts::callerNew",
-            1,
-            5,
-            0,
-            50,
-            "[]",
-            "hash-caller-new",
-        ],
-    )
-    .expect("insert historical caller new");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::target-new",
-            "sym::target-new",
-            cfg.repo.repo_id.as_str(),
-            "blob-target-new",
-            "src/target-new.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/target-new.ts::targetNew",
-            1,
-            3,
-            0,
-            30,
-            "[]",
-            "hash-target-new",
-        ],
-    )
-    .expect("insert historical target new");
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::caller-old",
+        Some("sym::caller-old"),
+        cfg.repo.repo_id.as_str(),
+        "blob-old",
+        "src/caller.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/caller.ts::callerOld",
+        None,
+        1,
+        5,
+        0,
+        50,
+        None,
+        "[]",
+        None,
+        Some("hash-caller-old"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::target-old",
+        Some("sym::target-old"),
+        cfg.repo.repo_id.as_str(),
+        "blob-target-old",
+        "src/target-old.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/target-old.ts::targetOld",
+        None,
+        1,
+        3,
+        0,
+        30,
+        None,
+        "[]",
+        None,
+        Some("hash-target-old"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::caller-new",
+        Some("sym::caller-new"),
+        cfg.repo.repo_id.as_str(),
+        "blob-new",
+        "src/caller.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/caller.ts::callerNew",
+        None,
+        1,
+        5,
+        0,
+        50,
+        None,
+        "[]",
+        None,
+        Some("hash-caller-new"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::target-new",
+        Some("sym::target-new"),
+        cfg.repo.repo_id.as_str(),
+        "blob-target-new",
+        "src/target-new.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/target-new.ts::targetNew",
+        None,
+        1,
+        3,
+        0,
+        30,
+        None,
+        "[]",
+        None,
+        Some("hash-target-new"),
+    );
 
     conn.execute(
         "INSERT INTO artefact_edges (
@@ -635,56 +619,48 @@ async fn execute_relational_pipeline_scopes_commit_asof_artefacts_by_path_when_b
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
 
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::shared-a",
-            "sym::shared-a",
-            cfg.repo.repo_id.as_str(),
-            shared_blob.as_str(),
-            "src/shared-a.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/shared-a.ts::shared",
-            1,
-            3,
-            0,
-            40,
-            "[]",
-            "hash-shared-a",
-        ],
-    )
-    .expect("insert shared-a artefact");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::shared-b",
-            "sym::shared-b",
-            cfg.repo.repo_id.as_str(),
-            shared_blob.as_str(),
-            "src/shared-b.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/shared-b.ts::shared",
-            1,
-            3,
-            0,
-            40,
-            "[]",
-            "hash-shared-b",
-        ],
-    )
-    .expect("insert shared-b artefact");
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::shared-a",
+        Some("sym::shared-a"),
+        cfg.repo.repo_id.as_str(),
+        shared_blob.as_str(),
+        "src/shared-a.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/shared-a.ts::shared",
+        None,
+        1,
+        3,
+        0,
+        40,
+        None,
+        "[]",
+        None,
+        Some("hash-shared-a"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::shared-b",
+        Some("sym::shared-b"),
+        cfg.repo.repo_id.as_str(),
+        shared_blob.as_str(),
+        "src/shared-b.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/shared-b.ts::shared",
+        None,
+        1,
+        3,
+        0,
+        40,
+        None,
+        "[]",
+        None,
+        Some("hash-shared-b"),
+    );
 
     let parsed = parse_devql_query(&format!(
         r#"asOf(commit:"{commit_sha}")->file("src/shared-a.ts")->artefacts(kind:"function")->limit(10)"#
@@ -752,106 +728,90 @@ async fn execute_relational_pipeline_scopes_commit_asof_deps_by_path_when_blob_i
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
 
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::shared-a",
-            "sym::shared-a",
-            cfg.repo.repo_id.as_str(),
-            shared_blob.as_str(),
-            "src/shared-a.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/shared-a.ts::shared",
-            1,
-            3,
-            0,
-            40,
-            "[]",
-            "hash-shared-a",
-        ],
-    )
-    .expect("insert shared-a artefact");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::shared-b",
-            "sym::shared-b",
-            cfg.repo.repo_id.as_str(),
-            shared_blob.as_str(),
-            "src/shared-b.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/shared-b.ts::shared",
-            1,
-            3,
-            0,
-            40,
-            "[]",
-            "hash-shared-b",
-        ],
-    )
-    .expect("insert shared-b artefact");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::target-a",
-            "sym::target-a",
-            cfg.repo.repo_id.as_str(),
-            "blob-target-a",
-            "src/target-a.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/target-a.ts::target",
-            1,
-            3,
-            0,
-            30,
-            "[]",
-            "hash-target-a",
-        ],
-    )
-    .expect("insert target-a artefact");
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
-            content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        rusqlite::params![
-            "artefact::target-b",
-            "sym::target-b",
-            cfg.repo.repo_id.as_str(),
-            "blob-target-b",
-            "src/target-b.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/target-b.ts::target",
-            1,
-            3,
-            0,
-            30,
-            "[]",
-            "hash-target-b",
-        ],
-    )
-    .expect("insert target-b artefact");
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::shared-a",
+        Some("sym::shared-a"),
+        cfg.repo.repo_id.as_str(),
+        shared_blob.as_str(),
+        "src/shared-a.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/shared-a.ts::shared",
+        None,
+        1,
+        3,
+        0,
+        40,
+        None,
+        "[]",
+        None,
+        Some("hash-shared-a"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::shared-b",
+        Some("sym::shared-b"),
+        cfg.repo.repo_id.as_str(),
+        shared_blob.as_str(),
+        "src/shared-b.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/shared-b.ts::shared",
+        None,
+        1,
+        3,
+        0,
+        40,
+        None,
+        "[]",
+        None,
+        Some("hash-shared-b"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::target-a",
+        Some("sym::target-a"),
+        cfg.repo.repo_id.as_str(),
+        "blob-target-a",
+        "src/target-a.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/target-a.ts::target",
+        None,
+        1,
+        3,
+        0,
+        30,
+        None,
+        "[]",
+        None,
+        Some("hash-target-a"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::target-b",
+        Some("sym::target-b"),
+        cfg.repo.repo_id.as_str(),
+        "blob-target-b",
+        "src/target-b.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/target-b.ts::target",
+        None,
+        1,
+        3,
+        0,
+        30,
+        None,
+        "[]",
+        None,
+        Some("hash-target-b"),
+    );
 
     conn.execute(
         "INSERT INTO artefact_edges (

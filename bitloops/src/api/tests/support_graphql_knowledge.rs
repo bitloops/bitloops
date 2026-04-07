@@ -188,55 +188,37 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
             Some("artefact::file-orphan") => Some("file::orphan"),
             _ => None,
         };
-        conn.execute(
-            "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, language, canonical_kind,
-                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
-            ) VALUES (
-                ?1, ?2, ?3, 'typescript', ?4,
-                ?5, ?6, NULL, ?7, ?8, ?9, '2026-03-26T09:00:00Z'
-            )",
-            rusqlite::params![
-                artefact_id,
-                symbol_id,
-                repo_id.as_str(),
-                canonical_kind,
-                language_kind,
-                symbol_fqn,
-                if canonical_kind == "file" {
-                    "[]"
-                } else {
-                    "[\"export\"]"
-                },
-                if canonical_kind == "file" {
-                    Option::<&str>::None
-                } else {
-                    Some("Example docstring")
-                },
-                format!("hash-{artefact_id}"),
-            ],
-        )
-        .expect("insert artefact row");
-        conn.execute(
-            "INSERT INTO artefact_snapshots (
-                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
-                start_line, end_line, start_byte, end_byte, created_at
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, 0, ?8, '2026-03-26T09:00:00Z'
-            )",
-            rusqlite::params![
-                repo_id.as_str(),
-                blob_sha,
-                path,
-                artefact_id,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                end_line * 10,
-            ],
-        )
-        .expect("insert artefact snapshot row");
+        let content_hash = format!("hash-{artefact_id}");
+        insert_historical_artefact_row(
+            &conn,
+            repo_id.as_str(),
+            artefact_id,
+            Some(symbol_id),
+            blob_sha,
+            path,
+            "typescript",
+            canonical_kind,
+            language_kind,
+            symbol_fqn,
+            parent_artefact_id,
+            start_line,
+            end_line,
+            0,
+            end_line * 10,
+            None,
+            if canonical_kind == "file" {
+                "[]"
+            } else {
+                "[\"export\"]"
+            },
+            if canonical_kind == "file" {
+                None
+            } else {
+                Some("Example docstring")
+            },
+            Some(content_hash.as_str()),
+            "2026-03-26T09:00:00Z",
+        );
         conn.execute(
             "INSERT INTO artefacts_current (
                 repo_id, path, content_id, symbol_id, artefact_id,

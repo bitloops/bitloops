@@ -177,42 +177,37 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
             Some("artefact::file-web-page") => Some("file::web-page"),
             _ => None,
         };
-        conn.execute(
-            "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
-                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, '2026-03-26T10:00:00Z'
-            )",
-            rusqlite::params![
-                artefact_id,
-                symbol_id,
-                repo_id.as_str(),
-                blob_sha,
-                path,
-                canonical_kind,
-                language_kind,
-                symbol_fqn,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                end_line * 10,
-                if canonical_kind == "file" {
-                    "[]"
-                } else {
-                    "[\"export\"]"
-                },
-                if canonical_kind == "file" {
-                    Option::<&str>::None
-                } else {
-                    Some("Monorepo docstring")
-                },
-                format!("hash-{artefact_id}"),
-            ],
-        )
-        .expect("insert artefact row");
+        let content_hash = format!("hash-{artefact_id}");
+        insert_historical_artefact_row(
+            &conn,
+            repo_id.as_str(),
+            artefact_id,
+            Some(symbol_id),
+            blob_sha,
+            path,
+            "typescript",
+            canonical_kind,
+            language_kind,
+            symbol_fqn,
+            parent_artefact_id,
+            start_line,
+            end_line,
+            0,
+            end_line * 10,
+            None,
+            if canonical_kind == "file" {
+                "[]"
+            } else {
+                "[\"export\"]"
+            },
+            if canonical_kind == "file" {
+                None
+            } else {
+                Some("Monorepo docstring")
+            },
+            Some(content_hash.as_str()),
+            "2026-03-26T10:00:00Z",
+        );
         conn.execute(
             "INSERT INTO artefacts_current (
                 repo_id, path, content_id, symbol_id, artefact_id, language,

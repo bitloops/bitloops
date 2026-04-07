@@ -139,6 +139,76 @@ pub(super) fn update_seeded_jira_site_url(repo_root: &Path, jira_site_url: &str)
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) fn insert_historical_artefact_row(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    artefact_id: &str,
+    symbol_id: Option<&str>,
+    blob_sha: &str,
+    path: &str,
+    language: &str,
+    canonical_kind: &str,
+    language_kind: &str,
+    symbol_fqn: &str,
+    parent_artefact_id: Option<&str>,
+    start_line: i64,
+    end_line: i64,
+    start_byte: i64,
+    end_byte: i64,
+    signature: Option<&str>,
+    modifiers: &str,
+    docstring: Option<&str>,
+    content_hash: Option<&str>,
+    created_at: &str,
+) {
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9, ?10, ?11, ?12
+        )",
+        rusqlite::params![
+            artefact_id,
+            symbol_id,
+            repo_id,
+            language,
+            canonical_kind,
+            language_kind,
+            symbol_fqn,
+            signature,
+            modifiers,
+            docstring,
+            content_hash,
+            created_at,
+        ],
+    )
+    .expect("insert historical artefact metadata");
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9
+        )",
+        rusqlite::params![
+            repo_id,
+            blob_sha,
+            path,
+            artefact_id,
+            parent_artefact_id,
+            start_line,
+            end_line,
+            start_byte,
+            end_byte,
+        ],
+    )
+    .expect("insert historical artefact snapshot");
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn insert_historical_function_artefact(
     conn: &rusqlite::Connection,
     repo_id: &str,
@@ -151,31 +221,29 @@ pub(super) fn insert_historical_function_artefact(
     end_line: i64,
     created_at: &str,
 ) {
-    conn.execute(
-        "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-            start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
-        ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, 'typescript', 'function',
-            'function_declaration', ?6, NULL, ?7, ?8, 0, ?9, NULL, '[\"export\"]',
-            'Event-backed docstring', ?10, ?11
-        )",
-        rusqlite::params![
-            artefact_id,
-            symbol_id,
-            repo_id,
-            blob_sha,
-            path,
-            symbol_fqn,
-            start_line,
-            end_line,
-            end_line * 10,
-            format!("hash-{artefact_id}"),
-            created_at,
-        ],
-    )
-    .expect("insert historical function artefact");
+    let content_hash = format!("hash-{artefact_id}");
+    insert_historical_artefact_row(
+        conn,
+        repo_id,
+        artefact_id,
+        Some(symbol_id),
+        blob_sha,
+        path,
+        "typescript",
+        "function",
+        "function_declaration",
+        symbol_fqn,
+        None,
+        start_line,
+        end_line,
+        0,
+        end_line * 10,
+        None,
+        "[\"export\"]",
+        Some("Event-backed docstring"),
+        Some(content_hash.as_str()),
+        created_at,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

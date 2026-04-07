@@ -108,50 +108,48 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
 
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     let repo_id = cfg.repo.repo_id.as_str();
-    conn.execute(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?13, ?14, '[]', ?15)",
-        rusqlite::params![
-            "artefact::invoice_pdf",
-            "sym::invoice_pdf",
-            repo_id,
-            "blob-1",
-            "src/pdf.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/pdf.ts::createInvoicePdf",
-            1,
-            12,
-            0,
-            120,
-            "function createInvoicePdf(orderId: string, locale: string)",
-            "hash-1",
-        ],
-    )
-    .expect("insert artefact history source");
-    conn.execute(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?13, ?14, '[]', ?15)",
-        rusqlite::params![
-            "artefact::invoice_doc",
-            "sym::invoice_doc",
-            repo_id,
-            "blob-2",
-            "src/render.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/render.ts::renderInvoiceDocument",
-            1,
-            12,
-            0,
-            120,
-            "function renderInvoiceDocument(orderId: string, locale: string)",
-            "hash-2",
-        ],
-    )
-    .expect("insert artefact history target");
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::invoice_pdf",
+        Some("sym::invoice_pdf"),
+        repo_id,
+        "blob-1",
+        "src/pdf.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/pdf.ts::createInvoicePdf",
+        None,
+        1,
+        12,
+        0,
+        120,
+        Some("function createInvoicePdf(orderId: string, locale: string)"),
+        "[]",
+        None,
+        Some("hash-1"),
+    );
+    insert_historical_artefact_row(
+        &conn,
+        "artefact::invoice_doc",
+        Some("sym::invoice_doc"),
+        repo_id,
+        "blob-2",
+        "src/render.ts",
+        "typescript",
+        "function",
+        "function_declaration",
+        "src/render.ts::renderInvoiceDocument",
+        None,
+        1,
+        12,
+        0,
+        120,
+        Some("function renderInvoiceDocument(orderId: string, locale: string)"),
+        "[]",
+        None,
+        Some("hash-2"),
+    );
 
     conn.execute(
         "INSERT INTO artefacts_current (
@@ -490,21 +488,30 @@ fn insert_clone_candidate_fixture(
     dimension: i64,
     embedding: &str,
 ) {
-    conn.execute(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, content_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function_declaration', ?6, NULL, 1, 12, 0, 120, ?7, '[]', ?8)",
-        rusqlite::params![
-            artefact_id,
-            symbol_id,
-            repo_id,
-            format!("blob-{symbol_id}"),
-            path,
-            symbol_fqn,
-            format!("function {normalized_name}(id: string)"),
-            format!("hash-{symbol_id}"),
-        ],
-    )
-    .expect("insert artefact history");
+    let blob_sha = format!("blob-{symbol_id}");
+    let signature = format!("function {normalized_name}(id: string)");
+    let content_hash = format!("hash-{symbol_id}");
+    insert_historical_artefact_row(
+        conn,
+        artefact_id,
+        Some(symbol_id),
+        repo_id,
+        blob_sha.as_str(),
+        path,
+        "typescript",
+        "function",
+        "function_declaration",
+        symbol_fqn,
+        None,
+        1,
+        12,
+        0,
+        120,
+        Some(signature.as_str()),
+        "[]",
+        None,
+        Some(content_hash.as_str()),
+    );
 
     conn.execute(
         "INSERT INTO artefacts_current (
@@ -515,11 +522,11 @@ fn insert_clone_candidate_fixture(
         rusqlite::params![
             repo_id,
             path,
-            format!("blob-{symbol_id}"),
+            blob_sha.as_str(),
             symbol_id,
             artefact_id,
             symbol_fqn,
-            format!("function {normalized_name}(id: string)"),
+            signature.as_str(),
         ],
     )
     .expect("insert current artefact");
@@ -530,7 +537,7 @@ fn insert_clone_candidate_fixture(
         rusqlite::params![
             artefact_id,
             repo_id,
-            format!("blob-{symbol_id}"),
+            blob_sha.as_str(),
             format!("semantic-hash-{symbol_id}"),
             format!("Function {normalized_name}."),
             summary,
@@ -544,10 +551,10 @@ fn insert_clone_candidate_fixture(
         rusqlite::params![
             artefact_id,
             repo_id,
-            format!("blob-{symbol_id}"),
+            blob_sha.as_str(),
             format!("semantic-hash-{symbol_id}"),
             normalized_name,
-            format!("function {normalized_name}(id: string)"),
+            signature.as_str(),
         ],
     )
     .expect("insert features");
@@ -558,7 +565,7 @@ fn insert_clone_candidate_fixture(
         rusqlite::params![
             artefact_id,
             repo_id,
-            format!("blob-{symbol_id}"),
+            blob_sha.as_str(),
             provider,
             model,
             dimension,

@@ -568,7 +568,7 @@ async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
     let current_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
 
     assert!(summary.success);
-    assert_eq!(summary.commits_processed, 2);
+    assert_eq!(summary.commits_processed, 3);
     assert!(!current_rows.is_empty());
     assert_eq!(setup.0, "local_fastembed");
     assert_eq!(setup.1, "bootstrap-model");

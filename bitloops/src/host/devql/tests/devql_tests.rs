@@ -163,6 +163,74 @@ async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     relational
 }
 
+#[allow(clippy::too_many_arguments)]
+fn insert_historical_artefact_row(
+    conn: &rusqlite::Connection,
+    artefact_id: &str,
+    symbol_id: Option<&str>,
+    repo_id: &str,
+    blob_sha: &str,
+    path: &str,
+    language: &str,
+    canonical_kind: &str,
+    language_kind: &str,
+    symbol_fqn: &str,
+    parent_artefact_id: Option<&str>,
+    start_line: i64,
+    end_line: i64,
+    start_byte: i64,
+    end_byte: i64,
+    signature: Option<&str>,
+    modifiers: &str,
+    docstring: Option<&str>,
+    content_hash: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9, ?10, ?11
+        )",
+        rusqlite::params![
+            artefact_id,
+            symbol_id,
+            repo_id,
+            language,
+            canonical_kind,
+            language_kind,
+            symbol_fqn,
+            signature,
+            modifiers,
+            docstring,
+            content_hash,
+        ],
+    )
+    .expect("insert historical artefact metadata");
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9
+        )",
+        rusqlite::params![
+            repo_id,
+            blob_sha,
+            path,
+            artefact_id,
+            parent_artefact_id,
+            start_line,
+            end_line,
+            start_byte,
+            end_byte,
+        ],
+    )
+    .expect("insert historical artefact snapshot");
+}
+
 #[tokio::test]
 async fn checkpoint_provenance_projection_is_idempotent_for_commit_diff_rows() {
     let repo = seed_git_repo();
