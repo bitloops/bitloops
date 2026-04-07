@@ -193,7 +193,7 @@ impl DevqlBddWorld {
     pub(super) fn test_cfg() -> DevqlConfig {
         let repo_root = Self::isolated_test_repo_root();
         DevqlConfig {
-            config_root: repo_root.clone(),
+            daemon_config_root: repo_root.clone(),
             repo_root,
             repo: RepoIdentity {
                 provider: "github".to_string(),

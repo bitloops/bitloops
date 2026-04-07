@@ -9,7 +9,7 @@ use super::{materialize_path, parse_cached_language_kind};
 
 fn test_cfg(repo_root: &std::path::Path) -> crate::host::devql::DevqlConfig {
     crate::host::devql::DevqlConfig {
-        config_root: repo_root.to_path_buf(),
+        daemon_config_root: repo_root.to_path_buf(),
         repo_root: repo_root.to_path_buf(),
         repo: crate::host::devql::RepoIdentity {
             provider: "github".to_string(),

@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
@@ -345,19 +344,9 @@ pub(crate) fn next_incremental_sequence(
     let Some(root) = repo_root else {
         return 1;
     };
-    let checkpoints_dir = root
-        .join(paths::session_metadata_dir_from_session_id(session_id))
-        .join("tasks")
-        .join(task_tool_use_id)
-        .join("checkpoints");
-    let Ok(entries) = fs::read_dir(checkpoints_dir) else {
-        return 1;
-    };
-    let count = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .count();
-    (count as u32) + 1
+    crate::host::runtime_store::RepoSqliteRuntimeStore::open(root)
+        .and_then(|store| store.next_task_incremental_sequence(session_id, task_tool_use_id))
+        .unwrap_or(1)
 }
 
 pub(super) fn truncate_prompt_for_storage(prompt: &str) -> String {

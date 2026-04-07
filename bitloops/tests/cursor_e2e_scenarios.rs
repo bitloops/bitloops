@@ -131,24 +131,8 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["commit", "-m", "initial"]);
 }
 
-fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
-        .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
-}
-
 fn ensure_relational_store_file(repo_root: &Path) {
-    let sqlite =
-        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
-            .expect("create relational sqlite file");
-    sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+    test_command_support::ensure_repo_daemon_stores(repo_root);
 }
 
 fn init_cursor(repo: &Path) {

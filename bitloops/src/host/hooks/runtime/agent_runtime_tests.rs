@@ -30,6 +30,7 @@ use tempfile::TempDir;
 fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".git")).unwrap();
+    ensure_test_store_backends(dir.path());
     let backend = LocalFileBackend::new(dir.path());
     (dir, backend, NoOpStrategy)
 }
@@ -765,14 +766,16 @@ fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
 fn cursor_before_shell_execution_creates_shell_fallback_pre_prompt() {
     let (dir, backend, strat) = setup();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::BeforeShellExecution,
-        r#"{"conversation_id":"cursor-shell-1","transcript_path":"/tmp/cursor-shell-1.jsonl","command":"npm test"}"#,
-        &backend,
-        &strat,
-        dir.path(),
-        "before-shell-execution",
-    )
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeShellExecution,
+            r#"{"conversation_id":"cursor-shell-1","transcript_path":"/tmp/cursor-shell-1.jsonl","command":"npm test"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "before-shell-execution",
+        )
+    })
     .unwrap();
 
     let state = backend.load_session("cursor-shell-1").unwrap().unwrap();
@@ -2556,7 +2559,7 @@ fn filter_and_normalize_paths_sibling_directories() {
 
     let files = vec![
         "/repo/src/file.ts".to_string(),
-        "/repo/.bitloops/metadata/session.json".to_string(),
+        "/repo/.bitloops/internal/sessions/session.json".to_string(),
     ];
     let got = filter_and_normalize_paths(&files, "/repo");
     assert_eq!(got, vec!["src/file.ts".to_string()]);

@@ -200,12 +200,13 @@ mod tests {
 
     fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
         let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
-        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-            resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-                .expect("resolve configured sqlite path")
-        } else {
-            crate::utils::paths::default_relational_db_path(repo_root)
-        }
+        let path = cfg
+            .relational
+            .sqlite_path
+            .as_deref()
+            .expect("test daemon config should set sqlite_path");
+        resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
     }
 
     fn ensure_relational_store_file(repo_root: &Path) {
@@ -240,6 +241,7 @@ mod tests {
             ],
         );
         assert!(ok, "initial commit failed: {err}");
+        crate::test_support::git_fixtures::write_test_daemon_config(root);
         ensure_relational_store_file(root);
 
         if create_feature_branch {

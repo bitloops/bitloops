@@ -16,7 +16,7 @@ Bitloops runs as a single global user-level daemon. The CLI is a thin control su
 
 ## Repo Policy With Local Runtime State
 
-Repositories can carry `.bitloops.toml` and `.bitloops.local.toml`. Durable relational, event, and blob data still live in platform app directories by default, while Bitloops keeps repo-scoped workflow runtime state in `.bitloops/stores/runtime/runtime.sqlite`.
+Repositories can carry `.bitloops.toml` and `.bitloops.local.toml`. Durable relational, event, and blob data still live in platform app directories by default, while Bitloops keeps repo-scoped workflow runtime state in `<config root>/stores/runtime/runtime.sqlite`.
 
 ## Queryable Development History
 
@@ -34,7 +34,7 @@ By default Bitloops separates paths by intent:
 - configured SQLite, DuckDB, and blob data in the data directory
 - embedding downloads and dashboard bundle assets in the cache directory
 - daemon runtime metadata and runtime SQLite in the state directory
-- repo workflow runtime state in `.bitloops/stores/runtime/runtime.sqlite`
+- repo workflow runtime state in `<config root>/stores/runtime/runtime.sqlite`
 
 ## Agent And Hook Integration
 

@@ -213,7 +213,7 @@ impl SessionBackend for DbSessionBackend {
                     ?20, ?21, ?22,
                     ?23, ?24, ?25, datetime('now')
                  )
-                 ON CONFLICT(session_id) DO UPDATE SET
+                 ON CONFLICT(repo_id, session_id) DO UPDATE SET
                     repo_id = excluded.repo_id,
                     cli_version = excluded.cli_version,
                     base_commit = excluded.base_commit,
@@ -314,7 +314,7 @@ impl SessionBackend for DbSessionBackend {
             conn.execute(
                 "INSERT INTO pre_prompt_states (session_id, repo_id, data, created_at)
                  VALUES (?1, ?2, ?3, datetime('now'))
-                 ON CONFLICT(session_id) DO UPDATE SET
+                 ON CONFLICT(repo_id, session_id) DO UPDATE SET
                     repo_id = excluded.repo_id,
                     data = excluded.data,
                     created_at = datetime('now')",
@@ -344,7 +344,7 @@ impl SessionBackend for DbSessionBackend {
             conn.execute(
                 "INSERT INTO pre_task_markers (tool_use_id, session_id, repo_id, data, created_at)
                  VALUES (?1, ?2, ?3, ?4, datetime('now'))
-                 ON CONFLICT(tool_use_id) DO UPDATE SET
+                 ON CONFLICT(repo_id, tool_use_id) DO UPDATE SET
                     session_id = excluded.session_id,
                     repo_id = excluded.repo_id,
                     data = excluded.data,

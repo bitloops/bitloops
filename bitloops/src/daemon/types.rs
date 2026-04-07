@@ -375,7 +375,8 @@ pub struct SyncTaskRecord {
     pub repo_provider: String,
     pub repo_organisation: String,
     pub repo_identity: String,
-    pub config_root: PathBuf,
+    #[serde(alias = "config_root", default)]
+    pub daemon_config_root: PathBuf,
     pub repo_root: PathBuf,
     pub source: SyncTaskSource,
     pub mode: SyncTaskMode,
@@ -389,6 +390,14 @@ pub struct SyncTaskRecord {
     pub progress: crate::host::devql::SyncProgressUpdate,
     pub error: Option<String>,
     pub summary: Option<crate::host::devql::SyncSummary>,
+}
+
+impl SyncTaskRecord {
+    pub fn normalise_legacy_values(&mut self) {
+        if self.daemon_config_root.as_os_str().is_empty() {
+            self.daemon_config_root = self.repo_root.clone();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

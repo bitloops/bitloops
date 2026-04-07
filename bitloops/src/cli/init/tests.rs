@@ -149,6 +149,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                 .expect("read git exclude");
             assert!(exclude.contains(".bitloops.local.toml"));
+            assert!(!exclude.contains(".bitloops/"));
             assert!(!exclude.contains("config.local.json"));
             assert!(!exclude.contains(".bitloops/config.local.json"));
         },

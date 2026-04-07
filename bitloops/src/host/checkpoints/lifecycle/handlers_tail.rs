@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::adapter::LifecycleAgentAdapter;
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
@@ -12,6 +12,11 @@ use crate::host::checkpoints::session::phase::{
 };
 use crate::host::checkpoints::session::state::PreTaskState;
 use crate::host::checkpoints::strategy::TaskStepContext;
+use crate::host::checkpoints::transcript::metadata::{
+    TaskCheckpointMetadataBundle, build_incremental_checkpoint_payload,
+    build_session_metadata_bundle, build_task_checkpoint_payload,
+    extract_prompts_from_transcript_bytes,
+};
 use crate::host::hooks::runtime::agent_runtime::helpers::{
     count_todos_from_tool_input, detect_file_changes, detect_untracked_files,
     extract_last_completed_todo_from_tool_input, next_incremental_sequence,
@@ -21,6 +26,10 @@ use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession,
+};
+use crate::host::runtime_store::{
+    RepoSqliteRuntimeStore, RuntimeMetadataBlobType, SessionMetadataSnapshot,
+    TaskCheckpointArtefact,
 };
 
 pub fn handle_lifecycle_compaction(
@@ -292,6 +301,54 @@ pub fn handle_lifecycle_subagent_end(
         }
 
         if total_changes > 0 {
+            let session_metadata = std::fs::read(&event.session_ref).ok().and_then(|transcript| {
+                let prompts = extract_prompts_from_transcript_bytes(&transcript);
+                let commit_message = crate::host::hooks::runtime::agent_runtime::helpers::generate_commit_message(
+                    prompts.last().map(String::as_str).unwrap_or_default(),
+                );
+                let metadata =
+                    build_session_metadata_bundle(&event.session_id, &commit_message, &transcript)
+                        .ok()?;
+                let runtime_store = RepoSqliteRuntimeStore::open(&repo_root).ok()?;
+                let mut snapshot =
+                    SessionMetadataSnapshot::new(event.session_id.clone(), metadata.clone());
+                snapshot.transcript_identifier = event.session_id.clone();
+                snapshot.transcript_path = event.session_ref.clone();
+                runtime_store.save_session_metadata_snapshot(&snapshot).ok()?;
+                Some(metadata)
+            });
+            let checkpoint_json = build_task_checkpoint_payload(
+                &event.session_id,
+                &event.tool_use_id,
+                "",
+                &event.subagent_id,
+            )?;
+            let subagent_transcript = if subagent_transcript_path.trim().is_empty() {
+                None
+            } else {
+                std::fs::read(&subagent_transcript_path).ok()
+            };
+            let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
+                .context("opening runtime store for lifecycle task checkpoint artefacts")?;
+            let mut checkpoint_artefact = TaskCheckpointArtefact::new(
+                event.session_id.clone(),
+                event.tool_use_id.clone(),
+                RuntimeMetadataBlobType::TaskCheckpoint,
+                checkpoint_json.clone(),
+            );
+            checkpoint_artefact.agent_id = event.subagent_id.clone();
+            runtime_store.save_task_checkpoint_artefact(&checkpoint_artefact)?;
+            if let Some(payload) = subagent_transcript.as_ref() {
+                let mut transcript_artefact = TaskCheckpointArtefact::new(
+                    event.session_id.clone(),
+                    event.tool_use_id.clone(),
+                    RuntimeMetadataBlobType::SubagentTranscript,
+                    payload.clone(),
+                );
+                transcript_artefact.agent_id = event.subagent_id.clone();
+                runtime_store.save_task_checkpoint_artefact(&transcript_artefact)?;
+            }
+
             let strategy = super::resolve_configured_strategy(&repo_root)?;
             strategy.save_task_step(&TaskStepContext {
                 session_id: event.session_id.clone(),
@@ -300,6 +357,13 @@ pub fn handle_lifecycle_subagent_end(
                 modified_files: changes.modified,
                 new_files: changes.new_files,
                 deleted_files: changes.deleted,
+                session_metadata,
+                task_metadata: Some(TaskCheckpointMetadataBundle {
+                    checkpoint_json: Some(checkpoint_json),
+                    subagent_transcript,
+                    incremental_checkpoint: None,
+                    prompt: None,
+                }),
                 transcript_path: event.session_ref.clone(),
                 subagent_transcript_path,
                 checkpoint_uuid: String::new(),
@@ -360,6 +424,56 @@ pub fn handle_lifecycle_todo_checkpoint(
         }
     }
 
+    let incremental_sequence = RepoSqliteRuntimeStore::open(&repo_root)
+        .and_then(|store| {
+            store.next_task_incremental_sequence(&event.session_id, &task_tool_use_id)
+        })
+        .unwrap_or_else(|_| {
+            next_incremental_sequence(Some(&repo_root), &event.session_id, &task_tool_use_id)
+        });
+    let session_metadata = std::fs::read(&event.session_ref)
+        .ok()
+        .and_then(|transcript| {
+            let prompts = extract_prompts_from_transcript_bytes(&transcript);
+            let commit_message =
+                crate::host::hooks::runtime::agent_runtime::helpers::generate_commit_message(
+                    prompts.last().map(String::as_str).unwrap_or_default(),
+                );
+            let metadata =
+                build_session_metadata_bundle(&event.session_id, &commit_message, &transcript)
+                    .ok()?;
+            let runtime_store = RepoSqliteRuntimeStore::open(&repo_root).ok()?;
+            let mut snapshot =
+                SessionMetadataSnapshot::new(event.session_id.clone(), metadata.clone());
+            snapshot.transcript_identifier = event.session_id.clone();
+            snapshot.transcript_path = event.session_ref.clone();
+            runtime_store
+                .save_session_metadata_snapshot(&snapshot)
+                .ok()?;
+            Some(metadata)
+        });
+    let incremental_payload = build_incremental_checkpoint_payload(
+        &task_tool_use_id,
+        &event.tool_name,
+        &now_rfc3339(),
+        event
+            .tool_input
+            .as_ref()
+            .unwrap_or(&serde_json::Value::Null),
+    )?;
+    let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
+        .context("opening runtime store for lifecycle incremental checkpoint artefacts")?;
+    let mut artefact = TaskCheckpointArtefact::new(
+        event.session_id.clone(),
+        task_tool_use_id.clone(),
+        RuntimeMetadataBlobType::IncrementalCheckpoint,
+        incremental_payload.clone(),
+    );
+    artefact.incremental_sequence = Some(incremental_sequence);
+    artefact.incremental_type = event.tool_name.clone();
+    artefact.is_incremental = true;
+    runtime_store.save_task_checkpoint_artefact(&artefact)?;
+
     let strategy = super::resolve_configured_strategy(&repo_root)?;
     strategy.save_task_step(&TaskStepContext {
         session_id: event.session_id.clone(),
@@ -368,6 +482,13 @@ pub fn handle_lifecycle_todo_checkpoint(
         modified_files: changes.modified,
         new_files: changes.new_files,
         deleted_files: changes.deleted,
+        session_metadata,
+        task_metadata: Some(TaskCheckpointMetadataBundle {
+            checkpoint_json: None,
+            subagent_transcript: None,
+            incremental_checkpoint: Some(incremental_payload),
+            prompt: None,
+        }),
         transcript_path: event.session_ref.clone(),
         subagent_transcript_path: String::new(),
         checkpoint_uuid: String::new(),
@@ -377,11 +498,7 @@ pub fn handle_lifecycle_todo_checkpoint(
         task_description: String::new(),
         agent_type: agent.agent_name().to_string(),
         is_incremental: true,
-        incremental_sequence: next_incremental_sequence(
-            Some(&repo_root),
-            &event.session_id,
-            &task_tool_use_id,
-        ),
+        incremental_sequence,
         incremental_type: event.tool_name.clone(),
         incremental_data: event
             .tool_input

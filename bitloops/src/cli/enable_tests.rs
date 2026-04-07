@@ -968,7 +968,7 @@ fn repo_local_policy_exclude_is_added_to_git_info_exclude() {
 
     let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.contains(".bitloops.local.toml"));
-    assert!(exclude.contains(".bitloops/"));
+    assert!(!exclude.contains(".bitloops/"));
 }
 
 #[test]

@@ -111,7 +111,7 @@ The host now uses two top-level storage boundaries:
 
 The default paths are:
 
-- repo runtime store: `.bitloops/stores/runtime/runtime.sqlite`
+- repo runtime store: `<config root>/stores/runtime/runtime.sqlite`
 - daemon runtime store: `<state dir>/daemon/runtime.sqlite`
 
 ### `RelationalStore`

@@ -1,24 +1,18 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::{
+    SessionMetadataBundle, TaskCheckpointMetadataBundle,
+};
 
-pub(crate) fn create_checkpoint_metadata_dir(repo_root: &Path, session_id: &str) -> String {
-    let metadata_dir = repo_root
-        .join(".bitloops")
-        .join("metadata")
-        .join(session_id);
-    fs::create_dir_all(&metadata_dir).unwrap();
-    fs::write(
-        metadata_dir.join(paths::TRANSCRIPT_FILE_NAME),
-        r#"{"test": true}"#,
-    )
-    .unwrap();
-    metadata_dir.to_string_lossy().to_string()
+pub(crate) fn create_checkpoint_metadata_bundle() -> SessionMetadataBundle {
+    SessionMetadataBundle {
+        transcript: br#"{"test": true}"#.to_vec(),
+        prompts: vec![],
+        summary: String::new(),
+        context: vec![],
+    }
 }
 
-pub(crate) fn first_checkpoint_opts(
-    session_id: &str,
-    base_commit: &str,
-    metadata_dir_abs: &str,
-) -> WriteTemporaryOptions {
+pub(crate) fn first_checkpoint_opts(session_id: &str, base_commit: &str) -> WriteTemporaryOptions {
     WriteTemporaryOptions {
         session_id: session_id.to_string(),
         base_commit: base_commit.to_string(),
@@ -26,8 +20,7 @@ pub(crate) fn first_checkpoint_opts(
         modified_files: vec![],
         new_files: vec![],
         deleted_files: vec![],
-        metadata_dir: format!(".bitloops/metadata/{session_id}"),
-        metadata_dir_abs: metadata_dir_abs.to_string(),
+        session_metadata: Some(create_checkpoint_metadata_bundle()),
         commit_message: "First checkpoint".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@test.com".to_string(),
@@ -98,11 +91,10 @@ pub(crate) fn write_temporary_first_checkpoint_captures_modified_tracked_files()
     let base_commit = setup_git_repo(&dir);
     let modified_content = "# Modified by User\n\nThis change was made before the agent started.\n";
     fs::write(dir.path().join("README.md"), modified_content).unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
     let result = write_temporary(
         dir.path(),
-        first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs),
+        first_checkpoint_opts("test-session", &base_commit),
     )
     .unwrap();
     assert!(!result.skipped, "first checkpoint should not be skipped");
@@ -121,11 +113,10 @@ pub(crate) fn write_temporary_first_checkpoint_captures_untracked_files() {
     let base_commit = setup_git_repo(&dir);
     let untracked_content = r#"{"key": "secret_value"}"#;
     fs::write(dir.path().join("config.local.json"), untracked_content).unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
     let result = write_temporary(
         dir.path(),
-        first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs),
+        first_checkpoint_opts("test-session", &base_commit),
     )
     .unwrap();
     assert!(
@@ -156,11 +147,10 @@ pub(crate) fn write_temporary_first_checkpoint_excludes_gitignored_files() {
         "module.exports = {}",
     )
     .unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
     let result = write_temporary(
         dir.path(),
-        first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs),
+        first_checkpoint_opts("test-session", &base_commit),
     )
     .unwrap();
     assert!(!result.skipped);
@@ -192,9 +182,8 @@ pub(crate) fn write_temporary_first_checkpoint_user_and_agent_changes() {
         fs::write(dir.path().join("README.md"), user_modified).unwrap();
         let agent_modified = "package main\n\nfunc main() {\n\tprintln(\"Hello\")\n}\n";
         fs::write(dir.path().join("main.rs"), agent_modified).unwrap();
-        let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
-        let mut opts = first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs);
+        let mut opts = first_checkpoint_opts("test-session", &base_commit);
         opts.modified_files = vec!["main.rs".to_string()];
         let result = write_temporary(dir.path(), opts).unwrap();
         assert!(!result.skipped);
@@ -226,11 +215,10 @@ pub(crate) fn write_temporary_first_checkpoint_captures_user_deleted_files() {
     let base_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
 
     fs::remove_file(dir.path().join("delete-me.txt")).unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
     let result = write_temporary(
         dir.path(),
-        first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs),
+        first_checkpoint_opts("test-session", &base_commit),
     )
     .unwrap();
     assert!(!result.skipped);
@@ -262,11 +250,10 @@ pub(crate) fn write_temporary_first_checkpoint_captures_renamed_files() {
     let base_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
 
     run_git(dir.path(), &["mv", "old-name.txt", "new-name.txt"]).unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
     let result = write_temporary(
         dir.path(),
-        first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs),
+        first_checkpoint_opts("test-session", &base_commit),
     )
     .unwrap();
     assert!(!result.skipped);
@@ -301,11 +288,10 @@ pub(crate) fn write_temporary_first_checkpoint_filenames_with_spaces() {
         "content with spaces",
     )
     .unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), "test-session");
 
     let result = write_temporary(
         dir.path(),
-        first_checkpoint_opts("test-session", &base_commit, &metadata_dir_abs),
+        first_checkpoint_opts("test-session", &base_commit),
     )
     .unwrap();
     assert!(!result.skipped);
@@ -324,7 +310,7 @@ pub(crate) fn write_temporary_first_checkpoint_filenames_with_spaces() {
 }
 
 #[test]
-pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
+pub(crate) fn write_temporary_task_incremental_persists_runtime_artefact_and_payload() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -339,9 +325,21 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
             modified_files: vec![],
             new_files: vec![],
             deleted_files: vec![],
-            transcript_path: String::new(),
-            subagent_transcript_path: String::new(),
-            checkpoint_uuid: "checkpoint-temp-123".to_string(),
+            session_metadata: None,
+            task_metadata: Some(TaskCheckpointMetadataBundle {
+                checkpoint_json: None,
+                subagent_transcript: None,
+                incremental_checkpoint: Some(
+                    serde_json::to_vec_pretty(&serde_json::json!({
+                        "type": "TodoWrite",
+                        "tool_use_id": "toolu_temp123",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "data": {"todo":"document dependencies"},
+                    }))
+                    .expect("serialize incremental payload"),
+                ),
+                prompt: None,
+            }),
             is_incremental: true,
             incremental_sequence: 3,
             incremental_type: "TodoWrite".to_string(),
@@ -353,15 +351,21 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
     )
     .expect("write_temporary_task should persist incremental checkpoint");
 
-    let payload_path =
-        ".bitloops/metadata/temp-session/tasks/toolu_temp123/checkpoints/003-toolu_temp123.json";
-    let payload_raw = run_git(
-        dir.path(),
-        &["show", &format!("{}:{payload_path}", result.commit_hash)],
-    )
-    .expect("incremental checkpoint payload should be present in checkpoint tree");
+    let runtime_store = crate::host::runtime_store::RepoSqliteRuntimeStore::open(dir.path())
+        .expect("open repo runtime store");
+    let artefacts = runtime_store
+        .load_task_checkpoint_artefacts("temp-session", "toolu_temp123")
+        .expect("load runtime task artefacts");
+    let payload_raw = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.kind
+                == crate::host::runtime_store::RuntimeMetadataBlobType::IncrementalCheckpoint
+        })
+        .map(|artefact| artefact.payload.clone())
+        .expect("incremental checkpoint payload should be present in runtime store");
     let payload: serde_json::Value =
-        serde_json::from_str(&payload_raw).expect("incremental payload should be valid json");
+        serde_json::from_slice(&payload_raw).expect("incremental payload should be valid json");
     assert_eq!(payload["type"], "TodoWrite");
     assert_eq!(payload["tool_use_id"], "toolu_temp123");
     assert_eq!(payload["data"]["todo"], "document dependencies");
@@ -375,7 +379,7 @@ pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
         &[
             "show",
             &format!(
-                "{}:.bitloops/metadata/temp-session/tasks/toolu_temp123/checkpoint.json",
+                "{}:.bitloops/internal/tasks/toolu_temp123/checkpoint.json",
                 result.commit_hash
             ),
         ],

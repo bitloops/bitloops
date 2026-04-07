@@ -14,7 +14,7 @@ mod tests;
 const LEGACY_INTERACTION_SPOOL_FILE_NAME: &str = "interaction_spool.sqlite";
 
 pub fn interaction_spool_db_path(repo_root: &Path) -> Result<PathBuf> {
-    Ok(crate::utils::paths::default_repo_runtime_db_path(repo_root))
+    crate::config::resolve_repo_runtime_db_path_for_repo(repo_root)
 }
 
 pub fn legacy_interaction_spool_db_path(repo_root: &Path) -> Result<PathBuf> {

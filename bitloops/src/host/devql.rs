@@ -566,10 +566,10 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
 }
 
 fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     embeddings::EmbeddingProviderConfig {
         daemon_config_path: crate::config::default_daemon_config_path()
-            .unwrap_or_else(|_| cfg.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
+            .unwrap_or_else(|_| cfg.daemon_config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
         embedding_profile: capability.semantic_clones.embedding_profile,
         runtime_command: capability.embeddings.runtime.command,
         runtime_args: capability.embeddings.runtime.args,
@@ -601,7 +601,7 @@ async fn initialise_devql_schema_for_command_with_mode(
     InitSchemaSummary,
     SyncExecutionSchemaOutcome,
 )> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 

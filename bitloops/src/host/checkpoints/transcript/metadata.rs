@@ -1,204 +1,330 @@
-use std::fs;
-use std::path::PathBuf;
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct TaskCheckpoint {
-    pub session_id: String,
-    pub tool_use_id: String,
-    pub checkpoint_uuid: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub agent_id: String,
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMetadataBundle {
+    pub transcript: Vec<u8>,
+    pub prompts: Vec<String>,
+    pub summary: String,
+    pub context: Vec<u8>,
 }
 
-pub fn task_metadata_dir(session_metadata_dir: &str, tool_use_id: &str) -> String {
-    PathBuf::from(session_metadata_dir)
-        .join("tasks")
-        .join(tool_use_id)
-        .to_string_lossy()
-        .to_string()
+impl SessionMetadataBundle {
+    pub fn prompt_text(&self) -> String {
+        self.prompts.join("\n\n---\n\n")
+    }
 }
 
-pub fn write_task_checkpoint(task_metadata_dir: &str, checkpoint: &TaskCheckpoint) -> Result<()> {
-    fs::create_dir_all(task_metadata_dir).with_context(|| {
-        format!("failed to create task metadata directory: {task_metadata_dir}")
-    })?;
-
-    let mut data =
-        serde_json::to_string_pretty(checkpoint).context("failed to marshal checkpoint")?;
-    data.push('\n');
-
-    let checkpoint_file =
-        PathBuf::from(task_metadata_dir).join(crate::utils::paths::CHECKPOINT_FILE_NAME);
-    fs::write(&checkpoint_file, data).with_context(|| {
-        format!(
-            "failed to write checkpoint file: {}",
-            checkpoint_file.to_string_lossy()
-        )
-    })?;
-
-    Ok(())
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskCheckpointMetadataBundle {
+    pub checkpoint_json: Option<Vec<u8>>,
+    pub subagent_transcript: Option<Vec<u8>>,
+    pub incremental_checkpoint: Option<Vec<u8>>,
+    pub prompt: Option<Vec<u8>>,
 }
 
-pub fn read_task_checkpoint(task_metadata_dir: &str) -> Result<TaskCheckpoint> {
-    let checkpoint_file =
-        PathBuf::from(task_metadata_dir).join(crate::utils::paths::CHECKPOINT_FILE_NAME);
-    let data = fs::read(&checkpoint_file).with_context(|| {
-        format!(
-            "failed to read checkpoint file: {}",
-            checkpoint_file.to_string_lossy()
-        )
-    })?;
+pub fn build_session_metadata_bundle(
+    session_id: &str,
+    commit_message: &str,
+    transcript: &[u8],
+) -> Result<SessionMetadataBundle> {
+    let prompts = extract_prompts_from_transcript_bytes(transcript);
+    let summary = extract_summary_from_transcript_bytes(transcript);
+    let context =
+        build_context_markdown(session_id, commit_message, &prompts, &summary).into_bytes();
 
-    serde_json::from_slice(&data).context("failed to unmarshal checkpoint")
+    Ok(SessionMetadataBundle {
+        transcript: transcript.to_vec(),
+        prompts,
+        summary,
+        context,
+    })
 }
 
-pub fn write_task_prompt(task_metadata_dir: &str, prompt: &str) -> Result<()> {
-    let prompt_file = PathBuf::from(task_metadata_dir).join(crate::utils::paths::PROMPT_FILE_NAME);
-    fs::write(&prompt_file, prompt).with_context(|| {
-        format!(
-            "failed to write prompt file: {}",
-            prompt_file.to_string_lossy()
-        )
-    })?;
-    Ok(())
-}
-
-pub fn copy_agent_transcript(
-    src_transcript: &str,
-    task_metadata_dir: &str,
+pub fn build_task_checkpoint_payload(
+    session_id: &str,
+    tool_use_id: &str,
+    checkpoint_uuid: &str,
     agent_id: &str,
-) -> Result<()> {
-    let src = PathBuf::from(src_transcript);
-    if !src.exists() {
-        return Ok(());
+) -> Result<Vec<u8>> {
+    let payload = serde_json::json!({
+        "session_id": session_id,
+        "tool_use_id": tool_use_id,
+        "checkpoint_uuid": checkpoint_uuid,
+        "agent_id": agent_id,
+    });
+    serde_json::to_vec_pretty(&payload).context("serializing task checkpoint payload")
+}
+
+pub fn build_incremental_checkpoint_payload(
+    tool_use_id: &str,
+    incremental_type: &str,
+    timestamp: &str,
+    data: &serde_json::Value,
+) -> Result<Vec<u8>> {
+    let payload = serde_json::json!({
+        "type": incremental_type,
+        "tool_use_id": tool_use_id,
+        "timestamp": timestamp,
+        "data": data,
+    });
+    serde_json::to_vec_pretty(&payload).context("serializing incremental checkpoint payload")
+}
+
+pub fn build_context_markdown(
+    session_id: &str,
+    commit_message: &str,
+    prompts: &[String],
+    summary: &str,
+) -> String {
+    let mut output = String::new();
+    output.push_str("# Session Context\n\n");
+    output.push_str(&format!("Session ID: {session_id}\n"));
+    output.push_str(&format!("Commit Message: {commit_message}\n\n"));
+
+    if !prompts.is_empty() {
+        output.push_str("## Prompts\n\n");
+        for (idx, prompt) in prompts.iter().enumerate() {
+            output.push_str(&format!("### Prompt {}\n\n{prompt}\n\n", idx + 1));
+        }
     }
 
-    let dst = PathBuf::from(task_metadata_dir).join(format!("agent-{agent_id}.jsonl"));
-    fs::copy(&src, &dst).with_context(|| {
-        format!(
-            "failed to copy transcript from {} to {}",
-            src.to_string_lossy(),
-            dst.to_string_lossy()
-        )
-    })?;
+    if !summary.trim().is_empty() {
+        output.push_str("## Summary\n\n");
+        output.push_str(summary);
+        output.push('\n');
+    }
 
-    Ok(())
+    output
+}
+
+pub fn extract_prompts_from_transcript_bytes(transcript: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(transcript);
+    let mut prompts = extract_user_prompts_from_jsonl(&text);
+    if !prompts.is_empty() {
+        return prompts;
+    }
+
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(transcript) else {
+        return Vec::new();
+    };
+    prompts = extract_prompts_from_json_value(&value);
+    prompts
+}
+
+pub fn extract_summary_from_transcript_bytes(transcript: &[u8]) -> String {
+    let text = String::from_utf8_lossy(transcript);
+    let summary = extract_summary_from_jsonl(&text);
+    if !summary.trim().is_empty() {
+        return summary;
+    }
+
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(transcript) else {
+        return String::new();
+    };
+    extract_summary_from_json_value(&value)
+}
+
+pub fn extract_user_prompts_from_jsonl(jsonl: &str) -> Vec<String> {
+    let mut prompts = Vec::new();
+    for line in jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if !is_user_role(transcript_line_role(&value)) {
+            continue;
+        }
+        let Some(content) = transcript_line_content(&value) else {
+            continue;
+        };
+        let text = content_to_text(content);
+        if !text.trim().is_empty() {
+            prompts.push(text);
+        }
+    }
+    prompts
+}
+
+pub fn extract_summary_from_jsonl(jsonl: &str) -> String {
+    let mut last_summary = String::new();
+    for line in jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if !is_assistant_role(transcript_line_role(&value)) {
+            continue;
+        }
+        let Some(content) = transcript_line_content(&value) else {
+            continue;
+        };
+        let text = content_to_text(content);
+        if !text.trim().is_empty() {
+            last_summary = text;
+        }
+    }
+    last_summary
+}
+
+pub fn transcript_line_role(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("message")
+        .and_then(|message| message.get("role"))
+        .and_then(|role| role.as_str())
+        .or_else(|| value.get("role").and_then(|role| role.as_str()))
+        .or_else(|| value.get("type").and_then(|kind| kind.as_str()))
+}
+
+pub fn transcript_line_content(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    let message_content = value
+        .get("message")
+        .and_then(|message| message.get("content"));
+    if message_content.is_some() {
+        return message_content;
+    }
+
+    let data_content = value.get("data").and_then(|data| data.get("content"));
+    if let Some(content) = data_content {
+        let text = content_to_text(content);
+        if !text.trim().is_empty() {
+            return Some(content);
+        }
+    }
+
+    value
+        .get("data")
+        .and_then(|data| data.get("transformedContent"))
+        .or_else(|| value.get("content"))
+}
+
+pub fn content_to_text(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(text) => text.trim().to_string(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                if item.get("type").and_then(|kind| kind.as_str()) == Some("text") {
+                    item.get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn extract_prompts_from_json_value(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .map(|messages| {
+            messages
+                .iter()
+                .filter_map(|message| {
+                    let role = message
+                        .get("type")
+                        .and_then(|kind| kind.as_str())
+                        .or_else(|| {
+                            message
+                                .get("role")
+                                .and_then(|role| role.as_str())
+                                .or_else(|| transcript_line_role(message))
+                        });
+                    if !is_user_role(role) {
+                        return None;
+                    }
+                    transcript_line_content(message)
+                        .map(content_to_text)
+                        .filter(|text| !text.trim().is_empty())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_summary_from_json_value(value: &serde_json::Value) -> String {
+    value
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .and_then(|messages| {
+            messages.iter().rev().find_map(|message| {
+                let role = message
+                    .get("type")
+                    .and_then(|kind| kind.as_str())
+                    .or_else(|| {
+                        message
+                            .get("role")
+                            .and_then(|role| role.as_str())
+                            .or_else(|| transcript_line_role(message))
+                    });
+                if !is_assistant_role(role) {
+                    return None;
+                }
+                transcript_line_content(message)
+                    .map(content_to_text)
+                    .filter(|text| !text.trim().is_empty())
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn is_user_role(role: Option<&str>) -> bool {
+    matches!(role, Some("user") | Some("human") | Some("user.message"))
+}
+
+fn is_assistant_role(role: Option<&str>) -> bool {
+    matches!(
+        role,
+        Some("assistant") | Some("assistant.message") | Some("gemini")
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-
-    use tempfile::tempdir;
-
-    use super::{
-        TaskCheckpoint, copy_agent_transcript, read_task_checkpoint, task_metadata_dir,
-        write_task_checkpoint, write_task_prompt,
-    };
+    use super::*;
 
     #[test]
-    fn test_task_metadata_dir() {
-        let session_metadata_dir = ".bitloops/metadata/2025-01-28-abc123";
-        let tool_use_id = "toolu_xyz789";
+    fn build_session_metadata_bundle_handles_gemini_messages_json() {
+        let transcript = br#"{"messages":[
+            {"type":"user","content":"What is 2+2?"},
+            {"type":"gemini","content":"2+2 equals 4."}
+        ]}"#;
 
-        let expected = ".bitloops/metadata/2025-01-28-abc123/tasks/toolu_xyz789";
-        let got = task_metadata_dir(session_metadata_dir, tool_use_id);
-
-        assert_eq!(got, expected);
+        let bundle =
+            build_session_metadata_bundle("session-1", "What is 2+2?", transcript).unwrap();
+        assert_eq!(bundle.prompts, vec!["What is 2+2?".to_string()]);
+        assert_eq!(bundle.summary, "2+2 equals 4.");
+        assert!(String::from_utf8_lossy(&bundle.context).contains("Prompt 1"));
     }
 
     #[test]
-    fn test_task_checkpoint() {
-        let tmp_dir = tempdir().expect("failed to create temp dir");
-        let task_metadata_dir = tmp_dir.path().join("tasks").join("toolu_test123");
-        let task_metadata_dir = task_metadata_dir.to_string_lossy().to_string();
-
-        let checkpoint = TaskCheckpoint {
-            session_id: "session-abc".to_string(),
-            tool_use_id: "toolu_test123".to_string(),
-            checkpoint_uuid: "uuid-checkpoint-123".to_string(),
-            agent_id: "agent_subagent_001".to_string(),
-        };
-
-        write_task_checkpoint(&task_metadata_dir, &checkpoint).expect("write should succeed");
-
-        let task_dir = PathBuf::from(&task_metadata_dir);
-        assert!(
-            task_dir.exists(),
-            "task metadata directory should be created"
+    fn extract_user_prompts_supports_copilot_transformed_content() {
+        let jsonl = r#"{"type":"user.message","data":{"content":"Create hello.txt"}}
+{"type":"user.message","data":{"content":"","transformedContent":"Refactor parser"}}
+"#;
+        assert_eq!(
+            extract_user_prompts_from_jsonl(jsonl),
+            vec!["Create hello.txt", "Refactor parser"]
         );
-
-        let checkpoint_file = task_dir.join(crate::utils::paths::CHECKPOINT_FILE_NAME);
-        let data = fs::read(&checkpoint_file).expect("failed reading checkpoint file");
-        let loaded: TaskCheckpoint =
-            serde_json::from_slice(&data).expect("failed unmarshaling checkpoint");
-
-        assert_eq!(loaded.session_id, checkpoint.session_id);
-        assert_eq!(loaded.tool_use_id, checkpoint.tool_use_id);
-        assert_eq!(loaded.checkpoint_uuid, checkpoint.checkpoint_uuid);
-        assert_eq!(loaded.agent_id, checkpoint.agent_id);
-
-        let read_checkpoint =
-            read_task_checkpoint(&task_metadata_dir).expect("read should succeed");
-        assert_eq!(read_checkpoint.session_id, checkpoint.session_id);
     }
 
     #[test]
-    fn test_write_task_prompt() {
-        let tmp_dir = tempdir().expect("failed to create temp dir");
-        let task_metadata_dir = tmp_dir.path().join("tasks").join("toolu_test");
-        fs::create_dir_all(&task_metadata_dir).expect("failed to create metadata dir");
-        let task_metadata_dir = task_metadata_dir.to_string_lossy().to_string();
-
-        let prompt = "Please implement the feature described in task-01.md";
-        write_task_prompt(&task_metadata_dir, prompt).expect("write prompt should succeed");
-
-        let prompt_file =
-            PathBuf::from(&task_metadata_dir).join(crate::utils::paths::PROMPT_FILE_NAME);
-        let data = fs::read_to_string(prompt_file).expect("failed to read prompt file");
-        assert_eq!(data, prompt);
-    }
-
-    #[test]
-    fn test_copy_agent_transcript() {
-        let tmp_dir = tempdir().expect("failed to create temp dir");
-        let src_dir = tmp_dir.path().join("source");
-        fs::create_dir_all(&src_dir).expect("failed to create source dir");
-
-        let src_transcript = src_dir.join("agent-test_agent.jsonl");
-        let transcript_content = "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":\"test\"}}\n{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[]}}";
-        fs::write(&src_transcript, transcript_content).expect("failed writing source transcript");
-
-        let dst_dir = tmp_dir.path().join("dest").join("tasks").join("toolu_test");
-        fs::create_dir_all(&dst_dir).expect("failed to create destination dir");
-
-        copy_agent_transcript(
-            &src_transcript.to_string_lossy(),
-            &dst_dir.to_string_lossy(),
-            "test_agent",
-        )
-        .expect("copy should succeed");
-
-        let dst_transcript = dst_dir.join("agent-test_agent.jsonl");
-        let data = fs::read_to_string(dst_transcript).expect("failed reading copied transcript");
-        assert_eq!(data, transcript_content);
-    }
-
-    #[test]
-    fn test_copy_agent_transcript_source_not_exists() {
-        let tmp_dir = tempdir().expect("failed to create temp dir");
-        let dst_dir = tmp_dir.path().join("dest");
-        fs::create_dir_all(&dst_dir).expect("failed creating destination dir");
-
-        copy_agent_transcript(
-            "/nonexistent/path.jsonl",
-            &dst_dir.to_string_lossy(),
-            "test",
-        )
-        .expect("copy should no-op when source does not exist");
+    fn extract_summary_supports_nested_message_content() {
+        let jsonl = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"first summary"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"final summary"},{"type":"tool_use","name":"Edit","input":{"file_path":"a.txt"}}]}}"#;
+        assert_eq!(extract_summary_from_jsonl(jsonl), "final summary");
     }
 }

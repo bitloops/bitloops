@@ -43,66 +43,66 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String); 9] {
     [
         (
             HOOK_TYPE_SESSION_START,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SESSION_START
-            ),
+            )),
         ),
         (
             HOOK_TYPE_SESSION_END,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SESSION_END
-            ),
+            )),
         ),
         (
             HOOK_TYPE_BEFORE_SUBMIT_PROMPT,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SUBMIT_PROMPT
-            ),
+            )),
         ),
         (
             HOOK_TYPE_BEFORE_SHELL_EXECUTION,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SHELL_EXECUTION
-            ),
+            )),
         ),
         (
             HOOK_TYPE_AFTER_SHELL_EXECUTION,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION
-            ),
+            )),
         ),
         (
             HOOK_TYPE_STOP,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_STOP
-            ),
+            )),
         ),
         (
             HOOK_TYPE_PRE_COMPACT,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_PRE_COMPACT
-            ),
+            )),
         ),
         (
             HOOK_TYPE_SUBAGENT_START,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_START
-            ),
+            )),
         ),
         (
             HOOK_TYPE_SUBAGENT_STOP,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_STOP
-            ),
+            )),
         ),
     ]
 }
@@ -135,9 +135,7 @@ fn command_of(entry: &Value) -> Option<&str> {
 }
 
 fn is_bitloops_hook(command: &str) -> bool {
-    MANAGED_HOOK_PREFIXES
-        .iter()
-        .any(|prefix| command.starts_with(prefix))
+    crate::adapters::agents::is_managed_hook_command(command, &MANAGED_HOOK_PREFIXES)
 }
 
 fn is_bitloops_hook_entry(entry: &Value) -> bool {
