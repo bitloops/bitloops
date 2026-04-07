@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::capability_packs as capabilities;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
-use crate::storage::SqliteConnectionPool;
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
@@ -165,12 +165,11 @@ impl DevqlCapabilityHost {
     }
 
     pub fn build_event_handler_context(&self) -> Result<EventHandlerContext> {
-        let sqlite_path = self
-            .runtime
-            .backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(self.repo_root())?;
-        let sqlite_pool = SqliteConnectionPool::connect(sqlite_path.clone())?;
+        let relational_store = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root(),
+            &self.runtime.backends.relational,
+        )?;
+        let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
 
         let language_services: Arc<dyn LanguageServicesGateway> =
             Arc::new(RuntimeLanguageServicesGateway {
@@ -182,7 +181,7 @@ impl DevqlCapabilityHost {
         );
 
         Ok(EventHandlerContext {
-            storage: Arc::new(RelationalStorage::local_only(sqlite_path)),
+            storage: Arc::new(relational_store.to_local_inner()),
             relational,
             language_services,
             host_services,

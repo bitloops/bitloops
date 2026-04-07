@@ -558,6 +558,13 @@ async fn devql_post_route_executes_slim_clone_queries() {
         {
           clones(filter: { minScore: 0.75 }, first: 10) {
             totalCount
+            summary {
+              totalCount
+              groups {
+                relationKind
+                count
+              }
+            }
             edges {
               node {
                 relationKind
@@ -587,6 +594,122 @@ async fn devql_post_route_executes_slim_clone_queries() {
         payload.get("errors")
     );
     assert_eq!(payload["data"]["clones"]["totalCount"], 0);
+    assert_eq!(payload["data"]["clones"]["summary"]["totalCount"], 0);
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_clone_summary_queries() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          cloneSummary(
+            filter: { kind: FUNCTION }
+            cloneFilter: { minScore: 0.68 }
+          ) {
+            totalCount
+            groups {
+              relationKind
+              count
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["totalCount"], 3);
+    assert_eq!(
+        payload["data"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["groups"][0]["count"], 2);
+    assert_eq!(
+        payload["data"]["cloneSummary"]["groups"][1]["relationKind"],
+        "contextual_neighbor"
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["groups"][1]["count"], 1);
+}
+
+#[tokio::test]
+async fn devql_post_route_rejects_slim_clone_summary_invalid_inputs_and_temporal_scopes() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (_, payload) = request_slim_query(
+        app,
+        repo.path(),
+        &format!(
+            r#"
+            {{
+              badSummary: cloneSummary(cloneFilter: {{ minScore: 1.5 }}) {{
+                totalCount
+              }}
+              asOf(input: {{ commit: "{commit_sha}" }}) {{
+                project(path: "packages/api") {{
+                  cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                    totalCount
+                  }}
+                }}
+                file(path: "packages/api/src/caller.ts") {{
+                  cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                    totalCount
+                  }}
+                }}
+              }}
+            }}
+            "#,
+        ),
+    )
+    .await;
+
+    let errors = payload["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert_eq!(errors.len(), 3, "unexpected errors: {errors:?}");
+    let messages = errors
+        .iter()
+        .filter_map(|error| error["message"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`minScore` must be between 0 and 1")),
+        "expected minScore validation error, got {messages:?}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message.contains(
+                    "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+                )
+            })
+            .count(),
+        2,
+        "expected temporal cloneSummary errors, got {messages:?}"
+    );
 }
 
 #[tokio::test]

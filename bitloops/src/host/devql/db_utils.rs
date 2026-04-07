@@ -400,9 +400,9 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
         }
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
         configure_sqlite_connection(&conn, "querying SQLite rows")?;
         let mut stmt = conn.prepare(&query).context("preparing SQLite query")?;
         let column_names = stmt

@@ -1,15 +1,15 @@
 use anyhow::{Result, bail};
 
 use super::args::{
-    compile_artefact_args, compile_checkpoint_args, compile_clones_args, compile_coverage_args,
-    compile_deps_args, compile_knowledge_args, compile_telemetry_args, compile_tests_args,
-    connection_field, first_arg,
+    compile_artefact_args, compile_checkpoint_args, compile_clone_summary_args,
+    compile_clones_args, compile_coverage_args, compile_deps_args, compile_knowledge_args,
+    compile_telemetry_args, compile_tests_args, connection_field, first_arg,
 };
 use super::document_builder::{GraphqlArgument, GraphqlField};
 use super::field_mapping::{
-    KNOWLEDGE_STAGE_NAME, SelectableLeaf, compile_as_of_input, coverage_result_selections,
-    quote_graphql_string, scalar_selections_for_leaf, tests_result_selections,
-    tests_summary_result_selections,
+    KNOWLEDGE_STAGE_NAME, SelectableLeaf, clone_result_selections, clone_summary_selections,
+    compile_as_of_input, coverage_result_selections, quote_graphql_string,
+    scalar_selections_for_leaf, tests_result_selections, tests_summary_result_selections,
 };
 use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall, RegisteredStageKind};
 
@@ -35,6 +35,10 @@ pub(super) fn compile_terminal_leaf(
         return compile_knowledge_leaf(parsed, stage);
     }
 
+    if matches!(registered_stage, Some(RegisteredStageKind::CloneSummary)) {
+        return compile_clone_summary_leaf(parsed);
+    }
+
     if parsed.has_artefacts_stage {
         return compile_artefacts_leaf(parsed, registered_stage);
     }
@@ -55,6 +59,9 @@ pub(super) fn compile_project_stage_leaf(
     registered_stage: RegisteredStageKind<'_>,
 ) -> Result<GraphqlField> {
     match registered_stage {
+        RegisteredStageKind::CloneSummary => {
+            bail!("summary() is not a project-level registered stage in the GraphQL compiler")
+        }
         RegisteredStageKind::Tests(stage) => Ok(GraphqlField::new(
             "tests",
             compile_tests_args(
@@ -116,6 +123,14 @@ fn compile_knowledge_leaf(
     ))
 }
 
+fn compile_clone_summary_leaf(parsed: &ParsedDevqlQuery) -> Result<GraphqlField> {
+    Ok(GraphqlField::new(
+        "cloneSummary",
+        compile_clone_summary_args(parsed)?,
+        clone_summary_selections(),
+    ))
+}
+
 fn compile_artefacts_leaf(
     parsed: &ParsedDevqlQuery,
     registered_stage: Option<RegisteredStageKind<'_>>,
@@ -124,8 +139,11 @@ fn compile_artefacts_leaf(
         bail!("knowledge() cannot be nested under artefacts() when compiling to GraphQL");
     }
 
-    let mut node_selections =
-        scalar_selections_for_leaf(SelectableLeaf::Artefact, &parsed.select_fields)?;
+    let mut node_selections = if parsed.has_clones_stage {
+        Vec::new()
+    } else {
+        scalar_selections_for_leaf(SelectableLeaf::Artefact, &parsed.select_fields)?
+    };
 
     if parsed.has_chat_history_stage {
         node_selections.push(
@@ -143,7 +161,7 @@ fn compile_artefacts_leaf(
             connection_field(
                 "clones",
                 compile_clones_args(parsed, parsed.has_limit_stage.then_some(parsed.limit)),
-                scalar_selections_for_leaf(SelectableLeaf::Clone, &[])?,
+                clone_result_selections(parsed.clones.raw)?,
             )
             .into(),
         );
@@ -176,6 +194,9 @@ fn compile_artefacts_leaf(
                 )
                 .into(),
             ),
+            RegisteredStageKind::CloneSummary => {
+                bail!("summary() cannot be nested under artefacts() in the GraphQL compiler")
+            }
             RegisteredStageKind::TestsSummary => {
                 bail!("test_harness_tests_summary() cannot be nested under artefacts()")
             }

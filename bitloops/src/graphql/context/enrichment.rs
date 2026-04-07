@@ -1,17 +1,19 @@
 use super::{DevqlGraphqlContext, GRAPHQL_GIT_SCAN_LIMIT};
+use crate::artefact_query_planner::{ArtefactQuerySpec, plan_graphql_artefact_query};
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
-    ChatEntry, ChatRole, ClonesFilterInput, DateTimeScalar, SemanticClone,
+    ArtefactFilterInput, ChatEntry, ChatRole, ClonesFilterInput, DateTimeScalar, SemanticClone,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     SessionContentView, list_committed, read_session_content_by_id,
 };
+use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
 use crate::host::devql::{esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape};
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::path::Path;
 
@@ -58,6 +60,30 @@ impl DevqlGraphqlContext {
             .map(clone_from_row)
             .map(|result| result.map(|clone| clone.with_scope(scope.clone())))
             .collect()
+    }
+
+    pub(crate) async fn summarize_clones(
+        &self,
+        path: Option<&str>,
+        artefact_filter: Option<&ArtefactFilterInput>,
+        clone_filter: Option<&ClonesFilterInput>,
+        scope: &ResolverScope,
+    ) -> Result<BTreeMap<String, usize>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let spec = plan_graphql_artefact_query(
+            &repo_id,
+            &self.current_branch_name(scope),
+            path,
+            artefact_filter,
+            scope,
+            None,
+        );
+        let sql = build_clone_summary_sql(&spec, clone_filter);
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
+
+        rows.into_iter()
+            .map(clone_summary_group_from_row)
+            .collect::<Result<BTreeMap<_, _>>>()
     }
 
     pub(crate) async fn load_chat_history_by_paths(
@@ -282,6 +308,24 @@ fn build_clone_filters(repo_id: &str, filter: Option<&ClonesFilterInput>) -> Vec
     clauses
 }
 
+fn build_clone_summary_sql(spec: &ArtefactQuerySpec, filter: Option<&ClonesFilterInput>) -> String {
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let clauses = build_clone_filters(spec.repo_id.as_str(), filter);
+
+    format!(
+        "{filtered_cte} \
+         SELECT ce.relation_kind AS relation_kind, COUNT(*) AS count \
+           FROM filtered fa \
+           JOIN symbol_clone_edges ce \
+             ON ce.repo_id = '{repo_id}' \
+            AND ce.source_artefact_id = fa.artefact_id \
+          WHERE {clauses} \
+       GROUP BY ce.relation_kind",
+        repo_id = esc_pg(spec.repo_id.as_str()),
+        clauses = clauses.join(" AND "),
+    )
+}
+
 #[allow(dead_code)]
 fn build_clickhouse_chat_history_sql(
     repo_id: &str,
@@ -381,6 +425,20 @@ fn clone_from_row(row: Value) -> Result<SemanticClone> {
         metadata: (!metadata.is_empty()).then_some(Json(Value::Object(metadata))),
         scope: ResolverScope::default(),
     })
+}
+
+fn clone_summary_group_from_row(row: Value) -> Result<(String, usize)> {
+    let relation_kind = required_string(&row, "relation_kind")?;
+    let count = row
+        .get("count")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|count| u64::try_from(count).ok()))
+        })
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| anyhow!("missing `count`"))?;
+    Ok((relation_kind, count))
 }
 
 #[allow(dead_code)]
@@ -863,4 +921,48 @@ fn escape_like_literal(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artefact_query_planner::{
+        ArtefactQuerySpec, ArtefactScope, ArtefactStructuralFilter, ArtefactTemporalScope,
+    };
+
+    fn clone_summary_spec() -> ArtefactQuerySpec {
+        ArtefactQuerySpec {
+            repo_id: "repo-1".to_string(),
+            branch: Some("main".to_string()),
+            historical_path_blob_sha: None,
+            scope: ArtefactScope {
+                project_path: Some("packages/api".to_string()),
+                path: None,
+                files_path: None,
+            },
+            temporal_scope: ArtefactTemporalScope::Current,
+            structural_filter: ArtefactStructuralFilter::default(),
+            activity_filter: None,
+            pagination: None,
+        }
+    }
+
+    #[test]
+    fn clone_summary_sql_aggregates_filtered_sources_by_relation_kind() {
+        let sql = build_clone_summary_sql(
+            &clone_summary_spec(),
+            Some(&ClonesFilterInput {
+                relation_kind: Some("similar_implementation".to_string()),
+                min_score: Some(0.75),
+            }),
+        );
+
+        assert!(sql.contains("WITH filtered AS"));
+        assert!(sql.contains("FROM filtered fa"));
+        assert!(sql.contains("JOIN symbol_clone_edges ce"));
+        assert!(sql.contains("ce.source_artefact_id = fa.artefact_id"));
+        assert!(sql.contains("ce.relation_kind = 'similar_implementation'"));
+        assert!(sql.contains("ce.score >= 0.75"));
+        assert!(sql.contains("GROUP BY ce.relation_kind"));
+    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::extract_user_prompts_from_jsonl;
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -115,23 +116,32 @@ impl ManualCommitStrategy {
         if state.turn_checkpoint_ids.is_empty() {
             return;
         }
-        if state.transcript_path.trim().is_empty() {
+        let metadata_bundle = read_session_metadata_bundle(&self.repo_root, &state.session_id);
+        if metadata_bundle.is_none() && state.transcript_path.trim().is_empty() {
             state.turn_checkpoint_ids.clear();
             return;
         }
 
-        let Ok(full_transcript) = fs::read(&state.transcript_path) else {
-            state.turn_checkpoint_ids.clear();
-            return;
-        };
+        let full_transcript = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.transcript.clone())
+            .or_else(|| fs::read(&state.transcript_path).ok())
+            .unwrap_or_default();
         if full_transcript.is_empty() {
             state.turn_checkpoint_ids.clear();
             return;
         }
 
         let transcript_text = String::from_utf8_lossy(&full_transcript).to_string();
-        let prompts = extract_user_prompts_from_jsonl(&transcript_text);
-        let context = generate_context_from_prompts(&prompts).into_bytes();
+        let prompts = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.prompts.clone())
+            .unwrap_or_else(|| extract_user_prompts_from_jsonl(&transcript_text));
+        let context = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.context.clone())
+            .filter(|context| !context.is_empty())
+            .unwrap_or_else(|| generate_context_from_prompts(&prompts).into_bytes());
 
         for checkpoint_id in state.turn_checkpoint_ids.clone() {
             let _ = update_committed(
@@ -182,7 +192,11 @@ impl ManualCommitStrategy {
             new_head,
             &committed_touched,
         );
-        let transcript_content = read_transcript_from_disk(&self.repo_root, &state.session_id)
+        let metadata_bundle = read_session_metadata_bundle(&self.repo_root, &state.session_id);
+        let transcript_content = metadata_bundle
+            .as_ref()
+            .map(|bundle| String::from_utf8_lossy(&bundle.transcript).to_string())
+            .filter(|transcript| !transcript.is_empty())
             .or_else(|| {
                 if state.transcript_path.trim().is_empty() {
                     return None;
@@ -193,8 +207,15 @@ impl ManualCommitStrategy {
             })
             .unwrap_or_default();
         let total_transcript_lines = transcript_content.lines().count() as i64;
-        let prompts = extract_user_prompts_from_jsonl(&transcript_content);
-        let context = generate_context_from_prompts(&prompts).into_bytes();
+        let prompts = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.prompts.clone())
+            .unwrap_or_else(|| extract_user_prompts_from_jsonl(&transcript_content));
+        let context = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.context.clone())
+            .filter(|context| !context.is_empty())
+            .unwrap_or_else(|| generate_context_from_prompts(&prompts).into_bytes());
         let token_usage = state
             .pending
             .token_usage

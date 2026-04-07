@@ -124,22 +124,113 @@ pub fn get_associated_commits_from_db(
     Ok(collected.into_iter().map(|(_, commit)| commit).collect())
 }
 
-fn compute_reachable_from_main(
+fn discover_default_branch_name(repo_root: &std::path::Path, current_branch: &str) -> String {
+    let current_branch = current_branch.trim();
+    if current_branch.is_empty() {
+        return resolve_default_branch_name(repo_root);
+    }
+
+    if let Ok(remote) = run_git(repo_root, &["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        let remote = remote.trim();
+        if let Some(branch) = remote.strip_prefix("refs/remotes/origin/")
+            && !branch.is_empty()
+        {
+            return branch.to_string();
+        }
+    }
+
+    for candidate in ["main", "master"] {
+        let local_ref = format!("refs/heads/{candidate}");
+        if run_git(
+            repo_root,
+            &["show-ref", "--verify", "--quiet", local_ref.as_str()],
+        )
+        .is_ok()
+        {
+            return candidate.to_string();
+        }
+
+        let remote_ref = format!("refs/remotes/origin/{candidate}");
+        if run_git(
+            repo_root,
+            &["show-ref", "--verify", "--quiet", remote_ref.as_str()],
+        )
+        .is_ok()
+        {
+            return candidate.to_string();
+        }
+    }
+
+    find_first_parent_base_branch(repo_root, current_branch)
+        .unwrap_or_else(|| current_branch.to_string())
+}
+
+fn find_first_parent_base_branch(
     repo_root: &std::path::Path,
+    current_branch: &str,
+) -> Option<String> {
+    let first_parent_log =
+        run_git(repo_root, &["log", "--first-parent", "--format=%H", "HEAD"]).unwrap_or_default();
+    let first_parent_order: HashMap<String, usize> = first_parent_log
+        .lines()
+        .map(str::trim)
+        .filter(|sha| !sha.is_empty())
+        .enumerate()
+        .map(|(idx, sha)| (sha.to_string(), idx))
+        .collect();
+    if first_parent_order.is_empty() {
+        return None;
+    }
+
+    let refs = run_git(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)|%(objectname)",
+            "refs/heads",
+        ],
+    )
+    .unwrap_or_default();
+
+    refs.lines()
+        .filter_map(|line| {
+            let (branch, sha) = line.split_once('|')?;
+            let branch = branch.trim();
+            let sha = sha.trim();
+            if branch.is_empty()
+                || sha.is_empty()
+                || branch == current_branch
+                || branch == paths::METADATA_BRANCH_NAME
+            {
+                return None;
+            }
+            first_parent_order
+                .get(sha)
+                .map(|position| (*position, branch.to_string()))
+        })
+        .min_by_key(|(position, _)| *position)
+        .map(|(_, branch)| branch)
+}
+
+fn compute_reachable_from_default_branch(
+    repo_root: &std::path::Path,
+    default_branch_name: &str,
     is_on_default_branch: bool,
 ) -> HashSet<String> {
     if is_on_default_branch {
         return HashSet::new();
     }
 
-    let out = run_git(repo_root, &["log", "--first-parent", "--format=%H", "main"])
-        .or_else(|_| {
-            run_git(
-                repo_root,
-                &["log", "--first-parent", "--format=%H", "master"],
-            )
-        })
-        .unwrap_or_default();
+    let default_branch_name = default_branch_name.trim();
+    if default_branch_name.is_empty() {
+        return HashSet::new();
+    }
+
+    let out = run_git(
+        repo_root,
+        &["log", "--first-parent", "--format=%H", default_branch_name],
+    )
+    .unwrap_or_default();
 
     out.lines()
         .take(1000)
@@ -415,7 +506,8 @@ pub fn get_branch_checkpoints_real(
         .unwrap_or_default()
         .trim()
         .to_string();
-    let is_default = is_default_branch(&branch);
+    let default_branch_name = discover_default_branch_name(repo_root, &branch);
+    let is_default = is_default_branch(&branch, &default_branch_name);
 
     let all_committed = list_committed(repo_root)?;
     let committed_map: HashMap<_, _> = all_committed
@@ -427,7 +519,8 @@ pub fn get_branch_checkpoints_real(
     // Unlimited walk on default branch, capped on feature branches.
     let graph_limit = if is_default { 0 } else { COMMIT_SCAN_LIMIT };
     let commits = build_commit_graph_from_git(repo_root, graph_limit)?;
-    let reachable_from_main = compute_reachable_from_main(repo_root, is_default);
+    let reachable_from_default =
+        compute_reachable_from_default_branch(repo_root, &default_branch_name, is_default);
 
     let walk_commits: Vec<CommitNode> = if is_default {
         commits.clone()
@@ -441,7 +534,7 @@ pub fn get_branch_checkpoints_real(
         let head_sha = commits[0].sha.clone();
         let mut walked: Vec<CommitNode> = Vec::new();
         for commit in walk_first_parent_commits(&head_sha, &commit_map, COMMIT_SCAN_LIMIT)? {
-            if reachable_from_main.contains(&commit.sha) {
+            if reachable_from_default.contains(&commit.sha) {
                 break;
             }
             walked.push(commit);

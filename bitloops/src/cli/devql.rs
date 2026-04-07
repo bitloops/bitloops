@@ -108,6 +108,9 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         },
         DevqlCommand::Query(args) => {
             let use_raw_graphql = use_raw_graphql_mode(&args.query, args.graphql);
+            let parsed_query = (!use_raw_graphql)
+                .then(|| parse_devql_query(&args.query))
+                .transpose()?;
             let trace = crate::devql_timing::timings_enabled_from_env()
                 .then(crate::devql_timing::TimingTrace::new);
 
@@ -159,7 +162,12 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             };
 
             let format_started = Instant::now();
-            let output = match format_query_output(&data, args.compact, use_raw_graphql) {
+            let output = match format_query_output(
+                &data,
+                args.compact,
+                use_raw_graphql,
+                parsed_query.as_ref(),
+            ) {
                 Ok(output) => {
                     if let Some(trace) = trace.as_ref() {
                         trace.record(

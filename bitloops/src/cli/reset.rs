@@ -66,7 +66,10 @@ mod tests {
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
     use crate::host::checkpoints::session::state::SessionState;
     use crate::storage::SqliteConnectionPool;
-    use crate::test_support::process_state::git_command;
+    use crate::test_support::git_fixtures::write_test_daemon_config;
+    use crate::test_support::process_state::{
+        SUPPRESS_HOST_DAEMON_CONFIG_ENV, git_command, with_process_state,
+    };
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -84,17 +87,18 @@ mod tests {
     }
 
     fn with_legacy_local_backend<T>(f: impl FnOnce() -> T) -> T {
-        f()
+        with_process_state(None, &[(SUPPRESS_HOST_DAEMON_CONFIG_ENV, Some("1"))], f)
     }
 
     fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
         let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
-        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-            resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-                .expect("resolve configured sqlite path")
-        } else {
-            crate::utils::paths::default_relational_db_path(repo_root)
-        }
+        let path = cfg
+            .relational
+            .sqlite_path
+            .as_deref()
+            .expect("test daemon config should set sqlite_path");
+        resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
     }
 
     fn ensure_relational_store_file(repo_root: &Path) {
@@ -127,6 +131,7 @@ mod tests {
             ],
         );
         assert!(ok, "initial commit failed: {err}");
+        write_test_daemon_config(root);
         ensure_relational_store_file(root);
 
         let (_, stdout, _) = run_git(root, &["rev-parse", "HEAD"]);

@@ -12,12 +12,14 @@ pub(crate) fn open_checkpoint_storage_context(
 ) -> Result<CheckpointStorageContext> {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for committed checkpoints")?;
-    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening relational store for committed checkpoints")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context("initialising committed checkpoint relational schema")?;
+    let sqlite = crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational)
         .context("opening committed checkpoint SQLite database")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising committed checkpoint schema")?;
 
     let resolved_blob_store =
         crate::storage::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)

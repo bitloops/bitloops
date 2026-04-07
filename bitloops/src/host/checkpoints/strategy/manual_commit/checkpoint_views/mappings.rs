@@ -2,12 +2,14 @@ use super::*;
 
 /// Look up the session_id for a given commit SHA via commit_checkpoints → checkpoint_sessions.
 pub fn lookup_session_id_for_commit(repo_root: &Path, commit_sha: &str) -> Result<Option<String>> {
-    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening relational store for session lookup")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context("initialising relational checkpoint schema for session lookup")?;
+    let sqlite = crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational)
         .context("opening SQLite for session lookup")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising checkpoint schema for session lookup")?;
 
     sqlite.with_connection(|conn| {
         let mut stmt = conn.prepare(
@@ -29,12 +31,14 @@ pub fn lookup_session_id_for_commit(repo_root: &Path, commit_sha: &str) -> Resul
 pub fn read_commit_checkpoint_mappings(
     repo_root: &Path,
 ) -> Result<std::collections::HashMap<String, String>> {
-    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening relational store for commit-checkpoint mappings")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context("initialising relational checkpoint schema for commit-checkpoint mappings")?;
+    let sqlite = crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational)
         .context("opening SQLite database for commit-checkpoint mappings")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising checkpoint schema for commit-checkpoint mappings")?;
 
     let repo_id = crate::host::devql::resolve_repo_id(repo_root)
         .context("resolving repo identity for commit-checkpoint mappings")?;

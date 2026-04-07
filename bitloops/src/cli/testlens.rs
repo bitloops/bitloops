@@ -10,6 +10,7 @@ use crate::capability_packs::test_harness::types::{
 };
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::resolve_repo_identity;
+use crate::host::relational_store::DefaultRelationalStore;
 use crate::models::{CoverageFormat, ScopeKind};
 use crate::utils::paths;
 
@@ -213,8 +214,8 @@ async fn run_ingest_coverage_batch(
 }
 
 fn run_ingest_results(repo_root: &Path, args: &TestLensIngestResultsArgs) -> Result<()> {
-    let sqlite_path = paths::default_relational_db_path(repo_root);
-    let pool = crate::storage::SqliteConnectionPool::connect(sqlite_path)?;
+    let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
+    let pool = relational_store.local_sqlite_pool_allow_create()?;
     let relational = crate::host::capability_host::gateways::SqliteRelationalGateway::new(pool);
     let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
     let summary = results::execute(&mut repository, &relational, &args.jest_json, &args.commit)?;

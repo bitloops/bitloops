@@ -13,7 +13,7 @@ async fn repo_sync_state_write_helpers_track_lifecycle() {
     let expected_repo_root = cfg.repo_root.to_string_lossy().to_string();
     seed_sync_repository_catalog_row(&relational, &cfg).await;
 
-    crate::host::devql::sync::lock::write_sync_started(
+    crate::host::devql::sync::state::write_sync_started(
         &relational,
         &cfg.repo.repo_id,
         cfg.repo_root.to_string_lossy().as_ref(),
@@ -76,7 +76,7 @@ FROM repo_sync_state WHERE repo_id = '{}'",
         Some("full")
     );
 
-    crate::host::devql::sync::lock::write_sync_completed(
+    crate::host::devql::sync::state::write_sync_completed(
         &relational,
         &cfg.repo.repo_id,
         Some("head-123"),
@@ -141,7 +141,7 @@ async fn repo_sync_state_write_failed_marks_repo_as_failed() {
     let cfg = sync_test_cfg();
     seed_sync_repository_catalog_row(&relational, &cfg).await;
 
-    crate::host::devql::sync::lock::write_sync_started(
+    crate::host::devql::sync::state::write_sync_started(
         &relational,
         &cfg.repo.repo_id,
         cfg.repo_root.to_string_lossy().as_ref(),
@@ -152,7 +152,7 @@ async fn repo_sync_state_write_failed_marks_repo_as_failed() {
     .await
     .expect("write started state");
 
-    crate::host::devql::sync::lock::write_sync_failed(&relational, &cfg.repo.repo_id)
+    crate::host::devql::sync::state::write_sync_failed(&relational, &cfg.repo.repo_id)
         .await
         .expect("write failed state");
 
@@ -191,7 +191,7 @@ async fn repo_sync_state_write_completed_errors_without_started_row() {
     let cfg = sync_test_cfg();
     seed_sync_repository_catalog_row(&relational, &cfg).await;
 
-    let err = crate::host::devql::sync::lock::write_sync_completed(
+    let err = crate::host::devql::sync::state::write_sync_completed(
         &relational,
         &cfg.repo.repo_id,
         Some("head-123"),
@@ -217,7 +217,7 @@ async fn repo_sync_state_write_failed_errors_without_started_row() {
     let cfg = sync_test_cfg();
     seed_sync_repository_catalog_row(&relational, &cfg).await;
 
-    let err = crate::host::devql::sync::lock::write_sync_failed(&relational, &cfg.repo.repo_id)
+    let err = crate::host::devql::sync::state::write_sync_failed(&relational, &cfg.repo.repo_id)
         .await
         .expect_err("missing repo_sync_state row should error");
 

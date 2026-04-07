@@ -5,23 +5,44 @@ use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
 
 fn write_local_devql_config(repo_root: &Path) {
+    let daemon_state_root = repo_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            repo_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        );
+    let sqlite_path = daemon_state_root
+        .join("stores")
+        .join("relational")
+        .join("devql.sqlite");
+    let duckdb_path = daemon_state_root
+        .join("stores")
+        .join("event")
+        .join("events.duckdb");
     write_repo_daemon_config(
         repo_root,
-        r#"[stores.relational]
-sqlite_path = ".bitloops/stores/devql.sqlite"
+        format!(
+            r#"[stores.relational]
+sqlite_path = {sqlite_path:?}
 
 [stores.events]
-duckdb_path = ".bitloops/stores/events.duckdb"
+duckdb_path = {duckdb_path:?}
 
 [semantic]
 provider = "disabled"
 "#,
+        ),
     );
 }
 
 fn test_cfg_for_repo(repo_root: &Path) -> DevqlConfig {
     let mut cfg = test_cfg();
-    cfg.config_root = repo_root.to_path_buf();
+    cfg.daemon_config_root = repo_root.to_path_buf();
     cfg.repo_root = repo_root.to_path_buf();
     cfg.repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
     cfg

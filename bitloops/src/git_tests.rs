@@ -571,9 +571,9 @@ fn test_hard_reset_with_protection_preserves_protected_dirs() {
     run_git(dir.path(), &["commit", "-m", "Second commit"]);
 
     fs::write(dir.path().join(".gitignore"), ".bitloops/\n.worktrees/\n").expect("write ignore");
-    fs::create_dir_all(dir.path().join(".bitloops/metadata")).expect("create .bitloops");
+    fs::create_dir_all(dir.path().join(".bitloops/internal")).expect("create .bitloops");
     fs::write(
-        dir.path().join(".bitloops/metadata/session.json"),
+        dir.path().join(".bitloops/internal/session.json"),
         "important session metadata",
     )
     .expect("write .bitloops content");
@@ -599,7 +599,7 @@ fn test_hard_reset_with_protection_preserves_protected_dirs() {
             ".bitloops should not be deleted by hard reset"
         );
         let bitloops_content =
-            fs::read_to_string(dir.path().join(".bitloops/metadata/session.json"))
+            fs::read_to_string(dir.path().join(".bitloops/internal/session.json"))
                 .expect("read .bitloops content");
         assert_eq!(bitloops_content, "important session metadata");
 

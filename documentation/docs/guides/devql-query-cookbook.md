@@ -193,6 +193,10 @@ bitloops devql query 'repo("bitloops")->asOf(ref:"main")->artefacts(kind:"functi
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.8)->limit(10)'
 ```
 
+`clones()` now defaults to a user-facing projection that highlights the source artefact, the
+matched artefact, the clone relation kind, and the score. Use `clones(raw:true)` when you want the
+low-level ids and debug metadata instead.
+
 ### Raw GraphQL
 
 ```graphql
@@ -219,6 +223,59 @@ bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_s
   }
 }
 ```
+
+### Raw GraphQL summary across the filtered artefact set
+
+```graphql
+{
+  repo(name: "bitloops") {
+    cloneSummary(
+      filter: { kind: FUNCTION, symbolFqn: "packages/api/src/caller.ts::caller" }
+      cloneFilter: { minScore: 0.75 }
+    ) {
+      totalCount
+      groups {
+        relationKind
+        count
+      }
+    }
+  }
+}
+```
+
+### Raw GraphQL summary for one resolved artefact
+
+```graphql
+{
+  repo(name: "bitloops") {
+    file(path: "packages/api/src/caller.ts") {
+      artefacts(
+        filter: { kind: FUNCTION, symbolFqn: "packages/api/src/caller.ts::caller" }
+        first: 1
+      ) {
+        edges {
+          node {
+            path
+            symbolFqn
+            clones(first: 10, filter: { minScore: 0.75 }) {
+              totalCount
+              summary {
+                totalCount
+                groups {
+                  relationKind
+                  count
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Use `cloneSummary(...)` for one aggregate result over the filtered artefacts. Use nested `clones { summary }` when you need the summary attached to a specific artefact node.
 
 ## Tips
 

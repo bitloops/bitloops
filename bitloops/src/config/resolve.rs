@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use crate::utils::paths;
 use super::constants::*;
 #[cfg(not(test))]
 use super::daemon_config::default_daemon_config_exists;
-use super::daemon_config::load_daemon_settings;
+use super::daemon_config::{LoadedDaemonSettings, load_daemon_settings};
 use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
@@ -29,12 +29,79 @@ use super::unified_config::{
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 
+fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSettings)>> {
+    let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) else {
+        return Ok(None);
+    };
+    let loaded = load_daemon_settings(Some(Path::new(&explicit_path)))?;
+    Ok(Some((loaded.root, loaded.settings)))
+}
+
+fn discover_nearest_daemon_config(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .map(|directory| directory.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+        .find(|candidate| candidate.is_file())
+}
+
+fn load_nearest_daemon_settings(repo_root: &Path) -> Result<Option<LoadedDaemonSettings>> {
+    discover_nearest_daemon_config(repo_root)
+        .map(|config_path| load_daemon_settings(Some(&config_path)))
+        .transpose()
+}
+
+#[cfg(test)]
+fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
+    // In tests, prefer repo-local config so concurrent tests using a process-wide
+    // daemon-config override do not leak store paths across unrelated repos.
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
+        return Ok(loaded);
+    }
+
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        return load_daemon_settings(Some(Path::new(&explicit_path)));
+    }
+
+    bail!(
+        "Bitloops daemon config is required to resolve the repo runtime store. Set `{}` to an explicit config path, add `{}` next to the repository, or create the default daemon config.",
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        BITLOOPS_CONFIG_RELATIVE_PATH
+    )
+}
+
+#[cfg(not(test))]
+fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        return load_daemon_settings(Some(Path::new(&explicit_path)));
+    }
+
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
+        return Ok(loaded);
+    }
+
+    if default_daemon_config_exists().unwrap_or(false) {
+        return load_daemon_settings(None);
+    }
+
+    bail!(
+        "Bitloops daemon config is required to resolve the repo runtime store. Set `{}` to an explicit config path, add `{}` next to the repository, or create the default daemon config.",
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        BITLOOPS_CONFIG_RELATIVE_PATH
+    )
+}
+
+pub fn resolve_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    required_daemon_settings_for_repo(repo_root).map(|loaded| loaded.root)
+}
+
 #[cfg(test)]
 fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
-    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if repo_toml.is_file() {
-        let loaded = load_daemon_settings(Some(&repo_toml))?;
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
         return Ok((loaded.root, loaded.settings));
+    }
+
+    if let Some(override_settings) = explicit_daemon_settings_override()? {
+        return Ok(override_settings);
     }
 
     Ok((repo_root.to_path_buf(), UnifiedSettings::default()))
@@ -42,9 +109,11 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
 
 #[cfg(not(test))]
 fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
-    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if repo_toml.is_file() {
-        let loaded = load_daemon_settings(Some(&repo_toml))?;
+    if let Some(override_settings) = explicit_daemon_settings_override()? {
+        return Ok(override_settings);
+    }
+
+    if let Some(loaded) = load_nearest_daemon_settings(repo_root)? {
         return Ok((loaded.root, loaded.settings));
     }
 
@@ -76,6 +145,17 @@ pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeCo
     resolve_watch_from_unified(&settings, |key| env::var(key).ok())
 }
 
+#[cfg(test)]
+pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
+    if let Some((config_root, settings)) = explicit_daemon_settings_override()? {
+        return resolve_store_backend_from_unified(&settings, &config_root);
+    }
+
+    let repo_root = current_repo_root_or_cwd_result()?;
+    resolve_store_backend_config_for_repo(&repo_root)
+}
+
+#[cfg(not(test))]
 pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
     let repo_root = current_repo_root_or_cwd_result()?;
     resolve_store_backend_config_for_repo(&repo_root)
@@ -84,6 +164,18 @@ pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
 pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBackendConfig> {
     let (config_root, settings) = daemon_settings_for_repo(repo_root)?;
     resolve_store_backend_from_unified(&settings, &config_root)
+}
+
+pub fn resolve_repo_runtime_db_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    let config_root = resolve_daemon_config_root_for_repo(repo_root)?;
+    Ok(resolve_repo_runtime_db_path_for_config_root(&config_root))
+}
+
+pub fn resolve_repo_runtime_db_path_for_config_root(config_root: &Path) -> PathBuf {
+    config_root
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite")
 }
 
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {

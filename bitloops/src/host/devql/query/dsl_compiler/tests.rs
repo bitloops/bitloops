@@ -96,6 +96,88 @@ fn compile_artefacts_with_clone_spans() {
 }
 
 #[test]
+fn compile_clone_summary_stage_ignores_limit_and_targets_typed_field() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.75)->summary()->limit(1)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    cloneSummary(filter: { kind: FUNCTION }, cloneFilter: { minScore: 0.75 }) {
+      totalCount
+      groups {
+        relationKind
+        count
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_file_clone_summary_stage_preserves_all_filters() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(kind:"function",symbol_fqn:"src/main.rs::main",lines:1..20,agent:"codex",since:"2026-03-01")->clones(relation_kind:"similar_implementation",min_score:0.75)->summary()"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    file(path: "src/main.rs") {
+      cloneSummary(filter: { kind: FUNCTION, symbolFqn: "src/main.rs::main", lines: { start: 1, end: 20 }, agent: "codex", since: "2026-03-01T00:00:00Z" }, cloneFilter: { relationKind: "similar_implementation", minScore: 0.75 }) {
+        totalCount
+        groups {
+          relationKind
+          count
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_clone_summary_stage_rejects_select_projection() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->summary()->select(total_count)"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("summary select() should fail");
+    assert!(
+        err.to_string()
+            .contains("summary() does not support select() in the GraphQL compiler yet"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_clone_summary_stage_rejects_invalid_since_literal() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(since:"not-a-date")->clones()->summary()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("invalid datetime should fail");
+    assert!(
+        err.to_string()
+            .contains("invalid datetime value `not-a-date`"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn compile_file_artefacts_with_chat_history_enrichment() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->chatHistory()->limit(5)"#,
@@ -129,6 +211,82 @@ fn compile_file_artefacts_with_chat_history_enrichment() {
                   role
                   content
                 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_artefact_clones_pipeline_uses_user_facing_default_selection() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.8)->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          clones(filter: { minScore: 0.8 }, first: 10) {
+            edges {
+              node {
+                relationKind
+                score
+                sourceArtefact {
+                  path
+                  symbolFqn
+                }
+                targetArtefact {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_artefact_clones_pipeline_keeps_raw_mode_opt_in() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",raw:true)->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          clones(filter: { relationKind: "similar_implementation" }, first: 10) {
+            edges {
+              node {
+                id
+                sourceArtefactId
+                targetArtefactId
+                relationKind
+                score
+                metadata
               }
             }
           }
@@ -307,5 +465,43 @@ fn compile_rejects_multiple_registered_stages() {
         err.to_string()
             .contains("does not yet support multiple registered capability-pack stages"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn compile_tests_stage_defaults_to_covering_test_line_range_fields() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts(kind:"function")->tests()->limit(5)"#)
+            .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert!(
+        graphql.contains("coveringTests"),
+        "expected coveringTests selection in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("startLine"),
+        "expected covering test startLine in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("endLine"),
+        "expected covering test endLine in compiled graphql: {graphql}"
+    );
+    assert!(
+        !graphql.contains("confidence"),
+        "did not expect confidence in default tests() selections: {graphql}"
+    );
+    assert!(
+        !graphql.contains("discoverySource"),
+        "did not expect discoverySource in default tests() selections: {graphql}"
+    );
+    assert!(
+        !graphql.contains("linkageSource"),
+        "did not expect linkageSource in default tests() selections: {graphql}"
+    );
+    assert!(
+        !graphql.contains("linkageStatus"),
+        "did not expect linkageStatus in default tests() selections: {graphql}"
     );
 }

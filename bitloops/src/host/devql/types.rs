@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::resolve_store_semantic_config_for_repo;
+use crate::config::{resolve_daemon_config_root_for_repo, resolve_store_semantic_config_for_repo};
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -12,7 +12,7 @@ pub struct RepoIdentity {
 
 #[derive(Debug, Clone)]
 pub struct DevqlConfig {
-    pub(crate) config_root: PathBuf,
+    pub(crate) daemon_config_root: PathBuf,
     pub(crate) repo_root: PathBuf,
     pub(crate) repo: RepoIdentity,
     pub(crate) pg_dsn: Option<String>,
@@ -28,19 +28,20 @@ pub struct DevqlConfig {
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
-        Self::from_roots(repo_root.clone(), repo_root, repo)
+        let daemon_config_root = resolve_daemon_config_root_for_repo(&repo_root)?;
+        Self::from_roots(daemon_config_root, repo_root, repo)
     }
 
     pub fn from_roots(
-        config_root: PathBuf,
+        daemon_config_root: PathBuf,
         repo_root: PathBuf,
         repo: RepoIdentity,
     ) -> Result<Self> {
-        let backend_cfg = resolve_store_backend_config_for_repo(&config_root)
+        let backend_cfg = resolve_store_backend_config_for_repo(&daemon_config_root)
             .context("resolving backend config for DevQL runtime")?;
-        let semantic_cfg = resolve_store_semantic_config_for_repo(&config_root);
+        let semantic_cfg = resolve_store_semantic_config_for_repo(&daemon_config_root);
         Ok(Self {
-            config_root,
+            daemon_config_root,
             repo_root,
             repo,
             pg_dsn: backend_cfg.relational.postgres_dsn,
@@ -135,28 +136,36 @@ impl RelationalStorage {
         RelationalDialect::Sqlite
     }
 
+    pub fn sqlite_path(&self) -> &Path {
+        &self.local.path
+    }
+
+    pub fn remote_client(&self) -> Option<&tokio_postgres::Client> {
+        self.remote.as_ref().map(|remote| &remote.client)
+    }
+
     pub async fn exec(&self, sql: &str) -> Result<()> {
-        sqlite_exec_path(&self.local.path, sql).await
+        sqlite_exec_path(self.sqlite_path(), sql).await
     }
 
     pub async fn exec_batch_transactional(&self, statements: &[String]) -> Result<()> {
-        sqlite_exec_batch_transactional_path(&self.local.path, statements).await
+        sqlite_exec_batch_transactional_path(self.sqlite_path(), statements).await
     }
 
     pub async fn exec_remote_batch_transactional(&self, statements: &[String]) -> Result<()> {
-        if let Some(remote) = self.remote.as_ref() {
-            return postgres_exec_batch_transactional(&remote.client, statements).await;
+        if let Some(remote_client) = self.remote_client() {
+            return postgres_exec_batch_transactional(remote_client, statements).await;
         }
         bail!("remote Postgres storage is not configured")
     }
 
     pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
-        sqlite_query_rows_path(&self.local.path, sql).await
+        sqlite_query_rows_path(self.sqlite_path(), sql).await
     }
 
     pub async fn query_rows_remote(&self, sql: &str) -> Result<Vec<Value>> {
-        if let Some(remote) = self.remote.as_ref() {
-            return pg_query_rows(&remote.client, sql).await;
+        if let Some(remote_client) = self.remote_client() {
+            return pg_query_rows(remote_client, sql).await;
         }
         bail!("remote Postgres storage is not configured")
     }
@@ -168,7 +177,7 @@ mod tests {
 
     fn sample_cfg(repo_root: PathBuf) -> DevqlConfig {
         DevqlConfig {
-            config_root: repo_root.clone(),
+            daemon_config_root: repo_root.clone(),
             repo_root,
             repo: RepoIdentity {
                 provider: "git".to_string(),
@@ -203,7 +212,7 @@ mod tests {
             .await
             .expect("connect relational storage");
 
-        assert_eq!(relational.local.path, sqlite_path);
+        assert_eq!(relational.sqlite_path(), sqlite_path.as_path());
         assert!(relational.remote.is_none());
         assert_eq!(relational.dialect(), RelationalDialect::Sqlite);
     }

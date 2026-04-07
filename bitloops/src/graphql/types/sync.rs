@@ -152,7 +152,7 @@ mod tests {
             repo_provider: "local".to_string(),
             repo_organisation: "local".to_string(),
             repo_identity: "local/bitloops".to_string(),
-            config_root: std::path::PathBuf::from("/tmp/config"),
+            daemon_config_root: std::path::PathBuf::from("/tmp/config"),
             repo_root: std::path::PathBuf::from("/tmp/repo"),
             source: crate::daemon::SyncTaskSource::ManualCli,
             mode: crate::daemon::SyncTaskMode::Validate,
