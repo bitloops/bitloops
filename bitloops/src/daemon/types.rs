@@ -329,6 +329,7 @@ pub struct CapabilityEventRunRecord {
     pub handler_id: String,
     pub event_kind: String,
     pub lane_key: String,
+    pub event_payload_json: String,
     pub status: CapabilityEventRunStatus,
     pub attempts: u32,
     pub submitted_at_unix: u64,

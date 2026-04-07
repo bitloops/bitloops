@@ -354,6 +354,17 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
                         handler_id: "sync_completed".to_string(),
                         event_kind: "sync_completed".to_string(),
                         lane_key: "repo-1:test_harness:sync_completed".to_string(),
+                        event_payload_json: serde_json::json!({
+                            "repo_id": "repo-1",
+                            "repo_root": "/tmp/repo",
+                            "active_branch": "main",
+                            "head_commit_sha": "abc123",
+                            "sync_mode": "full",
+                            "sync_completed_at": "2026-04-06T00:00:00Z",
+                            "files": {},
+                            "artefacts": {},
+                        })
+                        .to_string(),
                         status: crate::daemon::CapabilityEventRunStatus::Queued,
                         attempts: 0,
                         submitted_at_unix: 1,

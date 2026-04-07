@@ -32,6 +32,8 @@ mod enrichment;
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
+#[path = "daemon/capability_events.rs"]
+mod capability_events;
 #[path = "daemon/logger.rs"]
 mod logger;
 #[path = "daemon/process.rs"]
@@ -60,6 +62,7 @@ mod tests;
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
+pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
@@ -213,6 +216,10 @@ pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
     enrichment::snapshot()
 }
 
+pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+    CapabilityEventCoordinator::shared().snapshot(repo_id)
+}
+
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     enrichment::pause_enrichments(reason)
 }
@@ -227,6 +234,10 @@ pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
 
 pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
     EnrichmentCoordinator::shared()
+}
+
+pub fn shared_capability_event_coordinator() -> Arc<CapabilityEventCoordinator> {
+    CapabilityEventCoordinator::shared()
 }
 
 pub fn shared_sync_coordinator() -> Arc<SyncCoordinator> {
