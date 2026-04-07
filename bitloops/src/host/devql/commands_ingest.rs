@@ -49,7 +49,6 @@ async fn execute_ingest_inner(
     observer: Option<&dyn IngestionObserver>,
     enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
-    let _ = init;
     let mut counters = IngestionCounters {
         init_requested: init,
         ..IngestionCounters::default()

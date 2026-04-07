@@ -403,10 +403,11 @@ pub(super) fn build_current_dependency_sql(
         )
     };
     let tgt_join = if use_historical_tables {
-        format!(
-            "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id",
-            artefacts_table = artefacts_table_sql(true),
-        )
+        let commit_sha = temporal_scope
+            .filter(|s| s.use_historical_tables())
+            .map(ResolvedTemporalScope::resolved_commit)
+            .expect("historical dependency queries require a resolved commit");
+        historical_dependency_tgt_join_sql(repo_id, commit_sha)
     } else {
         format!(
             "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id",
@@ -497,10 +498,11 @@ pub(super) fn build_current_dependency_batch_sql(
         )
     };
     let tgt_join = if use_historical_tables {
-        format!(
-            "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id",
-            artefacts_table = artefacts_table_sql(true),
-        )
+        let commit_sha = temporal_scope
+            .filter(|s| s.use_historical_tables())
+            .map(ResolvedTemporalScope::resolved_commit)
+            .expect("historical batch dependency queries require a resolved commit");
+        historical_dependency_tgt_join_sql(repo_id, commit_sha)
     } else {
         format!(
             "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id",
@@ -606,6 +608,19 @@ fn file_state_exists_clause(
     )
 }
 
+/// Historical `artefacts_historical` can store multiple rows per `artefact_id` (different blobs).
+/// Joining the dependency target only on `artefact_id` duplicates rows or picks an arbitrary snapshot.
+/// Pin `tgt` to the tree at `commit_sha` by requiring `(tgt.path, tgt.blob_sha)` in `file_state`.
+fn historical_dependency_tgt_join_sql(repo_id: &str, commit_sha: &str) -> String {
+    format!(
+        "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id \
+         AND {file_state_match}",
+        artefacts_table = artefacts_table_sql(true),
+        file_state_match =
+            file_state_exists_clause("tgt.path", "tgt.blob_sha", repo_id, commit_sha),
+    )
+}
+
 fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
     let prefix = format!("{}/%", escape_like_pattern(project_path));
     format!(
@@ -681,6 +696,8 @@ mod tests {
         ArtefactActivityFilter, ArtefactPagination, ArtefactScope, ArtefactStructuralFilter,
         ArtefactTemporalScope,
     };
+    use crate::graphql::types::{DepsDirection, DepsFilterInput};
+    use crate::graphql::{ResolvedTemporalScope, TemporalAccessMode};
 
     fn activity_spec() -> ArtefactQuerySpec {
         ArtefactQuerySpec {
@@ -753,5 +770,44 @@ mod tests {
             "ORDER BY path DESC, kind_rank DESC, start_line DESC, end_line DESC, artefact_id DESC"
         ));
         assert!(sql.contains("LIMIT 7"));
+    }
+
+    #[test]
+    fn historical_dependency_sql_pins_tgt_to_file_state_at_commit() {
+        let scope =
+            ResolvedTemporalScope::new("abc123".to_string(), TemporalAccessMode::HistoricalCommit);
+        let sql = build_current_dependency_sql(
+            "repo-1",
+            "main",
+            DependencyScope::File("src/a.rs"),
+            None,
+            DepsFilterInput::default(),
+            Some(&scope),
+        );
+        assert!(sql.contains("LEFT JOIN artefacts_historical tgt"));
+        assert!(sql.contains("tgt.artefact_id = e.to_artefact_id"));
+        assert!(sql.contains("fs.path = tgt.path"));
+        assert!(sql.contains("fs.blob_sha = tgt.blob_sha"));
+        assert!(sql.contains("fs.commit_sha = 'abc123'"));
+    }
+
+    #[test]
+    fn historical_dependency_batch_sql_pins_tgt_to_file_state_at_commit() {
+        let scope = ResolvedTemporalScope::new(
+            "deadbeef".to_string(),
+            TemporalAccessMode::HistoricalCommit,
+        );
+        let sql = build_current_dependency_batch_sql(
+            "repo-1",
+            "main",
+            &["a1".to_string()],
+            DepsDirection::Out,
+            DepsFilterInput::default(),
+            None,
+            Some(&scope),
+        );
+        assert!(sql.contains("LEFT JOIN artefacts_historical tgt"));
+        assert!(sql.contains("fs.path = tgt.path"));
+        assert!(sql.contains("fs.commit_sha = 'deadbeef'"));
     }
 }
