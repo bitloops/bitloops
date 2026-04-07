@@ -31,10 +31,17 @@ path = "tests/production_seed.rs"
 [[test]]
 name = "testlens_gherkin"
 path = "tests/testlens_gherkin.rs"
+required-features = ["slow-tests"]
 
 [[test]]
 name = "testlens_sqlite_acceptance"
 path = "tests/testlens_sqlite_acceptance.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "agent_cli_smoke"
+path = "tests/agent_cli_smoke.rs"
+required-features = ["slow-tests"]
 
 [[test]]
 name = "claude_git_hooks_integration"
@@ -44,6 +51,11 @@ required-features = ["slow-tests"]
 [[test]]
 name = "copilot_integration"
 path = "tests/copilot_integration.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "checkpoint_rewind_smoke"
+path = "tests/checkpoint_rewind_smoke.rs"
 required-features = ["slow-tests"]
 
 [[test]]
@@ -74,6 +86,11 @@ required-features = ["slow-tests"]
 [[test]]
 name = "qat_acceptance"
 path = "tests/qat_acceptance.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "qat_bundle"
+path = "tests/qat_bundle.rs"
 
 [dependencies]
 anyhow = "1"

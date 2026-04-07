@@ -18,6 +18,7 @@ dev-test-lib = "run --manifest-path ../Cargo.toml --quiet --package xtask -- tes
 dev-test-core = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test core"
 dev-test-cli = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test cli"
 dev-test-fast = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test fast"
+dev-test-merge = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test merge"
 dev-test-slow = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test slow"
 dev-test-full = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test full"
 dev-coverage = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage run-lcov --lcov bitloops/target/llvm-cov.info"

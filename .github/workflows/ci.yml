@@ -8,6 +8,7 @@ on:
       - 'bitloops/**'
       - 'xtask/**'
       - '.cargo/config.toml'
+      - 'bitloops/.cargo/config.toml'
       - '.github/workflows/ci.yml'
 
 permissions:
@@ -53,6 +54,25 @@ jobs:
 
       - name: Compile test targets
         run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
+
+  test-full:
+    name: Full test suite
+    runs-on: self-hosted
+    env:
+      DUCKDB_DOWNLOAD_LIB: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: ci
+          cache-workspace-crates: true
+
+      - name: Run full test suite
+        run: cargo dev-test-full
 
   build-matrix:
     name: Build smoke ${{ matrix.target }}

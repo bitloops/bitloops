@@ -10,6 +10,15 @@ on:
       - '.cargo/config.toml'
       - 'bitloops/.cargo/config.toml'
       - '.github/workflows/dev-ci.yml'
+  push:
+    branches:
+      - develop
+    paths:
+      - 'bitloops/**'
+      - 'xtask/**'
+      - '.cargo/config.toml'
+      - 'bitloops/.cargo/config.toml'
+      - '.github/workflows/dev-ci.yml'
 
 permissions:
   contents: read
@@ -20,6 +29,7 @@ env:
 jobs:
   rust-file-size:
     name: Rust file size
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
@@ -29,6 +39,7 @@ jobs:
 
   fmt:
     name: Format
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
@@ -40,6 +51,7 @@ jobs:
 
   clippy:
     name: Clippy
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
@@ -54,9 +66,39 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings
 
+  test-fast:
+    name: Fast test lane
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: dev-ci
+          cache-workspace-crates: true
+      - name: Run fast test lane
+        run: cargo dev-test-fast
+
+  test-merge:
+    name: Merge smoke lane
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: dev-ci
+          cache-workspace-crates: true
+      - name: Run merge smoke lane
+        run: cargo dev-test-merge
+
   test-full:
     name: Full test suite
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ github.event_name == 'push' }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
