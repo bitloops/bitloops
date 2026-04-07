@@ -189,6 +189,45 @@ pub(super) fn coverage_result_selections() -> Vec<GraphqlSelection> {
     ]
 }
 
+pub(super) fn clone_result_selections(raw: bool) -> Result<Vec<GraphqlSelection>> {
+    if raw {
+        return scalar_selections_for_leaf(
+            SelectableLeaf::Clone,
+            &[
+                "id".to_string(),
+                "source_artefact_id".to_string(),
+                "target_artefact_id".to_string(),
+                "relation_kind".to_string(),
+                "score".to_string(),
+                "metadata".to_string(),
+            ],
+        );
+    }
+
+    Ok(vec![
+        GraphqlSelection::scalar("relationKind"),
+        GraphqlSelection::scalar("score"),
+        GraphqlField::new(
+            "sourceArtefact",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("path"),
+                GraphqlSelection::scalar("symbolFqn"),
+            ],
+        )
+        .into(),
+        GraphqlField::new(
+            "targetArtefact",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("path"),
+                GraphqlSelection::scalar("symbolFqn"),
+            ],
+        )
+        .into(),
+    ])
+}
+
 pub(super) fn tests_summary_result_selections() -> Vec<GraphqlSelection> {
     vec![
         GraphqlSelection::scalar("capability"),
