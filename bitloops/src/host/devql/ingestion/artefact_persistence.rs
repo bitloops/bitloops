@@ -72,6 +72,19 @@ pub(super) async fn upsert_language_artefacts(
             &file_artefact.language,
             record,
         ));
+        historical_sql_batch.push(build_upsert_historical_artefact_snapshot_sql(
+            &cfg.repo.repo_id,
+            rev.blob_sha,
+            &HistoricalArtefactSnapshotRecord {
+                artefact_id: record.artefact_id.clone(),
+                path: rev.path.to_string(),
+                parent_artefact_id: record.parent_artefact_id.clone(),
+                start_line: record.start_line,
+                end_line: record.end_line,
+                start_byte: record.start_byte,
+                end_byte: record.end_byte,
+            },
+        ));
     }
 
     let mut historical_lookup = HashMap::new();

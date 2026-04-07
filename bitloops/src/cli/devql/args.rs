@@ -24,17 +24,15 @@ pub enum DevqlCommand {
     Packs(DevqlPacksArgs),
     /// Manage repository-scoped external knowledge.
     Knowledge(DevqlKnowledgeArgs),
+    /// Test harness ingestion for DevQL production artefacts.
+    TestHarness(DevqlTestHarnessArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlInitArgs {}
 
-#[derive(Args, Debug, Clone)]
-pub struct DevqlIngestArgs {
-    /// Limit checkpoints processed (newest-first).
-    #[arg(long, default_value_t = 500)]
-    pub max_checkpoints: usize,
-}
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlIngestArgs {}
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct DevqlSyncArgs {
@@ -163,4 +161,62 @@ pub struct DevqlKnowledgeAssociateArgs {
 #[derive(Args, Debug, Clone)]
 pub struct DevqlKnowledgeRefArgs {
     pub knowledge_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessArgs {
+    #[command(subcommand)]
+    pub command: DevqlTestHarnessCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlTestHarnessCommand {
+    /// Parse test files, discover suites/scenarios, and link tests to production artefacts.
+    IngestTests(DevqlTestHarnessIngestTestsArgs),
+    /// Ingest coverage report (LCOV or LLVM JSON).
+    IngestCoverage(DevqlTestHarnessIngestCoverageArgs),
+    /// Batch-ingest coverage from a JSON manifest.
+    IngestCoverageBatch(DevqlTestHarnessIngestCoverageBatchArgs),
+    /// Ingest Jest JSON test results.
+    IngestResults(DevqlTestHarnessIngestResultsArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestTestsArgs {
+    #[arg(long)]
+    pub commit: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestCoverageArgs {
+    #[arg(long)]
+    pub lcov: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub input: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub commit: String,
+    #[arg(long)]
+    pub scope: String,
+    #[arg(long, default_value = "unknown")]
+    pub tool: String,
+    #[arg(long)]
+    pub test_artefact_id: Option<String>,
+    #[arg(long)]
+    pub format: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestCoverageBatchArgs {
+    #[arg(long)]
+    pub manifest: std::path::PathBuf,
+    #[arg(long)]
+    pub commit: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestResultsArgs {
+    #[arg(long)]
+    pub jest_json: std::path::PathBuf,
+    #[arg(long)]
+    pub commit: String,
 }

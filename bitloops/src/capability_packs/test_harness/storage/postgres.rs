@@ -19,15 +19,14 @@ use crate::models::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
     StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestHarnessCommitCounts,
+    TestRunRecord, derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
 use self::helpers::{
     clear_existing_test_discovery_data, get, get_i64, get_opt_i64, upsert_test_artefact_current,
-    upsert_test_artefact_edge_current, upsert_test_classification,
-    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
+    upsert_test_artefact_edge_current, upsert_test_classification, upsert_test_run,
 };
 
 /// Groups covered coverage rows by test symbol for classification. Pure helper used by
@@ -143,14 +142,10 @@ ORDER BY ts.path ASC, ts.start_line ASC
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         let commit_sha = commit_sha.to_string();
         let test_artefacts = test_artefacts.to_vec();
         let test_edges = test_edges.to_vec();
-        let discovery_run = discovery_run.clone();
-        let diagnostics = diagnostics.to_vec();
         self.with_client(move |client| {
             Box::pin(async move {
                 let tx = client
@@ -159,10 +154,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
                     .context("failed to start test discovery transaction")?;
                 clear_existing_test_discovery_data(&tx, &commit_sha).await?;
 
-                upsert_test_discovery_run(&tx, &discovery_run).await?;
-                for diagnostic in diagnostics {
-                    upsert_test_discovery_diagnostic(&tx, &diagnostic).await?;
-                }
                 for artefact in test_artefacts {
                     upsert_test_artefact_current(&tx, &artefact).await?;
                 }

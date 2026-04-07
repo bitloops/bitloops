@@ -3,13 +3,19 @@ use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 // Shared types used across ingestion modules.
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct IngestionCounters {
     pub(crate) success: bool,
-    pub(crate) checkpoints_processed: usize,
+    #[serde(skip_serializing)]
+    pub(crate) init_requested: bool,
+    #[serde(alias = "checkpointsProcessed")]
+    pub(crate) commits_processed: usize,
+    pub(crate) checkpoint_companions_processed: usize,
     pub(crate) events_inserted: usize,
     pub(crate) artefacts_upserted: usize,
+    #[serde(skip_serializing)]
     pub(crate) checkpoints_without_commit: usize,
+    #[serde(skip_serializing)]
     pub(crate) temporary_rows_promoted: usize,
     pub(crate) semantic_feature_rows_upserted: usize,
     pub(crate) semantic_feature_rows_skipped: usize,
@@ -31,8 +37,8 @@ pub(crate) enum IngestionProgressPhase {
 #[derive(Debug, Clone)]
 pub(crate) struct IngestionProgressUpdate {
     pub(crate) phase: IngestionProgressPhase,
-    pub(crate) checkpoints_total: usize,
-    pub(crate) checkpoints_processed: usize,
+    pub(crate) commits_total: usize,
+    pub(crate) commits_processed: usize,
     pub(crate) current_checkpoint_id: Option<String>,
     pub(crate) current_commit_sha: Option<String>,
     pub(crate) counters: IngestionCounters,

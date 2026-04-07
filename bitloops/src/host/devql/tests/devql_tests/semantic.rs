@@ -68,7 +68,6 @@ async fn init_relational_schema_creates_test_harness_tables() {
         "test_artefact_edges_current",
         "coverage_captures",
         "coverage_hits",
-        "test_discovery_runs",
     ] {
         let table_count: i64 = conn
             .query_row(
@@ -544,7 +543,7 @@ async fn run_direct_ingest_with_env(
         dimension.parse::<usize>().expect("parse dimension")
     );
 
-    execute_ingest_with_observer(&cfg, max_checkpoints, None, None)
+    execute_ingest_with_observer(&cfg, false, max_checkpoints, None, None)
         .await
         .expect("execute direct ingest")
 }
@@ -569,7 +568,7 @@ async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
     let current_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
 
     assert!(summary.success);
-    assert_eq!(summary.checkpoints_processed, 2);
+    assert_eq!(summary.commits_processed, 2);
     assert!(!current_rows.is_empty());
     assert_eq!(setup.0, "local_fastembed");
     assert_eq!(setup.1, "bootstrap-model");

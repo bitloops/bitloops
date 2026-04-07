@@ -40,7 +40,7 @@ fn build_prune_before_timestamp_sql(repo_id: &str, committed_at: &str) -> Vec<St
     let committed_at = crate::host::devql::esc_pg(committed_at);
     vec![
         format!(
-            "DELETE FROM artefacts \
+            "DELETE FROM artefact_edges \
 WHERE repo_id = '{repo_id}' \
   AND blob_sha IN (\
     SELECT DISTINCT blob_sha \
@@ -52,7 +52,7 @@ WHERE repo_id = '{repo_id}' \
   )"
         ),
         format!(
-            "DELETE FROM artefact_edges \
+            "DELETE FROM artefact_snapshots \
 WHERE repo_id = '{repo_id}' \
   AND blob_sha IN (\
     SELECT DISTINCT blob_sha \
@@ -61,6 +61,15 @@ WHERE repo_id = '{repo_id}' \
       AND commit_sha IN (\
         SELECT commit_sha FROM commits WHERE repo_id = '{repo_id}' AND committed_at <= '{committed_at}'\
       )\
+  )"
+        ),
+        format!(
+            "DELETE FROM artefacts \
+WHERE repo_id = '{repo_id}' \
+  AND NOT EXISTS (\
+    SELECT 1 FROM artefact_snapshots s \
+    WHERE s.repo_id = artefacts.repo_id \
+      AND s.artefact_id = artefacts.artefact_id\
   )"
         ),
         format!(
@@ -77,7 +86,7 @@ fn build_retention_prune_sql(repo_id: &str, keep_commits: usize) -> Vec<String> 
     let repo_id = crate::host::devql::esc_pg(repo_id);
     vec![
         format!(
-            "DELETE FROM artefacts \
+            "DELETE FROM artefact_edges \
 WHERE repo_id = '{repo_id}' \
   AND blob_sha IN (\
     SELECT DISTINCT blob_sha FROM file_state \
@@ -92,7 +101,7 @@ WHERE repo_id = '{repo_id}' \
   )"
         ),
         format!(
-            "DELETE FROM artefact_edges \
+            "DELETE FROM artefact_snapshots \
 WHERE repo_id = '{repo_id}' \
   AND blob_sha IN (\
     SELECT DISTINCT blob_sha FROM file_state \
@@ -104,6 +113,15 @@ WHERE repo_id = '{repo_id}' \
         ORDER BY committed_at DESC, commit_sha DESC \
         LIMIT {keep_commits}\
       )\
+  )"
+        ),
+        format!(
+            "DELETE FROM artefacts \
+WHERE repo_id = '{repo_id}' \
+  AND NOT EXISTS (\
+    SELECT 1 FROM artefact_snapshots s \
+    WHERE s.repo_id = artefacts.repo_id \
+      AND s.artefact_id = artefacts.artefact_id\
   )"
         ),
         format!(

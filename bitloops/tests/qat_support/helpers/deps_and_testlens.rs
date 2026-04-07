@@ -267,8 +267,8 @@ pub fn run_testlens_ingest_tests(world: &mut QatWorld, repo_name: &str) -> Resul
     let sha = resolve_head_sha(world)?;
     run_bitloops_success(
         world,
-        &["testlens", "ingest-tests", "--commit", &sha],
-        "bitloops testlens ingest-tests",
+        &["devql", "test-harness", "ingest-tests", "--commit", &sha],
+        "bitloops devql test-harness ingest-tests",
     )
 }
 
@@ -283,7 +283,8 @@ pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Re
     run_bitloops_success(
         world,
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--lcov",
             "coverage/lcov.info",
@@ -294,7 +295,7 @@ pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Re
             "--tool",
             tool,
         ],
-        "bitloops testlens ingest-coverage",
+        "bitloops devql test-harness ingest-coverage",
     )
 }
 
@@ -324,14 +325,15 @@ pub fn run_testlens_ingest_results(
     run_bitloops_success(
         world,
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-results",
             "--jest-json",
             results_file,
             "--commit",
             &sha,
         ],
-        "bitloops testlens ingest-results",
+        "bitloops devql test-harness ingest-results",
     )
 }
 

@@ -17,6 +17,14 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite
         .initialise_devql_schema()
         .context("creating SQLite relational DevQL tables")?;
+    let historical_cutover_needed = sqlite
+        .with_connection(sqlite_artefacts_historical_needs_cutover)
+        .context("inspecting SQLite historical artefacts schema shape")?;
+    if historical_cutover_needed {
+        sqlite_exec_path_allow_create(sqlite_path, historical_artefacts_cutover_sqlite_sql())
+            .await
+            .context("applying SQLite historical artefacts one-shot cutover")?;
+    }
     sqlite_exec_path_allow_create(
         sqlite_path,
         crate::host::devql::sync::schema::sync_schema_sql(),
@@ -59,6 +67,21 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
         .await
         .context("creating SQLite semantic embedding tables")?;
     Ok(())
+}
+
+fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Result<bool> {
+    let columns = sqlite_table_columns(conn, "artefacts")?;
+    Ok([
+        "blob_sha",
+        "path",
+        "parent_artefact_id",
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte",
+    ]
+    .iter()
+    .any(|column| columns.iter().any(|existing| existing == column)))
 }
 
 fn sync_tables_need_rebuild(conn: &rusqlite::Connection) -> Result<bool> {
@@ -272,7 +295,12 @@ async fn init_postgres_schema_with_policy(
     let artefacts_alter_sql = artefacts_upgrade_sql();
     postgres_exec(pg_client, artefacts_alter_sql)
         .await
-        .context("updating Postgres artefacts columns for byte offsets/signature")?;
+        .context("updating Postgres artefacts semantic columns")?;
+
+    let historical_cutover_sql = historical_artefacts_cutover_postgres_sql();
+    postgres_exec(pg_client, historical_cutover_sql)
+        .await
+        .context("applying Postgres historical artefacts one-shot cutover")?;
 
     let artefact_edges_hardening_sql = artefact_edges_hardening_sql();
     postgres_exec(pg_client, artefact_edges_hardening_sql)

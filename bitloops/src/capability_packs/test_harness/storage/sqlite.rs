@@ -20,8 +20,8 @@ use crate::models::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
     StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestHarnessCommitCounts,
+    TestRunRecord, derive_test_classification,
 };
 use crate::storage::init::open_existing_database;
 
@@ -33,8 +33,7 @@ use self::stage_serving::{
 };
 use self::writes::{
     clear_existing_test_discovery_data, upsert_test_artefact_current,
-    upsert_test_artefact_edge_current, upsert_test_classification,
-    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
+    upsert_test_artefact_edge_current, upsert_test_classification, upsert_test_run,
 };
 
 pub struct SqliteTestHarnessRepository {
@@ -89,8 +88,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         let tx = self
             .conn
@@ -98,10 +95,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
             .context("failed to start test discovery transaction")?;
         clear_existing_test_discovery_data(&tx, commit_sha)?;
 
-        upsert_test_discovery_run(&tx, discovery_run)?;
-        for diagnostic in diagnostics {
-            upsert_test_discovery_diagnostic(&tx, diagnostic)?;
-        }
         for artefact in test_artefacts {
             upsert_test_artefact_current(&tx, artefact)?;
         }

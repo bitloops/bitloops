@@ -19,7 +19,7 @@ use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::host::devql::*;
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ProductionArtefact, ScopeKind,
-    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
 };
 use crate::telemetry::logging;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
@@ -3378,21 +3378,6 @@ fn edge_targets_artefact(edge: &TestArtefactEdgeCurrentRecord, artefact_name: &s
             .is_some_and(|symbol_id| symbol_id.contains(artefact_name))
 }
 
-fn discovery_run_record(repo_id: &str, commit_sha: &str) -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: format!("discovery:{commit_sha}:bdd"),
-        repo_id: repo_id.to_string(),
-        sync_mode: "full".to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-24T00:00:00Z".to_string(),
-        finished_at: Some("2026-03-24T00:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("hybrid_full".to_string()),
-        notes_json: None,
-        stats_json: None,
-    }
-}
-
 fn coverage_capture_record(
     repo_id: &str,
     commit_sha: &str,
@@ -3653,13 +3638,7 @@ async fn execute_registered_stage_query(
     let mut test_artefacts = rewritten_suites;
     test_artefacts.extend(rewritten_scenarios.clone());
     repository
-        .replace_test_discovery(
-            commit_sha.trim(),
-            &test_artefacts,
-            &rewritten_edges,
-            &discovery_run_record(&cfg.repo.repo_id, commit_sha.trim()),
-            &[],
-        )
+        .replace_test_discovery(commit_sha.trim(), &test_artefacts, &rewritten_edges)
         .context("seed test discovery rows")?;
 
     if stage_name == "coverage"

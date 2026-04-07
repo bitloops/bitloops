@@ -13,7 +13,7 @@ use crate::models::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
+    TestHarnessCommitCounts, TestRunRecord,
 };
 pub enum BitloopsTestHarnessRepository {
     Sqlite(SqliteTestHarnessRepository),
@@ -48,7 +48,7 @@ fn init_schema_for_backends(
 
 pub fn open_repository_for_repo(repo_root: &Path) -> Result<BitloopsTestHarnessRepository> {
     let backends = resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving Bitloops store config for `bitloops testlens`")?;
+        .context("resolving Bitloops store config for `bitloops devql test-harness`")?;
 
     open_repository_for_backends(repo_root, backends)
 }
@@ -59,14 +59,14 @@ fn open_repository_for_backends(
 ) -> Result<BitloopsTestHarnessRepository> {
     if backends.relational.has_postgres() {
         let dsn = backends.relational.postgres_dsn.ok_or_else(|| {
-            anyhow!("`bitloops testlens` requires stores.relational.postgres_dsn")
+            anyhow!("`bitloops devql test-harness` requires stores.relational.postgres_dsn")
         })?;
         Ok(BitloopsTestHarnessRepository::Postgres(
             PostgresTestHarnessRepository::connect(dsn)?,
         ))
     } else {
         let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
-            .context("opening local relational store for `bitloops testlens`")?;
+            .context("opening local relational store for `bitloops devql test-harness`")?;
         Ok(BitloopsTestHarnessRepository::Sqlite(
             SqliteTestHarnessRepository::open_existing(relational.sqlite_path())?,
         ))
@@ -86,24 +86,14 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         match self {
-            Self::Sqlite(repository) => repository.replace_test_discovery(
-                commit_sha,
-                test_artefacts,
-                test_edges,
-                discovery_run,
-                diagnostics,
-            ),
-            Self::Postgres(repository) => repository.replace_test_discovery(
-                commit_sha,
-                test_artefacts,
-                test_edges,
-                discovery_run,
-                diagnostics,
-            ),
+            Self::Sqlite(repository) => {
+                repository.replace_test_discovery(commit_sha, test_artefacts, test_edges)
+            }
+            Self::Postgres(repository) => {
+                repository.replace_test_discovery(commit_sha, test_artefacts, test_edges)
+            }
         }
     }
 
@@ -426,7 +416,6 @@ mod tests {
             "test_artefact_edges_current",
             "coverage_captures",
             "coverage_hits",
-            "test_discovery_runs",
         ] {
             let exists: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
