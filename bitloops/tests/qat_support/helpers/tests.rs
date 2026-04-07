@@ -120,12 +120,6 @@ fn text_has_missing_production_artefacts_error_detects_relational_materializatio
 #[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
-    assert_eq!(args, vec!["init", "--agent", "claude-code", "--sync=false"]);
-}
-
-#[ignore = "QAT: requires full QAT environment"]
-fn build_init_bitloops_args_supports_no_sync_choice() {
-    let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(
         args,
         vec![
