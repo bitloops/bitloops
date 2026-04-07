@@ -630,4 +630,89 @@ mod tests {
         assert!(rendered.contains("similar_implementation"));
         assert!(rendered.contains("contextual_neighbor"));
     }
+
+    #[test]
+    fn format_query_output_renders_clone_summary_arrays_and_empty_groups() {
+        let rendered = format_query_output(
+            &json!([{
+                "total_count": 0,
+                "groups": []
+            }]),
+            false,
+            false,
+        )
+        .expect("clone summary array should render");
+
+        assert_eq!(rendered, "total_count: 0");
+    }
+
+    #[test]
+    fn format_query_output_renders_scalar_arrays_as_single_column_tables() {
+        let rendered = format_query_output(&json!(["alpha", "beta"]), false, false)
+            .expect("scalar array should render");
+
+        assert!(rendered.contains("| value"));
+        assert!(rendered.contains("alpha"));
+        assert!(rendered.contains("beta"));
+    }
+
+    #[test]
+    fn format_query_output_falls_back_to_json_for_mixed_arrays() {
+        let rendered = format_query_output(&json!(["alpha", { "count": 2 }]), false, false)
+            .expect("mixed array should render");
+
+        assert!(rendered.contains("\"alpha\""));
+        assert!(rendered.contains("\"count\": 2"));
+    }
+
+    #[test]
+    fn format_query_output_preserves_multiple_non_null_root_fields() {
+        let rendered = format_query_output(
+            &json!({
+                "left": { "count": 1 },
+                "right": { "count": 2 }
+            }),
+            false,
+            false,
+        )
+        .expect("multi-root payload should render");
+
+        assert!(rendered.contains("| left"));
+        assert!(rendered.contains("| right"));
+        assert!(rendered.contains(r#"{"count":1}"#));
+        assert!(rendered.contains(r#"{"count":2}"#));
+    }
+
+    #[test]
+    fn format_query_output_treats_all_null_objects_as_no_results() {
+        let rendered = format_query_output(
+            &json!({
+                "repo": null
+            }),
+            false,
+            false,
+        )
+        .expect("null payload should render");
+
+        assert_eq!(rendered, "No results.");
+    }
+
+    #[test]
+    fn format_query_output_handles_clone_summary_groups_without_objects() {
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "cloneSummary": {
+                        "totalCount": 4,
+                        "groups": ["unexpected"]
+                    }
+                }
+            }),
+            false,
+            false,
+        )
+        .expect("malformed clone summary groups should still render");
+
+        assert_eq!(rendered, "total_count: 4");
+    }
 }

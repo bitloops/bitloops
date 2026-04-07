@@ -672,6 +672,125 @@ async fn devql_graphql_clone_summary_queries_resolve_grouped_counts() {
 }
 
 #[tokio::test]
+async fn devql_graphql_file_clone_summary_queries_resolve_grouped_counts() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "packages/api/src/caller.ts") {
+                  cloneSummary(
+                    filter: { symbolFqn: "packages/api/src/caller.ts::caller" }
+                    cloneFilter: { minScore: 0.68 }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["file"]["cloneSummary"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"][0]["count"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"]
+            .as_array()
+            .expect("groups array")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_clone_summary_validates_inputs_and_rejects_temporal_scopes() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                badScore: cloneSummary(cloneFilter: {{ minScore: 1.5 }}) {{
+                  totalCount
+                }}
+                asOf(input: {{ commit: "{commit_sha}" }}) {{
+                  project(path: "packages/api") {{
+                    cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                      totalCount
+                    }}
+                  }}
+                  file(path: "packages/api/src/caller.ts") {{
+                    cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                      totalCount
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#,
+        )))
+        .await;
+
+    let messages = response
+        .errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 3, "unexpected errors: {messages:?}");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`minScore` must be between 0 and 1")),
+        "expected minScore validation error, got {messages:?}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message.contains(
+                    "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+                )
+            })
+            .count(),
+        2,
+        "expected temporal cloneSummary errors, got {messages:?}"
+    );
+}
+
+#[tokio::test]
 async fn devql_graphql_clone_source_target_loader_caches_within_a_request_and_resets_per_request() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_clone_data(repo.path());
