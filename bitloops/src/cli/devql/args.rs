@@ -16,6 +16,8 @@ pub enum DevqlCommand {
     Sync(DevqlSyncArgs),
     /// Backfill or repair DevQL relational projections.
     Projection(DevqlProjectionArgs),
+    /// Print the DevQL GraphQL schema SDL.
+    Schema(DevqlSchemaArgs),
     /// Execute a DevQL query.
     Query(DevqlQueryArgs),
     /// Check backend connectivity for Postgres and ClickHouse.
@@ -86,6 +88,17 @@ pub struct DevqlCheckpointFileSnapshotsArgs {
     /// Report counters without mutating checkpoint_file_snapshots.
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlSchemaArgs {
+    /// Print the full/global DevQL GraphQL schema.
+    #[arg(long = "global", default_value_t = false)]
+    pub global: bool,
+
+    /// Print human-readable formatted SDL instead of minified SDL.
+    #[arg(long, default_value_t = false)]
+    pub human: bool,
 }
 
 #[derive(Args, Debug, Clone)]

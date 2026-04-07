@@ -484,6 +484,70 @@ fn devql_cli_parses_packs_flags() {
 }
 
 #[test]
+fn devql_cli_parses_schema_defaults() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "devql", "schema"]).expect("devql schema should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(!schema.global);
+    assert!(!schema.human);
+}
+
+#[test]
+fn devql_cli_parses_schema_global_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--global"])
+        .expect("devql schema --global should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(schema.global);
+    assert!(!schema.human);
+}
+
+#[test]
+fn devql_cli_parses_schema_human_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--human"])
+        .expect("devql schema --human should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(!schema.global);
+    assert!(schema.human);
+}
+
+#[test]
+fn devql_cli_parses_schema_global_human_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--global", "--human"])
+        .expect("devql schema --global --human should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(schema.global);
+    assert!(schema.human);
+}
+
+#[test]
 fn devql_cli_parses_query_compact_flag() {
     let parsed = Cli::try_parse_from([
         "bitloops",
@@ -526,6 +590,90 @@ fn devql_cli_parses_query_graphql_flag() {
     assert_eq!(query.query, "{ repo(name: \"bitloops-cli\") { name } }");
     assert!(query.graphql);
     assert!(!query.compact);
+}
+
+#[test]
+fn render_schema_sdl_returns_formatted_slim_schema_for_human_mode() {
+    let rendered = render_schema_sdl(&DevqlSchemaArgs {
+        global: false,
+        human: true,
+    });
+
+    assert_eq!(rendered, crate::graphql::slim_schema_sdl());
+}
+
+#[test]
+fn render_schema_sdl_returns_formatted_global_schema_for_human_mode() {
+    let rendered = render_schema_sdl(&DevqlSchemaArgs {
+        global: true,
+        human: true,
+    });
+
+    assert_eq!(rendered, crate::graphql::schema_sdl());
+}
+
+#[test]
+fn render_schema_sdl_returns_minified_slim_schema_by_default() {
+    let rendered = render_schema_sdl(&DevqlSchemaArgs::default());
+
+    assert_eq!(
+        rendered,
+        minify_schema_sdl(&crate::graphql::slim_schema_sdl())
+    );
+    assert!(rendered.ends_with('\n'));
+}
+
+#[test]
+fn render_schema_sdl_returns_minified_global_schema_when_requested() {
+    let rendered = render_schema_sdl(&DevqlSchemaArgs {
+        global: true,
+        human: false,
+    });
+
+    assert_eq!(rendered, minify_schema_sdl(&crate::graphql::schema_sdl()));
+    assert!(rendered.ends_with('\n'));
+}
+
+#[test]
+fn minify_schema_sdl_collapses_whitespace_and_brace_padding() {
+    let input = "type QueryRoot {\n    repo(name: String!): Repository!\n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(
+        rendered,
+        "type QueryRoot {repo(name: String!): Repository!}\n"
+    );
+}
+
+#[test]
+fn minify_schema_sdl_preserves_block_strings() {
+    let input =
+        "\"\"\"\nLine one\nLine two\n\"\"\"\ntype QueryRoot {\n    health: HealthStatus!\n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(
+        rendered,
+        "\"\"\"\nLine one\nLine two\n\"\"\" type QueryRoot {health: HealthStatus!}\n"
+    );
+}
+
+#[test]
+fn minify_schema_sdl_preserves_quoted_string_defaults() {
+    let input = "type QueryRoot {\n    example(arg: String = \"a  b\\n c\"): String!\n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(
+        rendered,
+        "type QueryRoot {example(arg: String = \"a  b\\n c\"): String!}\n"
+    );
+}
+
+#[test]
+fn minify_schema_sdl_drops_padding_before_closing_braces() {
+    let input = "type QueryRoot {\n    nested: Nested\n    \n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(rendered, "type QueryRoot {nested: Nested}\n");
 }
 
 #[test]
@@ -605,6 +753,28 @@ fn devql_run_requires_subcommand() {
         .expect_err("missing subcommand should error");
 
     assert!(err.to_string().contains(MISSING_SUBCOMMAND_MESSAGE));
+}
+
+#[test]
+fn devql_run_schema_does_not_resolve_repo_scope() {
+    let mut output = Vec::new();
+
+    test_runtime()
+        .block_on(run_with_scope_discovery(
+            DevqlArgs {
+                command: Some(DevqlCommand::Schema(DevqlSchemaArgs::default())),
+            },
+            &mut output,
+            || -> anyhow::Result<SlimCliRepoScope> {
+                panic!("schema command should not attempt repo scope discovery");
+            },
+        ))
+        .expect("devql schema should succeed without repo scope discovery");
+
+    assert_eq!(
+        String::from_utf8(output).expect("utf8"),
+        render_schema_sdl(&DevqlSchemaArgs::default())
+    );
 }
 
 #[test]

@@ -137,7 +137,13 @@ pub(crate) fn telemetry_action_for_command(
 }
 
 pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -> bool {
-    matches!(command, crate::cli::Commands::Devql(_))
+    match command {
+        crate::cli::Commands::Devql(args) => !matches!(
+            args.command.as_ref(),
+            Some(crate::cli::devql::DevqlCommand::Schema(_))
+        ),
+        _ => false,
+    }
 }
 
 fn daemon_start_action(
@@ -515,6 +521,20 @@ fn devql_action(
                 ))
             }
         },
+        crate::cli::devql::DevqlCommand::Schema(args) => {
+            let mut props = HashMap::new();
+            insert_string_property(
+                &mut props,
+                "schema_mode",
+                if args.global { "global" } else { "slim" },
+            );
+            insert_string_property(
+                &mut props,
+                "output_mode",
+                if args.human { "human" } else { "minified" },
+            );
+            Some(new_action("bitloops devql schema", props))
+        }
         crate::cli::devql::DevqlCommand::Query(args) => {
             let mut props = HashMap::new();
             let mut flags = Vec::new();
