@@ -41,6 +41,16 @@ impl DaemonSqliteRuntimeStore {
         &self.db_path
     }
 
+    fn sqlite_pool(&self) -> Result<SqliteConnectionPool> {
+        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
+            format!("opening daemon runtime database {}", self.db_path.display())
+        })?;
+        sqlite
+            .execute_batch(RUNTIME_DOCUMENTS_SCHEMA)
+            .context("initialising daemon runtime documents schema")?;
+        Ok(sqlite)
+    }
+
     pub fn runtime_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_runtime_state())
     }
@@ -152,9 +162,7 @@ impl DaemonSqliteRuntimeStore {
     }
 
     fn document_exists(&self, kind: &'static str) -> Result<bool> {
-        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
-            format!("opening daemon runtime database {}", self.db_path.display())
-        })?;
+        let sqlite = self.sqlite_pool()?;
         sqlite.with_connection(|conn| {
             conn.query_row(
                 "SELECT 1 FROM runtime_documents WHERE document_kind = ?1 LIMIT 1",
@@ -175,9 +183,7 @@ impl DaemonSqliteRuntimeStore {
     where
         T: DeserializeOwned,
     {
-        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
-            format!("opening daemon runtime database {}", self.db_path.display())
-        })?;
+        let sqlite = self.sqlite_pool()?;
         sqlite.with_connection(|conn| {
             import_legacy_document_if_needed(conn, kind, legacy_path.as_deref())?;
             let payload = load_document_payload(conn, kind)?;
@@ -194,9 +200,7 @@ impl DaemonSqliteRuntimeStore {
     where
         T: Serialize,
     {
-        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
-            format!("opening daemon runtime database {}", self.db_path.display())
-        })?;
+        let sqlite = self.sqlite_pool()?;
         sqlite.with_connection(|conn| {
             store_document_payload(conn, kind, &serde_json::to_string(value)?)?;
             Ok(())
@@ -204,9 +208,7 @@ impl DaemonSqliteRuntimeStore {
     }
 
     fn delete_document(&self, kind: &'static str) -> Result<()> {
-        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
-            format!("opening daemon runtime database {}", self.db_path.display())
-        })?;
+        let sqlite = self.sqlite_pool()?;
         sqlite.with_connection(|conn| {
             conn.execute(
                 "DELETE FROM runtime_documents WHERE document_kind = ?1",
@@ -227,9 +229,7 @@ impl DaemonSqliteRuntimeStore {
     where
         TDoc: Serialize + DeserializeOwned,
     {
-        let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
-            format!("opening daemon runtime database {}", self.db_path.display())
-        })?;
+        let sqlite = self.sqlite_pool()?;
         sqlite.with_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting runtime document transaction")?;

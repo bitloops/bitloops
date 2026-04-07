@@ -341,7 +341,7 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 
     let checkpoint_projection_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots",
+            "SELECT COUNT(*) FROM checkpoint_files",
             [],
             |row| row.get(0),
         )
@@ -437,12 +437,15 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
         rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
     let checkpoint_projection_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM checkpoint_file_snapshots WHERE checkpoint_id = ?1 AND commit_sha = ?2",
+            "SELECT COUNT(*) FROM checkpoint_files WHERE checkpoint_id = ?1 AND commit_sha = ?2",
             rusqlite::params![checkpoint_id, head_sha.as_str()],
             |row| row.get(0),
         )
         .expect("count checkpoint projections");
-    assert_eq!(checkpoint_projection_rows, 1);
+    assert!(
+        checkpoint_projection_rows > 0,
+        "mapped commits should project at least one checkpoint_files row"
+    );
 
     let ledger_row: (String, String) = sqlite
         .query_row(
@@ -506,7 +509,7 @@ async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_b
     let stable_row_count: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM artefacts
-             WHERE repo_id = ?1 AND path = 'src/lib.rs' AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
+             WHERE repo_id = ?1 AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
             rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )

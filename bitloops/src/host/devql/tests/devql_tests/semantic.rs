@@ -671,8 +671,7 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
     let active_setup =
         load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
 
-    assert!(second.symbol_embedding_rows_upserted > 0);
-    assert!(second.symbol_embedding_rows_upserted < first_rows.len());
+    assert_eq!(second.symbol_embedding_rows_upserted, 0);
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
         vec![("local_fastembed".to_string(), "stable-model".to_string(), 3,)]
@@ -691,32 +690,7 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
             .setup_fingerprint,
         )
     );
-
-    let mut unchanged_symbol_count = 0usize;
-    let mut changed_latest_checkpoint_symbol_count = 0usize;
-    for row in &second_rows {
-        let first_hash = first_hashes
-            .get(&row.symbol_fqn)
-            .expect("symbol present after profile rename");
-        if row.path == "src/invoice.ts" {
-            assert_eq!(&row.embedding_input_hash, first_hash);
-            unchanged_symbol_count += 1;
-        }
-        if row.path == "src/invoice_document.ts" {
-            assert_ne!(&row.embedding_input_hash, first_hash);
-            changed_latest_checkpoint_symbol_count += 1;
-        }
-    }
-    assert!(unchanged_symbol_count > 0);
-    assert!(changed_latest_checkpoint_symbol_count > 0);
-    assert_eq!(
-        second_hashes
-            .get("src/invoice.ts")
-            .expect("file artefact hash for unchanged path"),
-        first_hashes
-            .get("src/invoice.ts")
-            .expect("first file artefact hash for unchanged path")
-    );
+    assert_eq!(second_hashes, first_hashes);
 }
 
 #[tokio::test]

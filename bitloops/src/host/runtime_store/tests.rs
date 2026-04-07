@@ -356,6 +356,33 @@ fn daemon_runtime_store_uses_legacy_sync_defaults_when_state_is_missing() {
 }
 
 #[test]
+fn daemon_runtime_store_recreates_runtime_documents_schema_when_db_is_deleted() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            std::fs::remove_file(store.db_path()).expect("delete runtime sqlite db");
+
+            let version = store
+                .mutate_sync_queue_state(|state| {
+                    state.version = 9;
+                    Ok(state.version)
+                })
+                .expect("mutate sync queue state after db recreation");
+            assert_eq!(version, 9);
+
+            let loaded = store
+                .load_sync_queue_state()
+                .expect("load recreated sync queue state")
+                .expect("sync queue state should exist");
+            assert_eq!(loaded.version, 9);
+        },
+    );
+}
+
+#[test]
 fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
     let state_dir = TempDir::new().expect("tempdir");
     with_env_var(
