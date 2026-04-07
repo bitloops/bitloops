@@ -310,6 +310,10 @@ Highlights:
 ### Query and diagnostics
 
 ```bash
+bitloops devql schema
+bitloops devql schema --global
+bitloops devql schema --human > bitloops/schema.slim.graphql
+bitloops devql schema --global --human > bitloops/schema.graphql
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
 bitloops devql query '{ health { relational { backend connected } } }'
 bitloops devql connection-status
@@ -318,6 +322,11 @@ bitloops devql packs --with-health
 
 Highlights:
 
+- `devql schema` is daemon-backed and fetches SDL from the running DevQL daemon
+- `devql schema` without `--global` requires running the command from within a Git repository
+- `devql schema --global` can be used outside a repository
+- `devql schema` defaults to minified SDL so the output is easier to pass to LLMs and other prompt-driven tooling
+- `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health

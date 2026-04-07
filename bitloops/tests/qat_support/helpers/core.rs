@@ -343,9 +343,9 @@ fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -
         agent_name.to_string(),
     ];
 
-    if let Some(sync_choice) = sync {
-        args.push(format!("--sync={sync_choice}"));
-    }
+    let sync_choice = sync.unwrap_or(false);
+    args.push(format!("--sync={sync_choice}"));
+    args.push("--ingest=false".to_string());
 
     if force {
         args.push("--force".to_string());

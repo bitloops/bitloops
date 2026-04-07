@@ -282,4 +282,4 @@ Use `cloneSummary(...)` for one aggregate result over the filtered artefacts. Us
 - Re-ingest after significant changes so relational, events, and blob-backed enrichments stay in sync
 - Use `asOf(...)` when you need reproducible answers against a commit or save state
 - Use `/devql/playground` to inspect the live schema before writing a client
-- Export `bitloops/schema.graphql` when you need client code generation or schema review
+- Use `bitloops devql schema --global --human > bitloops/schema.graphql` when you need client code generation or schema review

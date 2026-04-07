@@ -17,6 +17,34 @@ Feature: DevQL sync workspace reconciliation
     And DevQL artefacts query returns results in bitloops
 
   @devql @sync
+  Scenario: Sync materializes test-harness coverage for discovered tests
+    Given I run CleanStart for flow "SyncTestHarnessPopulate"
+    And I start the daemon in bitloops
+    And I run bitloops init --agent claude --sync=false in bitloops
+    And I create a TypeScript project with tests and coverage in bitloops
+    And I run InitCommit for bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I run DevQL sync --status in bitloops
+    Then TestHarness query for "createUser" at current workspace state with view "tests" returns results in bitloops
+
+  @devql @sync
+  Scenario: Sync removes test-harness coverage when test files are deleted
+    Given I run CleanStart for flow "SyncTestHarnessDeleteTestFile"
+    And I start the daemon in bitloops
+    And I run bitloops init --agent claude --sync=false in bitloops
+    And I create a TypeScript project with tests and coverage in bitloops
+    And I run InitCommit for bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I run DevQL sync --status in bitloops
+    Then TestHarness query for "createUser" at current workspace state with view "tests" returns results in bitloops
+    Given I delete a test file in bitloops
+    And I commit changes without hooks in bitloops
+    And I run DevQL sync --status in bitloops
+    Then TestHarness query for "createUser" at current workspace state with view "tests" returns empty or zero-count in bitloops
+
+  @devql @sync
   Scenario: Sync detects and indexes newly added source files
     Given I run CleanStart for flow "SyncNewFiles"
     And I start the daemon in bitloops

@@ -32,8 +32,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use tempfile::TempDir;
 use tree_sitter::Parser;
@@ -151,6 +151,41 @@ impl semantic::SemanticSummaryProvider for FixtureSummaryMapProvider {
             .get(&input.symbol_fqn)
             .cloned()
     }
+}
+
+#[derive(Debug)]
+struct PreparedRealCloneFixtureDb {
+    _workspace: TempDir,
+    sqlite_path: PathBuf,
+}
+
+fn real_clone_fixture_db_cache() -> &'static Mutex<HashMap<String, Arc<PreparedRealCloneFixtureDb>>>
+{
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<PreparedRealCloneFixtureDb>>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn prepare_real_clone_fixture_db(
+    fixture_name: &str,
+) -> Result<Arc<PreparedRealCloneFixtureDb>> {
+    if let Some(cached) = real_clone_fixture_db_cache()
+        .lock()
+        .expect("real clone fixture cache lock")
+        .get(fixture_name)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+
+    let prepared = Arc::new(build_prepared_real_clone_fixture_db(fixture_name).await?);
+    let mut cache = real_clone_fixture_db_cache()
+        .lock()
+        .expect("real clone fixture cache lock");
+    Ok(cache
+        .entry(fixture_name.to_string())
+        .or_insert_with(|| Arc::clone(&prepared))
+        .clone())
 }
 
 #[derive(Debug, Clone)]
@@ -1083,13 +1118,12 @@ fn seed_real_clone_fixture(
     Ok(files)
 }
 
-async fn execute_clone_query_for_real_fixture(
+async fn build_prepared_real_clone_fixture_db(
     fixture_name: &str,
-    query: &str,
-) -> Result<Vec<Value>> {
+) -> Result<PreparedRealCloneFixtureDb> {
     let fixture = build_real_clone_fixture(fixture_name)?;
-    let temp = TempDir::new().context("create semantic clone real-path temp dir")?;
-    let sqlite_path = temp.path().join("semantic-clones-real.sqlite");
+    let workspace = TempDir::new().context("create semantic clone real-path temp dir")?;
+    let sqlite_path = workspace.path().join("semantic-clones-real.sqlite");
     init_sqlite_schema(&sqlite_path)
         .await
         .context("initialise sqlite schema for real semantic clone fixture")?;
@@ -1116,6 +1150,11 @@ async fn execute_clone_query_for_real_fixture(
             rusqlite::Connection::open(&sqlite_path).context("open real semantic clone sqlite")?;
         seed_real_clone_fixture(&conn, &repo_id, &fixture)?
     };
+    let fixture_artefact_ids = fixture
+        .symbols
+        .iter()
+        .map(|symbol| symbol.artefact_id.as_str())
+        .collect::<HashSet<_>>();
 
     let mut all_semantic_inputs = Vec::new();
     for file in &materialized_files {
@@ -1127,11 +1166,6 @@ async fn execute_clone_query_for_real_fixture(
             load_pre_stage_dependencies_for_blob(&relational, &repo_id, &file.blob_sha, &file.path)
                 .await
                 .with_context(|| format!("load pre-stage dependencies for {}", file.path))?;
-        let fixture_artefact_ids = fixture
-            .symbols
-            .iter()
-            .map(|symbol| symbol.artefact_id.as_str())
-            .collect::<HashSet<_>>();
         let semantic_inputs =
             semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
                 &pre_stage_artefacts,
@@ -1179,6 +1213,34 @@ async fn execute_clone_query_for_real_fixture(
         .await
         .context("rebuild semantic clone edges for real-path fixture")?;
 
+    // Force WAL contents back into the main SQLite file so later copies are self-contained.
+    rusqlite::Connection::open(&sqlite_path)
+        .context("open real semantic clone sqlite for checkpoint")?
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .context("checkpoint real semantic clone sqlite")?;
+
+    Ok(PreparedRealCloneFixtureDb {
+        _workspace: workspace,
+        sqlite_path,
+    })
+}
+
+async fn execute_clone_query_for_real_fixture(
+    fixture_name: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
+    let prepared = prepare_real_clone_fixture_db(fixture_name).await?;
+    let temp = TempDir::new().context("create semantic clone query temp dir")?;
+    let sqlite_path = temp.path().join("semantic-clones-real.sqlite");
+    fs::copy(&prepared.sqlite_path, &sqlite_path).with_context(|| {
+        format!(
+            "copy prepared semantic clone fixture db from {} to {}",
+            prepared.sqlite_path.display(),
+            sqlite_path.display()
+        )
+    })?;
+    let relational = RelationalStorage::local_only(sqlite_path);
+    let cfg = DevqlBddWorld::test_cfg();
     let parsed = parse_devql_query(query).context("parse clone query")?;
     execute_devql_query(&cfg, &parsed, &empty_events_cfg(), Some(&relational))
         .await

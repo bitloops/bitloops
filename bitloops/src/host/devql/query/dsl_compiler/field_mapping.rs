@@ -265,6 +265,27 @@ pub(super) fn clone_summary_selections() -> Vec<GraphqlSelection> {
     ]
 }
 
+pub(super) fn deps_summary_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("totalCount"),
+        GraphqlSelection::scalar("incomingCount"),
+        GraphqlSelection::scalar("outgoingCount"),
+        GraphqlField::new(
+            "kindCounts",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("imports"),
+                GraphqlSelection::scalar("calls"),
+                GraphqlSelection::scalar("references"),
+                GraphqlSelection::scalar("extends"),
+                GraphqlSelection::scalar("implements"),
+                GraphqlSelection::scalar("exports"),
+            ],
+        )
+        .into(),
+    ]
+}
+
 fn map_selected_field(leaf: SelectableLeaf, field: &str) -> Result<String> {
     let graphql = dsl_field_to_graphql(field);
     if allowed_fields_for_leaf(leaf).contains(&graphql.as_str()) {
