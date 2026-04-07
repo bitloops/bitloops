@@ -252,6 +252,60 @@ fn repo_runtime_store_shares_runtime_sqlite_and_fences_rows_by_repo() {
 }
 
 #[test]
+fn save_task_checkpoint_artefact_rejects_duplicate_ids_without_overwriting_blob() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("bitloops");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let store = RepoSqliteRuntimeStore::open(&repo_root).expect("open runtime store");
+            let original_payload = br#"{"checkpoint":"original"}"#.to_vec();
+            let duplicate_payload = br#"{"checkpoint":"duplicate"}"#.to_vec();
+
+            let mut original = TaskCheckpointArtefact::new(
+                "session-1",
+                "tool-use-1",
+                RuntimeMetadataBlobType::TaskCheckpoint,
+                original_payload.clone(),
+            );
+            original.artefact_id = "artefact-1".to_string();
+            store
+                .save_task_checkpoint_artefact(&original)
+                .expect("save original artefact");
+
+            let mut duplicate = TaskCheckpointArtefact::new(
+                "session-1",
+                "tool-use-1",
+                RuntimeMetadataBlobType::TaskCheckpoint,
+                duplicate_payload,
+            );
+            duplicate.artefact_id = original.artefact_id.clone();
+            let err = store
+                .save_task_checkpoint_artefact(&duplicate)
+                .expect_err("duplicate artefact should fail");
+            let message = format!("{err:#}");
+            assert!(
+                message.contains("already exists"),
+                "expected duplicate artefact failure, got: {message}"
+            );
+
+            let artefacts = store
+                .load_task_checkpoint_artefacts("session-1", "tool-use-1")
+                .expect("load saved artefacts");
+            assert_eq!(artefacts.len(), 1);
+            assert_eq!(artefacts[0].artefact_id, "artefact-1");
+            assert_eq!(artefacts[0].payload, original_payload);
+        },
+    );
+}
+
+#[test]
 fn daemon_runtime_store_persists_sync_state_in_sqlite() {
     let state_dir = TempDir::new().expect("tempdir");
     with_env_var(

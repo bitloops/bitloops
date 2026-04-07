@@ -1,7 +1,28 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use rusqlite::OptionalExtension;
 
 use super::blob_keys::task_artefact_blob_key;
 use super::types::{RepoSqliteRuntimeStore, RuntimeMetadataBlobType, TaskCheckpointArtefact};
+use crate::storage::SqliteConnectionPool;
+
+fn task_checkpoint_artefact_exists(
+    sqlite: &SqliteConnectionPool,
+    artefact_id: &str,
+) -> Result<bool> {
+    sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT 1
+             FROM task_checkpoint_artefacts
+             WHERE artefact_id = ?1
+             LIMIT 1",
+            rusqlite::params![artefact_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(anyhow::Error::from)
+    })
+}
 
 impl RepoSqliteRuntimeStore {
     pub fn save_task_checkpoint_artefact(&self, artefact: &TaskCheckpointArtefact) -> Result<()> {
@@ -9,12 +30,17 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for task checkpoint save")?;
-        let (storage_backend, storage_path, content_hash, size_bytes) = self.write_runtime_blob(
-            &task_artefact_blob_key(&self.repo_id, artefact),
-            &artefact.payload,
-        )?;
+        if task_checkpoint_artefact_exists(&sqlite, &artefact.artefact_id)? {
+            bail!(
+                "task checkpoint artefact `{}` already exists",
+                artefact.artefact_id
+            );
+        }
+        let blob_key = task_artefact_blob_key(&self.repo_id, artefact);
+        let (storage_backend, storage_path, content_hash, size_bytes) =
+            self.write_runtime_blob(&blob_key, &artefact.payload)?;
 
-        sqlite.with_connection(|conn| {
+        let insert_result = sqlite.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO task_checkpoint_artefacts (
                     artefact_id, session_id, repo_id, tool_use_id, agent_id,
@@ -50,7 +76,17 @@ impl RepoSqliteRuntimeStore {
             )
             .context("inserting task_checkpoint_artefacts row")?;
             Ok(())
-        })
+        });
+        if let Err(err) = insert_result {
+            if !task_checkpoint_artefact_exists(&sqlite, &artefact.artefact_id).unwrap_or(false)
+                && let Ok(blob_store) = self.open_repo_blob_store()
+            {
+                let _ = blob_store.store.delete(&blob_key);
+            }
+            return Err(err);
+        }
+
+        Ok(())
     }
 
     pub fn load_task_checkpoint_artefacts(

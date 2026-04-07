@@ -850,23 +850,6 @@ mod tests {
         let config_root = TempDir::new().expect("temp daemon config");
         let config_path = write_test_daemon_config(config_root.path());
         let config_path_string = config_path.to_string_lossy().to_string();
-        let cfg = crate::config::resolve_store_backend_config_for_repo(repo.path())
-            .expect("resolve backend config");
-        let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
-            repo.path(),
-            Some(
-                cfg.relational
-                    .sqlite_path
-                    .as_deref()
-                    .expect("test daemon config should set sqlite_path"),
-            ),
-        )
-        .expect("resolve configured sqlite path");
-        let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
-            .expect("create sqlite database");
-        sqlite
-            .initialise_checkpoint_schema()
-            .expect("initialise checkpoint schema");
 
         let point = RewindPoint {
             session_id: "session-404".to_string(),
@@ -880,6 +863,23 @@ mod tests {
             ENV_DAEMON_CONFIG_PATH_OVERRIDE,
             Some(config_path_string.as_str()),
             || {
+                let cfg = crate::config::resolve_store_backend_config_for_repo(repo.path())
+                    .expect("resolve backend config");
+                let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
+                    repo.path(),
+                    Some(
+                        cfg.relational
+                            .sqlite_path
+                            .as_deref()
+                            .expect("test daemon config should set sqlite_path"),
+                    ),
+                )
+                .expect("resolve configured sqlite path");
+                let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
+                    .expect("create sqlite database");
+                sqlite
+                    .initialise_checkpoint_schema()
+                    .expect("initialise checkpoint schema");
                 reset_shadow_branch_to_checkpoint(repo.path(), &point)
                     .expect("missing session backend state should be a no-op");
             },
