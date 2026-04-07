@@ -513,7 +513,7 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest(input: IngestInput!): IngestResult!
+	ingest(input: IngestInput): IngestResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!

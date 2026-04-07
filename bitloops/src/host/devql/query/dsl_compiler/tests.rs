@@ -64,26 +64,19 @@ fn compile_artefacts_with_clone_spans() {
     artefacts(filter: { kind: FUNCTION }) {
       edges {
         node {
-          id
-          path
-          symbolFqn
-          canonicalKind
-          languageKind
-          startLine
-          endLine
-          language
           clones(first: 10) {
             edges {
               node {
-                id
-                sourceArtefactId
-                targetArtefactId
-                sourceStartLine
-                sourceEndLine
-                targetStartLine
-                targetEndLine
                 relationKind
                 score
+                sourceArtefact {
+                  path
+                  symbolFqn
+                }
+                targetArtefact {
+                  path
+                  symbolFqn
+                }
               }
             }
           }
