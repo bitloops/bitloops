@@ -606,9 +606,6 @@ fn testlens_action(
     args: &crate::cli::testlens::TestLensArgs,
 ) -> Option<crate::telemetry::analytics::ActionDescriptor> {
     match args.command.as_ref()? {
-        crate::cli::testlens::TestLensCommand::Init(_) => {
-            Some(new_action("bitloops testlens init", HashMap::new()))
-        }
         crate::cli::testlens::TestLensCommand::IngestTests(_) => {
             Some(new_action("bitloops testlens ingest-tests", HashMap::new()))
         }

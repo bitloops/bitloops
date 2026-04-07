@@ -14,7 +14,7 @@ use crate::host::relational_store::DefaultRelationalStore;
 use crate::models::{CoverageFormat, ScopeKind};
 use crate::utils::paths;
 
-const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens init`, `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`";
+const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct TestLensArgs {
@@ -24,8 +24,6 @@ pub struct TestLensArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum TestLensCommand {
-    /// Ensure test-harness schema exists in the configured relational store.
-    Init(TestLensInitArgs),
     /// Parse test files, discover suites/scenarios, and link tests to production artefacts.
     IngestTests(TestLensIngestTestsArgs),
     /// Ingest coverage report (LCOV or LLVM JSON).
@@ -35,9 +33,6 @@ pub enum TestLensCommand {
     /// Ingest Jest JSON test results.
     IngestResults(TestLensIngestResultsArgs),
 }
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct TestLensInitArgs {}
 
 #[derive(Args, Debug, Clone)]
 pub struct TestLensIngestTestsArgs {
@@ -87,7 +82,6 @@ pub async fn run(args: TestLensArgs) -> Result<()> {
     let repo_root = paths::repo_root()?;
 
     match command {
-        TestLensCommand::Init(_) => test_harness_engine::init_schema_for_repo(&repo_root),
         TestLensCommand::IngestTests(args) => run_ingest_tests(&repo_root, &args).await,
         TestLensCommand::IngestCoverage(args) => run_ingest_coverage(&repo_root, &args).await,
         TestLensCommand::IngestCoverageBatch(args) => {
