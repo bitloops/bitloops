@@ -204,6 +204,10 @@ type Clone {
 	id: ID!
 	sourceArtefactId: ID!
 	targetArtefactId: ID!
+	sourceStartLine: Int
+	sourceEndLine: Int
+	targetStartLine: Int
+	targetEndLine: Int
 	relationKind: String!
 	score: Float!
 	metadata: JSON

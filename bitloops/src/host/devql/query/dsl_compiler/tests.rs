@@ -49,6 +49,46 @@ fn compile_project_asof_artefacts_pipeline() {
 }
 
 #[test]
+fn compile_artefacts_with_clone_spans() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          clones(first: 10) {
+            edges {
+              node {
+                relationKind
+                score
+                sourceArtefact {
+                  path
+                  symbolFqn
+                }
+                targetArtefact {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_clone_summary_stage_ignores_limit_and_targets_typed_field() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.75)->summary()->limit(1)"#,
@@ -412,6 +452,10 @@ fn compile_artefact_clones_pipeline_keeps_raw_mode_opt_in() {
                 id
                 sourceArtefactId
                 targetArtefactId
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
                 relationKind
                 score
                 metadata

@@ -153,29 +153,42 @@ pub(super) fn insert_historical_function_artefact(
 ) {
     conn.execute(
         "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-            start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, 'typescript', 'function',
-            'function_declaration', ?6, NULL, ?7, ?8, 0, ?9, NULL, '[\"export\"]',
-            'Event-backed docstring', ?10, ?11
+            ?1, ?2, ?3, 'typescript', 'function',
+            'function_declaration', ?4, NULL, '[\"export\"]',
+            'Event-backed docstring', ?5, ?6
         )",
         rusqlite::params![
             artefact_id,
             symbol_id,
             repo_id,
-            blob_sha,
-            path,
             symbol_fqn,
-            start_line,
-            end_line,
-            end_line * 10,
             format!("hash-{artefact_id}"),
             created_at,
         ],
     )
-    .expect("insert historical function artefact");
+    .expect("insert historical function artefact metadata");
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, created_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, NULL, ?5, ?6, 0, ?7, ?8
+        )",
+        rusqlite::params![
+            repo_id,
+            blob_sha,
+            path,
+            artefact_id,
+            start_line,
+            end_line,
+            end_line * 10,
+            created_at,
+        ],
+    )
+    .expect("insert historical function artefact snapshot");
 }
 
 #[allow(clippy::too_many_arguments)]

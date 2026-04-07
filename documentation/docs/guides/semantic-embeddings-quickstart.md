@@ -132,7 +132,7 @@ The easiest user-facing proof that embeddings were written and used is a clone q
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.6)->limit(5)'
 ```
 
-If you need the low-level clone payload for debugging, add `raw:true`:
+If you need the low-level clone payload (including artefact ids and line ranges) for debugging, add `raw:true`:
 
 ```bash
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.6,raw:true)->limit(5)'

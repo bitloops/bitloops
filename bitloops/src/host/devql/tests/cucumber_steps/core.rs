@@ -902,32 +902,42 @@ fn insert_pre_stage_artefact(
 
     conn.execute(
         "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-            end_byte, signature, modifiers, docstring, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             row.artefact_id.as_str(),
             row.symbol_id.as_deref(),
             row.repo_id.as_str(),
-            row.blob_sha.as_str(),
-            row.path.as_str(),
             row.language.as_str(),
             row.canonical_kind.as_str(),
             row.language_kind.as_str(),
             row.symbol_fqn.as_str(),
-            row.parent_artefact_id.as_deref(),
-            row.start_line.unwrap_or(1) as i64,
-            row.end_line.unwrap_or(1) as i64,
-            row.start_byte.unwrap_or(0) as i64,
-            row.end_byte.unwrap_or(0) as i64,
             row.signature.as_deref(),
             serde_json::to_string(&row.modifiers).context("serialize modifiers")?,
             row.docstring.as_deref(),
             row.content_hash.as_deref(),
         ],
     )
-    .context("insert historical pre-stage artefact")?;
+    .context("insert historical pre-stage artefact metadata")?;
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            row.repo_id.as_str(),
+            row.blob_sha.as_str(),
+            row.path.as_str(),
+            row.artefact_id.as_str(),
+            row.parent_artefact_id.as_deref(),
+            row.start_line.unwrap_or(1) as i64,
+            row.end_line.unwrap_or(1) as i64,
+            row.start_byte.unwrap_or(0) as i64,
+            row.end_byte.unwrap_or(0) as i64,
+        ],
+    )
+    .context("insert historical pre-stage artefact snapshot")?;
 
     Ok(())
 }
@@ -1068,29 +1078,35 @@ fn seed_real_clone_fixture(
                     format!("{}::history::{churn_index}", symbol.artefact_id);
                 conn.execute(
                     "INSERT INTO artefacts (
-                        artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                        language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                        start_byte, end_byte, signature, modifiers, docstring, content_hash
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?13, ?14, '[]', NULL, ?15)",
+                        artefact_id, symbol_id, repo_id, language, canonical_kind,
+                        language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', NULL, ?9)",
                     rusqlite::params![
                         historical_artefact_id.as_str(),
                         symbol.symbol_id.as_str(),
                         repo_id,
-                        format!("history-blob-{}-{churn_index}", symbol.symbol_id),
-                        symbol.path.as_str(),
                         "typescript",
                         symbol.canonical_kind.as_str(),
                         clone_language_kind(&symbol.canonical_kind),
                         symbol.symbol_fqn.as_str(),
-                        1i64,
-                        1i64,
-                        0i64,
-                        1i64,
                         symbol.signature.as_deref(),
                         format!("history-hash-{}-{churn_index}", symbol.symbol_id),
                     ],
                 )
-                .context("insert churn artefact row")?;
+                .context("insert churn artefact metadata row")?;
+                conn.execute(
+                    "INSERT INTO artefact_snapshots (
+                        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                        start_line, end_line, start_byte, end_byte
+                    ) VALUES (?1, ?2, ?3, ?4, NULL, 1, 1, 0, 1)",
+                    rusqlite::params![
+                        repo_id,
+                        format!("history-blob-{}-{churn_index}", symbol.symbol_id),
+                        symbol.path.as_str(),
+                        historical_artefact_id.as_str(),
+                    ],
+                )
+                .context("insert churn artefact snapshot row")?;
             }
 
             insert_real_clone_edges(conn, repo_id, &blob_sha, symbol, &path)?;
@@ -1428,16 +1444,13 @@ fn replace_incremental_snapshot(
 
         conn.execute(
             "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-                end_byte, signature, modifiers, docstring, content_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, NULL, 1, 3, 0, 1, ?9, ?10, NULL, ?11)",
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+            ) VALUES (?1, ?2, ?3, 'typescript', ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
             rusqlite::params![
                 symbol.artefact_id.as_str(),
                 symbol.symbol_id.as_str(),
                 repo_id,
-                symbol.blob_sha.as_str(),
-                symbol.path.as_str(),
                 symbol.canonical_kind.as_str(),
                 language_kind,
                 symbol.symbol_fqn.as_str(),
@@ -1446,7 +1459,27 @@ fn replace_incremental_snapshot(
                 symbol.content_hash.as_str(),
             ],
         )
-        .context("insert incremental historical artefact")?;
+        .context("insert incremental historical artefact metadata")?;
+        conn.execute(
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte
+            ) VALUES (?1, ?2, ?3, ?4, NULL, 1, 3, 0, 1)
+            ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+              path = excluded.path,
+              parent_artefact_id = excluded.parent_artefact_id,
+              start_line = excluded.start_line,
+              end_line = excluded.end_line,
+              start_byte = excluded.start_byte,
+              end_byte = excluded.end_byte",
+            rusqlite::params![
+                repo_id,
+                symbol.blob_sha.as_str(),
+                symbol.path.as_str(),
+                symbol.artefact_id.as_str(),
+            ],
+        )
+        .context("insert incremental historical artefact snapshot")?;
 
         conn.execute(
             "INSERT INTO artefacts_current (
@@ -3556,29 +3589,36 @@ fn seed_target_production_artefact(
 
             conn.execute(
                 "INSERT INTO artefacts (
-                    artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                    language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte,
-                    modifiers, content_hash
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    artefact_id, symbol_id, repo_id, language, canonical_kind,
+                    language_kind, symbol_fqn, signature, modifiers, content_hash
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     historical_artefact_id.as_str(),
                     symbol_id.as_str(),
                     repo_id,
-                    blob_sha.as_str(),
-                    path,
                     "rust",
                     "function",
                     "function_item",
                     symbol_fqn.as_str(),
-                    1i64,
-                    3i64,
-                    0i64,
-                    64i64,
+                    "fn create_user()",
                     "[]",
                     "hash-historical",
                 ],
             )
-            .context("insert historical artefact row")?;
+            .context("insert historical artefact metadata row")?;
+            conn.execute(
+                "INSERT INTO artefact_snapshots (
+                    repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                    start_line, end_line, start_byte, end_byte
+                ) VALUES (?1, ?2, ?3, ?4, NULL, 1, 3, 0, 64)",
+                rusqlite::params![
+                    repo_id,
+                    blob_sha.as_str(),
+                    path,
+                    historical_artefact_id.as_str()
+                ],
+            )
+            .context("insert historical artefact snapshot row")?;
 
             return Ok(SeededArtefact {
                 path: path.clone(),

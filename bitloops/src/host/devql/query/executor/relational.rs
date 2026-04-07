@@ -91,6 +91,8 @@ pub(crate) async fn build_relational_clones_query(
 SELECT ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json, \
 src.artefact_id AS source_artefact_id, src.path AS source_path, src.symbol_fqn AS source_symbol_fqn, \
 tgt.artefact_id AS target_artefact_id, tgt.path AS target_path, tgt.symbol_fqn AS target_symbol_fqn, \
+src.start_line AS source_start_line, src.end_line AS source_end_line, \
+tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
 tgt.canonical_kind AS target_canonical_kind, tgt.language_kind AS target_language_kind, tgt.language AS target_language, \
 ss.summary AS target_summary \
 FROM symbol_clone_edges ce \

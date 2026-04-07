@@ -14,6 +14,7 @@ use async_graphql::types::Json;
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::path::Path;
 
 impl DevqlGraphqlContext {
@@ -249,8 +250,10 @@ fn build_project_clones_sql(
     clauses.push(repo_path_prefix_clause("src.path", project_path));
 
     format!(
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
-                ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
+        "SELECT ce.source_artefact_id, ce.target_artefact_id, \
+                src.start_line AS source_start_line, src.end_line AS source_end_line, \
+                tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
+                ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
            FROM symbol_clone_edges ce \
            JOIN artefacts_current src ON src.repo_id = ce.repo_id \
                                      AND src.symbol_id = ce.source_symbol_id \
@@ -276,8 +279,10 @@ fn build_artefact_clones_sql(
     }
 
     format!(
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
-                ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
+        "SELECT ce.source_artefact_id, ce.target_artefact_id, \
+                src.start_line AS source_start_line, src.end_line AS source_end_line, \
+                tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
+                ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
            FROM symbol_clone_edges ce \
            JOIN artefacts_current src ON src.repo_id = ce.repo_id \
                                      AND src.symbol_id = ce.source_symbol_id \
@@ -411,6 +416,10 @@ fn clone_from_row(row: Value) -> Result<SemanticClone> {
         id: format!("clone::{source_artefact_id}::{target_artefact_id}::{relation_kind}").into(),
         source_artefact_id: source_artefact_id.into(),
         target_artefact_id: target_artefact_id.into(),
+        source_start_line: optional_i32(&row, "source_start_line"),
+        source_end_line: optional_i32(&row, "source_end_line"),
+        target_start_line: optional_i32(&row, "target_start_line"),
+        target_end_line: optional_i32(&row, "target_end_line"),
         relation_kind,
         score: required_f64(&row, "score")?,
         metadata: (!metadata.is_empty()).then_some(Json(Value::Object(metadata))),
@@ -757,6 +766,12 @@ fn optional_f64(row: &Value, key: &str) -> Option<f64> {
     })
 }
 
+fn optional_i32(row: &Value, key: &str) -> Option<i32> {
+    row.get(key)
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+}
+
 fn parse_json_column(value: Option<&Value>) -> Result<Option<Value>> {
     match value {
         None | Some(Value::Null) => Ok(None),
@@ -819,6 +834,37 @@ fn parse_string_array(value: Option<&Value>) -> Result<Vec<String>> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn clone_from_row_preserves_metadata_and_missing_spans() {
+        let clone = clone_from_row(json!({
+            "source_artefact_id": "artefact::source",
+            "target_artefact_id": "artefact::target",
+            "relation_kind": "similar_implementation",
+            "score": 0.9,
+            "semantic_score": 0.8,
+            "lexical_score": 0.7,
+            "structural_score": 0.6,
+            "explanation_json": "{\"reason\":\"shared structure\"}"
+        }))
+        .expect("clone row parses");
+
+        assert_eq!(clone.source_start_line, None);
+        assert_eq!(clone.source_end_line, None);
+        assert_eq!(clone.target_start_line, None);
+        assert_eq!(clone.target_end_line, None);
+        let metadata = clone.metadata.expect("metadata should be present");
+        assert_eq!(metadata.0["semanticScore"], json!(0.8));
+        assert_eq!(metadata.0["lexicalScore"], json!(0.7));
+        assert_eq!(metadata.0["structuralScore"], json!(0.6));
+        assert_eq!(metadata.0["explanation"]["reason"], "shared structure");
+    }
+}
+
 #[allow(dead_code)]
 fn parse_payload(value: Option<&Value>) -> Result<Option<Value>> {
     match value {
@@ -878,7 +924,7 @@ fn escape_like_literal(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod clone_summary_tests {
     use super::*;
     use crate::artefact_query_planner::{
         ArtefactQuerySpec, ArtefactScope, ArtefactStructuralFilter, ArtefactTemporalScope,
