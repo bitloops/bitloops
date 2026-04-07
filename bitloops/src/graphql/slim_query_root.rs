@@ -602,7 +602,7 @@ fn project_stage_row_from_artefact(artefact: &Artefact) -> Value {
         "artefact_id": artefact.id.as_ref(),
         "symbol_id": &artefact.symbol_id,
         "symbol_fqn": &artefact.symbol_fqn,
-        "canonical_kind": artefact.canonical_kind.as_devql_value(),
+        "canonical_kind": artefact.canonical_kind.map(|kind| kind.as_devql_value()),
         "path": &artefact.path,
         "start_line": artefact.start_line,
         "end_line": artefact.end_line,

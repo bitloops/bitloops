@@ -10,12 +10,10 @@ use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::config::SemanticCloneEmbeddingMode;
-use crate::daemon::state_store::{read_json, write_json};
 use crate::host::devql::RepoIdentity;
+use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
-use super::types::{
-    EnrichmentQueueMode, EnrichmentQueueStatus, global_daemon_dir_fallback, unix_timestamp_now,
-};
+use super::types::{EnrichmentQueueMode, EnrichmentQueueStatus, unix_timestamp_now};
 
 #[path = "enrichment/execution.rs"]
 mod execution;
@@ -120,7 +118,7 @@ impl EnrichmentJobTarget {
 
 #[derive(Debug)]
 pub struct EnrichmentCoordinator {
-    state_path: PathBuf,
+    runtime_store: DaemonSqliteRuntimeStore,
     lock: Mutex<()>,
     notify: Notify,
 }
@@ -189,7 +187,8 @@ impl EnrichmentCoordinator {
         static INSTANCE: OnceLock<Arc<EnrichmentCoordinator>> = OnceLock::new();
         Arc::clone(INSTANCE.get_or_init(|| {
             let coordinator = Arc::new(Self {
-                state_path: enrichment_state_path(),
+                runtime_store: DaemonSqliteRuntimeStore::open()
+                    .expect("opening daemon runtime store for enrichment queue"),
                 lock: Mutex::new(()),
                 notify: Notify::new(),
             });
@@ -412,7 +411,11 @@ impl EnrichmentCoordinator {
     }
 
     fn ensure_state_file(&self) {
-        if self.state_path.exists() {
+        if self
+            .runtime_store
+            .enrichment_state_exists()
+            .unwrap_or(false)
+        {
             return;
         }
         let mut state = default_state();
@@ -520,13 +523,16 @@ impl EnrichmentCoordinator {
     }
 
     fn load_state(&self) -> Result<EnrichmentQueueState> {
-        Ok(read_json::<EnrichmentQueueState>(&self.state_path)?.unwrap_or_else(default_state))
+        Ok(self
+            .runtime_store
+            .load_enrichment_queue_state()?
+            .unwrap_or_else(default_state))
     }
 
     fn save_state(&self, state: &mut EnrichmentQueueState) -> Result<()> {
         state.version = 1;
         state.updated_at_unix = unix_timestamp_now();
-        write_json(&self.state_path, state)
+        self.runtime_store.save_enrichment_queue_state(state)
     }
 
     async fn enqueue_symbol_embeddings_from_artefact_ids(
@@ -596,22 +602,26 @@ impl EnrichmentCoordinator {
 }
 
 pub fn snapshot() -> Result<EnrichmentQueueStatus> {
-    let state =
-        read_json::<EnrichmentQueueState>(&enrichment_state_path())?.unwrap_or_else(default_state);
+    let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let state = runtime_store
+        .load_enrichment_queue_state()?
+        .unwrap_or_else(default_state);
     Ok(EnrichmentQueueStatus {
         state: project_status(&state),
-        persisted: enrichment_state_path().exists(),
+        persisted: runtime_store.enrichment_state_exists()?,
     })
 }
 
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
-    let path = enrichment_state_path();
-    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or_else(default_state);
+    let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let mut state = runtime_store
+        .load_enrichment_queue_state()?
+        .unwrap_or_else(default_state);
     state.paused_embeddings = true;
     state.paused_semantic = true;
     state.paused_reason = reason.clone();
     state.last_action = Some("paused".to_string());
-    write_json(&path, &state)?;
+    runtime_store.save_enrichment_queue_state(&state)?;
     let mut projected = project_status(&state);
     projected.mode = EnrichmentQueueMode::Paused;
     projected.last_action = Some("paused".to_string());
@@ -625,13 +635,15 @@ pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResu
 }
 
 pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
-    let path = enrichment_state_path();
-    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or_else(default_state);
+    let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let mut state = runtime_store
+        .load_enrichment_queue_state()?
+        .unwrap_or_else(default_state);
     state.paused_embeddings = false;
     state.paused_semantic = false;
     state.paused_reason = None;
     state.last_action = Some("resumed".to_string());
-    write_json(&path, &state)?;
+    runtime_store.save_enrichment_queue_state(&state)?;
     Ok(EnrichmentControlResult {
         message: "Enrichment queue resumed.".to_string(),
         state: project_status(&state),
@@ -639,8 +651,10 @@ pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
 }
 
 pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
-    let path = enrichment_state_path();
-    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or_else(default_state);
+    let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let mut state = runtime_store
+        .load_enrichment_queue_state()?
+        .unwrap_or_else(default_state);
     let mut retried = 0u64;
     for job in &mut state.jobs {
         if job.status == EnrichmentJobStatus::Failed {
@@ -652,7 +666,7 @@ pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
     }
     state.retried_failed_jobs += retried;
     state.last_action = Some("retry_failed".to_string());
-    write_json(&path, &state)?;
+    runtime_store.save_enrichment_queue_state(&state)?;
     let mut projected = project_status(&state);
     projected.retried_failed_jobs = state.retried_failed_jobs;
     projected.last_action = Some("retry_failed".to_string());
@@ -668,10 +682,6 @@ fn default_state() -> EnrichmentQueueState {
         last_action: Some("initialized".to_string()),
         ..EnrichmentQueueState::default()
     }
-}
-
-fn enrichment_state_path() -> PathBuf {
-    global_daemon_dir_fallback().join(super::types::ENRICHMENT_STATE_FILE_NAME)
 }
 
 fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIdentity {
@@ -696,6 +706,7 @@ fn build_batch_key(artefact_ids: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::runtime_store::DaemonSqliteRuntimeStore;
     use serde_json::json;
     use tempfile::TempDir;
     use tokio::sync::{Mutex, Notify};
@@ -831,9 +842,10 @@ mod tests {
         }
     }
 
-    fn new_test_coordinator(state_path: PathBuf) -> EnrichmentCoordinator {
+    fn new_test_coordinator(runtime_db_path: PathBuf) -> EnrichmentCoordinator {
         EnrichmentCoordinator {
-            state_path,
+            runtime_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
+                .expect("open test daemon runtime store"),
             lock: Mutex::new(()),
             notify: Notify::new(),
         }
@@ -842,8 +854,8 @@ mod tests {
     #[tokio::test]
     async fn enqueue_clone_edges_rebuild_waits_for_embedding_and_semantic_jobs_to_drain() {
         let temp = TempDir::new().expect("temp dir");
-        let state_path = temp.path().join("enrichment.json");
-        let coordinator = new_test_coordinator(state_path.clone());
+        let runtime_db_path = temp.path().join("runtime.sqlite");
+        let coordinator = new_test_coordinator(runtime_db_path);
         let repo_id = "repo-1";
 
         let mut initial_state = default_state();
@@ -852,7 +864,10 @@ mod tests {
             sample_embedding_job(repo_id, EnrichmentJobStatus::Pending, "embedding-a"),
             sample_embedding_job(repo_id, EnrichmentJobStatus::Running, "embedding-b"),
         ];
-        write_json(&state_path, &initial_state).expect("write initial enrichment state");
+        coordinator
+            .runtime_store
+            .save_enrichment_queue_state(&initial_state)
+            .expect("write initial enrichment state");
 
         coordinator
             .enqueue_clone_edges_rebuild(
@@ -862,7 +877,9 @@ mod tests {
             .await
             .expect("defer clone rebuild while embedding producers remain");
 
-        let deferred_state = read_json::<EnrichmentQueueState>(&state_path)
+        let deferred_state = coordinator
+            .runtime_store
+            .load_enrichment_queue_state()
             .expect("read deferred state")
             .expect("state exists");
         assert!(
@@ -880,7 +897,10 @@ mod tests {
         for job in &mut drained_state.jobs {
             job.status = EnrichmentJobStatus::Completed;
         }
-        write_json(&state_path, &drained_state).expect("write drained state");
+        coordinator
+            .runtime_store
+            .save_enrichment_queue_state(&drained_state)
+            .expect("write drained state");
 
         coordinator
             .enqueue_clone_edges_rebuild(
@@ -890,7 +910,9 @@ mod tests {
             .await
             .expect("enqueue clone rebuild after producers drain");
 
-        let enqueued_state = read_json::<EnrichmentQueueState>(&state_path)
+        let enqueued_state = coordinator
+            .runtime_store
+            .load_enrichment_queue_state()
             .expect("read enqueued state")
             .expect("state exists");
         assert_eq!(
@@ -910,7 +932,9 @@ mod tests {
             .await
             .expect("dedupe clone rebuild jobs");
 
-        let deduped_state = read_json::<EnrichmentQueueState>(&state_path)
+        let deduped_state = coordinator
+            .runtime_store
+            .load_enrichment_queue_state()
             .expect("read deduped state")
             .expect("state exists");
         assert_eq!(

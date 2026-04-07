@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 
 use super::adapter::LifecycleAgentAdapter;
@@ -7,9 +7,9 @@ use super::git_workspace::{
     detect_file_changes_for_turn_end, filter_and_normalize_paths_for_turn_end,
     filter_to_uncommitted_files_for_turn_end, merge_unique_for_turn_end,
 };
-use super::interaction::resolve_interaction_event_store;
-use super::time_and_ids::{generate_interaction_event_id, now_rfc3339};
-use super::transcript::{create_context_file, resolve_transcript_offset};
+use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
+use super::time_and_ids::{generate_interaction_event_id, generate_lifecycle_turn_id, now_rfc3339};
+use super::transcript::resolve_transcript_offset;
 use super::types::{LifecycleEvent, PrePromptState, SessionIdPolicy, apply_session_id_policy};
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::phase::{
@@ -17,8 +17,19 @@ use crate::host::checkpoints::session::phase::{
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
     transition_with_context as transition_session_with_context,
 };
-use crate::host::interactions::store::InteractionEventStore;
-use crate::host::interactions::types::{InteractionEvent, InteractionEventType};
+use crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
+use crate::host::checkpoints::transcript::metadata::{
+    build_session_metadata_bundle, extract_prompts_from_transcript_bytes,
+};
+use crate::host::interactions::model::resolve_interaction_model_from_bytes;
+use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::transcript_fragment::{
+    transcript_fragment_from_bytes, transcript_position_from_bytes,
+};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+};
+use crate::host::runtime_store::{RepoSqliteRuntimeStore, SessionMetadataSnapshot};
 
 pub fn handle_lifecycle_turn_end(
     agent: &dyn LifecycleAgentAdapter,
@@ -41,18 +52,6 @@ pub fn handle_lifecycle_turn_end(
 
     let repo_root = crate::utils::paths::repo_root()?;
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
-    let meta_rel = crate::utils::paths::session_metadata_dir_from_session_id(&session_id);
-    let meta_dir_abs = {
-        let path = repo_root.join(&meta_rel);
-        std::fs::create_dir_all(&path)
-            .map_err(|e| anyhow!("failed to create session directory: {e}"))?;
-        Some(path)
-    };
-    if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
-        let log_path = meta_dir_abs.join(crate::utils::paths::TRANSCRIPT_FILE_NAME);
-        std::fs::write(&log_path, &transcript_data)
-            .map_err(|e| anyhow!("failed to write transcript: {e}"))?;
-    }
 
     let transcript_ref_canon = Path::new(&event.session_ref)
         .canonicalize()
@@ -61,106 +60,38 @@ pub fn handle_lifecycle_turn_end(
 
     let backend = create_session_backend_or_local(&repo_root);
     let pre_prompt = backend.load_pre_prompt(&session_id).ok().flatten();
+    if event.source == PRE_PROMPT_SOURCE_CURSOR_SHELL
+        && pre_prompt.as_ref().map(|state| state.source.as_str())
+            != Some(PRE_PROMPT_SOURCE_CURSOR_SHELL)
+    {
+        return Ok(());
+    }
     let lifecycle_pre = pre_prompt.as_ref().map(|p| PrePromptState {
         transcript_offset: p.transcript_offset as usize,
     });
     let transcript_offset = resolve_transcript_offset(lifecycle_pre.as_ref(), &session_id);
 
-    let mut all_prompts: Vec<String> = Vec::new();
-    let mut summary = String::new();
     let mut transcript_modified_files: Vec<String> = Vec::new();
     let mut new_transcript_position = transcript_offset;
 
-    if let Some(analyzer) = agent.as_transcript_analyzer() {
-        if let Ok(prompts) = analyzer.extract_prompts(&transcript_ref_str, transcript_offset) {
-            all_prompts = prompts;
-        }
-        if let Ok(s) = analyzer.extract_summary(&transcript_ref_str) {
-            summary = s;
-        }
-        if let Ok((files, pos)) =
+    if let Some(analyzer) = agent.as_transcript_analyzer()
+        && let Ok((files, pos)) =
             analyzer.extract_modified_files_from_offset(&transcript_ref_str, transcript_offset)
-        {
-            transcript_modified_files = filter_and_normalize_paths_for_turn_end(&files, &repo_root);
-            new_transcript_position = pos;
-        }
-    }
-    // Use transcript we already read (same bytes we copied to metadata); parse with Gemini or raw JSON
-    if let Ok(t) = crate::adapters::agents::gemini::transcript::parse_transcript(&transcript_data) {
-        let from_transcript =
-            crate::adapters::agents::gemini::transcript::extract_all_user_prompts_from_transcript(
-                &t,
-            );
-        if !from_transcript.is_empty() {
-            all_prompts = from_transcript;
-        }
-        for msg in t.messages.iter().rev() {
-            if msg.r#type == crate::adapters::agents::gemini::transcript::MESSAGE_TYPE_GEMINI
-                && !msg.content.is_empty()
-            {
-                summary = msg.content.clone();
-                break;
-            }
-        }
-    }
-    // Raw JSON fallback for {"messages":[{"type":"user","content":"..."}, ...]}
-    if all_prompts.is_empty()
-        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&transcript_data)
-        && let Some(arr) = v.get("messages").and_then(|m| m.as_array())
     {
-        for msg in arr {
-            if msg.get("type").and_then(|t| t.as_str()) == Some("user")
-                && let Some(c) = msg.get("content").and_then(|c| c.as_str())
-            {
-                all_prompts.push(c.to_string());
-            }
-        }
-    }
-    if summary.is_empty()
-        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&transcript_data)
-        && let Some(arr) = v.get("messages").and_then(|m| m.as_array())
-    {
-        for msg in arr.iter().rev() {
-            if msg.get("type").and_then(|t| t.as_str()) == Some("gemini")
-                && let Some(c) = msg.get("content").and_then(|c| c.as_str())
-            {
-                summary = c.to_string();
-                break;
-            }
-        }
-    }
-    if summary.is_empty()
-        && let Ok(s) = crate::adapters::agents::gemini::transcript::extract_last_assistant_message(
-            &transcript_data,
-        )
-    {
-        summary = s;
+        transcript_modified_files = filter_and_normalize_paths_for_turn_end(&files, &repo_root);
+        new_transcript_position = pos;
     }
 
-    let prompt_content = all_prompts.join("\n\n---\n\n");
-    if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
-        let prompt_file = meta_dir_abs.join(crate::utils::paths::PROMPT_FILE_NAME);
-        std::fs::write(&prompt_file, &prompt_content)
-            .map_err(|e| anyhow!("failed to write prompt file: {e}"))?;
-
-        let summary_file = meta_dir_abs.join(crate::utils::paths::SUMMARY_FILE_NAME);
-        std::fs::write(&summary_file, &summary)
-            .map_err(|e| anyhow!("failed to write summary file: {e}"))?;
+    if new_transcript_position <= transcript_offset && !transcript_data.is_empty() {
+        new_transcript_position = transcript_position_from_bytes(&transcript_data);
     }
 
-    let last_prompt = all_prompts.last().cloned().unwrap_or_default();
+    let derived_prompts = extract_prompts_from_transcript_bytes(&transcript_data);
+    let last_prompt = derived_prompts.last().cloned().unwrap_or_default();
     let commit_message = crate::utils::strings::truncate_runes(&last_prompt, 72, "...");
-
-    if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
-        let context_path = meta_dir_abs.join(crate::utils::paths::CONTEXT_FILE_NAME);
-        create_context_file(
-            &context_path,
-            &commit_message,
-            &session_id,
-            &all_prompts,
-            &summary,
-        )?;
-    }
+    let metadata = build_session_metadata_bundle(&session_id, &commit_message, &transcript_data)?;
+    let all_prompts = metadata.prompts.clone();
+    let summary = metadata.summary.clone();
 
     let author = crate::git::get_git_author().unwrap_or(crate::git::GitAuthor {
         name: "Unknown".to_string(),
@@ -184,19 +115,33 @@ pub fn handle_lifecycle_turn_end(
             .ok()
     });
 
-    let metadata_dir_abs_str = meta_dir_abs
+    let session_before_capture = backend.load_session(&session_id).ok().flatten();
+    let turn_id = session_before_capture
         .as_ref()
-        .and_then(|path| path.to_str())
-        .unwrap_or("")
-        .to_string();
+        .map(|state| state.turn_id.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(generate_lifecycle_turn_id);
+    let turn_number = session_before_capture
+        .as_ref()
+        .map(|state| state.pending.step_count + 1)
+        .unwrap_or(1);
+
+    let runtime_store = RepoSqliteRuntimeStore::open(&repo_root)
+        .context("opening runtime store for lifecycle turn-end metadata")?;
+    let mut snapshot = SessionMetadataSnapshot::new(session_id.clone(), metadata.clone());
+    snapshot.turn_id = turn_id.clone();
+    snapshot.transcript_identifier = session_id.clone();
+    snapshot.transcript_path = event.session_ref.clone();
+    runtime_store
+        .save_session_metadata_snapshot(&snapshot)
+        .context("saving lifecycle turn-end metadata snapshot")?;
 
     let ctx = crate::host::checkpoints::strategy::StepContext {
         session_id: session_id.to_string(),
         modified_files: rel_modified,
         new_files: rel_new,
         deleted_files: rel_deleted,
-        metadata_dir: meta_rel,
-        metadata_dir_abs: metadata_dir_abs_str,
+        metadata: Some(metadata.clone()),
         commit_message,
         transcript_path: event.session_ref.clone(),
         author_name: author.name,
@@ -207,71 +152,140 @@ pub fn handle_lifecycle_turn_end(
         token_usage,
     };
 
-    let registry = crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
-    let strategy = registry.get(
-        crate::host::checkpoints::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
-        &repo_root,
-    )?;
-    strategy.save_step(&ctx)?;
-
-    // ── interaction event persistence ────────────────────────────────────────
-    if let Some(store) = resolve_interaction_event_store(&repo_root) {
-        let turn_id = backend
-            .load_session(&session_id)
-            .ok()
-            .flatten()
-            .map(|s| s.turn_id.clone());
-        if let Some(turn_id) = turn_id.filter(|id| !id.trim().is_empty()) {
-            let now = now_rfc3339();
-            let all_files: Vec<String> = ctx
-                .modified_files
-                .iter()
-                .chain(ctx.new_files.iter())
-                .chain(ctx.deleted_files.iter())
-                .cloned()
-                .collect();
-            let token_meta = ctx.token_usage.as_ref().map(|t| {
-                crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
-                    input_tokens: t.input_tokens.max(0) as u64,
-                    cache_creation_tokens: t.cache_creation_tokens.max(0) as u64,
-                    cache_read_tokens: t.cache_read_tokens.max(0) as u64,
-                    output_tokens: t.output_tokens.max(0) as u64,
-                    api_call_count: t.api_call_count.max(0) as u64,
-                    subagent_tokens: None,
-                }
-            });
-            if let Err(err) = store.record_turn_end(&turn_id, &now, token_meta.as_ref(), &all_files)
-            {
-                eprintln!("[bitloops] Warning: failed to record interaction turn end: {err}");
-            }
-            let payload = serde_json::json!({
-                "files_count": all_files.len(),
-                "token_usage": token_meta,
-            });
-            if let Err(err) = store.record_event(&InteractionEvent {
-                event_id: generate_interaction_event_id(),
-                session_id: session_id.to_string(),
-                turn_id: Some(turn_id),
-                repo_id: store.repo_id().to_string(),
-                event_type: InteractionEventType::TurnEnd,
-                event_time: now,
-                agent_type: ctx.agent_type.clone(),
-                model: event.model.clone(),
-                payload,
-            }) {
-                eprintln!("[bitloops] Warning: failed to record turn_end event: {err}");
-            }
-        } else {
-            eprintln!(
-                "[bitloops] Warning: skipping interaction persistence for session {session_id} \
-                 because turn_id is missing or empty"
-            );
+    let interaction_now = now_rfc3339();
+    let all_files: Vec<String> = ctx
+        .modified_files
+        .iter()
+        .chain(ctx.new_files.iter())
+        .chain(ctx.deleted_files.iter())
+        .cloned()
+        .collect();
+    let total_changes = all_files.len();
+    let token_meta = ctx.token_usage.as_ref().map(|t| {
+        crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
+            input_tokens: t.input_tokens.max(0) as u64,
+            cache_creation_tokens: t.cache_creation_tokens.max(0) as u64,
+            cache_read_tokens: t.cache_read_tokens.max(0) as u64,
+            output_tokens: t.output_tokens.max(0) as u64,
+            api_call_count: t.api_call_count.max(0) as u64,
+            subagent_tokens: None,
         }
+    });
+    let transcript_fragment = transcript_fragment_from_bytes(
+        &transcript_data,
+        transcript_offset,
+        new_transcript_position,
+    );
+    let model = resolve_interaction_model_from_bytes(&event.model, &transcript_data);
+
+    if let Some(spool) = resolve_interaction_spool(&repo_root) {
+        let session = session_before_capture
+            .as_ref()
+            .map(|state| InteractionSession {
+                session_id: session_id.clone(),
+                repo_id: spool.repo_id().to_string(),
+                agent_type: state.agent_type.clone(),
+                model: model.clone(),
+                first_prompt: state.first_prompt.clone(),
+                transcript_path: state.transcript_path.clone(),
+                worktree_path: state.worktree_path.clone(),
+                worktree_id: state.worktree_id.clone(),
+                started_at: if state.started_at.trim().is_empty() {
+                    interaction_now.clone()
+                } else {
+                    state.started_at.clone()
+                },
+                ended_at: state.ended_at.clone(),
+                last_event_at: interaction_now.clone(),
+                updated_at: interaction_now.clone(),
+            })
+            .unwrap_or(InteractionSession {
+                session_id: session_id.clone(),
+                repo_id: spool.repo_id().to_string(),
+                agent_type: ctx.agent_type.clone(),
+                model: model.clone(),
+                first_prompt: last_prompt.clone(),
+                transcript_path: event.session_ref.clone(),
+                worktree_path: repo_root.to_string_lossy().to_string(),
+                worktree_id: crate::utils::paths::get_worktree_id(&repo_root).unwrap_or_default(),
+                started_at: interaction_now.clone(),
+                ended_at: None,
+                last_event_at: interaction_now.clone(),
+                updated_at: interaction_now.clone(),
+            });
+        if let Err(err) = spool.record_session(&session) {
+            eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
+        }
+
+        let turn = InteractionTurn {
+            turn_id: turn_id.clone(),
+            session_id: session_id.clone(),
+            repo_id: spool.repo_id().to_string(),
+            turn_number,
+            prompt: all_prompts
+                .last()
+                .cloned()
+                .unwrap_or_else(|| last_prompt.clone()),
+            agent_type: ctx.agent_type.clone(),
+            model: model.clone(),
+            started_at: session_before_capture
+                .as_ref()
+                .and_then(|state| {
+                    (!state
+                        .last_interaction_time
+                        .clone()
+                        .unwrap_or_default()
+                        .is_empty())
+                    .then(|| state.last_interaction_time.clone().unwrap_or_default())
+                })
+                .unwrap_or_else(|| interaction_now.clone()),
+            ended_at: Some(interaction_now.clone()),
+            token_usage: token_meta.clone(),
+            summary: summary.clone(),
+            prompt_count: all_prompts.len().min(u32::MAX as usize) as u32,
+            transcript_offset_start: Some(transcript_offset as i64),
+            transcript_offset_end: Some(new_transcript_position as i64),
+            transcript_fragment: transcript_fragment.clone(),
+            files_modified: all_files.clone(),
+            checkpoint_id: None,
+            updated_at: interaction_now.clone(),
+        };
+        if let Err(err) = spool.record_turn(&turn) {
+            eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
+        }
+        if let Err(err) = spool.record_event(&InteractionEvent {
+            event_id: generate_interaction_event_id(),
+            session_id: session_id.to_string(),
+            turn_id: Some(turn_id.clone()),
+            repo_id: spool.repo_id().to_string(),
+            event_type: InteractionEventType::TurnEnd,
+            event_time: interaction_now.clone(),
+            agent_type: ctx.agent_type.clone(),
+            model,
+            payload: serde_json::json!({
+                "files_modified": all_files,
+                "files_count": all_files.len(),
+                "prompt_count": all_prompts.len(),
+                "summary": summary,
+                "transcript_offset_start": transcript_offset,
+                "transcript_offset_end": new_transcript_position,
+                "transcript_fragment": transcript_fragment,
+                "token_usage": token_meta,
+            }),
+        }) {
+            eprintln!("[bitloops] Warning: failed to spool turn_end event: {err}");
+        }
+    }
+    flush_interaction_spool_best_effort(&repo_root);
+
+    if total_changes > 0 {
+        let strategy = super::resolve_configured_strategy(&repo_root)?;
+        strategy.save_step(&ctx)?;
     }
 
     if let Ok(Some(mut state)) = backend.load_session(&session_id) {
         let context = SessionTransitionContext {
-            has_files_touched: !state.files_touched.is_empty(),
+            has_files_touched: !state.pending.files_touched.is_empty(),
             is_rebase_in_progress: false,
         };
         let transition =

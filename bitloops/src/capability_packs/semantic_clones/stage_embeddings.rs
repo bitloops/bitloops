@@ -153,9 +153,9 @@ pub(crate) async fn upsert_symbol_embedding_rows(
 pub(crate) async fn ensure_semantic_embeddings_schema(
     relational: &RelationalStorage,
 ) -> Result<()> {
-    init_sqlite_semantic_embeddings_schema(&relational.local.path).await?;
-    if let Some(remote) = relational.remote.as_ref() {
-        init_postgres_semantic_embeddings_schema(&remote.client).await?;
+    init_sqlite_semantic_embeddings_schema(relational.sqlite_path()).await?;
+    if let Some(remote_client) = relational.remote_client() {
+        init_postgres_semantic_embeddings_schema(remote_client).await?;
     }
     Ok(())
 }

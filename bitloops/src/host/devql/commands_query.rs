@@ -40,7 +40,7 @@ pub(crate) async fn execute_query_json_with_composition(
     composition: Option<RegisteredStageCompositionContext>,
 ) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql query`")?;
     let relational = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         None

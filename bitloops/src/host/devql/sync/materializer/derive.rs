@@ -209,10 +209,13 @@ pub(super) fn parse_cached_language_kind(
     language: &str,
     raw_kind: &str,
 ) -> Result<crate::host::language_adapter::LanguageKind> {
-    use crate::host::language_adapter::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+    use crate::host::language_adapter::{
+        GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
+    };
 
     let parsed = match language {
         "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
+        "java" => JavaKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::java),
         "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
         "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
         "typescript" | "javascript" => {

@@ -98,6 +98,15 @@ impl RelationalGateway for FakeRelationalGateway {
         )
     }
 
+    fn load_current_production_artefacts(
+        &self,
+        repo_id: &str,
+    ) -> Result<Vec<crate::models::ProductionArtefact>> {
+        bail!(
+            "FakeRelationalGateway: load_current_production_artefacts not implemented (repo {repo_id})"
+        )
+    }
+
     fn load_production_artefacts(
         &self,
         commit_sha: &str,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::extract_user_prompts_from_jsonl;
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -26,7 +27,6 @@ impl ManualCommitStrategy {
                 started_at: now_rfc3339(),
                 phase: SessionPhase::Active,
                 turn_id: generate_checkpoint_id(),
-                step_count: 0,
                 untracked_files_at_start: collect_untracked_files_at_start(&self.repo_root),
                 agent_type: canonicalize_agent_type(agent_type),
                 transcript_path: transcript_path.to_string(),
@@ -68,7 +68,7 @@ impl ManualCommitStrategy {
         &self,
         state: &SessionState,
     ) -> SessionPromptAttribution {
-        let checkpoint_number = state.step_count as i32 + 1;
+        let checkpoint_number = state.pending.step_count as i32 + 1;
         let mut changed_files: BTreeMap<String, String> = BTreeMap::new();
         if let Ok((modified, new_files, deleted)) = working_tree_changes(&self.repo_root) {
             for file in modified.into_iter().chain(new_files).chain(deleted) {
@@ -116,23 +116,32 @@ impl ManualCommitStrategy {
         if state.turn_checkpoint_ids.is_empty() {
             return;
         }
-        if state.transcript_path.trim().is_empty() {
+        let metadata_bundle = read_session_metadata_bundle(&self.repo_root, &state.session_id);
+        if metadata_bundle.is_none() && state.transcript_path.trim().is_empty() {
             state.turn_checkpoint_ids.clear();
             return;
         }
 
-        let Ok(full_transcript) = fs::read(&state.transcript_path) else {
-            state.turn_checkpoint_ids.clear();
-            return;
-        };
+        let full_transcript = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.transcript.clone())
+            .or_else(|| fs::read(&state.transcript_path).ok())
+            .unwrap_or_default();
         if full_transcript.is_empty() {
             state.turn_checkpoint_ids.clear();
             return;
         }
 
         let transcript_text = String::from_utf8_lossy(&full_transcript).to_string();
-        let prompts = extract_user_prompts_from_jsonl(&transcript_text);
-        let context = generate_context_from_prompts(&prompts).into_bytes();
+        let prompts = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.prompts.clone())
+            .unwrap_or_else(|| extract_user_prompts_from_jsonl(&transcript_text));
+        let context = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.context.clone())
+            .filter(|context| !context.is_empty())
+            .unwrap_or_else(|| generate_context_from_prompts(&prompts).into_bytes());
 
         for checkpoint_id in state.turn_checkpoint_ids.clone() {
             let _ = update_committed(
@@ -160,9 +169,10 @@ impl ManualCommitStrategy {
     ) -> Result<()> {
         let committed_files =
             files_changed_in_commit(&self.repo_root, new_head).unwrap_or_default();
-        let had_tracked_files = !state.files_touched.is_empty();
+        let had_tracked_files = !state.pending.files_touched.is_empty();
         let committed_touched: Vec<String> = if had_tracked_files {
             state
+                .pending
                 .files_touched
                 .iter()
                 .filter(|f| committed_files.contains(f.as_str()))
@@ -182,7 +192,11 @@ impl ManualCommitStrategy {
             new_head,
             &committed_touched,
         );
-        let transcript_content = read_transcript_from_disk(&self.repo_root, &state.session_id)
+        let metadata_bundle = read_session_metadata_bundle(&self.repo_root, &state.session_id);
+        let transcript_content = metadata_bundle
+            .as_ref()
+            .map(|bundle| String::from_utf8_lossy(&bundle.transcript).to_string())
+            .filter(|transcript| !transcript.is_empty())
             .or_else(|| {
                 if state.transcript_path.trim().is_empty() {
                     return None;
@@ -193,16 +207,24 @@ impl ManualCommitStrategy {
             })
             .unwrap_or_default();
         let total_transcript_lines = transcript_content.lines().count() as i64;
-        let prompts = extract_user_prompts_from_jsonl(&transcript_content);
-        let context = generate_context_from_prompts(&prompts).into_bytes();
+        let prompts = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.prompts.clone())
+            .unwrap_or_else(|| extract_user_prompts_from_jsonl(&transcript_content));
+        let context = metadata_bundle
+            .as_ref()
+            .map(|bundle| bundle.context.clone())
+            .filter(|context| !context.is_empty())
+            .unwrap_or_else(|| generate_context_from_prompts(&prompts).into_bytes());
         let token_usage = state
+            .pending
             .token_usage
             .as_ref()
             .map(token_usage_metadata_from_runtime)
             .or_else(|| {
                 calculate_token_usage_from_transcript(
                     &transcript_content,
-                    state.checkpoint_transcript_start,
+                    state.pending.checkpoint_transcript_start,
                 )
             });
         let (author_name, author_email) = get_commit_author(&self.repo_root, new_head)
@@ -228,13 +250,13 @@ impl ManualCommitStrategy {
                 };
                 let scoped = crate::host::checkpoints::summarize::scope_transcript_for_checkpoint(
                     transcript_content.as_bytes(),
-                    state.checkpoint_transcript_start.max(0) as usize,
+                    state.pending.checkpoint_transcript_start.max(0) as usize,
                     summarize_agent,
                 );
                 if !scoped.is_empty() {
                     match crate::host::checkpoints::summarize::generate_from_transcript(
                         &scoped,
-                        &state.files_touched,
+                        &state.pending.files_touched,
                         summarize_agent,
                         None,
                     ) {
@@ -265,14 +287,17 @@ impl ManualCommitStrategy {
                 transcript: transcript_content.clone().into_bytes(),
                 prompts: Some(prompts),
                 context: Some(context),
-                checkpoints_count: state.step_count,
+                checkpoints_count: state.pending.step_count,
                 files_touched: committed_touched,
                 token_usage_input: None,
                 token_usage_output: None,
                 token_usage_api_call_count: None,
                 turn_id: state.turn_id.clone(),
-                transcript_identifier_at_start: state.transcript_identifier_at_start.clone(),
-                checkpoint_transcript_start: state.checkpoint_transcript_start,
+                transcript_identifier_at_start: state
+                    .pending
+                    .transcript_identifier_at_start
+                    .clone(),
+                checkpoint_transcript_start: state.pending.checkpoint_transcript_start,
                 token_usage,
                 initial_attribution,
                 author_name,
@@ -290,17 +315,17 @@ impl ManualCommitStrategy {
             &self.repo_root,
             latest_session_tree_hash.as_deref(),
             new_head,
-            &state.files_touched,
+            &state.pending.files_touched,
             &committed_files,
         );
 
         // Update session state.
         state.base_commit = new_head.to_string();
         state.attribution_base_commit = new_head.to_string();
-        state.step_count = 0;
-        state.checkpoint_transcript_start = total_transcript_lines;
-        state.files_touched = remaining_files;
-        state.transcript_identifier_at_start.clear();
+        state.pending.step_count = 0;
+        state.pending.checkpoint_transcript_start = total_transcript_lines;
+        state.pending.files_touched = remaining_files;
+        state.pending.transcript_identifier_at_start.clear();
         state.last_checkpoint_id = checkpoint_id.to_string();
         state.prompt_attributions.clear();
         state.pending_prompt_attribution = None;
@@ -314,26 +339,241 @@ impl ManualCommitStrategy {
         Ok(())
     }
 
-    /// Applies the formal GitCommit transition and returns emitted actions.
-    pub(crate) fn apply_git_commit_transition(
+    pub(crate) fn condense_interaction_session(
         &self,
-        state: &mut SessionState,
-        is_rebase_in_progress: bool,
-    ) -> Vec<Action> {
-        let context = TransitionContext {
-            has_files_touched: !state.files_touched.is_empty(),
-            is_rebase_in_progress,
-        };
-        let result = transition_with_context(state.phase, Event::GitCommit, context);
-        let actions = result.actions.clone();
-        let mut handler = NoOpActionHandler;
-        if let Err(err) = apply_transition(state, result, &mut handler) {
-            eprintln!(
-                "[bitloops] Warning: git-commit transition failed for session {}: {err}",
-                state.session_id
+        session: &crate::host::interactions::types::InteractionSession,
+        turns: &[crate::host::interactions::types::InteractionTurn],
+        checkpoint_id: &str,
+        new_head: &str,
+        committed_files: &std::collections::HashSet<String>,
+    ) -> Result<()> {
+        let turn_ids: Vec<String> = turns.iter().map(|turn| turn.turn_id.clone()).collect();
+        let session_files = aggregate_turn_files(turns);
+        let committed_touched: Vec<String> = session_files
+            .iter()
+            .filter(|file| committed_files.contains(file.as_str()))
+            .cloned()
+            .collect();
+        if committed_touched.is_empty() {
+            anyhow::bail!(
+                "interaction session {} has no overlap with committed files",
+                session.session_id
             );
         }
-        actions
+
+        let latest_session_tree_hash =
+            latest_temporary_checkpoint_tree_hash(&self.repo_root, &session.session_id);
+        let mut local_state = self.backend.load_session(&session.session_id)?;
+        let initial_attribution = local_state.as_ref().and_then(|state| {
+            calculate_session_initial_attribution(
+                &self.repo_root,
+                state,
+                latest_session_tree_hash.as_deref(),
+                new_head,
+                &committed_touched,
+            )
+        });
+
+        if let Some(missing_turn) = turns
+            .iter()
+            .find(|turn| turn.transcript_fragment.trim().is_empty())
+        {
+            let context = format_post_commit_derivation_context(
+                new_head,
+                Some(checkpoint_id),
+                Some(&session.session_id),
+                &turn_ids,
+                None,
+            );
+            eprintln!(
+                "[bitloops] Warning: missing transcript_fragment for overlapping interaction turn turn_id={} ({context})",
+                missing_turn.turn_id
+            );
+            anyhow::bail!(
+                "missing transcript_fragment for overlapping interaction turn turn_id={} ({context})",
+                missing_turn.turn_id
+            );
+        }
+
+        let transcript_content = turns
+            .iter()
+            .map(|turn| turn.transcript_fragment.as_str())
+            .collect::<String>();
+
+        let mut prompts = aggregate_turn_prompts(turns);
+        if prompts.is_empty() {
+            prompts = extract_user_prompts_from_jsonl(&transcript_content);
+        }
+        if prompts.is_empty() && !session.first_prompt.trim().is_empty() {
+            prompts.push(session.first_prompt.clone());
+        }
+        let context = generate_context_from_prompts(&prompts).into_bytes();
+        let token_usage = aggregate_turn_token_usage(turns);
+        let (author_name, author_email) = get_commit_author(&self.repo_root, new_head)
+            .unwrap_or(get_git_author_from_repo(&self.repo_root)?);
+
+        let resolved_agent = session
+            .agent_type
+            .trim()
+            .is_empty()
+            .then(|| {
+                turns.iter().find_map(|turn| {
+                    let candidate = turn.agent_type.trim();
+                    (!candidate.is_empty()).then(|| canonicalize_agent_type(candidate))
+                })
+            })
+            .flatten()
+            .unwrap_or_else(|| {
+                if session.agent_type.trim().is_empty() {
+                    AGENT_TYPE_CLAUDE_CODE.to_string()
+                } else {
+                    canonicalize_agent_type(&session.agent_type)
+                }
+            });
+
+        let summary: Option<serde_json::Value> = {
+            let settings =
+                crate::config::settings::load_settings(&self.repo_root).unwrap_or_default();
+            if settings.is_summarize_enabled() && !transcript_content.is_empty() {
+                let summarize_agent = match resolved_agent.as_str() {
+                    s if s == AGENT_TYPE_GEMINI => {
+                        crate::host::checkpoints::summarize::AgentType::Gemini
+                    }
+                    s if s == AGENT_TYPE_OPEN_CODE => {
+                        crate::host::checkpoints::summarize::AgentType::OpenCode
+                    }
+                    s if s == AGENT_TYPE_CLAUDE_CODE || s == AGENT_TYPE_CODEX => {
+                        crate::host::checkpoints::summarize::AgentType::ClaudeCode
+                    }
+                    _ => crate::host::checkpoints::summarize::AgentType::Unknown,
+                };
+                let scoped = crate::host::checkpoints::summarize::scope_transcript_for_checkpoint(
+                    transcript_content.as_bytes(),
+                    0,
+                    summarize_agent,
+                );
+                if !scoped.is_empty() {
+                    match crate::host::checkpoints::summarize::generate_from_transcript(
+                        &scoped,
+                        &committed_touched,
+                        summarize_agent,
+                        None,
+                    ) {
+                        Ok(summary) => serde_json::to_value(summary).ok(),
+                        Err(err) => {
+                            eprintln!(
+                                "[warn] summary generation failed session_id={} error={err}",
+                                session.session_id
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let turn_id = turns
+            .last()
+            .map(|turn| turn.turn_id.clone())
+            .unwrap_or_default();
+        write_committed(
+            &self.repo_root,
+            WriteCommittedOptions {
+                checkpoint_id: checkpoint_id.to_string(),
+                session_id: session.session_id.clone(),
+                strategy: "manual-commit".to_string(),
+                agent: resolved_agent.clone(),
+                transcript: transcript_content.clone().into_bytes(),
+                prompts: Some(prompts),
+                context: Some(context),
+                checkpoints_count: turns.len().min(u32::MAX as usize) as u32,
+                files_touched: committed_touched.clone(),
+                token_usage_input: None,
+                token_usage_output: None,
+                token_usage_api_call_count: None,
+                turn_id: turn_id.clone(),
+                transcript_identifier_at_start: String::new(),
+                checkpoint_transcript_start: 0,
+                token_usage,
+                initial_attribution,
+                author_name,
+                author_email,
+                summary,
+                is_task: false,
+                tool_use_id: String::new(),
+                agent_id: String::new(),
+                transcript_path: session.transcript_path.clone(),
+                subagent_transcript_path: String::new(),
+            },
+        )?;
+
+        let remaining_files = files_with_remaining_agent_changes_from_tree(
+            &self.repo_root,
+            latest_session_tree_hash.as_deref(),
+            new_head,
+            &session_files,
+            committed_files,
+        );
+
+        if let Some(mut state) = local_state.take() {
+            if state.started_at.trim().is_empty() && !session.started_at.trim().is_empty() {
+                state.started_at = session.started_at.clone();
+            }
+            if state.ended_at.is_none() && session.ended_at.is_some() {
+                state.ended_at = session.ended_at.clone();
+            }
+            if state.worktree_path.trim().is_empty() && !session.worktree_path.trim().is_empty() {
+                state.worktree_path = session.worktree_path.clone();
+            }
+            if state.worktree_id.trim().is_empty() && !session.worktree_id.trim().is_empty() {
+                state.worktree_id = session.worktree_id.clone();
+            }
+            if state.transcript_path.trim().is_empty() && !session.transcript_path.trim().is_empty()
+            {
+                state.transcript_path = session.transcript_path.clone();
+            }
+            if state.first_prompt.trim().is_empty() && !session.first_prompt.trim().is_empty() {
+                state.first_prompt = session.first_prompt.clone();
+            }
+            if !resolved_agent.trim().is_empty() {
+                state.agent_type = resolved_agent;
+            }
+            if !session.last_event_at.trim().is_empty() {
+                state.last_interaction_time = Some(session.last_event_at.clone());
+            }
+
+            state.base_commit = new_head.to_string();
+            state.attribution_base_commit = new_head.to_string();
+            state.pending.step_count = 0;
+            state.turn_id = turn_id;
+            state.pending.checkpoint_transcript_start = aggregate_turn_transcript_bounds(turns)
+                .map(|(_, end)| end as i64)
+                .unwrap_or_default();
+            state.pending.files_touched = remaining_files;
+            state.pending.transcript_identifier_at_start.clear();
+            state.last_checkpoint_id = checkpoint_id.to_string();
+            state.prompt_attributions.clear();
+            state.pending_prompt_attribution = None;
+            if state.phase.is_active() {
+                state.turn_checkpoint_ids.push(checkpoint_id.to_string());
+            }
+            self.backend.save_session(&state)?;
+        }
+
+        let context = format_post_commit_derivation_context(
+            new_head,
+            Some(checkpoint_id),
+            Some(&session.session_id),
+            &turn_ids,
+            None,
+        );
+        eprintln!("[bitloops] Condensed interaction session ({context})");
+
+        Ok(())
     }
 
     /// Updates `base_commit` to HEAD for all active sessions.

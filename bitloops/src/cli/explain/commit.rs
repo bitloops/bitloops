@@ -82,8 +82,10 @@ pub fn output_explain_content(content: &str, no_pager: bool) -> String {
     String::new()
 }
 
-pub(super) fn is_default_branch(branch_name: &str) -> bool {
-    matches!(branch_name, "main" | "master")
+pub(super) fn is_default_branch(branch_name: &str, default_branch_name: &str) -> bool {
+    let branch_name = branch_name.trim();
+    let default_branch_name = default_branch_name.trim();
+    !branch_name.is_empty() && branch_name == default_branch_name
 }
 
 pub(super) fn truncate_description(input: &str, max_len: usize) -> String {

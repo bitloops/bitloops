@@ -10,6 +10,8 @@ mod devql_refresh;
 mod helpers;
 #[path = "post_commit/hooks_and_strategy.rs"]
 mod hooks_and_strategy;
+#[path = "post_commit/interaction_derivation.rs"]
+mod interaction_derivation;
 #[path = "post_commit/mapping.rs"]
 mod mapping;
 #[path = "post_commit/metadata.rs"]
@@ -29,6 +31,7 @@ pub(crate) use self::compatibility::*;
 pub(crate) use self::devql_refresh::*;
 pub(crate) use self::helpers::*;
 pub(crate) use self::hooks_and_strategy::*;
+pub(crate) use self::interaction_derivation::*;
 pub(crate) use self::mapping::*;
 pub(crate) use self::metadata::*;
 pub(crate) use self::phase_transitions::*;

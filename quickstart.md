@@ -68,7 +68,7 @@ What this does:
 - installs or reconciles hooks for the selected agent
 - queues an initial DevQL current-state sync and waits for it to finish
 
-If you want to inspect SQLite tables directly later in this guide, set `CFG_IF_DB` to the `sqlite_path` configured in your daemon `config.toml`. With the default daemon config, that path lives under the Bitloops data directory rather than inside `./.bitloops/stores/...`.
+If you want to inspect SQLite tables directly later in this guide, set `CFG_IF_DB` to the `sqlite_path` configured in your daemon `config.toml`. With the default daemon config, that path lives under the Bitloops data directory.
 
 ## 4) Create one committed Bitloops checkpoint
 

@@ -35,6 +35,12 @@ On a fresh machine, use `--create-default-config` once. This writes the default 
 
 Interactive `bitloops start` also prompts to create the default config when it is missing. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`.
 
+If you are using a repo-scoped or test-specific daemon config instead of the default global config, create the local file-backed stores for that config with:
+
+```bash
+bitloops start --config ./config.toml --bootstrap-local-stores
+```
+
 ## 3. Initialise A Project
 
 From inside a git repository or subproject:

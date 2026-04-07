@@ -30,6 +30,7 @@ Bitloops now follows a daemon-first architecture.
 - Config directory: daemon config
 - Data directory: SQLite, DuckDB, blob storage
 - Cache directory: embedding downloads, dashboard bundle
-- State directory: runtime metadata and hook scratch files
+- State directory: daemon runtime metadata, daemon runtime SQLite, and hook scratch files
+- Repo runtime directory: `<config root>/stores/runtime/runtime.sqlite`
 
-This separation is why repo-local runtime directories are no longer the default.
+This separation keeps configured relational, event, and blob stores machine-scoped by default while preserving repo-scoped runtime state for active workflow data.

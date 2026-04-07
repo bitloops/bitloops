@@ -11,6 +11,7 @@ use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
 #[derive(Debug)]
@@ -132,6 +133,12 @@ impl Default for DevqlBddWorld {
 }
 
 impl DevqlBddWorld {
+    fn isolated_test_repo_root() -> PathBuf {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("bitloops-devql-bdd-test-{id}"))
+    }
+
     pub(super) fn reset(&mut self) {
         self.scenario_id = None;
         self.source_path = None;
@@ -184,9 +191,10 @@ impl DevqlBddWorld {
     }
 
     pub(super) fn test_cfg() -> DevqlConfig {
+        let repo_root = Self::isolated_test_repo_root();
         DevqlConfig {
-            config_root: PathBuf::from("/tmp/repo"),
-            repo_root: PathBuf::from("/tmp/repo"),
+            daemon_config_root: repo_root.clone(),
+            repo_root,
             repo: RepoIdentity {
                 provider: "github".to_string(),
                 organization: "bitloops".to_string(),

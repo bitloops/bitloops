@@ -2,6 +2,7 @@ use super::*;
 use crate::config::load_daemon_settings;
 use crate::config::resolve_blob_local_path_for_repo;
 use crate::config::unified_config::resolve_store_backend_from_unified;
+use crate::host::relational_store::DefaultRelationalStore;
 
 pub(super) fn resolve_daemon_config(
     explicit_config_path: Option<&Path>,
@@ -15,10 +16,10 @@ pub(super) fn resolve_daemon_config(
     let config_root = derive_config_root(&config_path)?;
     let backend_config = resolve_store_backend_from_unified(&loaded.settings, &config_root)
         .with_context(|| format!("resolving store backends from {}", config_path.display()))?;
-    let relational_db_path = backend_config
-        .relational
-        .resolve_sqlite_db_path_for_repo(&config_root)
-        .context("resolving SQLite path for Bitloops daemon")?;
+    let relational_db_path = DefaultRelationalStore::open_local_for_repo_root(&config_root)
+        .context("opening local relational store for Bitloops daemon")?
+        .sqlite_path()
+        .to_path_buf();
     let events_db_path = backend_config
         .events
         .resolve_duckdb_db_path_for_repo(&config_root);

@@ -20,6 +20,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                 session_id: apply_session_id_policy(&raw.session_id, SessionIdPolicy::Strict)
                     .context("codex session-start requires non-empty session_id")?,
                 session_ref: raw.transcript_path,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }
@@ -32,6 +33,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
                     SessionIdPolicy::FallbackUnknown,
                 )?,
                 session_ref: raw.transcript_path,
+                model: raw.model,
                 ..LifecycleEvent::default()
             }))
         }

@@ -2,18 +2,26 @@ use super::*;
 use crate::cli::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
 use crate::cli::{Cli, Commands};
 use crate::config::{BlobStorageConfig, StoreFileConfig};
-use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{TempDir, tempdir};
 
+fn isolated_test_repo_root() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("bitloops-devql-test-{id}"))
+}
+
 fn test_cfg() -> DevqlConfig {
+    let repo_root = isolated_test_repo_root();
     DevqlConfig {
-        config_root: PathBuf::from("/tmp/repo"),
-        repo_root: PathBuf::from("/tmp/repo"),
+        daemon_config_root: repo_root.clone(),
+        repo_root,
         repo: RepoIdentity {
             provider: "github".to_string(),
             organization: "bitloops".to_string(),
@@ -181,7 +189,7 @@ async fn checkpoint_provenance_projection_is_idempotent_for_commit_diff_rows() {
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 
     let mut cfg = test_cfg();
-    cfg.config_root = repo.path().to_path_buf();
+    cfg.daemon_config_root = repo.path().to_path_buf();
     cfg.repo_root = repo.path().to_path_buf();
     cfg.repo = resolve_repo_identity(repo.path()).expect("resolve repo identity");
 
@@ -336,6 +344,7 @@ fn seed_git_repo() -> TempDir {
         "Bitloops Test",
         "bitloops-test@example.com",
     );
+    write_test_daemon_config(dir.path());
     git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
     dir
 }
@@ -363,12 +372,13 @@ fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoi
 fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn status_for(rows: &[DatabaseStatusRow], label: &'static str) -> DatabaseConnectionStatus {

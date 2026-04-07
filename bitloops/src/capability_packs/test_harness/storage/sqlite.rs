@@ -50,7 +50,7 @@ impl SqliteTestHarnessRepository {
 }
 
 impl TestHarnessRepository for SqliteTestHarnessRepository {
-    fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
+    fn load_test_scenarios(&self, _commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
         let mut stmt = self
             .conn
             .prepare(
@@ -60,15 +60,14 @@ FROM test_artefacts_current ts
 LEFT JOIN test_artefacts_current parent
   ON parent.repo_id = ts.repo_id
  AND parent.symbol_id = ts.parent_symbol_id
-WHERE ts.commit_sha = ?1
-  AND ts.canonical_kind = 'test_scenario'
+WHERE ts.canonical_kind = 'test_scenario'
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
             )
             .context("failed preparing scenario lookup query")?;
 
         let rows = stmt
-            .query_map(params![commit_sha], |row| {
+            .query_map([], |row| {
                 Ok(ResolvedTestScenarioRecord {
                     scenario_id: row.get(0)?,
                     path: row.get(1)?,
@@ -605,34 +604,34 @@ ORDER BY ch.line, ch.branch_id
     }
 
     fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts> {
-        fn count(conn: &Connection, sql: &str, commit_sha: &str) -> Result<u64> {
-            let n: i64 = conn
-                .query_row(sql, params![commit_sha], |row| row.get(0))
-                .context("test harness commit count query")?;
+        fn count(conn: &Connection, sql: &str, commit_sha: Option<&str>) -> Result<u64> {
+            let n: i64 = if let Some(commit_sha) = commit_sha {
+                conn.query_row(sql, params![commit_sha], |row| row.get(0))
+                    .context("test harness commit count query")?
+            } else {
+                conn.query_row(sql, [], |row| row.get(0))
+                    .context("test harness commit count query")?
+            };
             Ok(n.max(0) as u64)
         }
 
         let conn = &self.conn;
         Ok(TestHarnessCommitCounts {
-            test_artefacts: count(
-                conn,
-                "SELECT COUNT(*) FROM test_artefacts_current WHERE commit_sha = ?1",
-                commit_sha,
-            )?,
+            test_artefacts: count(conn, "SELECT COUNT(*) FROM test_artefacts_current", None)?,
             test_artefact_edges: count(
                 conn,
-                "SELECT COUNT(*) FROM test_artefact_edges_current WHERE commit_sha = ?1",
-                commit_sha,
+                "SELECT COUNT(*) FROM test_artefact_edges_current",
+                None,
             )?,
             test_classifications: count(
                 conn,
                 "SELECT COUNT(*) FROM test_classifications WHERE commit_sha = ?1",
-                commit_sha,
+                Some(commit_sha),
             )?,
             coverage_captures: count(
                 conn,
                 "SELECT COUNT(*) FROM coverage_captures WHERE commit_sha = ?1",
-                commit_sha,
+                Some(commit_sha),
             )?,
             coverage_hits: count(
                 conn,
@@ -641,7 +640,7 @@ SELECT COUNT(*) FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
 "#,
-                commit_sha,
+                Some(commit_sha),
             )?,
         })
     }
@@ -650,7 +649,6 @@ WHERE cc.commit_sha = ?1
         &self,
         repo_id: &str,
         production_symbol_id: &str,
-        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -659,7 +657,6 @@ WHERE cc.commit_sha = ?1
             &self.conn,
             repo_id,
             production_symbol_id,
-            commit_sha,
             min_confidence,
             linkage_source,
             limit,

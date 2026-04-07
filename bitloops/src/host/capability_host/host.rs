@@ -9,9 +9,15 @@ use serde_json::Value;
 use crate::capability_packs as capabilities;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
+use super::events::{EventHandlerContext, HostEventHandler};
+use super::gateways::{
+    DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway,
+    SqliteRelationalGateway,
+};
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::lifecycle;
 use super::migrations::CapabilityMigration;
@@ -36,11 +42,29 @@ enum RegisteredIngester {
     Knowledge(Arc<dyn KnowledgeIngesterHandler>),
 }
 
+struct RuntimeLanguageServicesGateway {
+    inner: &'static crate::host::capability_host::runtime_contexts::BuiltinLanguageServicesGateway,
+}
+
+impl LanguageServicesGateway for RuntimeLanguageServicesGateway {
+    fn test_supports(&self) -> Vec<Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
+        self.inner.test_supports()
+    }
+
+    fn resolve_test_support_for_path(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
+        self.inner.resolve_test_support_for_path(relative_path)
+    }
+}
+
 pub struct DevqlCapabilityHost {
     runtime: LocalCapabilityRuntimeResources,
     descriptors: HashMap<String, &'static CapabilityDescriptor>,
     stages: HashMap<(String, String), RegisteredStage>,
     ingesters: HashMap<(String, String), RegisteredIngester>,
+    event_handlers: Vec<Arc<dyn HostEventHandler>>,
     schema_modules: Vec<SchemaModule>,
     query_examples: Vec<&'static [QueryExample]>,
     migrations: Vec<CapabilityMigration>,
@@ -61,6 +85,7 @@ impl DevqlCapabilityHost {
             descriptors: HashMap::new(),
             stages: HashMap::new(),
             ingesters: HashMap::new(),
+            event_handlers: Vec::new(),
             schema_modules: Vec::new(),
             query_examples: Vec::new(),
             migrations: Vec::new(),
@@ -133,6 +158,34 @@ impl DevqlCapabilityHost {
 
     pub fn query_examples(&self) -> &[&'static [QueryExample]] {
         self.query_examples.as_slice()
+    }
+
+    pub fn event_handlers(&self) -> &[Arc<dyn HostEventHandler>] {
+        self.event_handlers.as_slice()
+    }
+
+    pub fn build_event_handler_context(&self) -> Result<EventHandlerContext> {
+        let relational_store = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root(),
+            &self.runtime.backends.relational,
+        )?;
+        let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
+
+        let language_services: Arc<dyn LanguageServicesGateway> =
+            Arc::new(RuntimeLanguageServicesGateway {
+                inner: self.runtime.languages,
+            });
+        let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
+        let host_services: Arc<dyn HostServicesGateway> = Arc::new(
+            DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
+        );
+
+        Ok(EventHandlerContext {
+            storage: Arc::new(relational_store.to_local_inner()),
+            relational,
+            language_services,
+            host_services,
+        })
     }
 
     /// Snapshot of registered packs, migrations, invocation policy, and cross-pack grants.
@@ -467,6 +520,11 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
 
     fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()> {
         self.query_examples.push(examples);
+        Ok(())
+    }
+
+    fn register_event_handler(&mut self, handler: Arc<dyn HostEventHandler>) -> Result<()> {
+        self.event_handlers.push(handler);
         Ok(())
     }
 }

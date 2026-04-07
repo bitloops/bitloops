@@ -8,6 +8,7 @@ use super::{
 };
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd};
 
@@ -30,9 +31,10 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    ensure_test_store_backends(dir.path());
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
-    ensure_test_store_backends(dir.path());
 }
 
 /// Fails until capture_pre_prompt_state uses the agent's get_transcript_position and persists it.
@@ -101,24 +103,14 @@ fn turn_end_writes_prompt_and_summary_to_session_metadata() {
         handle_lifecycle_turn_end(&adapter, &event)
             .expect("handle_lifecycle_turn_end should succeed");
 
-        let meta_dir = dir
-            .path()
-            .join(".bitloops")
-            .join("metadata")
-            .join("turn-end-session");
-        let prompt_file = meta_dir.join("prompt.txt");
-        let summary_file = meta_dir.join("summary.txt");
-        assert!(
-            prompt_file.exists(),
-            "session metadata should contain prompt.txt"
-        );
-        assert!(
-            summary_file.exists(),
-            "session metadata should contain summary.txt"
-        );
-
-        let prompt_content = std::fs::read_to_string(&prompt_file).unwrap();
-        let summary_content = std::fs::read_to_string(&summary_file).unwrap();
+        let runtime_store =
+            RepoSqliteRuntimeStore::open(dir.path()).expect("open runtime store for turn-end test");
+        let snapshot = runtime_store
+            .load_latest_session_metadata_snapshot("turn-end-session")
+            .expect("load latest session metadata snapshot")
+            .expect("turn-end should persist a session metadata snapshot");
+        let prompt_content = snapshot.bundle.prompt_text();
+        let summary_content = snapshot.bundle.summary;
         assert!(
             prompt_content.contains("2+2"),
             "prompt.txt should contain user prompt from transcript"
@@ -162,7 +154,8 @@ fn turn_end_includes_token_usage_in_step() {
 
         let state = state.expect("session state should exist after turn end");
         assert!(
-            state.token_usage.is_some() && state.token_usage.as_ref().unwrap().api_call_count > 0,
+            state.pending.token_usage.is_some()
+                && state.pending.token_usage.as_ref().unwrap().api_call_count > 0,
             "session state should include token usage from transcript after turn end"
         );
     });

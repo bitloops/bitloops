@@ -40,13 +40,13 @@ pub(crate) async fn execute_ingest_with_observer(
 
     let result: Result<()> = async {
     let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let knowledge_context =
         capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
             .context("resolving knowledge capability ingester owner")?;
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     let semantic_clones = capability.semantic_clones.clone();
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> = if enrichment.is_some()
         || semantic_clones.summary_mode == SemanticSummaryMode::Off
@@ -282,7 +282,7 @@ pub(crate) async fn execute_ingest_with_observer(
             })?;
             if let Some(enrichment) = enrichment.as_ref() {
                 let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                    cfg.config_root.clone(),
+                    cfg.daemon_config_root.clone(),
                     cfg.repo_root.clone(),
                     cfg.repo.repo_id.clone(),
                     active_branch.clone(),
@@ -434,13 +434,6 @@ pub(crate) async fn execute_ingest_with_observer(
         )
         .await?;
     }
-    // Propagate interaction events from checkpoint SQLite to the events store.
-    // Failures here are logged but do not block the rest of ingestion.
-    match ingest_interaction_events_from_checkpoint(cfg, &backends.events).await {
-        Ok(n) => counters.interaction_events_attempted = n,
-        Err(err) => log::warn!("interaction event ingestion skipped: {err:#}"),
-    }
-
     counters.success = true;
     emit_progress(
         observer,
@@ -480,25 +473,6 @@ fn active_branch_name(repo_root: &Path) -> String {
     .ok()
     .filter(|value| !value.trim().is_empty())
     .unwrap_or_else(|| "main".to_string())
-}
-
-async fn ingest_interaction_events_from_checkpoint(
-    cfg: &DevqlConfig,
-    events_cfg: &crate::config::EventsBackendConfig,
-) -> Result<usize> {
-    let sqlite_path =
-        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
-            &cfg.repo_root,
-        )?;
-    if !sqlite_path.is_file() {
-        return Ok(0);
-    }
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
-        .context("opening checkpoint SQLite for interaction event ingestion")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("ensuring interaction tables exist for ingestion")?;
-    ingest_interaction_events(&sqlite, cfg, events_cfg, &cfg.repo.repo_id).await
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

@@ -55,7 +55,7 @@ async fn init_relational_schema_creates_test_harness_tables() {
     );
 
     let mut cfg = test_cfg();
-    cfg.config_root = repo_root.clone();
+    cfg.daemon_config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let relational = RelationalStorage::local_only(db_path.clone());
     init_relational_schema(&cfg, &relational)
@@ -97,7 +97,7 @@ async fn init_relational_schema_creates_test_harness_tables() {
 
 fn semantic_ingest_test_cfg_for_repo(repo_root: &Path) -> DevqlConfig {
     let mut cfg = test_cfg();
-    cfg.config_root = repo_root.to_path_buf();
+    cfg.daemon_config_root = repo_root.to_path_buf();
     cfg.repo_root = repo_root.to_path_buf();
     cfg.repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
     cfg

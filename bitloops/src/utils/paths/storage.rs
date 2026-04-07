@@ -5,17 +5,19 @@ use crate::utils::platform_dirs::bitloops_state_dir;
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
 #[cfg(not(test))]
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
-#[cfg(not(test))]
 use sha2::{Digest, Sha256};
 
-use super::constants::{BITLOOPS_METADATA_DIR, EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME};
+use super::constants::{
+    EVENTS_DB_FILE_NAME, LEGACY_BITLOOPS_METADATA_DIR, RELATIONAL_DB_FILE_NAME,
+    RUNTIME_DB_FILE_NAME,
+};
 
 fn platform_path_fallback(category: &str) -> PathBuf {
     std::env::temp_dir().join("bitloops").join(category)
 }
 
-pub fn session_metadata_dir_from_session_id(session_id: &str) -> String {
-    format!("{BITLOOPS_METADATA_DIR}/{session_id}")
+pub fn legacy_session_metadata_dir_from_session_id(session_id: &str) -> String {
+    format!("{LEGACY_BITLOOPS_METADATA_DIR}/{session_id}")
 }
 
 #[cfg(test)]
@@ -120,15 +122,18 @@ pub fn default_runtime_state_dir(_repo_root: &Path) -> PathBuf {
         .join("daemon")
 }
 
-#[cfg(test)]
-pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
-    if should_use_test_app_dirs(repo_root) {
-        return default_runtime_state_dir(repo_root).join("tmp");
-    }
-    repo_root.join(".bitloops").join("tmp")
+pub fn default_repo_runtime_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("runtime")
+        .join(RUNTIME_DB_FILE_NAME)
 }
 
-#[cfg(not(test))]
+pub fn default_global_runtime_db_path() -> PathBuf {
+    default_runtime_state_dir(Path::new(".")).join(RUNTIME_DB_FILE_NAME)
+}
+
 pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
     default_runtime_state_dir(repo_root)
         .join("repos")
@@ -136,7 +141,6 @@ pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
         .join("tmp")
 }
 
-#[cfg(not(test))]
 fn repo_state_key(repo_root: &Path) -> String {
     let canonical = repo_root
         .canonicalize()

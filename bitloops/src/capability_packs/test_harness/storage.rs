@@ -84,7 +84,6 @@ pub trait TestHarnessQueryRepository {
         &self,
         repo_id: &str,
         production_symbol_id: &str,
-        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,

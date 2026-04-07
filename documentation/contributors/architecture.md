@@ -37,7 +37,7 @@ Bitloops is organized around four cooperating layers:
 - Working on DevQL host/runtime behavior: `bitloops/src/host/`
 - Adding or updating a capability pack: `bitloops/src/capability_packs/`
 - Adding or updating an adapter: `bitloops/src/adapters/`
-- Touching persistence or migrations: `bitloops/src/storage/`
+- Touching persistence or migrations: `bitloops/src/host/runtime_store.rs`, `bitloops/src/host/relational_store.rs`, and `bitloops/src/storage/`
 
 Use this page as the orientation layer. The deeper architecture pages under this
 section are the canonical contributor docs for the runtime design.

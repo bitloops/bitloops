@@ -79,6 +79,8 @@ async fn run_start_with_io(
 
     if preflight.create_default_config {
         let _ = bootstrap_default_daemon_environment()?;
+    } else if args.bootstrap_local_stores {
+        let _ = crate::config::ensure_daemon_store_artifacts(args.config.as_deref())?;
     }
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);

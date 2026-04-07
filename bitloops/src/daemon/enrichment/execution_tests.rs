@@ -517,7 +517,7 @@ fn build_embedding_job(
         id: "job-1".to_string(),
         repo_id: cfg.repo.repo_id.clone(),
         repo_root: cfg.repo_root.clone(),
-        config_root: cfg.config_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
         branch: "main".to_string(),
         status: crate::daemon::enrichment::EnrichmentJobStatus::Pending,
         attempts: 0,

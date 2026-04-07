@@ -1,12 +1,11 @@
 pub(crate) fn sqlite_test_domain_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS test_artefacts_current (
-    artefact_id TEXT NOT NULL,
-    symbol_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
     language TEXT NOT NULL,
     canonical_kind TEXT NOT NULL,
     language_kind TEXT,
@@ -21,12 +20,10 @@ CREATE TABLE IF NOT EXISTS test_artefacts_current (
     signature TEXT,
     modifiers TEXT NOT NULL DEFAULT '[]',
     docstring TEXT,
-    content_hash TEXT,
     discovery_source TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, symbol_id)
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_test_artefacts_current_path
@@ -39,11 +36,10 @@ CREATE INDEX IF NOT EXISTS idx_test_artefacts_current_parent
 ON test_artefacts_current (repo_id, parent_symbol_id);
 
 CREATE TABLE IF NOT EXISTS test_artefact_edges_current (
-    edge_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
     from_artefact_id TEXT NOT NULL,
     from_symbol_id TEXT NOT NULL,
     to_artefact_id TEXT,
@@ -54,9 +50,8 @@ CREATE TABLE IF NOT EXISTS test_artefact_edges_current (
     start_line INTEGER,
     end_line INTEGER,
     metadata TEXT DEFAULT '{}',
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, edge_id),
     CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL)
 );
 
@@ -156,7 +151,7 @@ ON coverage_diagnostics (capture_id);
 CREATE TABLE IF NOT EXISTS test_discovery_runs (
     discovery_run_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
+    sync_mode TEXT NOT NULL,
     language TEXT,
     started_at TEXT NOT NULL,
     finished_at TEXT,
@@ -166,14 +161,13 @@ CREATE TABLE IF NOT EXISTS test_discovery_runs (
     stats_json TEXT
 );
 
-CREATE INDEX IF NOT EXISTS test_discovery_runs_commit_idx
-ON test_discovery_runs (repo_id, commit_sha);
+CREATE INDEX IF NOT EXISTS idx_test_discovery_runs_repo
+ON test_discovery_runs (repo_id, sync_mode);
 
 CREATE TABLE IF NOT EXISTS test_discovery_diagnostics (
     diagnostic_id TEXT PRIMARY KEY,
     discovery_run_id TEXT REFERENCES test_discovery_runs(discovery_run_id) ON DELETE CASCADE,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
     path TEXT,
     line INTEGER,
     severity TEXT NOT NULL,
@@ -181,9 +175,6 @@ CREATE TABLE IF NOT EXISTS test_discovery_diagnostics (
     message TEXT NOT NULL,
     metadata_json TEXT
 );
-
-CREATE INDEX IF NOT EXISTS test_discovery_diagnostics_commit_idx
-ON test_discovery_diagnostics (repo_id, commit_sha);
 
 CREATE INDEX IF NOT EXISTS test_discovery_diagnostics_run_idx
 ON test_discovery_diagnostics (discovery_run_id);
@@ -193,12 +184,11 @@ ON test_discovery_diagnostics (discovery_run_id);
 pub(crate) fn postgres_test_domain_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS test_artefacts_current (
-    artefact_id TEXT NOT NULL,
-    symbol_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
     language TEXT NOT NULL,
     canonical_kind TEXT NOT NULL,
     language_kind TEXT,
@@ -213,12 +203,10 @@ CREATE TABLE IF NOT EXISTS test_artefacts_current (
     signature TEXT,
     modifiers TEXT NOT NULL DEFAULT '[]',
     docstring TEXT,
-    content_hash TEXT,
     discovery_source TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (repo_id, symbol_id)
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_test_artefacts_current_path
@@ -231,11 +219,10 @@ CREATE INDEX IF NOT EXISTS idx_test_artefacts_current_parent
 ON test_artefacts_current (repo_id, parent_symbol_id);
 
 CREATE TABLE IF NOT EXISTS test_artefact_edges_current (
-    edge_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
     from_artefact_id TEXT NOT NULL,
     from_symbol_id TEXT NOT NULL,
     to_artefact_id TEXT,
@@ -246,9 +233,8 @@ CREATE TABLE IF NOT EXISTS test_artefact_edges_current (
     start_line BIGINT,
     end_line BIGINT,
     metadata TEXT DEFAULT '{}',
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (repo_id, edge_id),
     CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL)
 );
 
@@ -348,7 +334,7 @@ ON coverage_diagnostics (capture_id);
 CREATE TABLE IF NOT EXISTS test_discovery_runs (
     discovery_run_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
+    sync_mode TEXT NOT NULL,
     language TEXT,
     started_at TEXT NOT NULL,
     finished_at TEXT,
@@ -358,14 +344,13 @@ CREATE TABLE IF NOT EXISTS test_discovery_runs (
     stats_json TEXT
 );
 
-CREATE INDEX IF NOT EXISTS test_discovery_runs_commit_idx
-ON test_discovery_runs (repo_id, commit_sha);
+CREATE INDEX IF NOT EXISTS idx_test_discovery_runs_repo
+ON test_discovery_runs (repo_id, sync_mode);
 
 CREATE TABLE IF NOT EXISTS test_discovery_diagnostics (
     diagnostic_id TEXT PRIMARY KEY,
     discovery_run_id TEXT REFERENCES test_discovery_runs(discovery_run_id) ON DELETE CASCADE,
     repo_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
     path TEXT,
     line BIGINT,
     severity TEXT NOT NULL,
@@ -373,9 +358,6 @@ CREATE TABLE IF NOT EXISTS test_discovery_diagnostics (
     message TEXT NOT NULL,
     metadata_json TEXT
 );
-
-CREATE INDEX IF NOT EXISTS test_discovery_diagnostics_commit_idx
-ON test_discovery_diagnostics (repo_id, commit_sha);
 
 CREATE INDEX IF NOT EXISTS test_discovery_diagnostics_run_idx
 ON test_discovery_diagnostics (discovery_run_id);

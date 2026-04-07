@@ -39,8 +39,8 @@ pub fn test_structural_symbol_id(
 }
 
 /// Revision-specific identity for a test artefact.
-pub fn test_revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
-    crate::host::devql::deterministic_uuid(&format!("{repo_id}|{blob_sha}|{symbol_id}"))
+pub fn test_revision_artefact_id(repo_id: &str, content_id: &str, symbol_id: &str) -> String {
+    crate::host::devql::deterministic_uuid(&format!("{repo_id}|{content_id}|{symbol_id}"))
 }
 
 /// Deterministic edge identity for a test-to-production relationship.
@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_artefact_id_changes_with_blob_sha() {
+    fn revision_artefact_id_changes_with_content_id() {
         let symbol_id = test_structural_symbol_id(
             "tests/example.rs",
             "test_scenario",
@@ -92,8 +92,8 @@ mod tests {
             Some("fn example_case()"),
         );
         assert_ne!(
-            test_revision_artefact_id("repo", "blob-a", &symbol_id),
-            test_revision_artefact_id("repo", "blob-b", &symbol_id)
+            test_revision_artefact_id("repo", "content-a", &symbol_id),
+            test_revision_artefact_id("repo", "content-b", &symbol_id)
         );
     }
 
