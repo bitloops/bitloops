@@ -16,8 +16,7 @@ use crate::capability_packs::test_harness::storage::{
 };
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestRunRecord,
+    TestArtefactEdgeCurrentRecord, TestRunRecord,
 };
 
 #[allow(clippy::items_after_test_module)]
@@ -40,8 +39,6 @@ const SCENARIO_ID: &str = "scenario:checks-email-domain";
 const TEST_LINK_ID: &str = "link:checks-email-domain:create-user";
 const SUITE_ARTEFACT_ID: &str = "test-artefact:suite:user-service";
 const SCENARIO_ARTEFACT_ID: &str = "test-artefact:scenario:checks-email-domain";
-const DISCOVERY_RUN_ID: &str = "discovery:user-service";
-const DIAGNOSTIC_ID: &str = "diag:user-service";
 const RUN_ID: &str = "run:checks-email-domain";
 const CAPTURE_ID: &str = "capture:checks-email-domain";
 const POSTGRES_TEST_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
@@ -71,25 +68,11 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     initialise_postgres_repository(&repository)?;
     seed_production_state(&repository)?;
 
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &stale_test_artefacts(),
-        &stale_test_edges(),
-        &stale_discovery_run(),
-        &[stale_diagnostic()],
-    )?;
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &test_artefacts(),
-        &test_edges(),
-        &discovery_run_record(),
-        &[diagnostic_record()],
-    )?;
+    repository.replace_test_discovery(COMMIT_SHA, &stale_test_artefacts(), &stale_test_edges())?;
+    repository.replace_test_discovery(COMMIT_SHA, &test_artefacts(), &test_edges())?;
 
     assert_eq!(table_count(&repository, "test_artefacts_current")?, 2);
     assert_eq!(table_count(&repository, "test_artefact_edges_current")?, 1);
-    assert_eq!(table_count(&repository, "test_discovery_runs")?, 1);
-    assert_eq!(table_count(&repository, "test_discovery_diagnostics")?, 1);
 
     let scenarios = repository.load_test_scenarios(COMMIT_SHA)?;
     assert_eq!(scenarios.len(), 1);
@@ -171,13 +154,7 @@ fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_cla
     initialise_postgres_repository(&repository)?;
     seed_production_state(&repository)?;
 
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &stale_test_artefacts(),
-        &stale_test_edges(),
-        &stale_discovery_run(),
-        &[stale_diagnostic()],
-    )?;
+    repository.replace_test_discovery(COMMIT_SHA, &stale_test_artefacts(), &stale_test_edges())?;
     repository.replace_test_runs(COMMIT_SHA, &[test_run_record()])?;
     repository.insert_coverage_capture(&coverage_capture_record())?;
     repository.insert_coverage_hits(&coverage_hits())?;
@@ -191,13 +168,7 @@ fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_cla
     assert_eq!(table_count(&repository, "coverage_hits")?, 6);
     assert_eq!(table_count(&repository, "test_classifications")?, 1);
 
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &test_artefacts(),
-        &test_edges(),
-        &discovery_run_record(),
-        &[diagnostic_record()],
-    )?;
+    repository.replace_test_discovery(COMMIT_SHA, &test_artefacts(), &test_edges())?;
 
     assert_eq!(table_count(&repository, "test_runs")?, 0);
     assert_eq!(table_count(&repository, "coverage_captures")?, 0);
@@ -429,36 +400,6 @@ fn stale_test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
     }]
 }
 
-fn stale_discovery_run() -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: "discovery:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-19T12:01:00Z".to_string(),
-        finished_at: Some("2026-03-19T12:01:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("static_only".to_string()),
-        notes_json: Some("{\"note\":\"stale\"}".to_string()),
-        stats_json: Some("{\"files\":1}".to_string()),
-    }
-}
-
-fn stale_diagnostic() -> TestDiscoveryDiagnosticRecord {
-    TestDiscoveryDiagnosticRecord {
-        diagnostic_id: "diag:stale".to_string(),
-        discovery_run_id: "discovery:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        path: Some("tests/stale.rs".to_string()),
-        line: Some(1),
-        severity: "warning".to_string(),
-        code: "stale".to_string(),
-        message: "stale diagnostic".to_string(),
-        metadata_json: Some("{\"stale\":true}".to_string()),
-    }
-}
-
 fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {
     vec![
         TestArtefactCurrentRecord {
@@ -536,36 +477,6 @@ fn test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
         revision_kind: "commit".to_string(),
         revision_id: COMMIT_SHA.to_string(),
     }]
-}
-
-fn discovery_run_record() -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: DISCOVERY_RUN_ID.to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-19T12:02:00Z".to_string(),
-        finished_at: Some("2026-03-19T12:02:03Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("hybrid_full".to_string()),
-        notes_json: Some("{\"mode\":\"hybrid\"}".to_string()),
-        stats_json: Some("{\"files\":2,\"scenarios\":1}".to_string()),
-    }
-}
-
-fn diagnostic_record() -> TestDiscoveryDiagnosticRecord {
-    TestDiscoveryDiagnosticRecord {
-        diagnostic_id: DIAGNOSTIC_ID.to_string(),
-        discovery_run_id: DISCOVERY_RUN_ID.to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        path: Some("tests/user_service.rs".to_string()),
-        line: Some(8),
-        severity: "info".to_string(),
-        code: "enumeration".to_string(),
-        message: "hybrid enumeration used cargo-backed discovery".to_string(),
-        metadata_json: Some("{\"enumerated\":1}".to_string()),
-    }
 }
 
 fn test_run_record() -> TestRunRecord {

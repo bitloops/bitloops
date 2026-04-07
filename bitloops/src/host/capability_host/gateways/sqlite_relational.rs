@@ -56,7 +56,7 @@ impl SqliteRelationalGateway {
                 .query_row(params![commit_sha], |row| row.get(0))
                 .with_context(|| {
                     format!(
-                        "no production artefacts found for commit {}; materialize production artefacts first (use `bitloops devql ingest` for Bitloops-backed stores or `testlens ingest-production-artefacts` in prototype mode)",
+                        "no production artefacts found for commit {}; materialize production artefacts first (use `bitloops devql ingest` or `bitloops devql sync`)",
                         commit_sha
                     )
                 })?;

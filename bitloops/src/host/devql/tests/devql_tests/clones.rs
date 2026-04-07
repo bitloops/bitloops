@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6)->limit(5)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6,raw:true)->limit(5)"#,
     )
     .unwrap();
 
@@ -13,6 +13,31 @@ fn parse_devql_clones_stage_basic() {
         Some("similar_implementation")
     );
     assert_eq!(parsed.clones.min_score, Some(0.6));
+    assert!(parsed.clones.raw);
+}
+
+#[test]
+fn parse_devql_clones_stage_accepts_raw_false() {
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(raw:false)->limit(5)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_clones_stage);
+    assert!(!parsed.clones.raw);
+}
+
+#[test]
+fn parse_devql_clones_stage_rejects_invalid_raw_literal() {
+    let err = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(raw:"maybe")->limit(5)"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("invalid boolean value for clones raw")
+    );
 }
 
 #[tokio::test]

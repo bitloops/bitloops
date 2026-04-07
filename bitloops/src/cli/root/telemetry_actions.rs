@@ -123,7 +123,6 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Explain(args) => Some(explain_action(args)),
         crate::cli::Commands::Debug(_) => None,
         crate::cli::Commands::Devql(args) => devql_action(args),
-        crate::cli::Commands::Testlens(args) => testlens_action(args),
         crate::cli::Commands::Embeddings(args) => embeddings_action(args),
         crate::cli::Commands::EmbeddingsRuntime(_) => None,
         crate::cli::Commands::DevqlWatcher(_) => None,
@@ -138,10 +137,7 @@ pub(crate) fn telemetry_action_for_command(
 }
 
 pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -> bool {
-    matches!(
-        command,
-        crate::cli::Commands::Devql(_) | crate::cli::Commands::Testlens(_)
-    )
+    matches!(command, crate::cli::Commands::Devql(_))
 }
 
 fn daemon_start_action(
@@ -597,39 +593,35 @@ fn devql_action(
                 HashMap::new(),
             )),
         },
-    }
-}
-
-fn testlens_action(
-    args: &crate::cli::testlens::TestLensArgs,
-) -> Option<crate::telemetry::analytics::ActionDescriptor> {
-    match args.command.as_ref()? {
-        crate::cli::testlens::TestLensCommand::Init(_) => {
-            Some(new_action("bitloops testlens init", HashMap::new()))
-        }
-        crate::cli::testlens::TestLensCommand::IngestTests(_) => {
-            Some(new_action("bitloops testlens ingest-tests", HashMap::new()))
-        }
-        crate::cli::testlens::TestLensCommand::IngestCoverage(args) => {
-            let mut props = HashMap::new();
-            insert_bool_property(&mut props, "has_lcov", args.lcov.is_some());
-            insert_bool_property(&mut props, "has_input", args.input.is_some());
-            insert_bool_property(
-                &mut props,
-                "has_test_artefact_id",
-                args.test_artefact_id.is_some(),
-            );
-            insert_bool_property(&mut props, "has_format", args.format.is_some());
-            Some(new_action("bitloops testlens ingest-coverage", props))
-        }
-        crate::cli::testlens::TestLensCommand::IngestCoverageBatch(_) => Some(new_action(
-            "bitloops testlens ingest-coverage-batch",
-            HashMap::new(),
-        )),
-        crate::cli::testlens::TestLensCommand::IngestResults(_) => Some(new_action(
-            "bitloops testlens ingest-results",
-            HashMap::new(),
-        )),
+        crate::cli::devql::DevqlCommand::TestHarness(args) => match &args.command {
+            crate::cli::devql::DevqlTestHarnessCommand::IngestTests(_) => Some(new_action(
+                "bitloops devql test-harness ingest-tests",
+                HashMap::new(),
+            )),
+            crate::cli::devql::DevqlTestHarnessCommand::IngestCoverage(args) => {
+                let mut props = HashMap::new();
+                insert_bool_property(&mut props, "has_lcov", args.lcov.is_some());
+                insert_bool_property(&mut props, "has_input", args.input.is_some());
+                insert_bool_property(
+                    &mut props,
+                    "has_test_artefact_id",
+                    args.test_artefact_id.is_some(),
+                );
+                insert_bool_property(&mut props, "has_format", args.format.is_some());
+                Some(new_action(
+                    "bitloops devql test-harness ingest-coverage",
+                    props,
+                ))
+            }
+            crate::cli::devql::DevqlTestHarnessCommand::IngestCoverageBatch(_) => Some(new_action(
+                "bitloops devql test-harness ingest-coverage-batch",
+                HashMap::new(),
+            )),
+            crate::cli::devql::DevqlTestHarnessCommand::IngestResults(_) => Some(new_action(
+                "bitloops devql test-harness ingest-results",
+                HashMap::new(),
+            )),
+        },
     }
 }
 

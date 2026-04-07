@@ -157,7 +157,7 @@ mod tests {
     use crate::models::{
         CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
         ResolvedTestScenarioRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-        TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestRunRecord,
+        TestRunRecord,
     };
 
     #[derive(Default)]
@@ -180,8 +180,6 @@ mod tests {
             _commit_sha: &str,
             _test_artefacts: &[TestArtefactCurrentRecord],
             _test_edges: &[TestArtefactEdgeCurrentRecord],
-            _discovery_run: &TestDiscoveryRunRecord,
-            _diagnostics: &[TestDiscoveryDiagnosticRecord],
         ) -> Result<()> {
             unreachable!("unused in results tests")
         }

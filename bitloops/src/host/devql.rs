@@ -400,6 +400,70 @@ fn resolve_language_id_for_file_path(file_path: &str) -> Option<&'static str> {
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct ExtractedProductionArtefact {
+    pub canonical_kind: Option<String>,
+    pub language_kind: String,
+    pub name: String,
+    pub symbol_fqn: String,
+    pub parent_symbol_fqn: Option<String>,
+    pub start_line: i32,
+    pub end_line: i32,
+    pub start_byte: i32,
+    pub end_byte: i32,
+    pub signature: String,
+    pub modifiers: Vec<String>,
+    pub docstring: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtractedProductionFile {
+    pub language: String,
+    pub file_docstring: Option<String>,
+    pub artefacts: Vec<ExtractedProductionArtefact>,
+}
+
+/// Extracts production artefacts for a single source file using the same
+/// language adapter packs that power DevQL sync materialization.
+pub fn extract_production_file_artefacts(
+    path: &str,
+    content: &str,
+) -> Result<Option<ExtractedProductionFile>> {
+    let language = detect_language(path);
+    let Some(pack_id) = resolve_language_pack_owner_for_input(&language, Some(path))
+        .or_else(|| resolve_language_pack_owner(&language))
+    else {
+        return Ok(None);
+    };
+
+    let registry = language_adapter_registry()?;
+    let file_docstring = registry.extract_file_docstring(pack_id, content);
+    let artefacts = registry
+        .extract_artefacts(pack_id, content, path)?
+        .into_iter()
+        .map(|item| ExtractedProductionArtefact {
+            canonical_kind: item.canonical_kind,
+            language_kind: item.language_kind.to_string(),
+            name: item.name,
+            symbol_fqn: item.symbol_fqn,
+            parent_symbol_fqn: item.parent_symbol_fqn,
+            start_line: item.start_line,
+            end_line: item.end_line,
+            start_byte: item.start_byte,
+            end_byte: item.end_byte,
+            signature: item.signature,
+            modifiers: item.modifiers,
+            docstring: item.docstring,
+        })
+        .collect();
+
+    Ok(Some(ExtractedProductionFile {
+        language,
+        file_docstring,
+        artefacts,
+    }))
+}
+
 fn language_pack_context_for_language(
     cfg: &DevqlConfig,
     commit_sha: Option<&str>,

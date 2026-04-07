@@ -68,7 +68,6 @@ async fn init_relational_schema_creates_test_harness_tables() {
         "test_artefact_edges_current",
         "coverage_captures",
         "coverage_hits",
-        "test_discovery_runs",
     ] {
         let table_count: i64 = conn
             .query_row(

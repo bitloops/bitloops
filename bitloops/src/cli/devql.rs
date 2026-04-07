@@ -17,6 +17,7 @@ use crate::host::devql::{
 mod args;
 pub(crate) mod graphql;
 mod knowledge;
+mod test_harness;
 
 #[cfg(test)]
 mod tests;
@@ -27,9 +28,12 @@ pub use args::{
     DevqlIngestArgs, DevqlInitArgs, DevqlKnowledgeAddArgs, DevqlKnowledgeArgs,
     DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand, DevqlKnowledgeRefArgs, DevqlPacksArgs,
     DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSyncArgs,
+    DevqlTestHarnessArgs, DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
+    DevqlTestHarnessIngestCoverageBatchArgs, DevqlTestHarnessIngestResultsArgs,
+    DevqlTestHarnessIngestTestsArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
 
 pub async fn run(args: DevqlArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -65,6 +69,10 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
                 run_knowledge_versions_via_host(&repo_root, &repo, &versions.knowledge_ref).await
             }
         };
+    }
+
+    if let DevqlCommand::TestHarness(args) = command {
+        return test_harness::run(args, &repo_root).await;
     }
 
     let cfg = DevqlConfig::from_env(repo_root, repo)?;
@@ -128,6 +136,9 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         },
         DevqlCommand::Query(args) => {
             let use_raw_graphql = use_raw_graphql_mode(&args.query, args.graphql);
+            let parsed_query = (!use_raw_graphql)
+                .then(|| parse_devql_query(&args.query))
+                .transpose()?;
             let trace = crate::devql_timing::timings_enabled_from_env()
                 .then(crate::devql_timing::TimingTrace::new);
 
@@ -179,7 +190,12 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             };
 
             let format_started = Instant::now();
-            let output = match format_query_output(&data, args.compact, use_raw_graphql) {
+            let output = match format_query_output(
+                &data,
+                args.compact,
+                use_raw_graphql,
+                parsed_query.as_ref(),
+            ) {
                 Ok(output) => {
                     if let Some(trace) = trace.as_ref() {
                         trace.record(
@@ -223,6 +239,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         ),
         DevqlCommand::ConnectionStatus(_) => unreachable!("handled before repo setup"),
         DevqlCommand::Knowledge(_) => unreachable!("handled before cfg setup"),
+        DevqlCommand::TestHarness(_) => unreachable!("handled before cfg setup"),
     }
 }
 

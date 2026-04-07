@@ -193,6 +193,10 @@ bitloops devql query 'repo("bitloops")->asOf(ref:"main")->artefacts(kind:"functi
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.8)->limit(10)'
 ```
 
+`clones()` now defaults to a user-facing projection that highlights the source artefact, the
+matched artefact, the clone relation kind, and the score. Use `clones(raw:true)` when you want the
+low-level ids and debug metadata instead.
+
 ### Raw GraphQL
 
 ```graphql

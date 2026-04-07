@@ -7,9 +7,9 @@ use super::args::{
 };
 use super::document_builder::{GraphqlArgument, GraphqlField};
 use super::field_mapping::{
-    KNOWLEDGE_STAGE_NAME, SelectableLeaf, clone_summary_selections, compile_as_of_input,
-    coverage_result_selections, quote_graphql_string, scalar_selections_for_leaf,
-    tests_result_selections, tests_summary_result_selections,
+    KNOWLEDGE_STAGE_NAME, SelectableLeaf, clone_result_selections, clone_summary_selections,
+    compile_as_of_input, coverage_result_selections, quote_graphql_string,
+    scalar_selections_for_leaf, tests_result_selections, tests_summary_result_selections,
 };
 use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall, RegisteredStageKind};
 
@@ -139,8 +139,11 @@ fn compile_artefacts_leaf(
         bail!("knowledge() cannot be nested under artefacts() when compiling to GraphQL");
     }
 
-    let mut node_selections =
-        scalar_selections_for_leaf(SelectableLeaf::Artefact, &parsed.select_fields)?;
+    let mut node_selections = if parsed.has_clones_stage {
+        Vec::new()
+    } else {
+        scalar_selections_for_leaf(SelectableLeaf::Artefact, &parsed.select_fields)?
+    };
 
     if parsed.has_chat_history_stage {
         node_selections.push(
@@ -158,7 +161,7 @@ fn compile_artefacts_leaf(
             connection_field(
                 "clones",
                 compile_clones_args(parsed, parsed.has_limit_stage.then_some(parsed.limit)),
-                scalar_selections_for_leaf(SelectableLeaf::Clone, &[])?,
+                clone_result_selections(parsed.clones.raw)?,
             )
             .into(),
         );

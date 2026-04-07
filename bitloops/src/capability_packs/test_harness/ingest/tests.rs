@@ -6,7 +6,6 @@ use crate::capability_packs::test_harness::mapping;
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::host::capability_host::gateways::LanguageServicesGateway;
 use crate::host::capability_host::gateways::RelationalGateway;
-use crate::models::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
 
 #[derive(Debug, Clone)]
 pub struct IngestTestsIssue {
@@ -34,54 +33,9 @@ pub fn execute(
 ) -> Result<IngestTestsSummary> {
     let repo_id = relational.load_repo_id_for_commit(commit_sha)?;
     let production = relational.load_production_artefacts(commit_sha)?;
-    let started_at = chrono::Utc::now().to_rfc3339();
     let mapping = mapping::execute(&repo_id, repo_dir, commit_sha, &production, languages)?;
-    let finished_at = chrono::Utc::now().to_rfc3339();
 
-    let discovery_run_id = format!("discovery:{commit_sha}");
-    let stats_json = serde_json::json!({
-        "files": mapping.stats.files,
-        "test_artefacts": mapping.stats.test_artefacts,
-        "test_edges": mapping.stats.test_edges,
-        "enumerated_scenarios": mapping.stats.enumerated_scenarios,
-    })
-    .to_string();
-    let discovery_run = TestDiscoveryRunRecord {
-        discovery_run_id: discovery_run_id.clone(),
-        repo_id: repo_id.clone(),
-        sync_mode: "manual_ingest".to_string(),
-        language: None,
-        started_at,
-        finished_at: Some(finished_at),
-        status: "complete".to_string(),
-        enumeration_status: Some(mapping.enumeration_status.clone()),
-        notes_json: Some(serde_json::to_string(&mapping.enumeration_notes)?),
-        stats_json: Some(stats_json),
-    };
-    let diagnostics: Vec<TestDiscoveryDiagnosticRecord> = mapping
-        .issues
-        .iter()
-        .enumerate()
-        .map(|(idx, issue)| TestDiscoveryDiagnosticRecord {
-            diagnostic_id: format!("diagnostic:{commit_sha}:{idx}"),
-            discovery_run_id: discovery_run_id.clone(),
-            repo_id: repo_id.clone(),
-            path: Some(issue.path.clone()),
-            line: None,
-            severity: "warning".to_string(),
-            code: "mapping_issue".to_string(),
-            message: issue.message.clone(),
-            metadata_json: None,
-        })
-        .collect();
-
-    repository.replace_test_discovery(
-        commit_sha,
-        &mapping.test_artefacts,
-        &mapping.test_edges,
-        &discovery_run,
-        &diagnostics,
-    )?;
+    repository.replace_test_discovery(commit_sha, &mapping.test_artefacts, &mapping.test_edges)?;
 
     Ok(IngestTestsSummary {
         files: mapping.stats.files,
