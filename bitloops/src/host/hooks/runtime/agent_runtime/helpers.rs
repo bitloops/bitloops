@@ -5,6 +5,8 @@ use std::process::Command;
 
 #[cfg(test)]
 use anyhow::{Context, Result, bail};
+#[cfg(test)]
+use crate::test_support::process_state::git_command;
 use serde_json::Value;
 
 use crate::adapters::agents::claude_code::transcript as claude_transcript;
@@ -20,6 +22,18 @@ pub(crate) struct FileChanges {
     pub(crate) modified: Vec<String>,
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted: Vec<String>,
+}
+
+fn runtime_git_command() -> Command {
+    #[cfg(test)]
+    {
+        git_command()
+    }
+
+    #[cfg(not(test))]
+    {
+        Command::new("git")
+    }
 }
 
 pub(super) fn detect_transcript_modified_files(
@@ -146,7 +160,7 @@ pub(super) fn filter_to_uncommitted_files(
         return files;
     };
 
-    let head_probe = Command::new("git")
+    let head_probe = runtime_git_command()
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(root)
         .output();
@@ -160,7 +174,7 @@ pub(super) fn filter_to_uncommitted_files(
     let mut filtered = Vec::with_capacity(files.len());
     for rel_path in files {
         let head_spec = format!("HEAD:{rel_path}");
-        let head_has_file = Command::new("git")
+        let head_has_file = runtime_git_command()
             .args(["cat-file", "-e", &head_spec])
             .current_dir(root)
             .output();
@@ -180,7 +194,7 @@ pub(super) fn filter_to_uncommitted_files(
             continue;
         };
 
-        let head_content = Command::new("git")
+        let head_content = runtime_git_command()
             .args(["show", &head_spec])
             .current_dir(root)
             .output();
@@ -441,7 +455,7 @@ pub(crate) fn detect_untracked_files(repo_root: Option<&Path>) -> Vec<String> {
 }
 
 pub(super) fn git_status_porcelain(repo_root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = runtime_git_command()
         // Include all untracked files (not just directory placeholders)
         // so change detection captures paths like `src/auth.rs` instead of `src/`.
         .args(["status", "--porcelain", "--untracked-files=all"])
@@ -486,7 +500,26 @@ pub(super) fn calculate_stop_token_usage(
 
 #[cfg(test)]
 mod tests {
-    use super::detect_transcript_modified_files;
+    use super::{detect_file_changes, detect_transcript_modified_files};
+    use crate::test_support::process_state::{isolated_git_command, with_env_vars};
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn init_git_repo(dir: &TempDir) {
+        let run = |args: &[&str]| {
+            let out = isolated_git_command(dir.path())
+                .args(args)
+                .output()
+                .expect("run git command");
+            assert!(out.status.success(), "git {:?} failed", args);
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "t@t.com"]);
+        run(&["config", "user.name", "Test"]);
+        fs::write(dir.path().join("tracked.txt"), "one\n").expect("write tracked file");
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+    }
 
     #[test]
     fn detect_transcript_modified_files_ignores_missing_transcripts() {
@@ -497,5 +530,24 @@ mod tests {
             detect_transcript_modified_files(missing.to_string_lossy().as_ref(), "s1", 0, None);
 
         assert!(files.is_empty(), "missing transcript should yield no files");
+    }
+
+    #[test]
+    fn detect_file_changes_ignores_inherited_git_env() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        init_git_repo(&dir);
+        fs::write(dir.path().join("tracked.txt"), "two\n").expect("modify tracked file");
+
+        let changes = with_env_vars(
+            &[
+                ("GIT_DIR", Some("/definitely/not/a/repo")),
+                ("GIT_WORK_TREE", Some("/definitely/not/a/worktree")),
+            ],
+            || detect_file_changes(Some(dir.path()), None),
+        );
+
+        assert_eq!(changes.modified, vec!["tracked.txt".to_string()]);
+        assert!(changes.new_files.is_empty());
+        assert!(changes.deleted.is_empty());
     }
 }
