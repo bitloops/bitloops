@@ -20,7 +20,6 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub(crate) mod telemetry_consent;
-pub mod testlens;
 pub mod uninstall;
 pub mod versioncheck;
 
@@ -95,8 +94,6 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
-    /// Test harness ingestion for DevQL production artefacts.
-    Testlens(testlens::TestLensArgs),
     /// Manage embedding profiles and caches.
     Embeddings(embeddings::EmbeddingsArgs),
     /// Hidden internal embeddings runtime entry point.
@@ -217,7 +214,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
-        Commands::Testlens(args) => testlens::run(args).await,
         Commands::Embeddings(args) => embeddings::run(args),
         Commands::EmbeddingsRuntime(args) => embeddings_runtime::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,

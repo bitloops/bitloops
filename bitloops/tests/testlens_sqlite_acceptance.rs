@@ -80,7 +80,7 @@ fn bitloops_testlens_ingest_coverage_reports_artefact_only_mode_on_sqlite() {
         seed_production_artefacts(&workspace, commit);
         run_bitloops_or_panic(
             workspace.repo_dir(),
-            &["testlens", "ingest-tests", "--commit", commit],
+            &["devql", "test-harness", "ingest-tests", "--commit", commit],
         );
     }
 
@@ -103,7 +103,8 @@ end_of_record
     run_bitloops_or_panic(
         workspace.repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--commit",
             "C1",
@@ -122,7 +123,8 @@ end_of_record
     let c0_query: Value = serde_json::from_str(&run_bitloops_or_panic(
         workspace.repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "query",
             "--artefact",
             &rust_find_by_id,
@@ -141,7 +143,8 @@ end_of_record
     let c1_summary: Value = serde_json::from_str(&run_bitloops_or_panic(
         workspace.repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "query",
             "--artefact",
             &rust_find_by_id,

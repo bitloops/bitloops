@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use clap::{Args, Subcommand};
 
 use crate::capability_packs::test_harness::ingest::{coverage_batch, results};
 use crate::capability_packs::test_harness::storage as test_harness_engine;
@@ -12,86 +11,30 @@ use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::resolve_repo_identity;
 use crate::host::relational_store::DefaultRelationalStore;
 use crate::models::{CoverageFormat, ScopeKind};
-use crate::utils::paths;
 
-const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`";
+use super::args::{
+    DevqlTestHarnessArgs, DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
+    DevqlTestHarnessIngestCoverageBatchArgs, DevqlTestHarnessIngestResultsArgs,
+    DevqlTestHarnessIngestTestsArgs,
+};
 
-#[derive(Args, Debug, Clone, Default)]
-pub struct TestLensArgs {
-    #[command(subcommand)]
-    pub command: Option<TestLensCommand>,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum TestLensCommand {
-    /// Parse test files, discover suites/scenarios, and link tests to production artefacts.
-    IngestTests(TestLensIngestTestsArgs),
-    /// Ingest coverage report (LCOV or LLVM JSON).
-    IngestCoverage(TestLensIngestCoverageArgs),
-    /// Batch-ingest coverage from a JSON manifest.
-    IngestCoverageBatch(TestLensIngestCoverageBatchArgs),
-    /// Ingest Jest JSON test results.
-    IngestResults(TestLensIngestResultsArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct TestLensIngestTestsArgs {
-    #[arg(long)]
-    pub commit: String,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct TestLensIngestCoverageArgs {
-    #[arg(long)]
-    pub lcov: Option<std::path::PathBuf>,
-    #[arg(long)]
-    pub input: Option<std::path::PathBuf>,
-    #[arg(long)]
-    pub commit: String,
-    #[arg(long)]
-    pub scope: String,
-    #[arg(long, default_value = "unknown")]
-    pub tool: String,
-    #[arg(long)]
-    pub test_artefact_id: Option<String>,
-    #[arg(long)]
-    pub format: Option<String>,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct TestLensIngestCoverageBatchArgs {
-    #[arg(long)]
-    pub manifest: std::path::PathBuf,
-    #[arg(long)]
-    pub commit: String,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct TestLensIngestResultsArgs {
-    #[arg(long)]
-    pub jest_json: std::path::PathBuf,
-    #[arg(long)]
-    pub commit: String,
-}
-
-pub async fn run(args: TestLensArgs) -> Result<()> {
-    let Some(command) = args.command else {
-        bail!(MISSING_SUBCOMMAND_MESSAGE);
-    };
-
-    let repo_root = paths::repo_root()?;
-
-    match command {
-        TestLensCommand::IngestTests(args) => run_ingest_tests(&repo_root, &args).await,
-        TestLensCommand::IngestCoverage(args) => run_ingest_coverage(&repo_root, &args).await,
-        TestLensCommand::IngestCoverageBatch(args) => {
-            run_ingest_coverage_batch(&repo_root, &args).await
+pub(super) async fn run(args: DevqlTestHarnessArgs, repo_root: &Path) -> Result<()> {
+    match args.command {
+        DevqlTestHarnessCommand::IngestTests(args) => run_ingest_tests(repo_root, &args).await,
+        DevqlTestHarnessCommand::IngestCoverage(args) => {
+            run_ingest_coverage(repo_root, &args).await
         }
-        TestLensCommand::IngestResults(args) => run_ingest_results(&repo_root, &args),
+        DevqlTestHarnessCommand::IngestCoverageBatch(args) => {
+            run_ingest_coverage_batch(repo_root, &args).await
+        }
+        DevqlTestHarnessCommand::IngestResults(args) => run_ingest_results(repo_root, &args),
     }
 }
 
-async fn run_ingest_tests(repo_root: &Path, args: &TestLensIngestTestsArgs) -> Result<()> {
+async fn run_ingest_tests(
+    repo_root: &Path,
+    args: &DevqlTestHarnessIngestTestsArgs,
+) -> Result<()> {
     let repo = resolve_repo_identity(repo_root)?;
     let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
@@ -104,7 +47,10 @@ async fn run_ingest_tests(repo_root: &Path, args: &TestLensIngestTestsArgs) -> R
     Ok(())
 }
 
-async fn run_ingest_coverage(repo_root: &Path, args: &TestLensIngestCoverageArgs) -> Result<()> {
+async fn run_ingest_coverage(
+    repo_root: &Path,
+    args: &DevqlTestHarnessIngestCoverageArgs,
+) -> Result<()> {
     let scope_kind = args.scope.parse::<ScopeKind>().map_err(|_| {
         anyhow::anyhow!(
             "invalid scope: {} (expected workspace, package, test-scenario, or doctest)",
@@ -151,7 +97,7 @@ async fn run_ingest_coverage(repo_root: &Path, args: &TestLensIngestCoverageArgs
 
 async fn run_ingest_coverage_batch(
     repo_root: &Path,
-    args: &TestLensIngestCoverageBatchArgs,
+    args: &DevqlTestHarnessIngestCoverageBatchArgs,
 ) -> Result<()> {
     let entries = coverage_batch::parse_manifest_entries(&args.manifest)?;
     let manifest_dir = args
@@ -207,7 +153,10 @@ async fn run_ingest_coverage_batch(
     Ok(())
 }
 
-fn run_ingest_results(repo_root: &Path, args: &TestLensIngestResultsArgs) -> Result<()> {
+fn run_ingest_results(
+    repo_root: &Path,
+    args: &DevqlTestHarnessIngestResultsArgs,
+) -> Result<()> {
     let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
     let pool = relational_store.local_sqlite_pool_allow_create()?;
     let relational = crate::host::capability_host::gateways::SqliteRelationalGateway::new(pool);

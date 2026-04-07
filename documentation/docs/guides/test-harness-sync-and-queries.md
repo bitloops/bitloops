@@ -35,11 +35,11 @@ the daemon runs a current-state sync. After a successful non-`validate` sync, it
 
 Sync-side updates cover source-based discovery and linkage refresh for current test artefacts.
 
-Coverage and test-run results are separate ingestion flows. Use `testlens` commands for those:
+Coverage and test-run results are separate ingestion flows. Use `devql test-harness` commands for those:
 
 ```bash
-bitloops testlens ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
-bitloops testlens ingest-results --jest-json reports/jest.json --commit <sha>
+bitloops devql test-harness ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
+bitloops devql test-harness ingest-results --jest-json reports/jest.json --commit <sha>
 ```
 
 ## Query One Artefact And Its Covering Tests
