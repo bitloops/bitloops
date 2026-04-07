@@ -309,10 +309,20 @@ The schema is versioned in two places:
 - Generated at runtime from the `async-graphql` schema
 - Checked in as `bitloops/schema.graphql` for review and client code generation
 
-Export the current schema snapshot from the repository root with:
+The CLI fetches SDL from the running daemon so schema export stays aligned with the daemon's current stitched schema:
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml --example export-schema > bitloops/schema.graphql
+bitloops devql schema
+bitloops devql schema --global
+```
+
+`bitloops devql schema` defaults to minified SDL so the output is shorter for LLM and prompt workflows. Use `--human` when you want the normal formatted SDL. The slim form requires running the command from within a repository; use `--global` when you want the daemon's global schema from outside a repository.
+
+Export the current checked-in schema snapshots from the repository root with:
+
+```bash
+bitloops devql schema --human > bitloops/schema.slim.graphql
+bitloops devql schema --global --human > bitloops/schema.graphql
 ```
 
 The test suite asserts that the checked-in snapshot still matches the runtime SDL.

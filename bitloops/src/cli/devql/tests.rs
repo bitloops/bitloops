@@ -1,4 +1,4 @@
-use super::graphql::with_graphql_executor_hook;
+use super::graphql::{with_graphql_executor_hook, with_schema_sdl_fetch_hook};
 use super::*;
 use crate::cli::{Cli, Commands};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
@@ -167,7 +167,22 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
-    let _ = ingest;
+    assert!(!ingest.require_daemon);
+}
+
+#[test]
+fn devql_cli_parses_ingest_require_daemon_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "ingest", "--require-daemon"])
+        .expect("devql ingest --require-daemon should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
+        panic!("expected devql ingest command");
+    };
+
+    assert!(ingest.require_daemon);
 }
 
 #[test]
@@ -196,6 +211,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.repair);
     assert!(!sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
         .expect("devql sync repair should parse");
@@ -210,6 +226,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(sync.repair);
     assert!(!sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
         .expect("devql sync full should parse");
@@ -224,6 +241,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.repair);
     assert!(!sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
         .expect("devql sync validate should parse");
@@ -238,6 +256,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.repair);
     assert!(sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 }
 
 #[test]
@@ -251,6 +270,20 @@ fn devql_cli_parses_sync_status_flag() {
         panic!("expected devql sync command");
     };
     assert!(sync.status);
+    assert!(!sync.require_daemon);
+}
+
+#[test]
+fn devql_cli_parses_sync_require_daemon_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--require-daemon"])
+        .expect("devql sync --require-daemon should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(sync.require_daemon);
 }
 
 #[test]
@@ -484,6 +517,70 @@ fn devql_cli_parses_packs_flags() {
 }
 
 #[test]
+fn devql_cli_parses_schema_defaults() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "devql", "schema"]).expect("devql schema should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(!schema.global);
+    assert!(!schema.human);
+}
+
+#[test]
+fn devql_cli_parses_schema_global_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--global"])
+        .expect("devql schema --global should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(schema.global);
+    assert!(!schema.human);
+}
+
+#[test]
+fn devql_cli_parses_schema_human_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--human"])
+        .expect("devql schema --human should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(!schema.global);
+    assert!(schema.human);
+}
+
+#[test]
+fn devql_cli_parses_schema_global_human_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--global", "--human"])
+        .expect("devql schema --global --human should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Schema(schema)) = args.command else {
+        panic!("expected devql schema command");
+    };
+
+    assert!(schema.global);
+    assert!(schema.human);
+}
+
+#[test]
 fn devql_cli_parses_query_compact_flag() {
     let parsed = Cli::try_parse_from([
         "bitloops",
@@ -526,6 +623,48 @@ fn devql_cli_parses_query_graphql_flag() {
     assert_eq!(query.query, "{ repo(name: \"bitloops-cli\") { name } }");
     assert!(query.graphql);
     assert!(!query.compact);
+}
+
+#[test]
+fn minify_schema_sdl_collapses_whitespace_and_brace_padding() {
+    let input = "type QueryRoot {\n    repo(name: String!): Repository!\n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(
+        rendered,
+        "type QueryRoot {repo(name: String!): Repository!}\n"
+    );
+}
+
+#[test]
+fn minify_schema_sdl_preserves_block_strings() {
+    let input =
+        "\"\"\"\nLine one\nLine two\n\"\"\"\ntype QueryRoot {\n    health: HealthStatus!\n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(
+        rendered,
+        "\"\"\"\nLine one\nLine two\n\"\"\" type QueryRoot {health: HealthStatus!}\n"
+    );
+}
+
+#[test]
+fn minify_schema_sdl_preserves_quoted_string_defaults() {
+    let input = "type QueryRoot {\n    example(arg: String = \"a  b\\n c\"): String!\n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(
+        rendered,
+        "type QueryRoot {example(arg: String = \"a  b\\n c\"): String!}\n"
+    );
+}
+
+#[test]
+fn minify_schema_sdl_drops_padding_before_closing_braces() {
+    let input = "type QueryRoot {\n    nested: Nested\n    \n}\n";
+    let rendered = minify_schema_sdl(input);
+
+    assert_eq!(rendered, "type QueryRoot {nested: Nested}\n");
 }
 
 #[test]
@@ -605,6 +744,216 @@ fn devql_run_requires_subcommand() {
         .expect_err("missing subcommand should error");
 
     assert!(err.to_string().contains(MISSING_SUBCOMMAND_MESSAGE));
+}
+
+#[test]
+fn devql_run_global_schema_fetches_daemon_sdl_without_repo_scope() {
+    let mut output = Vec::new();
+    let sdl = "type QueryRoot {\n    health: HealthStatus!\n}\n";
+
+    with_schema_sdl_fetch_hook(
+        move |endpoint_path, scope| {
+            assert_eq!(endpoint_path, "/devql/global/sdl");
+            assert!(scope.is_none(), "global schema should not carry repo scope");
+            Ok((200, sdl.to_string()))
+        },
+        || {
+            test_runtime()
+                .block_on(run_with_scope_discovery(
+                    DevqlArgs {
+                        command: Some(DevqlCommand::Schema(DevqlSchemaArgs {
+                            global: true,
+                            human: false,
+                        })),
+                    },
+                    &mut output,
+                    || -> anyhow::Result<SlimCliRepoScope> {
+                        panic!("global schema should not attempt repo scope discovery");
+                    },
+                ))
+                .expect("devql schema --global should succeed without repo scope discovery");
+        },
+    );
+
+    assert_eq!(
+        String::from_utf8(output).expect("utf8"),
+        minify_schema_sdl(sdl)
+    );
+}
+
+#[test]
+fn devql_run_schema_fetches_slim_daemon_sdl_with_repo_scope() {
+    let repo = seed_devql_cli_repo();
+    let repo_root = repo
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| repo.path().to_path_buf());
+    let mut output = Vec::new();
+    let sdl = "type QueryRoot {\n    health: HealthStatus!\n}\n".to_string();
+
+    with_schema_sdl_fetch_hook(
+        {
+            let sdl = sdl.clone();
+            let repo_root = repo_root.clone();
+            move |endpoint_path, scope| {
+                assert_eq!(endpoint_path, "/devql/sdl");
+                let scope = scope.expect("slim schema should include repo scope");
+                assert_eq!(scope.repo_root, repo_root);
+                assert_eq!(scope.branch_name, "main");
+                Ok((200, sdl.clone()))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run_with_scope_discovery(
+                    DevqlArgs {
+                        command: Some(DevqlCommand::Schema(DevqlSchemaArgs {
+                            global: false,
+                            human: true,
+                        })),
+                    },
+                    &mut output,
+                    || {
+                        crate::devql_transport::discover_slim_cli_repo_scope(Some(
+                            repo_root.as_path(),
+                        ))
+                    },
+                ))
+                .expect("devql schema should fetch slim SDL from the daemon");
+        },
+    );
+
+    assert_eq!(String::from_utf8(output).expect("utf8"), sdl);
+}
+
+#[test]
+fn devql_run_schema_requires_repo_scope_when_not_global() {
+    let dir = TempDir::new().expect("temp dir");
+    let _guard = enter_process_state(Some(dir.path()), &[]);
+
+    let err = test_runtime()
+        .block_on(run(DevqlArgs {
+            command: Some(DevqlCommand::Schema(DevqlSchemaArgs::default())),
+        }))
+        .expect_err("devql schema should require repo scope outside a git repository");
+
+    assert_eq!(err.to_string(), SCHEMA_SCOPE_REQUIRED_MESSAGE);
+}
+
+#[test]
+fn devql_run_schema_requires_running_daemon() {
+    let repo = seed_devql_cli_repo();
+    let state_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+
+    let err = test_runtime()
+        .block_on(run(DevqlArgs {
+            command: Some(DevqlCommand::Schema(DevqlSchemaArgs::default())),
+        }))
+        .expect_err("devql schema should require a running daemon");
+
+    assert_eq!(
+        err.to_string(),
+        "Bitloops daemon is not running. Start it with `bitloops daemon start`."
+    );
+}
+
+#[test]
+fn devql_run_global_schema_requires_running_daemon() {
+    let dir = TempDir::new().expect("temp dir");
+    let state_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+
+    let err = test_runtime()
+        .block_on(run(DevqlArgs {
+            command: Some(DevqlCommand::Schema(DevqlSchemaArgs {
+                global: true,
+                human: false,
+            })),
+        }))
+        .expect_err("devql schema --global should require a running daemon");
+
+    assert_eq!(
+        err.to_string(),
+        "Bitloops daemon is not running. Start it with `bitloops daemon start`."
+    );
+}
+
+#[test]
+fn devql_run_schema_returns_http_status_errors_from_daemon_sdl_fetch() {
+    with_schema_sdl_fetch_hook(
+        |_endpoint_path, _scope| Ok((503, "temporarily unavailable".to_string())),
+        || {
+            let err = test_runtime()
+                .block_on(run_with_scope_discovery(
+                    DevqlArgs {
+                        command: Some(DevqlCommand::Schema(DevqlSchemaArgs {
+                            global: true,
+                            human: false,
+                        })),
+                    },
+                    &mut Vec::new(),
+                    || -> anyhow::Result<SlimCliRepoScope> {
+                        panic!("global schema should not attempt repo scope discovery");
+                    },
+                ))
+                .expect_err("schema fetch should surface non-200 daemon responses");
+
+            assert!(
+                err.to_string()
+                    .contains("Bitloops daemon returned HTTP 503 Service Unavailable"),
+                "expected HTTP status error, got: {err:#}"
+            );
+            assert!(
+                err.to_string().contains("temporarily unavailable"),
+                "expected response body snippet, got: {err:#}"
+            );
+        },
+    );
+}
+
+#[test]
+fn schema_sdl_fetch_hook_is_cleared_after_panic() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_schema_sdl_fetch_hook(
+            |_endpoint_path, _scope| {
+                Ok((
+                    200,
+                    "type QueryRoot { health: HealthStatus! }\n".to_string(),
+                ))
+            },
+            || panic!("boom"),
+        );
+    }));
+
+    assert!(
+        result.is_err(),
+        "expected hook installation closure to panic"
+    );
+
+    with_schema_sdl_fetch_hook(
+        |_endpoint_path, _scope| {
+            Ok((
+                200,
+                "type QueryRoot { health: HealthStatus! }\n".to_string(),
+            ))
+        },
+        || {},
+    );
 }
 
 #[test]
@@ -699,7 +1048,9 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs::default())),
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                require_daemon: false,
+                            })),
                         }))
                         .expect("devql ingest should succeed");
                 },
@@ -761,7 +1112,9 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs::default())),
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                require_daemon: false,
+                            })),
                         }))
                         .expect("devql ingest should succeed");
                 },
@@ -777,6 +1130,44 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
         .expect("graphql mutation should be captured");
     assert!(query.contains("ingest"));
     assert_eq!(variables, json!({}));
+}
+
+#[test]
+fn devql_run_ingest_require_daemon_fails_without_bootstrap() {
+    let repo = seed_devql_cli_repo();
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+
+    with_isolated_daemon_state(repo.path(), || {
+        super::graphql::with_ingest_daemon_bootstrap_hook(
+            {
+                let bootstrap_count = Rc::clone(&bootstrap_count);
+                move |_repo_root: &std::path::Path| {
+                    *bootstrap_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let err = test_runtime()
+                    .block_on(run(DevqlArgs {
+                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                            require_daemon: true,
+                        })),
+                    }))
+                    .expect_err("devql ingest --require-daemon should fail without a daemon");
+
+                assert!(
+                    err.to_string().contains("Bitloops daemon is not running"),
+                    "expected daemon-required error, got: {err:#}"
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        *bootstrap_count.borrow(),
+        0,
+        "daemon bootstrap should not be attempted when require_daemon is set"
+    );
 }
 
 #[test]
@@ -921,6 +1312,7 @@ fn devql_run_sync_executes_graphql_mutation() {
                                 repair: false,
                                 validate: false,
                                 status: false,
+                                require_daemon: false,
                             })),
                         }))
                         .expect("devql sync should succeed");
@@ -1004,6 +1396,7 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
                                 repair: false,
                                 validate: false,
                                 status: false,
+                                require_daemon: false,
                             })),
                         }))
                         .expect("devql sync with paths should succeed");
@@ -1083,6 +1476,7 @@ fn devql_run_sync_ensures_daemon_available() {
                                 repair: false,
                                 validate: false,
                                 status: false,
+                                require_daemon: false,
                             })),
                         }))
                         .expect("devql sync should succeed");
@@ -1095,6 +1489,49 @@ fn devql_run_sync_ensures_daemon_available() {
         *bootstrap_count.borrow(),
         1,
         "daemon bootstrap should be called once"
+    );
+}
+
+#[test]
+fn devql_run_sync_require_daemon_fails_without_bootstrap() {
+    let repo = seed_devql_cli_repo();
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+
+    with_isolated_daemon_state(repo.path(), || {
+        super::graphql::with_ingest_daemon_bootstrap_hook(
+            {
+                let bootstrap_count = Rc::clone(&bootstrap_count);
+                move |_repo_root: &std::path::Path| {
+                    *bootstrap_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let err = test_runtime()
+                    .block_on(run(DevqlArgs {
+                        command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                            full: false,
+                            paths: None,
+                            repair: false,
+                            validate: false,
+                            status: false,
+                            require_daemon: true,
+                        })),
+                    }))
+                    .expect_err("devql sync --require-daemon should fail without a daemon");
+
+                assert!(
+                    err.to_string().contains("Bitloops daemon is not running"),
+                    "expected daemon-required error, got: {err:#}"
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        *bootstrap_count.borrow(),
+        0,
+        "daemon bootstrap should not be attempted when require_daemon is set"
     );
 }
 

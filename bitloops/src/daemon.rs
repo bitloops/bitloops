@@ -283,3 +283,7 @@ pub fn choose_dashboard_launch_mode() -> Result<Option<DaemonMode>> {
 pub fn daemon_url() -> Result<Option<String>> {
     graphql_client::daemon_url()
 }
+
+pub(crate) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
+    process::daemon_http_client(url)
+}

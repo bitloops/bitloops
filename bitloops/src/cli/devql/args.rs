@@ -16,6 +16,8 @@ pub enum DevqlCommand {
     Sync(DevqlSyncArgs),
     /// Backfill or repair DevQL relational projections.
     Projection(DevqlProjectionArgs),
+    /// Print the DevQL GraphQL schema SDL.
+    Schema(DevqlSchemaArgs),
     /// Execute a DevQL query.
     Query(DevqlQueryArgs),
     /// Check backend connectivity for Postgres and ClickHouse.
@@ -32,7 +34,11 @@ pub enum DevqlCommand {
 pub struct DevqlInitArgs {}
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct DevqlIngestArgs {}
+pub struct DevqlIngestArgs {
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
+}
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct DevqlSyncArgs {
@@ -55,6 +61,10 @@ pub struct DevqlSyncArgs {
     /// Follow the queued sync task until it reaches a terminal state.
     #[arg(long, default_value_t = false)]
     pub status: bool,
+
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -86,6 +96,17 @@ pub struct DevqlCheckpointFileSnapshotsArgs {
     /// Report counters without mutating checkpoint_file_snapshots.
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlSchemaArgs {
+    /// Print the full/global DevQL GraphQL schema.
+    #[arg(long = "global", default_value_t = false)]
+    pub global: bool,
+
+    /// Print human-readable formatted SDL instead of minified SDL.
+    #[arg(long, default_value_t = false)]
+    pub human: bool,
 }
 
 #[derive(Args, Debug, Clone)]
