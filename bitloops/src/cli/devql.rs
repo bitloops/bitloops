@@ -7,7 +7,9 @@ use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
 use crate::config::{
     SemanticCloneEmbeddingMode, SemanticSummaryMode, resolve_embedding_capability_config_for_repo,
 };
-use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
+use crate::devql_transport::{
+    SlimCliRepoScope, discover_slim_cli_repo_scope, is_repo_root_discovery_error,
+};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
     SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
@@ -67,7 +69,7 @@ where
 }
 
 fn map_schema_scope_error(err: anyhow::Error) -> anyhow::Error {
-    if format!("{err:#}").contains("failed to resolve git repository root for DevQL scope") {
+    if is_repo_root_discovery_error(&err) {
         anyhow!(SCHEMA_SCOPE_REQUIRED_MESSAGE)
     } else {
         err
@@ -88,13 +90,18 @@ fn minify_schema_sdl(sdl: &str) -> String {
             && chars.get(index + 2) == Some(&'"')
     }
 
-    fn push_pending_space(output: &mut String, next: char, pending_space: &mut bool) {
-        if !*pending_space || output.is_empty() {
+    fn push_pending_space(
+        output: &mut String,
+        next: char,
+        pending_space: &mut bool,
+        last_emitted: &mut Option<char>,
+    ) {
+        if !*pending_space || last_emitted.is_none() {
             *pending_space = false;
             return;
         }
 
-        let previous = output.chars().last();
+        let previous = *last_emitted;
         if previous == Some('{')
             || next == '}'
             || matches!(previous, Some(' ' | '\n' | '\r' | '\t'))
@@ -104,6 +111,7 @@ fn minify_schema_sdl(sdl: &str) -> String {
         }
 
         output.push(' ');
+        *last_emitted = Some(' ');
         *pending_space = false;
     }
 
@@ -111,37 +119,48 @@ fn minify_schema_sdl(sdl: &str) -> String {
     let mut output = String::with_capacity(sdl.len());
     let mut state = State::Normal;
     let mut pending_space = false;
+    let mut last_emitted = None;
     let mut index = 0usize;
 
     while index < chars.len() {
         match state {
             State::Normal => {
                 if starts_with_triple_quotes(&chars, index) {
-                    push_pending_space(&mut output, '"', &mut pending_space);
+                    push_pending_space(&mut output, '"', &mut pending_space, &mut last_emitted);
                     output.push_str("\"\"\"");
+                    last_emitted = Some('"');
                     index += 3;
                     state = State::BlockString;
                 } else if chars[index] == '"' {
-                    push_pending_space(&mut output, '"', &mut pending_space);
+                    push_pending_space(&mut output, '"', &mut pending_space, &mut last_emitted);
                     output.push('"');
+                    last_emitted = Some('"');
                     index += 1;
                     state = State::String;
                 } else if chars[index].is_whitespace() {
                     pending_space = true;
                     index += 1;
                 } else {
-                    push_pending_space(&mut output, chars[index], &mut pending_space);
+                    push_pending_space(
+                        &mut output,
+                        chars[index],
+                        &mut pending_space,
+                        &mut last_emitted,
+                    );
                     output.push(chars[index]);
+                    last_emitted = Some(chars[index]);
                     index += 1;
                 }
             }
             State::String => {
                 let ch = chars[index];
                 output.push(ch);
+                last_emitted = Some(ch);
                 index += 1;
                 if ch == '\\' {
                     if let Some(next) = chars.get(index) {
                         output.push(*next);
+                        last_emitted = Some(*next);
                         index += 1;
                     }
                 } else if ch == '"' {
@@ -151,10 +170,12 @@ fn minify_schema_sdl(sdl: &str) -> String {
             State::BlockString => {
                 if starts_with_triple_quotes(&chars, index) {
                     output.push_str("\"\"\"");
+                    last_emitted = Some('"');
                     index += 3;
                     state = State::Normal;
                 } else {
                     output.push(chars[index]);
+                    last_emitted = Some(chars[index]);
                     index += 1;
                 }
             }
@@ -390,8 +411,14 @@ where
 }
 
 pub async fn run(args: DevqlArgs) -> Result<()> {
-    let stdout = std::io::stdout();
-    let mut writer = stdout.lock();
+    if matches!(args.command.as_ref(), Some(DevqlCommand::Schema(_))) {
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+        return run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None))
+            .await;
+    }
+
+    let mut writer = std::io::stdout();
     run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None)).await
 }
 

@@ -918,7 +918,41 @@ fn devql_run_schema_returns_http_status_errors_from_daemon_sdl_fetch() {
                     .contains("Bitloops daemon returned HTTP 503 Service Unavailable"),
                 "expected HTTP status error, got: {err:#}"
             );
+            assert!(
+                err.to_string().contains("temporarily unavailable"),
+                "expected response body snippet, got: {err:#}"
+            );
         },
+    );
+}
+
+#[test]
+fn schema_sdl_fetch_hook_is_cleared_after_panic() {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_schema_sdl_fetch_hook(
+            |_endpoint_path, _scope| {
+                Ok((
+                    200,
+                    "type QueryRoot { health: HealthStatus! }\n".to_string(),
+                ))
+            },
+            || panic!("boom"),
+        );
+    }));
+
+    assert!(
+        result.is_err(),
+        "expected hook installation closure to panic"
+    );
+
+    with_schema_sdl_fetch_hook(
+        |_endpoint_path, _scope| {
+            Ok((
+                200,
+                "type QueryRoot { health: HealthStatus! }\n".to_string(),
+            ))
+        },
+        || {},
     );
 }
 
