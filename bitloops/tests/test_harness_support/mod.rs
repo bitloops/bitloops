@@ -35,26 +35,17 @@ struct AppPaths {
 
 fn write_test_daemon_config(config_root: &Path) -> PathBuf {
     let config_path = config_root.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
-    let daemon_state_root = config_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| config_root.to_path_buf())
-        .join(".bitloops-test-state")
-        .join(
-            config_root
-                .file_name()
-                .map(|name| name.to_os_string())
-                .unwrap_or_default(),
-        );
-    let sqlite_path = daemon_state_root
+    let app_paths = app_paths_for_repo(config_root);
+    let data_root = app_paths.xdg_data.join("bitloops");
+    let sqlite_path = data_root
         .join("stores")
         .join("relational")
         .join("relational.db");
-    let duckdb_path = daemon_state_root
+    let duckdb_path = data_root
         .join("stores")
         .join("event")
         .join("events.duckdb");
-    let blob_path = daemon_state_root.join("stores").join("blob");
+    let blob_path = data_root.join("stores").join("blob");
     let config_contents = format!(
         r#"[runtime]
 local_dev = false
@@ -162,6 +153,11 @@ pub fn prepare_graphql_workspace(workspace: &Workspace) {
             .expect("build tokio runtime for GraphQL workspace")
             .block_on(bitloops::host::devql::run_init(&cfg))
             .expect("initialise DevQL schema for GraphQL workspace");
+
+        bitloops::capability_packs::test_harness::storage::init_test_domain_database(
+            workspace.db_path(),
+        )
+        .expect("initialise test-harness schema for GraphQL workspace");
     });
 }
 

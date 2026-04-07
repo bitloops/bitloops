@@ -769,6 +769,122 @@ async fn devql_graphql_file_clone_summary_queries_resolve_grouped_counts() {
 }
 
 #[tokio::test]
+async fn devql_graphql_same_file_method_clone_summaries_match_across_repo_file_and_artefact_views() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_same_file_method_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                cloneSummary(
+                  filter: {
+                    kind: METHOD
+                    symbolFqn: "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute"
+                  }
+                ) {
+                  totalCount
+                  groups {
+                    relationKind
+                    count
+                  }
+                }
+                file(path: "packages/api/src/change-path.ts") {
+                  cloneSummary(
+                    filter: {
+                      kind: METHOD
+                      symbolFqn: "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute"
+                    }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                  artefacts(
+                    filter: {
+                      kind: METHOD
+                      symbolFqn: "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute"
+                    }
+                    first: 10
+                  ) {
+                    totalCount
+                    edges {
+                      node {
+                        symbolFqn
+                        clones(first: 10) {
+                          totalCount
+                          summary {
+                            totalCount
+                            groups {
+                              relationKind
+                              count
+                            }
+                          }
+                          edges {
+                            node {
+                              relationKind
+                              targetArtefact {
+                                symbolFqn
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["cloneSummary"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["cloneSummary"]["groups"][0]["relationKind"],
+        "weak_clone_candidate"
+    );
+    assert_eq!(json["repo"]["file"]["cloneSummary"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"][0]["relationKind"],
+        "weak_clone_candidate"
+    );
+    assert_eq!(json["repo"]["file"]["artefacts"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"][0]
+            ["relationKind"],
+        "weak_clone_candidate"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
+            ["targetArtefact"]["symbolFqn"],
+        "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command"
+    );
+}
+
+#[tokio::test]
 async fn devql_graphql_clone_summary_validates_inputs_and_rejects_temporal_scopes() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_clone_data(repo.path());

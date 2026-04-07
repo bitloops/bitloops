@@ -374,6 +374,13 @@ fn persist_production_rows(
         })?;
     }
 
+    bitloops::storage::SqliteConnectionPool::connect(db_path.to_path_buf())
+        .context("creating sqlite pool for production seed")?
+        .initialise_devql_schema()
+        .context("initialising SQLite DevQL schema for production seed")?;
+    bitloops::capability_packs::test_harness::storage::init_test_domain_database(db_path)
+        .context("initialising test-harness schema for production seed")?;
+
     let mut conn = Connection::open(db_path)
         .with_context(|| format!("failed opening sqlite database at {}", db_path.display()))?;
     let tx = conn

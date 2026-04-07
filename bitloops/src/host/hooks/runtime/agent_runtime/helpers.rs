@@ -32,6 +32,10 @@ pub(super) fn detect_transcript_modified_files(
         return vec![];
     }
 
+    if !Path::new(transcript_path).is_file() {
+        return vec![];
+    }
+
     let start_line = if transcript_offset <= 0 {
         0
     } else {
@@ -478,4 +482,20 @@ pub(super) fn calculate_stop_token_usage(
     };
     let subagents_dir = subagents_dir_for_session(transcript_path, session_id);
     claude_transcript::calculate_total_token_usage(transcript_path, start_line, &subagents_dir).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_transcript_modified_files;
+
+    #[test]
+    fn detect_transcript_modified_files_ignores_missing_transcripts() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let missing = temp.path().join("missing.jsonl");
+
+        let files =
+            detect_transcript_modified_files(missing.to_string_lossy().as_ref(), "s1", 0, None);
+
+        assert!(files.is_empty(), "missing transcript should yield no files");
+    }
 }
