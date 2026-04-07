@@ -143,19 +143,19 @@ bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_s
 bitloops devql query 'repo("bitloops")->file("bitloops/src/main.rs")->artefacts(kind:"function",symbol_fqn:"bitloops/src/main.rs::main")->clones(min_score:0.8)->summary()'
 ```
 
-**Per-artefact dependency counts (`depsSummary`).** Use `summary(deps:true, ...)`. This requires an `artefacts()` stage and **must not** be combined with `deps()` or `clones()` in the same query. Optional arguments (all string literals in the DSL):
+**Per-artefact dependency counts (`depsSummary`).** Use `summary(deps:true, ...)`. This requires an `artefacts()` stage and **must not** be combined with `deps()` or `clones()` in the same query.
 
 | Argument | Values | Role |
 | --- | --- | --- |
 | `deps` | `true` only | Selects dependency-summary mode (`deps:false` is rejected). |
 | `kind` | `imports`, `calls`, `references`, `extends`, `implements`, `exports` | Restrict counts to one edge kind; omit for all kinds. |
-| `direction` | `out`, `in`, `both` | Which directions to include; if omitted in raw GraphQL, `depsSummary` defaults to both directions. |
-| `unresolved` | `all`, `resolved`, `unresolved` | Whether unresolved targets are included in the counts. |
+| `direction` | `out`, `in`, `both` | Which directions to include; default is `both`. |
+| `unresolved` | `true`, `false` | Include unresolved targets when `true`; default is `false` (resolved-only). |
 
 The compiler emits `artefacts { edges { node { depsSummary(filter: ...) { ... } } } }`. Counts are **for each returned artefact’s edges** in the current dependency graph (same data plane as `outgoingDeps` / `incomingDeps`). Filters on `artefacts(...)` only restrict **which artefacts appear** as rows, not “edges only to other rows on this page.”
 
 ```bash
-bitloops devql query 'repo("bitloops")->file("bitloops/src/lib.rs")->artefacts(kind:"function")->summary(deps:true,direction:"both",unresolved:"all",kind:"calls")'
+bitloops devql query 'repo("bitloops")->file("bitloops/src/lib.rs")->artefacts(kind:"function")->summary(deps:true,direction:"both",unresolved:true,kind:"calls")'
 ```
 
 `summary(deps:true, ...)` is **only** supported when the pipeline is compiled and executed on the **GraphQL** path (the default for DSL queries that contain `->`). The relational executor rejects this shape.
@@ -226,7 +226,7 @@ Per-artefact dependency summaries (same field the DSL `summary(deps:true, ...)` 
           node {
             path
             symbolFqn
-            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: ALL }) {
+            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: false }) {
               totalCount
               incomingCount
               outgoingCount
@@ -246,6 +246,8 @@ Per-artefact dependency summaries (same field the DSL `summary(deps:true, ...)` 
   }
 }
 ```
+
+Raw GraphQL note: `depsSummary.filter.unresolved` is a `Boolean` (`false` by default). It controls only `depsSummary`. `outgoingDeps` / `incomingDeps` are separate fields and use their own `includeUnresolved` filter.
 
 ```graphql
 {
