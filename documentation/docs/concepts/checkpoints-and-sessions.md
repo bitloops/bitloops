@@ -21,7 +21,7 @@ Under the current architecture:
 
 - queryable checkpoint and session history live in the configured relational and event stores
 - daemon runtime metadata and queue state live in the platform state directory runtime store
-- repo-scoped workflow runtime state lives in `.bitloops/stores/runtime/runtime.sqlite`
+- repo-scoped workflow runtime state lives in `<config root>/stores/runtime/runtime.sqlite`
 
 ## Repo Policy
 

@@ -24,10 +24,11 @@ pub use repo_policy::{
     RepoPolicySnapshot, discover_repo_policy, discover_repo_policy_optional,
 };
 pub use resolve::{
-    resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_dashboard_config,
-    resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo,
+    resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_daemon_config_root_for_repo,
+    resolve_dashboard_config, resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo,
     resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
     resolve_provider_config, resolve_provider_config_for_repo,
+    resolve_repo_runtime_db_path_for_config_root, resolve_repo_runtime_db_path_for_repo,
     resolve_semantic_clones_config_for_repo, resolve_sqlite_db_path,
     resolve_sqlite_db_path_for_repo, resolve_store_backend_config,
     resolve_store_backend_config_for_repo, resolve_store_semantic_config,

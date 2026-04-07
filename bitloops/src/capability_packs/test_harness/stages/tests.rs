@@ -120,6 +120,8 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
                     "test_name": rec.test_name,
                     "suite_name": rec.suite_name,
                     "file_path": rec.file_path,
+                    "start_line": rec.start_line,
+                    "end_line": rec.end_line,
                     "confidence": rec.confidence,
                     "discovery_source": rec.discovery_source,
                     "linkage_source": rec.linkage_source,
@@ -387,6 +389,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: Some("suite".into()),
                 file_path: "tests/a.rs".into(),
+                start_line: 3,
+                end_line: 6,
                 confidence: 0.91,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -410,6 +414,8 @@ mod guardrail_tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
         assert_eq!(rows[0]["covering_tests"].as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["covering_tests"][0]["start_line"], 3);
+        assert_eq!(rows[0]["covering_tests"][0]["end_line"], 6);
         assert_eq!(repo.calls().len(), 1);
         assert_eq!(repo.calls()[0].production_symbol_id, "symbol-a");
     }
@@ -424,6 +430,8 @@ mod guardrail_tests {
                     test_name: "covers_a".into(),
                     suite_name: Some("suite-a".into()),
                     file_path: "tests/a.rs".into(),
+                    start_line: 5,
+                    end_line: 9,
                     confidence: 0.8,
                     discovery_source: "static".into(),
                     linkage_source: "coverage".into(),
@@ -437,6 +445,8 @@ mod guardrail_tests {
                     test_name: "covers_b".into(),
                     suite_name: Some("suite-b".into()),
                     file_path: "tests/b.rs".into(),
+                    start_line: 7,
+                    end_line: 12,
                     confidence: 0.82,
                     discovery_source: "static".into(),
                     linkage_source: "coverage".into(),
@@ -474,6 +484,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 10,
+                end_line: 11,
                 confidence: 0.8,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -509,6 +521,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 1,
+                end_line: 2,
                 confidence: 0.5,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -551,6 +565,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 1,
+                end_line: 2,
                 confidence: 0.5,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),

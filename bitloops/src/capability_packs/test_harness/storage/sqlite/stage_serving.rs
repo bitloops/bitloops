@@ -19,6 +19,7 @@ pub(super) fn load_stage_covering_tests(
     let mut sql = String::from(
         "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
          parent.name AS suite_name, ts.path AS file_path, \
+         ts.start_line, ts.end_line, \
          COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) AS confidence, \
          ts.discovery_source, \
          COALESCE(json_extract(te.metadata, '$.link_source'), 'unknown') AS linkage_source, \
@@ -75,10 +76,12 @@ pub(super) fn load_stage_covering_tests(
                 test_name: row.get(1)?,
                 suite_name: row.get(2)?,
                 file_path: row.get(3)?,
-                confidence: row.get(4)?,
-                discovery_source: row.get(5)?,
-                linkage_source: row.get(6)?,
-                linkage_status: row.get(7)?,
+                start_line: row.get(4)?,
+                end_line: row.get(5)?,
+                confidence: row.get(6)?,
+                discovery_source: row.get(7)?,
+                linkage_source: row.get(8)?,
+                linkage_status: row.get(9)?,
             })
         })
         .context("failed querying stage covering tests")?;

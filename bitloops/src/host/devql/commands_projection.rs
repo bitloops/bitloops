@@ -45,7 +45,7 @@ pub async fn run_checkpoint_file_snapshot_backfill(
 ) -> Result<()> {
     options.resume_after = normalise_optional_resume_after(options.resume_after);
     validate_backfill_options(&options)?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql projection checkpoint-provenance`")?;
     let relational = RelationalStorage::connect(
         cfg,

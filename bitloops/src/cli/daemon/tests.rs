@@ -702,7 +702,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
                 repo_provider: "local".to_string(),
                 repo_organisation: "local".to_string(),
                 repo_identity: "local/demo".to_string(),
-                config_root: std::path::PathBuf::from("/tmp/repo"),
+                daemon_config_root: std::path::PathBuf::from("/tmp/repo"),
                 repo_root: std::path::PathBuf::from("/tmp/repo"),
                 source: SyncTaskSource::ManualCli,
                 mode: SyncTaskMode::Full,

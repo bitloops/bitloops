@@ -542,7 +542,6 @@ type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
-	sync(input: SyncInput!): SyncResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
@@ -624,25 +623,6 @@ type SubscriptionRoot {
 	checkpointIngested(repoName: String!): Checkpoint!
 	ingestionProgress(repoName: String!): IngestionProgressEvent!
 	syncProgress(taskId: String!): SyncProgressEvent!
-}
-
-input SyncInput {
-	"""
-	Run a full workspace reconciliation.
-	"""
-	full: Boolean! = false
-	"""
-	Reconcile only the specified workspace paths (comma-delimited values accepted).
-	"""
-	paths: [String!] = null
-	"""
-	Rebuild sync state from the current workspace, ignoring stored manifest trust.
-	"""
-	repair: Boolean! = false
-	"""
-	Validate current-state tables against a full read-only workspace reconciliation.
-	"""
-	validate: Boolean! = false
 }
 
 type SyncProgressEvent {
@@ -839,6 +819,8 @@ type TestHarnessCoveringTest {
 	testName: String!
 	suiteName: String
 	filePath: String!
+	startLine: Int!
+	endLine: Int!
 	confidence: Float!
 	discoverySource: String!
 	linkageSource: String!

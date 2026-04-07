@@ -21,6 +21,7 @@ pub(super) async fn load_stage_covering_tests(
     let mut sql = String::from(
         "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
          parent.name AS suite_name, ts.path AS file_path, \
+         ts.start_line, ts.end_line, \
          COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) AS confidence, \
          ts.discovery_source, \
          COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') AS linkage_source, \
@@ -79,10 +80,12 @@ pub(super) async fn load_stage_covering_tests(
                 test_name: get(&row, 1, "test_name")?,
                 suite_name: row.try_get::<_, Option<String>>(2).context("suite_name")?,
                 file_path: get(&row, 3, "file_path")?,
-                confidence: row.try_get::<_, f64>(4).context("confidence")?,
-                discovery_source: get(&row, 5, "discovery_source")?,
-                linkage_source: get(&row, 6, "linkage_source")?,
-                linkage_status: get(&row, 7, "linkage_status")?,
+                start_line: get_i64(&row, 4, "start_line")?,
+                end_line: get_i64(&row, 5, "end_line")?,
+                confidence: row.try_get::<_, f64>(6).context("confidence")?,
+                discovery_source: get(&row, 7, "discovery_source")?,
+                linkage_source: get(&row, 8, "linkage_source")?,
+                linkage_status: get(&row, 9, "linkage_status")?,
             })
         })
         .collect()

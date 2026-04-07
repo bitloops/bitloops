@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::resolve_store_semantic_config_for_repo;
+use crate::config::{resolve_daemon_config_root_for_repo, resolve_store_semantic_config_for_repo};
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -12,7 +12,7 @@ pub struct RepoIdentity {
 
 #[derive(Debug, Clone)]
 pub struct DevqlConfig {
-    pub(crate) config_root: PathBuf,
+    pub(crate) daemon_config_root: PathBuf,
     pub(crate) repo_root: PathBuf,
     pub(crate) repo: RepoIdentity,
     pub(crate) pg_dsn: Option<String>,
@@ -28,19 +28,20 @@ pub struct DevqlConfig {
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
-        Self::from_roots(repo_root.clone(), repo_root, repo)
+        let daemon_config_root = resolve_daemon_config_root_for_repo(&repo_root)?;
+        Self::from_roots(daemon_config_root, repo_root, repo)
     }
 
     pub fn from_roots(
-        config_root: PathBuf,
+        daemon_config_root: PathBuf,
         repo_root: PathBuf,
         repo: RepoIdentity,
     ) -> Result<Self> {
-        let backend_cfg = resolve_store_backend_config_for_repo(&config_root)
+        let backend_cfg = resolve_store_backend_config_for_repo(&daemon_config_root)
             .context("resolving backend config for DevQL runtime")?;
-        let semantic_cfg = resolve_store_semantic_config_for_repo(&config_root);
+        let semantic_cfg = resolve_store_semantic_config_for_repo(&daemon_config_root);
         Ok(Self {
-            config_root,
+            daemon_config_root,
             repo_root,
             repo,
             pg_dsn: backend_cfg.relational.postgres_dsn,
@@ -176,7 +177,7 @@ mod tests {
 
     fn sample_cfg(repo_root: PathBuf) -> DevqlConfig {
         DevqlConfig {
-            config_root: repo_root.clone(),
+            daemon_config_root: repo_root.clone(),
             repo_root,
             repo: RepoIdentity {
                 provider: "git".to_string(),

@@ -13,11 +13,11 @@ mod duckdb;
 use self::clickhouse::ClickHouseInteractionRepository;
 use self::duckdb::DuckDbInteractionRepository;
 
-pub fn create_event_repository(
+pub fn create_interaction_repository(
     events_cfg: &EventsBackendConfig,
     repo_root: &Path,
     repo_id: String,
-) -> Result<EventDbInteractionRepository> {
+) -> Result<impl InteractionEventRepository + use<>> {
     if events_cfg.has_clickhouse() {
         let repository = ClickHouseInteractionRepository {
             repo_id,
@@ -26,7 +26,7 @@ pub fn create_event_repository(
             password: events_cfg.clickhouse_password.clone(),
         };
         repository.ensure_schema()?;
-        return Ok(EventDbInteractionRepository::ClickHouse(repository));
+        return Ok(InteractionRepositoryBackend::ClickHouse(repository));
     }
 
     let repository = DuckDbInteractionRepository {
@@ -34,15 +34,15 @@ pub fn create_event_repository(
         path: events_cfg.resolve_duckdb_db_path_for_repo(repo_root),
     };
     repository.ensure_schema()?;
-    Ok(EventDbInteractionRepository::DuckDb(repository))
+    Ok(InteractionRepositoryBackend::DuckDb(repository))
 }
 
-pub enum EventDbInteractionRepository {
+enum InteractionRepositoryBackend {
     DuckDb(DuckDbInteractionRepository),
     ClickHouse(ClickHouseInteractionRepository),
 }
 
-impl InteractionEventRepository for EventDbInteractionRepository {
+impl InteractionEventRepository for InteractionRepositoryBackend {
     fn repo_id(&self) -> &str {
         match self {
             Self::DuckDb(repository) => repository.repo_id(),

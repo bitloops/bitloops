@@ -39,7 +39,7 @@ The older repo-local defaults are no longer used automatically for configured re
 
 There is no automatic migration and no silent legacy fallback.
 
-Bitloops does still keep repo-scoped workflow runtime state locally in `.bitloops/stores/runtime/runtime.sqlite`.
+Bitloops does still keep repo-scoped workflow runtime state locally in `<config root>/stores/runtime/runtime.sqlite`.
 
 ## New Configuration Model
 
@@ -55,7 +55,7 @@ Default path categories now follow platform app directories:
 - Data directory: relational DB, event DB, blob store
 - Cache directory: embedding model downloads, dashboard bundle
 - State directory: daemon runtime metadata, daemon runtime SQLite, and hook scratch files
-- Repo runtime directory: `.bitloops/stores/runtime/runtime.sqlite`
+- Repo runtime directory: `<config root>/stores/runtime/runtime.sqlite`
 
 ## What To Update
 

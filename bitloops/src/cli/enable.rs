@@ -86,10 +86,8 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
         .join(REPO_POLICY_LOCAL_FILE_NAME);
     let relative_local_policy = relative_local_policy.to_string_lossy().replace('\\', "/");
 
-    for entry in [relative_local_policy.as_str(), ".bitloops/"] {
-        if content.lines().any(|line| line.trim() == entry) {
-            continue;
-        }
+    let entry = relative_local_policy.as_str();
+    if !content.lines().any(|line| line.trim() == entry) {
         if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');
         }
@@ -102,8 +100,12 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
     Ok(())
 }
 
-fn restart_watcher_if_running(repo_root: &Path, config_root: &Path) {
-    if let Err(err) = watch::restart_watcher(repo_root, config_root) {
+fn restart_watcher_if_running(repo_root: &Path) {
+    let Ok(daemon_config_root) = crate::config::resolve_daemon_config_root_for_repo(repo_root)
+    else {
+        return;
+    };
+    if let Err(err) = watch::restart_watcher(repo_root, &daemon_config_root) {
         log::debug!("skipping watcher restart after policy change: {err:#}");
     }
 }
@@ -174,10 +176,9 @@ async fn run_with_input(args: EnableArgs, input: &mut dyn BufRead) -> Result<()>
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    let policy_root = policy.root.unwrap_or_else(|| cwd.clone());
     set_capture_enabled(&target_path, true)?;
     let settings = load_settings(&cwd).unwrap_or_default();
-    restart_watcher_if_running(&git_root, &policy_root);
+    restart_watcher_if_running(&git_root);
 
     println!("Bitloops enabled in this project! :)");
     println!("Strategy: {}.", settings.strategy);
@@ -200,10 +201,9 @@ pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    let policy_root = policy.root.unwrap_or_else(|| start.to_path_buf());
     set_capture_enabled(&target_path, false)?;
     let repo_root = find_repo_root(start)?;
-    restart_watcher_if_running(&repo_root, &policy_root);
+    restart_watcher_if_running(&repo_root);
     writeln!(
         out,
         "Bitloops capture is now disabled for this project ({})",

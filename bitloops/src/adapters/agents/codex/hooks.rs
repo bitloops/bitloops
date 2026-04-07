@@ -30,18 +30,18 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String, &'static str); 2] {
     [
         (
             HOOK_KEY_SESSION_START,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START
-            ),
+            )),
             STATUS_MESSAGE_SESSION_START,
         ),
         (
             HOOK_KEY_STOP,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::codex::lifecycle::HOOK_NAME_STOP
-            ),
+            )),
             STATUS_MESSAGE_STOP,
         ),
     ]
@@ -96,9 +96,7 @@ fn marshal_hook_entries(raw_hooks: &mut Map<String, Value>, hook_key: &str, entr
 }
 
 fn is_bitloops_hook(command: &str) -> bool {
-    MANAGED_HOOK_PREFIXES
-        .iter()
-        .any(|prefix| command.starts_with(prefix))
+    crate::adapters::agents::is_managed_hook_command(command, &MANAGED_HOOK_PREFIXES)
 }
 
 fn command_of(entry: &Value) -> Option<&str> {

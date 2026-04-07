@@ -1,6 +1,6 @@
 const CHECKPOINT_RUNTIME_SCHEMA_SQL_SQLITE: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     cli_version TEXT DEFAULT '',
     base_commit TEXT DEFAULT '',
@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     prompt_attributions TEXT DEFAULT '[]',
     pending_prompt_attribution TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS sessions_repo_idx
@@ -54,31 +55,91 @@ CREATE TABLE IF NOT EXISTS temporary_checkpoints (
 );
 
 CREATE INDEX IF NOT EXISTS temporary_checkpoints_session_step_idx
-ON temporary_checkpoints (session_id, step_number);
+ON temporary_checkpoints (repo_id, session_id, step_number);
 
 CREATE INDEX IF NOT EXISTS temporary_checkpoints_session_tree_idx
-ON temporary_checkpoints (session_id, tree_hash);
+ON temporary_checkpoints (repo_id, session_id, tree_hash);
 
 CREATE TABLE IF NOT EXISTS pre_prompt_states (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS pre_prompt_states_repo_idx
 ON pre_prompt_states (repo_id);
 
 CREATE TABLE IF NOT EXISTS pre_task_markers (
-    tool_use_id TEXT PRIMARY KEY,
+    tool_use_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, tool_use_id)
 );
 
 CREATE INDEX IF NOT EXISTS pre_task_markers_session_idx
-ON pre_task_markers (session_id);
+ON pre_task_markers (repo_id, session_id);
+
+CREATE TABLE IF NOT EXISTS session_metadata_snapshots (
+    snapshot_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    turn_id TEXT DEFAULT '',
+    transcript_identifier TEXT DEFAULT '',
+    transcript_path TEXT DEFAULT '',
+    blob_type TEXT NOT NULL,
+    storage_backend TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    content_hash TEXT DEFAULT '',
+    size_bytes INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, snapshot_id, blob_type)
+);
+
+CREATE INDEX IF NOT EXISTS session_metadata_snapshots_session_idx
+ON session_metadata_snapshots (repo_id, session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS task_checkpoint_artefacts (
+    artefact_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    tool_use_id TEXT NOT NULL,
+    agent_id TEXT DEFAULT '',
+    checkpoint_uuid TEXT DEFAULT '',
+    artefact_kind TEXT NOT NULL,
+    incremental_sequence INTEGER,
+    incremental_type TEXT DEFAULT '',
+    is_incremental INTEGER DEFAULT 0,
+    storage_backend TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    content_hash TEXT DEFAULT '',
+    size_bytes INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS task_checkpoint_artefacts_lookup_idx
+ON task_checkpoint_artefacts (repo_id, session_id, tool_use_id, created_at);
+
+CREATE INDEX IF NOT EXISTS task_checkpoint_artefacts_incremental_idx
+ON task_checkpoint_artefacts (
+    repo_id,
+    session_id,
+    tool_use_id,
+    is_incremental,
+    incremental_sequence
+);
+
+CREATE TABLE IF NOT EXISTS repo_watcher_registrations (
+    repo_id TEXT PRIMARY KEY,
+    repo_root TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    restart_token TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 "#;
 
 const CHECKPOINT_RELATIONAL_SCHEMA_SQL_SQLITE: &str = r#"
@@ -254,7 +315,7 @@ pub(crate) fn checkpoint_relational_schema_sql_sqlite() -> &'static str {
 pub(crate) fn checkpoint_schema_sql_sqlite() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     cli_version TEXT DEFAULT '',
     base_commit TEXT DEFAULT '',
@@ -280,7 +341,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     prompt_attributions TEXT DEFAULT '[]',
     pending_prompt_attribution TEXT,
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS sessions_repo_idx
@@ -308,10 +370,10 @@ CREATE TABLE IF NOT EXISTS temporary_checkpoints (
 );
 
 CREATE INDEX IF NOT EXISTS temporary_checkpoints_session_step_idx
-ON temporary_checkpoints (session_id, step_number);
+ON temporary_checkpoints (repo_id, session_id, step_number);
 
 CREATE INDEX IF NOT EXISTS temporary_checkpoints_session_tree_idx
-ON temporary_checkpoints (session_id, tree_hash);
+ON temporary_checkpoints (repo_id, session_id, tree_hash);
 
 CREATE TABLE IF NOT EXISTS checkpoints (
     checkpoint_id TEXT PRIMARY KEY,
@@ -458,25 +520,76 @@ CREATE INDEX IF NOT EXISTS commit_checkpoints_repo_commit_idx
 ON commit_checkpoints (repo_id, commit_sha);
 
 CREATE TABLE IF NOT EXISTS pre_prompt_states (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS pre_prompt_states_repo_idx
 ON pre_prompt_states (repo_id);
 
 CREATE TABLE IF NOT EXISTS pre_task_markers (
-    tool_use_id TEXT PRIMARY KEY,
+    tool_use_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, tool_use_id)
 );
 
 CREATE INDEX IF NOT EXISTS pre_task_markers_session_idx
-ON pre_task_markers (session_id);
+ON pre_task_markers (repo_id, session_id);
+
+CREATE TABLE IF NOT EXISTS session_metadata_snapshots (
+    snapshot_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    turn_id TEXT DEFAULT '',
+    transcript_identifier TEXT DEFAULT '',
+    transcript_path TEXT DEFAULT '',
+    blob_type TEXT NOT NULL,
+    storage_backend TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    content_hash TEXT DEFAULT '',
+    size_bytes INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, snapshot_id, blob_type)
+);
+
+CREATE INDEX IF NOT EXISTS session_metadata_snapshots_session_idx
+ON session_metadata_snapshots (repo_id, session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS task_checkpoint_artefacts (
+    artefact_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    tool_use_id TEXT NOT NULL,
+    agent_id TEXT DEFAULT '',
+    checkpoint_uuid TEXT DEFAULT '',
+    artefact_kind TEXT NOT NULL,
+    incremental_sequence INTEGER,
+    incremental_type TEXT DEFAULT '',
+    is_incremental INTEGER DEFAULT 0,
+    storage_backend TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    content_hash TEXT DEFAULT '',
+    size_bytes INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS task_checkpoint_artefacts_lookup_idx
+ON task_checkpoint_artefacts (repo_id, session_id, tool_use_id, created_at);
+
+CREATE INDEX IF NOT EXISTS task_checkpoint_artefacts_incremental_idx
+ON task_checkpoint_artefacts (
+    repo_id,
+    session_id,
+    tool_use_id,
+    is_incremental,
+    incremental_sequence
+);
 
 CREATE TABLE IF NOT EXISTS checkpoint_blobs (
     blob_id TEXT PRIMARY KEY,

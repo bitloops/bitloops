@@ -12,12 +12,13 @@ fn git_ok(repo_root: &std::path::Path, args: &[&str]) -> String {
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_checkpoint_schema(repo_root: &std::path::Path) {
@@ -60,6 +61,7 @@ fn setup_git_repo() -> TempDir {
         dir.path(),
         &["config", "user.email", "explain-test@example.com"],
     );
+    crate::test_support::git_fixtures::write_test_daemon_config(dir.path());
     dir
 }
 
@@ -167,21 +169,21 @@ fn resolve_branch_display_name_handles_empty_and_named_branches() {
 }
 
 #[test]
-fn compute_reachable_from_main_returns_empty_on_default_branch_and_uses_master_fallback() {
+fn compute_reachable_from_default_branch_returns_empty_on_default_branch_and_uses_custom_name() {
     let repo = setup_git_repo();
     assert!(
-        compute_reachable_from_main(repo.path(), true).is_empty(),
+        compute_reachable_from_default_branch(repo.path(), "main", true).is_empty(),
         "default branch should not compute a reachable-main set"
     );
 
-    git_ok(repo.path(), &["checkout", "-B", "master"]);
-    let master_sha = commit_file(repo.path(), "README.md", "seed", "initial commit");
-    git_ok(repo.path(), &["checkout", "-b", "feature/master-fallback"]);
+    git_ok(repo.path(), &["checkout", "-B", "trunk"]);
+    let trunk_sha = commit_file(repo.path(), "README.md", "seed", "initial commit");
+    git_ok(repo.path(), &["checkout", "-b", "feature/custom-default"]);
 
-    let reachable = compute_reachable_from_main(repo.path(), false);
+    let reachable = compute_reachable_from_default_branch(repo.path(), "trunk", false);
     assert!(
-        reachable.contains(&master_sha),
-        "expected fallback traversal through master to include the default-branch head"
+        reachable.contains(&trunk_sha),
+        "expected traversal through the resolved default branch to include the default-branch head"
     );
 }
 

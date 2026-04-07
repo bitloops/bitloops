@@ -179,7 +179,7 @@ impl SyncCoordinator {
                 repo_provider: cfg.repo.provider.clone(),
                 repo_organisation: cfg.repo.organization.clone(),
                 repo_identity: cfg.repo.identity.clone(),
-                config_root: cfg.config_root.clone(),
+                daemon_config_root: cfg.daemon_config_root.clone(),
                 repo_root: cfg.repo_root.clone(),
                 source,
                 mode,
@@ -273,7 +273,11 @@ impl SyncCoordinator {
             organization: task.repo_organisation.clone(),
             identity: task.repo_identity.clone(),
         };
-        let cfg = DevqlConfig::from_roots(task.config_root.clone(), task.repo_root.clone(), repo)?;
+        let cfg = DevqlConfig::from_roots(
+            task.daemon_config_root.clone(),
+            task.repo_root.clone(),
+            repo,
+        )?;
         let requested_mode = sync_task_mode_to_host(&task.mode);
 
         let schema_outcome = match crate::host::devql::prepare_sync_execution_schema(
@@ -588,7 +592,7 @@ mod tests {
             repo_provider: cfg.repo.provider.clone(),
             repo_organisation: cfg.repo.organization.clone(),
             repo_identity: cfg.repo.identity.clone(),
-            config_root: cfg.config_root.clone(),
+            daemon_config_root: cfg.daemon_config_root.clone(),
             repo_root: cfg.repo_root.clone(),
             source: SyncTaskSource::ManualCli,
             mode: SyncTaskMode::Full,
@@ -676,7 +680,7 @@ mod tests {
             repo_provider: cfg.repo.provider.clone(),
             repo_organisation: cfg.repo.organization.clone(),
             repo_identity: cfg.repo.identity.clone(),
-            config_root: cfg.config_root.clone(),
+            daemon_config_root: cfg.daemon_config_root.clone(),
             repo_root: cfg.repo_root.clone(),
             source: SyncTaskSource::ManualCli,
             mode: SyncTaskMode::Full,
