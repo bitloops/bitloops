@@ -289,6 +289,7 @@ async fn slim_graphql_health_and_default_branch_after_init() {
 #[tokio::test]
 async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
@@ -407,6 +408,7 @@ async fn devql_ingest_mutation_with_backfill_limits_history_window() {
     use rusqlite::OptionalExtension;
 
     let repo = seed_graphql_mutation_repo();
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     fs::write(
         repo.path().join("src/lib.rs"),
         "pub fn answer() -> i32 {\n    42\n}\n\npub fn second() -> i32 {\n    2\n}\n",
@@ -493,6 +495,7 @@ async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
     use rusqlite::OptionalExtension;
 
     let repo = seed_graphql_mutation_repo();
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     fs::write(
         repo.path().join("src/lib.rs"),
         "pub fn answer() -> i32 {\n    42\n}\n\npub fn second() -> i32 {\n    2\n}\n",
@@ -779,6 +782,7 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
         return;
     }
     let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     let server = match MockSequentialHttpServer::try_start(vec![
         MockHttpResponse::json(
             200,
@@ -1042,6 +1046,7 @@ async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flo
         return;
     }
     let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     let server = match MockSequentialHttpServer::try_start(vec![MockHttpResponse::json(
         500,
         json!({ "errorMessages": ["provider boom"] }),

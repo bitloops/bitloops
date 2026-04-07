@@ -67,13 +67,9 @@ jobs:
         run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings
 
   test-fast:
-    name: Fast test lane (threads=${{ matrix.test_threads }})
+    name: Fast test lane
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        test_threads: [1, 4, 8]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -83,7 +79,7 @@ jobs:
           shared-key: dev-ci
           cache-workspace-crates: true
       - name: Run fast test lane
-        run: cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast --no-default-features -- --format=terse --test-threads=${{ matrix.test_threads }}
+        run: cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast --no-default-features -- --format=terse --test-threads=8
 
   test-smoke:
     name: Merge smoke lane

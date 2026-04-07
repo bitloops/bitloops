@@ -50,7 +50,7 @@ fn run_clean_at(w: &mut dyn Write, force: bool, start: &Path) -> Result<()> {
             }),
     );
 
-    run_clean_with_items(w, force, &items)
+    run_clean_with_items_at_root(w, force, &items, Some(&repo_root))
 }
 
 pub fn run_clean_with_items(w: &mut dyn Write, force: bool, items: &[CleanupItem]) -> Result<()> {

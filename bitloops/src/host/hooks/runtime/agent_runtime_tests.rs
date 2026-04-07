@@ -1499,50 +1499,52 @@ fn stop_with_empty_session_id_falls_back_to_unknown_session() {
 fn stop_with_empty_session_id_does_not_conflate_existing_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
-    let strat = RecordingStrategy::default();
+    with_process_state(Some(dir.path()), &[], || {
+        let backend = LocalFileBackend::new(dir.path());
+        let strat = RecordingStrategy::default();
 
-    backend
-        .save_session(&SessionState {
-            session_id: "real-session".to_string(),
-            phase: SessionPhase::Active,
-            ..Default::default()
-        })
+        backend
+            .save_session(&SessionState {
+                session_id: "real-session".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .save_pre_prompt(&PrePromptState {
+                session_id: "real-session".to_string(),
+                prompt: "real prompt".to_string(),
+                transcript_path: String::new(),
+                ..Default::default()
+            })
+            .unwrap();
+        fs::write(dir.path().join("tracked.txt"), "unknown-fallback\n").unwrap();
+
+        handle_stop(
+            SessionInfoInput {
+                session_id: String::new(),
+                transcript_path: String::new(),
+            },
+            &backend,
+            &strat,
+            Some(dir.path()),
+        )
         .unwrap();
-    backend
-        .save_pre_prompt(&PrePromptState {
-            session_id: "real-session".to_string(),
-            prompt: "real prompt".to_string(),
-            transcript_path: String::new(),
-            ..Default::default()
-        })
-        .unwrap();
-    fs::write(dir.path().join("tracked.txt"), "unknown-fallback\n").unwrap();
 
-    handle_stop(
-        SessionInfoInput {
-            session_id: String::new(),
-            transcript_path: String::new(),
-        },
-        &backend,
-        &strat,
-        Some(dir.path()),
-    )
-    .unwrap();
+        let calls = strat
+            .step_calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(calls.len(), 1, "expected one save_step call");
+        assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
 
-    let calls = strat
-        .step_calls
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert_eq!(calls.len(), 1, "expected one save_step call");
-    assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
-
-    let real_state = backend.load_session("real-session").unwrap().unwrap();
-    assert_eq!(real_state.phase, SessionPhase::Active);
-    assert!(
-        backend.load_pre_prompt("real-session").unwrap().is_some(),
-        "fallback stop should not consume another session's pre-prompt state"
-    );
+        let real_state = backend.load_session("real-session").unwrap().unwrap();
+        assert_eq!(real_state.phase, SessionPhase::Active);
+        assert!(
+            backend.load_pre_prompt("real-session").unwrap().is_some(),
+            "fallback stop should not consume another session's pre-prompt state"
+        );
+    });
 }
 
 #[test]
