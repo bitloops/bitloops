@@ -4,10 +4,8 @@ use crate::host::capability_host::{CapabilityConfigView, StageResponse};
 
 pub const TEST_HARNESS_CAPABILITY_ID: &str = "test_harness";
 pub const TEST_HARNESS_TESTS_STAGE_ID: &str = "tests";
-pub const TEST_HARNESS_TESTS_STAGE_ALIAS_ID: &str = "test_harness_tests";
 pub const TEST_HARNESS_TESTS_SUMMARY_STAGE_ID: &str = "test_harness_tests_summary";
 pub const TEST_HARNESS_COVERAGE_STAGE_ID: &str = "coverage";
-pub const TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID: &str = "test_harness_coverage";
 pub const TEST_HARNESS_LINKAGE_INGESTER_ID: &str = "test_harness.linkage";
 pub const TEST_HARNESS_COVERAGE_INGESTER_ID: &str = "test_harness.coverage";
 pub const TEST_HARNESS_CLASSIFICATION_INGESTER_ID: &str = "test_harness.classification";
