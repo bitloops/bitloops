@@ -1,5 +1,5 @@
 pub mod db_store;
-pub(crate) mod event_sink;
+pub(crate) mod interaction_repository;
 pub(crate) mod model;
 pub mod store;
 pub(crate) mod transcript_fragment;

@@ -1,13 +1,12 @@
 use super::DevqlGraphqlContext;
 use crate::adapters::agents::canonical_agent_key;
-use crate::config::resolve_store_backend_config_for_repo;
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     ArtefactCopyLineage, Checkpoint, CheckpointFileRelation, DateTimeScalar,
 };
 use crate::host::checkpoints::strategy::manual_commit::{list_committed, read_committed_info};
 use crate::host::devql::resolve_repo_identity;
-use crate::storage::SqliteConnectionPool;
+use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -76,23 +75,22 @@ impl DevqlGraphqlContext {
         let repo_id = self.repo_id_for_scope(scope)?;
         let scope = scope.clone();
         let commit_sha = commit_sha.to_string();
-        let sqlite_path = self
-            .backend_config
-            .as_ref()
-            .context("store backend configuration unavailable")?
-            .relational
-            .resolve_sqlite_db_path_for_repo(&self.config_root)
-            .context("resolving SQLite path for commit checkpoints")?;
+        let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root.as_path())
+            .context("opening relational store for commit checkpoints")?;
+        let sqlite_path = relational.sqlite_path().to_path_buf();
 
         task::spawn_blocking(move || -> Result<Vec<Checkpoint>> {
-            let sqlite = match SqliteConnectionPool::connect_existing(sqlite_path) {
-                Ok(sqlite) => sqlite,
-                Err(err) if is_missing_sqlite_store_error(&err) => return Ok(Vec::new()),
-                Err(err) => return Err(err).context("opening checkpoint SQLite store"),
-            };
-            sqlite
-                .initialise_checkpoint_schema()
-                .context("initialising checkpoint schema for GraphQL commit checkpoints")?;
+            if !sqlite_path.is_file() {
+                return Ok(Vec::new());
+            }
+            let relational = DefaultRelationalStore::local_only(sqlite_path);
+            relational
+                .initialise_local_relational_checkpoint_schema()
+                .context(
+                    "initialising relational checkpoint schema for GraphQL commit checkpoints",
+                )?;
+            let sqlite = RelationalStore::local_sqlite_pool(&relational)
+                .context("opening checkpoint SQLite store")?;
             let checkpoint_ids = sqlite.with_connection(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT checkpoint_id
@@ -132,14 +130,15 @@ impl DevqlGraphqlContext {
     ) -> Result<Vec<CheckpointFileRelation>> {
         let repo_id = self.repo_id_for_scope(scope)?;
         let repo_root = self.repo_root_for_scope(scope)?;
-        let sqlite_path =
-            crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+        let relational_store =
+            crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
                 &repo_root,
             )?;
+        let sqlite_path = relational_store.sqlite_path().to_path_buf();
         if !sqlite_path.is_file() {
             return Ok(Vec::new());
         }
-        let relational = crate::host::devql::RelationalStorage::local_only(sqlite_path);
+        let relational = relational_store.to_local_inner();
         let rows =
             crate::host::devql::checkpoint_provenance::CheckpointFileGateway::new(&relational)
                 .list_checkpoint_files(&repo_id, checkpoint_id)
@@ -169,14 +168,15 @@ impl DevqlGraphqlContext {
     ) -> Result<Vec<ArtefactCopyLineage>> {
         let repo_id = self.repo_id_for_scope(scope)?;
         let repo_root = self.repo_root_for_scope(scope)?;
-        let sqlite_path =
-            crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+        let relational_store =
+            crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
                 &repo_root,
             )?;
+        let sqlite_path = relational_store.sqlite_path().to_path_buf();
         if !sqlite_path.is_file() {
             return Ok(Vec::new());
         }
-        let relational = crate::host::devql::RelationalStorage::local_only(sqlite_path);
+        let relational = relational_store.to_local_inner();
         let rows =
             crate::host::devql::checkpoint_provenance::CheckpointFileGateway::new(&relational)
                 .list_artefact_copy_lineage(&repo_id, artefact_id, 100)
@@ -202,13 +202,14 @@ impl DevqlGraphqlContext {
 pub(super) fn read_commit_checkpoint_mappings_all(
     repo_root: &Path,
 ) -> Result<BTreeMap<String, Vec<String>>> {
-    let cfg = resolve_store_backend_config_for_repo(repo_root)?;
-    let sqlite_path = cfg.relational.resolve_sqlite_db_path_for_repo(repo_root)?;
-    let sqlite = SqliteConnectionPool::connect_existing(sqlite_path)
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening relational store for commit-checkpoint mappings")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context("initialising relational checkpoint schema for commit-checkpoint mappings")?;
+    let sqlite = crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational)
         .context("opening SQLite database for commit-checkpoint mappings")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising checkpoint schema for commit-checkpoint mappings")?;
     let repo_id = resolve_repo_identity(repo_root)?.repo_id;
 
     sqlite.with_connection(|conn| {
@@ -233,13 +234,15 @@ pub(super) fn read_commit_checkpoint_mappings_all(
 }
 
 fn read_latest_checkpoint_commit_mappings(repo_root: &Path) -> Result<HashMap<String, String>> {
-    let cfg = resolve_store_backend_config_for_repo(repo_root)?;
-    let sqlite_path = cfg.relational.resolve_sqlite_db_path_for_repo(repo_root)?;
-    let sqlite = SqliteConnectionPool::connect_existing(sqlite_path)
+    let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
+        .context("opening relational store for latest checkpoint commit mappings")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context(
+            "initialising relational checkpoint schema for latest checkpoint commit mappings",
+        )?;
+    let sqlite = RelationalStore::local_sqlite_pool(&relational)
         .context("opening SQLite database for latest checkpoint commit mappings")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising checkpoint schema for latest checkpoint commit mappings")?;
     let repo_id = resolve_repo_identity(repo_root)?.repo_id;
 
     sqlite.with_connection(|conn| {

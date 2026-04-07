@@ -19,6 +19,20 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .expect("tokio runtime")
 }
 
+fn test_daemon_state_root(repo_root: &Path) -> PathBuf {
+    repo_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            repo_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        )
+}
+
 fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
     let sqlite_path = settings["stores"]["relational"]["sqlite_path"]
         .as_str()
@@ -62,15 +76,22 @@ fn seed_devql_cli_repo() -> TempDir {
     git_ok(repo_root, &["add", "."]);
     git_ok(repo_root, &["commit", "-m", "Seed DevQL CLI repo"]);
 
+    let daemon_state_root = test_daemon_state_root(repo_root);
     write_envelope_config(
         repo_root,
         json!({
             "stores": {
                 "relational": {
-                    "sqlite_path": ".bitloops/stores/devql.sqlite"
+                    "sqlite_path": daemon_state_root
+                        .join("stores")
+                        .join("relational")
+                        .join("devql.sqlite")
                 },
                 "events": {
-                    "duckdb_path": ".bitloops/stores/events.duckdb"
+                    "duckdb_path": daemon_state_root
+                        .join("stores")
+                        .join("event")
+                        .join("events.duckdb")
                 }
             },
             "semantic": {
@@ -761,15 +782,17 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
 #[test]
 fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
     let repo = seed_devql_cli_repo();
+    let daemon_state_root = test_daemon_state_root(repo.path());
     fs::write(
         repo.path()
             .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
-        r#"[stores]
+        format!(
+            r#"[stores]
 [stores.relational]
-sqlite_path = ".bitloops/stores/devql.sqlite"
+sqlite_path = {sqlite_path:?}
 
 [stores.events]
-duckdb_path = ".bitloops/stores/events.duckdb"
+duckdb_path = {duckdb_path:?}
 
 [semantic]
 provider = "disabled"
@@ -778,6 +801,15 @@ provider = "disabled"
 summary_mode = "off"
 embedding_mode = "off"
 "#,
+            sqlite_path = daemon_state_root
+                .join("stores")
+                .join("relational")
+                .join("devql.sqlite"),
+            duckdb_path = daemon_state_root
+                .join("stores")
+                .join("event")
+                .join("events.duckdb"),
+        ),
     )
     .expect("write deterministic-only config");
     let graphql_calls = Rc::new(RefCell::new(0usize));

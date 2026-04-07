@@ -12,7 +12,6 @@ pub(super) fn load_stage_covering_tests(
     conn: &Connection,
     repo_id: &str,
     production_symbol_id: &str,
-    commit_sha: Option<&str>,
     min_confidence: Option<f64>,
     linkage_source: Option<&str>,
     limit: usize,
@@ -20,6 +19,7 @@ pub(super) fn load_stage_covering_tests(
     let mut sql = String::from(
         "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
          parent.name AS suite_name, ts.path AS file_path, \
+         ts.start_line, ts.end_line, \
          COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) AS confidence, \
          ts.discovery_source, \
          COALESCE(json_extract(te.metadata, '$.link_source'), 'unknown') AS linkage_source, \
@@ -36,10 +36,6 @@ pub(super) fn load_stage_covering_tests(
            AND ts.canonical_kind = 'test_scenario'",
     );
     let mut param_idx = 3;
-    if commit_sha.is_some() {
-        sql.push_str(&format!(" AND te.commit_sha = ?{param_idx}"));
-        param_idx += 1;
-    }
     if min_confidence.is_some() {
         sql.push_str(&format!(
             " AND COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) >= ?{param_idx}"
@@ -64,9 +60,6 @@ pub(super) fn load_stage_covering_tests(
         Box::new(repo_id.to_string()),
         Box::new(production_symbol_id.to_string()),
     ];
-    if let Some(sha) = commit_sha {
-        params_vec.push(Box::new(sha.to_string()));
-    }
     if let Some(mc) = min_confidence {
         params_vec.push(Box::new(mc));
     }
@@ -83,10 +76,12 @@ pub(super) fn load_stage_covering_tests(
                 test_name: row.get(1)?,
                 suite_name: row.get(2)?,
                 file_path: row.get(3)?,
-                confidence: row.get(4)?,
-                discovery_source: row.get(5)?,
-                linkage_source: row.get(6)?,
-                linkage_status: row.get(7)?,
+                start_line: row.get(4)?,
+                end_line: row.get(5)?,
+                confidence: row.get(6)?,
+                discovery_source: row.get(7)?,
+                linkage_source: row.get(8)?,
+                linkage_status: row.get(9)?,
             })
         })
         .context("failed querying stage covering tests")?;

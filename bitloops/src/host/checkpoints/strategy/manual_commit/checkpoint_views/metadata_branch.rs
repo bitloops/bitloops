@@ -88,6 +88,7 @@ pub(crate) fn redact_code_learnings(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn copy_metadata_dir(
     metadata_dir: &Path,
     base_path: &str,
@@ -95,6 +96,7 @@ pub(crate) fn copy_metadata_dir(
     add_directory_to_entries_with_abs_path(metadata_dir, base_path)
 }
 
+#[cfg(test)]
 pub(crate) fn add_directory_to_entries_with_abs_path(
     metadata_dir: &Path,
     base_path: &str,

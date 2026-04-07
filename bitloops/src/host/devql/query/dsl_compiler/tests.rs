@@ -262,3 +262,41 @@ fn compile_rejects_multiple_registered_stages() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn compile_tests_stage_defaults_to_covering_test_line_range_fields() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts(kind:"function")->tests()->limit(5)"#)
+            .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert!(
+        graphql.contains("coveringTests"),
+        "expected coveringTests selection in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("startLine"),
+        "expected covering test startLine in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("endLine"),
+        "expected covering test endLine in compiled graphql: {graphql}"
+    );
+    assert!(
+        !graphql.contains("confidence"),
+        "did not expect confidence in default tests() selections: {graphql}"
+    );
+    assert!(
+        !graphql.contains("discoverySource"),
+        "did not expect discoverySource in default tests() selections: {graphql}"
+    );
+    assert!(
+        !graphql.contains("linkageSource"),
+        "did not expect linkageSource in default tests() selections: {graphql}"
+    );
+    assert!(
+        !graphql.contains("linkageStatus"),
+        "did not expect linkageStatus in default tests() selections: {graphql}"
+    );
+}

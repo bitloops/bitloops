@@ -9,11 +9,42 @@ pub(super) struct RunServerOptions<'a> {
     pub telemetry: Option<bool>,
 }
 
+struct DaemonConfigPathOverrideGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl DaemonConfigPathOverrideGuard {
+    fn install(config_path: &Path) -> Self {
+        let previous = std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE);
+        // SAFETY: the daemon process installs this override during startup on a dedicated process
+        // path and drops it during shutdown.
+        unsafe {
+            std::env::set_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, config_path);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for DaemonConfigPathOverrideGuard {
+    fn drop(&mut self) {
+        // SAFETY: paired with install() above; the daemon owns this process state for the duration
+        // of the server lifetime.
+        unsafe {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, previous);
+            } else {
+                std::env::remove_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE);
+            }
+        }
+    }
+}
+
 pub(super) async fn run_server(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
     options: RunServerOptions<'_>,
 ) -> Result<()> {
+    let _config_override = DaemonConfigPathOverrideGuard::install(&daemon_config.config_path);
     log::debug!(
         "daemon boot: mode={} config={} host={:?} port={}",
         options.mode,
@@ -38,16 +69,14 @@ pub(super) async fn run_server(
         .config_root
         .canonicalize()
         .unwrap_or_else(|_| daemon_config.config_root.clone());
-    let runtime_path = runtime_state_path(&config_root);
     let service_metadata_path = service_metadata_path(&config_root);
     let current_fingerprint = current_binary_fingerprint()?;
     let on_ready_config = daemon_config.clone();
-    let on_ready_runtime_path = runtime_path.clone();
     let on_ready_service_metadata_path = service_metadata_path.clone();
     let on_ready_service_name = options.service_name.clone();
     let ready_hook: DashboardReadyHook = std::sync::Arc::new(move |ready| {
         write_runtime_state(
-            &on_ready_runtime_path,
+            &runtime_state_path(&on_ready_config.config_root),
             &DaemonRuntimeState {
                 version: 1,
                 config_path: on_ready_config.config_path.clone(),
@@ -74,14 +103,13 @@ pub(super) async fn run_server(
         {
             metadata.last_url = Some(ready.url.clone());
             metadata.last_pid = Some(std::process::id());
-            write_json(&on_ready_service_metadata_path, &metadata)?;
+            write_service_metadata(&on_ready_service_metadata_path, &metadata)?;
         }
 
         Ok(())
     });
-    let on_shutdown_runtime_path = runtime_path.clone();
     let on_shutdown = std::sync::Arc::new(move || {
-        let _ = fs::remove_file(&on_shutdown_runtime_path);
+        let _ = delete_runtime_state();
     });
 
     api::run_with_options(
@@ -216,7 +244,7 @@ pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) ->
             && !matches!(runtime.mode, DaemonMode::Service)
         {
             terminate_process(runtime.pid)?;
-            let _ = fs::remove_file(runtime_state_path(repo_root));
+            let _ = delete_runtime_state();
         } else {
             bail!(
                 "Bitloops daemon is already running for this repository at {}. Use `bitloops daemon restart` if you need to replace it.",

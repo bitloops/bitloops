@@ -41,7 +41,7 @@ fn claude_settings_path(repo_root: &Path) -> PathBuf {
 
 /// Returns true if the command is a Bitloops-managed hook.
 fn is_bitloops_hook(command: &str) -> bool {
-    command.starts_with(BITLOOPS_HOOK_PREFIX)
+    crate::adapters::agents::is_managed_hook_command(command, &[BITLOOPS_HOOK_PREFIX])
 }
 
 /// Returns true if `command` appears in any hook of any matcher.
@@ -141,6 +141,14 @@ fn write_settings_file(path: &Path, settings: &Map<String, Value>) -> Result<()>
 ///
 pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
     let settings_path = claude_settings_path(repo_root);
+    let cmd_session_start = crate::adapters::agents::managed_hook_command(CMD_SESSION_START);
+    let cmd_session_end = crate::adapters::agents::managed_hook_command(CMD_SESSION_END);
+    let cmd_stop = crate::adapters::agents::managed_hook_command(CMD_STOP);
+    let cmd_user_prompt_submit =
+        crate::adapters::agents::managed_hook_command(CMD_USER_PROMPT_SUBMIT);
+    let cmd_pre_task = crate::adapters::agents::managed_hook_command(CMD_PRE_TASK);
+    let cmd_post_task = crate::adapters::agents::managed_hook_command(CMD_POST_TASK);
+    let cmd_post_todo = crate::adapters::agents::managed_hook_command(CMD_POST_TODO);
 
     // Parse existing settings as a raw map — preserves ALL unknown fields and hook types.
     let mut raw_settings: Map<String, Value> = match fs::read(&settings_path) {
@@ -175,32 +183,32 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
     let mut count = 0usize;
 
     // Session hooks use empty matcher; tool-use hooks use named matcher.
-    if !hook_command_exists(&session_start, CMD_SESSION_START) {
-        session_start = add_hook_to_matcher(session_start, "", CMD_SESSION_START);
+    if !hook_command_exists(&session_start, &cmd_session_start) {
+        session_start = add_hook_to_matcher(session_start, "", &cmd_session_start);
         count += 1;
     }
-    if !hook_command_exists(&session_end, CMD_SESSION_END) {
-        session_end = add_hook_to_matcher(session_end, "", CMD_SESSION_END);
+    if !hook_command_exists(&session_end, &cmd_session_end) {
+        session_end = add_hook_to_matcher(session_end, "", &cmd_session_end);
         count += 1;
     }
-    if !hook_command_exists(&stop, CMD_STOP) {
-        stop = add_hook_to_matcher(stop, "", CMD_STOP);
+    if !hook_command_exists(&stop, &cmd_stop) {
+        stop = add_hook_to_matcher(stop, "", &cmd_stop);
         count += 1;
     }
-    if !hook_command_exists(&user_prompt_submit, CMD_USER_PROMPT_SUBMIT) {
-        user_prompt_submit = add_hook_to_matcher(user_prompt_submit, "", CMD_USER_PROMPT_SUBMIT);
+    if !hook_command_exists(&user_prompt_submit, &cmd_user_prompt_submit) {
+        user_prompt_submit = add_hook_to_matcher(user_prompt_submit, "", &cmd_user_prompt_submit);
         count += 1;
     }
-    if !hook_command_exists_with_matcher(&pre_tool_use, "Task", CMD_PRE_TASK) {
-        pre_tool_use = add_hook_to_matcher(pre_tool_use, "Task", CMD_PRE_TASK);
+    if !hook_command_exists_with_matcher(&pre_tool_use, "Task", &cmd_pre_task) {
+        pre_tool_use = add_hook_to_matcher(pre_tool_use, "Task", &cmd_pre_task);
         count += 1;
     }
-    if !hook_command_exists_with_matcher(&post_tool_use, "Task", CMD_POST_TASK) {
-        post_tool_use = add_hook_to_matcher(post_tool_use, "Task", CMD_POST_TASK);
+    if !hook_command_exists_with_matcher(&post_tool_use, "Task", &cmd_post_task) {
+        post_tool_use = add_hook_to_matcher(post_tool_use, "Task", &cmd_post_task);
         count += 1;
     }
-    if !hook_command_exists_with_matcher(&post_tool_use, "TodoWrite", CMD_POST_TODO) {
-        post_tool_use = add_hook_to_matcher(post_tool_use, "TodoWrite", CMD_POST_TODO);
+    if !hook_command_exists_with_matcher(&post_tool_use, "TodoWrite", &cmd_post_todo) {
+        post_tool_use = add_hook_to_matcher(post_tool_use, "TodoWrite", &cmd_post_todo);
         count += 1;
     }
 
@@ -281,12 +289,16 @@ pub fn are_hooks_installed(repo_root: &Path) -> bool {
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
     let stop = parse_hook_type(&raw_hooks, "Stop");
-    hook_command_exists(&stop, CMD_STOP)
+    stop.iter()
+        .flat_map(|matcher| &matcher.hooks)
+        .any(|hook| is_bitloops_hook(&hook.command))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
+    use crate::test_support::process_state::with_env_var;
     use tempfile::TempDir;
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -556,10 +568,11 @@ mod tests {
 
     #[test]
     fn install_hooks_preserves_user_hooks_on_same_type() {
-        let dir = tempfile::tempdir().unwrap();
-        write_claude_settings(
-            &dir,
-            r#"{
+        with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+            let dir = tempfile::tempdir().unwrap();
+            write_claude_settings(
+                &dir,
+                r#"{
   "hooks": {
     "Stop": [
       {"matcher": "", "hooks": [{"type": "command", "command": "echo user stop hook"}]}
@@ -572,41 +585,47 @@ mod tests {
     ]
   }
 }"#,
-        );
-        install_hooks(dir.path(), false).unwrap();
+            );
+            install_hooks(dir.path(), false).unwrap();
+            let cmd_stop = crate::adapters::agents::managed_hook_command(CMD_STOP);
+            let cmd_session_start =
+                crate::adapters::agents::managed_hook_command(CMD_SESSION_START);
+            let cmd_post_task = crate::adapters::agents::managed_hook_command(CMD_POST_TASK);
+            let cmd_post_todo = crate::adapters::agents::managed_hook_command(CMD_POST_TODO);
 
-        let stop = read_hook_type(&dir, "Stop");
-        assert_hook_exists(&stop, "", "echo user stop hook", "user Stop hook");
-        assert_hook_exists(&stop, "", CMD_STOP, "Bitloops Stop hook");
+            let stop = read_hook_type(&dir, "Stop");
+            assert_hook_exists(&stop, "", "echo user stop hook", "user Stop hook");
+            assert_hook_exists(&stop, "", &cmd_stop, "Bitloops Stop hook");
 
-        let session_start = read_hook_type(&dir, "SessionStart");
-        assert_hook_exists(
-            &session_start,
-            "",
-            "echo user session start",
-            "user SessionStart hook",
-        );
-        assert_hook_exists(
-            &session_start,
-            "",
-            CMD_SESSION_START,
-            "Bitloops SessionStart hook",
-        );
+            let session_start = read_hook_type(&dir, "SessionStart");
+            assert_hook_exists(
+                &session_start,
+                "",
+                "echo user session start",
+                "user SessionStart hook",
+            );
+            assert_hook_exists(
+                &session_start,
+                "",
+                &cmd_session_start,
+                "Bitloops SessionStart hook",
+            );
 
-        let post_tool_use = read_hook_type(&dir, "PostToolUse");
-        assert_hook_exists(
-            &post_tool_use,
-            "Write",
-            "echo user wrote file",
-            "user Write hook",
-        );
-        assert_hook_exists(&post_tool_use, "Task", CMD_POST_TASK, "Bitloops Task hook");
-        assert_hook_exists(
-            &post_tool_use,
-            "TodoWrite",
-            CMD_POST_TODO,
-            "Bitloops TodoWrite hook",
-        );
+            let post_tool_use = read_hook_type(&dir, "PostToolUse");
+            assert_hook_exists(
+                &post_tool_use,
+                "Write",
+                "echo user wrote file",
+                "user Write hook",
+            );
+            assert_hook_exists(&post_tool_use, "Task", &cmd_post_task, "Bitloops Task hook");
+            assert_hook_exists(
+                &post_tool_use,
+                "TodoWrite",
+                &cmd_post_todo,
+                "Bitloops TodoWrite hook",
+            );
+        });
     }
 
     #[test]
@@ -704,10 +723,11 @@ mod tests {
 
     #[test]
     fn install_hooks_force_replaces_stale_bitloops_hooks() {
-        let dir = tempfile::tempdir().unwrap();
-        write_claude_settings(
-            &dir,
-            r#"{
+        with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+            let dir = tempfile::tempdir().unwrap();
+            write_claude_settings(
+                &dir,
+                r#"{
   "hooks": {
     "Stop": [
       {"matcher": "", "hooks": [{"type": "command", "command": "bitloops hooks claude-code stop --stale"}]},
@@ -718,32 +738,92 @@ mod tests {
     ]
   }
 }"#,
-        );
+            );
 
-        install_hooks(dir.path(), true).unwrap();
+            install_hooks(dir.path(), true).unwrap();
+            let cmd_stop = crate::adapters::agents::managed_hook_command(CMD_STOP);
+            let cmd_post_task = crate::adapters::agents::managed_hook_command(CMD_POST_TASK);
 
-        let stop = read_hook_type(&dir, "Stop");
-        assert_hook_exists(&stop, "", CMD_STOP, "fresh Bitloops Stop hook");
-        assert_hook_exists(&stop, "", "echo user stop hook", "user Stop hook");
-        assert!(
-            !hook_command_exists(&stop, "bitloops hooks claude-code stop --stale"),
-            "stale Bitloops stop hook should be removed"
-        );
+            let stop = read_hook_type(&dir, "Stop");
+            assert_hook_exists(&stop, "", &cmd_stop, "fresh Bitloops Stop hook");
+            assert_hook_exists(&stop, "", "echo user stop hook", "user Stop hook");
+            assert!(
+                !hook_command_exists(&stop, "bitloops hooks claude-code stop --stale"),
+                "stale Bitloops stop hook should be removed"
+            );
 
-        let post_tool_use = read_hook_type(&dir, "PostToolUse");
-        assert_hook_exists(
-            &post_tool_use,
-            "Task",
-            CMD_POST_TASK,
-            "fresh Bitloops Task hook",
-        );
-        assert!(
-            !hook_command_exists_with_matcher(
+            let post_tool_use = read_hook_type(&dir, "PostToolUse");
+            assert_hook_exists(
                 &post_tool_use,
                 "Task",
-                "bitloops hooks claude-code post-task --stale"
-            ),
-            "stale Bitloops post-task hook should be removed"
+                &cmd_post_task,
+                "fresh Bitloops Task hook",
+            );
+            assert!(
+                !hook_command_exists_with_matcher(
+                    &post_tool_use,
+                    "Task",
+                    "bitloops hooks claude-code post-task --stale"
+                ),
+                "stale Bitloops post-task hook should be removed"
+            );
+        });
+    }
+
+    #[test]
+    fn install_hooks_prefixes_commands_with_explicit_daemon_config_override() {
+        let dir = tempfile::tempdir().unwrap();
+
+        with_env_var(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some("/tmp/config root/config.toml"),
+            || {
+                install_hooks(dir.path(), false).unwrap();
+            },
+        );
+
+        let session_start = read_hook_type(&dir, "SessionStart");
+        assert_hook_exists(
+            &session_start,
+            "",
+            "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start",
+            "Bitloops SessionStart hook with daemon config override",
+        );
+
+        let stop = read_hook_type(&dir, "Stop");
+        assert_hook_exists(
+            &stop,
+            "",
+            "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code stop",
+            "Bitloops Stop hook with daemon config override",
+        );
+    }
+
+    #[test]
+    fn are_hooks_installed_accepts_env_prefixed_bitloops_hook_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        write_claude_settings(
+            &dir,
+            r#"{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code stop"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+        );
+
+        assert!(
+            are_hooks_installed(dir.path()),
+            "env-prefixed Bitloops hook should count as installed"
         );
     }
 

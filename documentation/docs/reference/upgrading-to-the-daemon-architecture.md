@@ -23,19 +23,23 @@ Bitloops has moved to a daemon-first architecture. This release intentionally br
 
 ## Removed Defaults
 
-The older repo-local defaults are no longer used automatically:
+The older repo-local defaults are no longer used automatically for configured relational, event, blob, cache, and scratch paths:
 
 - `config.json`
 - `config.local.json`
 - `settings.json`
 - `settings.local.json`
-- `.bitloops/stores/...`
+- `.bitloops/stores/relational/...`
+- `.bitloops/stores/event/...`
+- `.bitloops/stores/blob/...`
 - `.bitloops/embeddings/...`
 - `.bitloops/tmp/...`
 - `.bitloops/metadata/...`
 - `~/.bitloops/dashboard/bundle`
 
 There is no automatic migration and no silent legacy fallback.
+
+Bitloops does still keep repo-scoped workflow runtime state locally in `<config root>/stores/runtime/runtime.sqlite`.
 
 ## New Configuration Model
 
@@ -50,7 +54,8 @@ Default path categories now follow platform app directories:
 - Config directory: daemon config
 - Data directory: relational DB, event DB, blob store
 - Cache directory: embedding model downloads, dashboard bundle
-- State directory: daemon runtime metadata and hook scratch files
+- State directory: daemon runtime metadata, daemon runtime SQLite, and hook scratch files
+- Repo runtime directory: `<config root>/stores/runtime/runtime.sqlite`
 
 ## What To Update
 
@@ -58,11 +63,12 @@ Default path categories now follow platform app directories:
 2. Move repo capture policy into `.bitloops.toml`.
 3. Move local repo overrides into `.bitloops.local.toml`.
 4. Run `bitloops start` interactively on each machine, or `bitloops start --create-default-config --telemetry` in non-interactive setups, to create the default daemon config and default local store files.
-5. Answer the telemetry prompt during that first `start`, or pass an explicit telemetry flag.
-6. Run `bitloops init --sync=true` or `bitloops init --sync=false` in each repo or subproject to create `.bitloops.local.toml` and install hooks. Use `bitloops init --install-default-daemon` if you want init to bootstrap the default daemon service first.
-7. Use `bitloops enable` and `bitloops disable` to toggle capture in project policy.
-8. Use `bitloops devql ingest` for checkpoint/history ingestion, and `bitloops devql sync --status` when you want to queue and follow a current-state reconciliation.
-9. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.
+5. If you use an explicit repo-scoped or test config, run `bitloops start --config /path/to/config.toml --bootstrap-local-stores` to create the matching local file-backed stores before the first start.
+6. Answer the telemetry prompt during that first `start`, or pass an explicit telemetry flag.
+7. Run `bitloops init --sync=true` or `bitloops init --sync=false` in each repo or subproject to create `.bitloops.local.toml` and install hooks. Use `bitloops init --install-default-daemon` if you want init to bootstrap the default daemon service first.
+8. Use `bitloops enable` and `bitloops disable` to toggle capture in project policy.
+9. Use `bitloops devql ingest` for checkpoint/history ingestion, and `bitloops devql sync --status` when you want to queue and follow a current-state reconciliation.
+10. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.
 
 ## Examples
 

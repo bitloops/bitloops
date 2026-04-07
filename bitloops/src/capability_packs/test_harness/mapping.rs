@@ -7,6 +7,7 @@ pub(crate) mod model;
 mod tests;
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -50,9 +51,14 @@ pub(crate) fn execute(
 
     let candidates = discover_test_files(repo_dir, &supports)?;
     let mut discovery_batch = TestDiscoveryBatch::default();
+    let mut content_ids = HashMap::new();
 
     for candidate in candidates {
         let absolute_path = repo_dir.join(&candidate.relative_path);
+        let content_id = crate::host::devql::sync::content_identity::compute_blob_oid(&fs::read(
+            &absolute_path,
+        )?);
+        content_ids.insert(candidate.relative_path.clone(), content_id);
         let provider = find_language_support(&supports, &candidate.language_id)?;
         discovery_batch
             .files
@@ -66,7 +72,7 @@ pub(crate) fn execute(
 
     let mut materialization = MaterializationContext {
         repo_id,
-        commit_sha,
+        content_ids: &content_ids,
         production,
         production_index: &production_index,
         test_artefacts: &mut test_artefacts,

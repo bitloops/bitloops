@@ -144,7 +144,7 @@ mod tests {
     fn sample_cfg() -> DevqlConfig {
         let repo_root = sample_repo_root();
         DevqlConfig {
-            config_root: repo_root.clone(),
+            daemon_config_root: repo_root.clone(),
             repo_root,
             repo: RepoIdentity {
                 provider: "git".to_string(),

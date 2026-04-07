@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **RuntimeStore and RelationalStore storage boundaries**: introduced `host/runtime_store` as the local-only SQLite runtime boundary and `host/relational_store` as the approved relational SQL boundary over local SQLite plus optional Postgres. Repo workflow runtime state now uses `.bitloops/stores/runtime/runtime.sqlite`, daemon runtime documents now use `<state dir>/daemon/runtime.sqlite`, and the interaction spool, daemon runtime/service/supervisor documents, sync queue state, enrichment queue state, session runtime tables, and temporary checkpoint state all route through the new runtime store surface.
+- **Explicit-config store bootstrap for daemon start**: added `bitloops start --bootstrap-local-stores` so Bitloops can materialise the local SQLite, DuckDB, and blob-store artefacts required by an existing explicit daemon config before startup. This is especially useful for repo-scoped configs and automated test runs.
 - **QAT tests**: Added a new QAT (Quality Acceptance Tests) suite under bitloops/qat/features with 8 feature files / 27 scenarios.
 - **Normalised checkpoint provenance relations**: committed checkpoint storage now writes canonical `checkpoint_files` and `checkpoint_artefacts` relations instead of persisting committed `files_touched`. File provenance records add/modify/delete/rename semantics with before/after paths and blob SHAs, while artefact provenance is emitted only for semantic artefact changes.
 - **First-class checkpoint copy provenance**: checkpoint file provenance now supports `copy` as a first-class change kind with explicit copy-origin path/blob metadata, `checkpoint_artefact_lineage` now records copy lineage between source and destination artefacts, and structured checkpoint/detail reads expose copy provenance through GraphQL `fileRelations`, artefact `copyLineage`, and dashboard/API checkpoint file rows while legacy `filesTouched` summaries remain path-only.
@@ -28,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Storage responsibilities are now split by purpose**: queryable checkpoint and DevQL relational state continue to live behind `RelationalStore`, while local workflow state such as sessions, temporary checkpoints, pre-prompt markers, pre-task markers, daemon runtime documents, queue state, and the interaction spool now live behind `RuntimeStore`.
 - **Event-first checkpoint derivation hardening**: `post_commit` now treats the Event DB as the normal interaction read path, while the local spool remains a write-ahead buffer and local mirror only. Checkpoint condensation now prefers captured interaction turns for prompts, token usage, file overlap, and transcript scoping, with transcript-file fallback limited to the committed transcript blob when turn offsets are unavailable. Post-commit coverage is now split between fast fake repository/spool tests and ignored real-DB derivation coverage for DuckDB and ClickHouse.
 - **Test target gating for local performance**: switched `bitloops` to explicit `[[test]]` declarations (`autotests = false`), introduced `slow-tests`, and gated heavy e2e/integration binaries behind `required-features = ["slow-tests"]` so default local test runs stay fast.
 - **DuckDB local defaults**: changed default crate features to opt out of bundled DuckDB compilation (`default = []`), keeping bundled mode explicit for offline/exotic target paths.
@@ -42,6 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Explicit daemon config startup inside nested Git repos**: daemon startup and dashboard DB initialisation now honour the selected explicit config path even when that config lives inside a larger Git repository. This fixes false startup health-check failures and detached-start timeouts caused by resolving store backends from the wrong repo root, and makes `--bootstrap-local-stores` work reliably for repo-scoped test configs.
 - **Stop Daemon on Uninstall**: made sure that the Bitloops daemon is stopped when the service is uninstalled in order to release the port.
 - **DevQL ingest telemetry metadata**: removed the stale `max_checkpoints` property from the `bitloops devql ingest` telemetry action after the CLI command stopped exposing that flag, restoring clean compilation of the CLI telemetry surface and adding regression coverage for the current empty-args ingest command.
 - **Sandbox-safe local test lanes**: isolated the remaining environment-sensitive test cases so repository-root default lanes stay clean in sandboxed runs. Socket-bound tests now skip cleanly when loopback binds are not permitted, and git-fixture tests disable local commit/tag signing so host SSH signing configuration does not leak into test repos.

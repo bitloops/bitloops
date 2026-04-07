@@ -46,11 +46,11 @@ pub(crate) fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite()
         "write_committed should persist to DB/blob storage: {result:?}"
     );
 
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(dir.path()))
         .expect("connect checkpoint sqlite");
     sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+        .initialise_relational_checkpoint_schema()
+        .expect("initialise relational checkpoint schema");
     let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
         .expect("resolve repo identity")
         .repo_id;
@@ -215,11 +215,11 @@ pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
         "update_summary should persist to checkpoint_sessions: {update:?}"
     );
 
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(dir.path()))
         .expect("connect checkpoint sqlite");
     sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+        .initialise_relational_checkpoint_schema()
+        .expect("initialise relational checkpoint schema");
     let summary_json = sqlite
         .with_connection(|conn| -> anyhow::Result<Option<Option<String>>> {
             conn.query_row(

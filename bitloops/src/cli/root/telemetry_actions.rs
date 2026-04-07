@@ -152,6 +152,9 @@ fn daemon_start_action(
     if args.create_default_config {
         flags.push("create_default_config");
     }
+    if args.bootstrap_local_stores {
+        flags.push("bootstrap_local_stores");
+    }
     if args.detached {
         flags.push("detached");
     }

@@ -152,7 +152,7 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
-    cfg.config_root = repo_root.clone();
+    cfg.daemon_config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let events_cfg = default_events_cfg();
     let sqlite_path = temp.path().join("relational.sqlite");
@@ -408,7 +408,7 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
-    cfg.config_root = repo_root.clone();
+    cfg.daemon_config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let sqlite_path = temp.path().join("relational.sqlite");
     if let Some(parent) = sqlite_path.parent() {
@@ -476,17 +476,16 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
         };
         conn.execute(
             "INSERT INTO test_artefacts_current (
-                artefact_id, symbol_id, repo_id, commit_sha, blob_sha, path, language,
+                repo_id, path, content_id, symbol_id, artefact_id, language,
                 canonical_kind, symbol_fqn, name, parent_artefact_id, parent_symbol_id,
-                start_line, end_line, modifiers, discovery_source, revision_kind, revision_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                start_line, end_line, modifiers, discovery_source
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
-                artefact_id,
-                symbol_id,
                 repo_id,
-                commit_sha,
-                format!("blob:{commit_sha}"),
                 "src/user/service_tests.rs",
+                format!("blob:{commit_sha}"),
+                symbol_id,
+                artefact_id,
                 "rust",
                 canonical_kind,
                 symbol_fqn,
@@ -497,8 +496,6 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
                 10i64,
                 "[]",
                 "source",
-                "commit",
-                commit_sha,
             ],
         )
         .expect("insert test artefact");
@@ -522,16 +519,14 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
     ] {
         conn.execute(
             "INSERT INTO test_artefact_edges_current (
-                edge_id, repo_id, commit_sha, blob_sha, path, from_artefact_id, from_symbol_id,
-                to_artefact_id, to_symbol_id, edge_kind, language, start_line, end_line,
-                metadata, revision_kind, revision_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                repo_id, path, content_id, edge_id, from_artefact_id, from_symbol_id,
+                to_artefact_id, to_symbol_id, edge_kind, language, start_line, end_line, metadata
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
-                edge_id,
                 repo_id,
-                commit_sha,
-                format!("blob:{commit_sha}"),
                 "src/user/service_tests.rs",
+                format!("blob:{commit_sha}"),
+                edge_id,
                 from_artefact_id,
                 from_symbol_id,
                 "artefact::create_user",
@@ -541,8 +536,6 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
                 5i64,
                 8i64,
                 format!("{{\"confidence\":{confidence},\"link_source\":\"static_analysis\",\"linkage_status\":\"resolved\"}}"),
-                "commit",
-                commit_sha,
             ],
         )
         .expect("insert test link");
@@ -572,9 +565,9 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
         .get("covering_tests")
         .and_then(Value::as_array)
         .expect("should have covering_tests");
-    assert_eq!(covering_tests.len(), 1);
+    assert_eq!(covering_tests.len(), 2);
     assert_eq!(
         covering_tests[0].get("test_name").and_then(Value::as_str),
-        Some("test_create_user_old")
+        Some("test_create_user_new")
     );
 }

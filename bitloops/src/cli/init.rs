@@ -303,10 +303,8 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
         .join(REPO_POLICY_LOCAL_FILE_NAME);
     let relative_local_policy = relative_local_policy.to_string_lossy().replace('\\', "/");
 
-    for entry in [relative_local_policy.as_str(), ".bitloops/"] {
-        if content.lines().any(|line| line.trim() == entry) {
-            continue;
-        }
+    let entry = relative_local_policy.as_str();
+    if !content.lines().any(|line| line.trim() == entry) {
         if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');
         }

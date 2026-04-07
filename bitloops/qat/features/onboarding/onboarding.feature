@@ -26,8 +26,7 @@ Feature: Activation and Onboarding
         And   I run InitCommit for bitloops
         And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops enable in bitloops
-        Then  the repo-local .bitloops exists in bitloops
-        And   the repo-local .bitloops.local.toml exists in bitloops
+        Then  the repo-local .bitloops.local.toml exists in bitloops
 
 
 

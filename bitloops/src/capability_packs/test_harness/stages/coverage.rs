@@ -322,7 +322,6 @@ mod tests {
             &self,
             _repo_id: &str,
             _production_symbol_id: &str,
-            _commit_sha: Option<&str>,
             _min_confidence: Option<f64>,
             _linkage_source: Option<&str>,
             _limit: usize,

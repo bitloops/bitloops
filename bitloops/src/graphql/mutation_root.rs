@@ -2,7 +2,6 @@ use async_graphql::{Context, Error, ErrorExtensions, InputObject, Object, Result
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
 
 use super::{
     DevqlGraphqlContext,
@@ -30,22 +29,6 @@ pub struct AssociateKnowledgeInput {
 #[derive(Debug, Clone, InputObject)]
 pub struct RefreshKnowledgeInput {
     pub knowledge_ref: String,
-}
-
-#[derive(Debug, Clone, InputObject)]
-pub struct SyncInput {
-    /// Run a full workspace reconciliation.
-    #[graphql(default = false)]
-    pub full: bool,
-    /// Reconcile only the specified workspace paths (comma-delimited values accepted).
-    #[graphql(default)]
-    pub paths: Option<Vec<String>>,
-    /// Rebuild sync state from the current workspace, ignoring stored manifest trust.
-    #[graphql(default = false)]
-    pub repair: bool,
-    /// Validate current-state tables against a full read-only workspace reconciliation.
-    #[graphql(default = false)]
-    pub validate: bool,
 }
 
 #[derive(Debug, Clone, InputObject)]
@@ -412,69 +395,6 @@ impl MutationRoot {
             .await
         }
         .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
-        Ok(summary.into())
-    }
-
-    async fn sync(&self, ctx: &Context<'_>, input: SyncInput) -> Result<SyncResult> {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        context
-            .require_repo_write_scope()
-            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "sync", err))?;
-        let cfg = context
-            .devql_config()
-            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "sync", err))?;
-
-        let mode = resolve_sync_mode_input(
-            input.full,
-            input.paths,
-            input.repair,
-            input.validate,
-            "sync",
-        )?;
-        let schema_outcome = crate::host::devql::prepare_sync_execution_schema(
-            &cfg,
-            "GraphQL mutation `sync`",
-            &mode,
-        )
-        .await
-        .map_err(|err| operation_error("BACKEND_ERROR", "initialisation", "sync", err))?;
-        let mode =
-            crate::host::devql::effective_sync_mode_after_schema_preparation(mode, schema_outcome);
-        let host = context.capability_host_arc().ok();
-        let (summary, file_diff, artefact_diff) =
-            crate::host::devql::run_sync_with_summary_and_observer_and_diffs(&cfg, mode, None)
-                .await
-                .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
-
-        if summary.success
-            && summary.mode != "validate"
-            && let Some(host) = host
-        {
-            match host.build_event_handler_context() {
-                Ok(handler_context) => {
-                    let payload = crate::host::capability_host::SyncCompletedPayload {
-                        repo_id: cfg.repo.repo_id.clone(),
-                        repo_root: cfg.repo_root.clone(),
-                        active_branch: summary.active_branch.clone(),
-                        head_commit_sha: summary.head_commit_sha.clone(),
-                        sync_mode: summary.mode.clone(),
-                        sync_completed_at: Utc::now().to_rfc3339(),
-                        files: file_diff,
-                        artefacts: artefact_diff,
-                    };
-                    crate::host::capability_host::dispatch_event(
-                        crate::host::capability_host::HostEvent::SyncCompleted(payload),
-                        host.event_handlers(),
-                        Arc::new(handler_context),
-                    );
-                }
-                Err(err) => {
-                    log::warn!(
-                        "failed to build sync event handler context for GraphQL sync: {err:#}"
-                    );
-                }
-            }
-        }
         Ok(summary.into())
     }
 

@@ -43,6 +43,23 @@ If the default global config does not exist yet:
 
 In non-interactive environments, Bitloops does not create the default config unless you pass `--create-default-config`.
 
+If you already have an explicit config file and only need Bitloops to create the matching local file-backed stores, run:
+
+```bash
+bitloops start --config /path/to/config.toml --bootstrap-local-stores
+```
+
+That creates the local SQLite, DuckDB, and blob-store artefacts referenced by that config before startup.
+
+## Detached Start Times Out With An Explicit Config
+
+Checks:
+
+1. Confirm the config file itself already exists.
+2. Run `bitloops start --config /path/to/config.toml --bootstrap-local-stores ...` so the local relational, event, and blob artefacts exist before startup.
+3. Inspect the daemon log with `bitloops daemon logs --tail 200`.
+4. If the config lives inside a larger Git repo, make sure daemon startup is actually resolving store backends from that explicit config path rather than from a repo-root daemon config.
+
 ## Capture Seems Disabled Unexpectedly
 
 Checks:

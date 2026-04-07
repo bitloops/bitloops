@@ -60,6 +60,7 @@ mod tests;
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
+pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
 pub use self::types::{
@@ -68,6 +69,9 @@ pub use self::types::{
     EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
     ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
     SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+};
+pub(crate) use self::types::{
+    ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
 };
 
 use self::process::*;
@@ -81,8 +85,7 @@ use self::types::global_daemon_dir_fallback;
 use self::types::{
     GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME, READY_TIMEOUT, STOP_TIMEOUT,
     SupervisorAppState, SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest,
-    global_daemon_dir, supervisor_runtime_state_path, supervisor_service_metadata_path,
-    unix_timestamp_now,
+    global_daemon_dir, supervisor_service_metadata_path, unix_timestamp_now,
 };
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {

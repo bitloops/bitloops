@@ -36,12 +36,15 @@ pub fn handle_stop_codex(
 mod tests {
     use super::*;
     use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_TYPE_CODEX};
+    use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
     use crate::host::checkpoints::session::backend::SessionBackend;
     use crate::host::checkpoints::session::local_backend::LocalFileBackend;
     use crate::host::checkpoints::session::phase::SessionPhase;
     use crate::host::checkpoints::session::state::PrePromptState;
     use crate::host::checkpoints::strategy::{StepContext, TaskStepContext};
+    use crate::test_support::git_fixtures::write_test_daemon_config;
     use crate::test_support::process_state::git_command;
+    use crate::test_support::process_state::with_env_var;
     use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
@@ -151,6 +154,9 @@ mod tests {
         let strategy = RecordingStrategy::default();
         let session_id = "codex-session";
         let transcript_path = repo.path().join("codex.jsonl");
+        let config_root = TempDir::new().expect("temp daemon config");
+        let config_path = write_test_daemon_config(config_root.path());
+        let config_path_string = config_path.to_string_lossy().to_string();
         fs::write(&transcript_path, "").expect("write transcript");
 
         backend
@@ -164,16 +170,22 @@ mod tests {
 
         fs::write(repo.path().join("tracked.txt"), "two\n").expect("modify tracked file");
 
-        handle_stop_codex(
-            SessionInfoInput {
-                session_id: session_id.to_string(),
-                transcript_path: transcript_path.to_string_lossy().to_string(),
+        with_env_var(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(config_path_string.as_str()),
+            || {
+                handle_stop_codex(
+                    SessionInfoInput {
+                        session_id: session_id.to_string(),
+                        transcript_path: transcript_path.to_string_lossy().to_string(),
+                    },
+                    &backend,
+                    &strategy,
+                    Some(repo.path()),
+                )
+                .expect("stop should succeed");
             },
-            &backend,
-            &strategy,
-            Some(repo.path()),
-        )
-        .expect("stop should succeed");
+        );
 
         let step_calls = strategy
             .step_calls

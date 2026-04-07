@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::Url;
 use serde_json::json;
+use std::fs;
 use tempfile::tempdir;
 
 use super::config::ClickHouseConfig;
@@ -162,5 +163,38 @@ async fn dashboard_db_pools_query_duckdb_with_shared_pool() -> Result<()> {
         .await?;
 
     assert_eq!(rows, vec![json!({ "value": 3 }), json!({ "value": 4 })]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn bootstrapped_daemon_store_artifacts_are_openable_by_dashboard_pools() -> Result<()> {
+    let dir = tempdir()?;
+    let config_path = dir.path().join("config.toml");
+    fs::write(
+        &config_path,
+        r#"
+[runtime]
+local_dev = false
+cli_version = "0.0.12"
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+"#,
+    )
+    .context("write daemon config")?;
+
+    crate::config::ensure_daemon_store_artifacts(Some(config_path.as_path()))?;
+
+    let sqlite_path = dir.path().join("stores/relational/relational.db");
+    let duckdb_path = dir.path().join("stores/event/events.duckdb");
+
+    let sqlite = SqlitePool::connect(sqlite_path).await?;
+    let duckdb = DuckDbPool::connect(duckdb_path).await?;
+
+    assert_eq!(sqlite.ping().await?, 1);
+    assert_eq!(duckdb.ping().await?, 1);
     Ok(())
 }

@@ -67,13 +67,13 @@ async fn execute_ingest_inner(
 
     let result: Result<()> = async {
     let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let knowledge_context =
         capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
             .context("resolving knowledge capability ingester owner")?;
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     let semantic_clones = capability.semantic_clones.clone();
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> = if enrichment.is_some()
         || semantic_clones.summary_mode == SemanticSummaryMode::Off

@@ -626,7 +626,7 @@ async fn execute_relational_pipeline_scopes_commit_asof_artefacts_by_path_when_b
 
     let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
     let mut cfg = test_cfg();
-    cfg.config_root = dir.path().to_path_buf();
+    cfg.daemon_config_root = dir.path().to_path_buf();
     cfg.repo_root = dir.path().to_path_buf();
     cfg.repo = repo;
 
@@ -743,7 +743,7 @@ async fn execute_relational_pipeline_scopes_commit_asof_deps_by_path_when_blob_i
 
     let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
     let mut cfg = test_cfg();
-    cfg.config_root = dir.path().to_path_buf();
+    cfg.daemon_config_root = dir.path().to_path_buf();
     cfg.repo_root = dir.path().to_path_buf();
     cfg.repo = repo;
 

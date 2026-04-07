@@ -326,7 +326,7 @@ mod tests {
         let repo_root = PathBuf::from("/repo");
         let input = vec![
             "/repo/src/main.rs".to_string(),
-            "/repo/.bitloops/tmp/file".to_string(),
+            "/repo/.bitloops/stores/runtime/file".to_string(),
             "/other/outside.rs".to_string(),
             "relative.rs".to_string(),
         ];

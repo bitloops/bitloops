@@ -14,13 +14,6 @@ struct TestsStagePayload {
     input_rows: Vec<Value>,
     #[serde(default)]
     args: JsonMap<String, Value>,
-    #[serde(default)]
-    query_context: TestsQueryContext,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct TestsQueryContext {
-    resolved_commit_sha: Option<String>,
 }
 
 pub struct TestsStageHandler;
@@ -81,7 +74,6 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
         .map(|value| value.clamp(0.0, 1.0));
     let linkage_source = parse_optional_string_arg(&payload.args, "linkage_source")?;
     let repo_id = ctx.repo().repo_id.clone();
-    let commit_sha = payload.query_context.resolved_commit_sha;
 
     // Upstream core owns the contract row shape here: artefact_id, symbol_id,
     // symbol_fqn, canonical_kind, path, start_line, end_line.
@@ -115,7 +107,6 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
         let covering = store.load_stage_covering_tests(
             &repo_id,
             production_symbol_id,
-            commit_sha.as_deref(),
             min_confidence,
             linkage_source.as_deref(),
             limit,
@@ -129,6 +120,8 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
                     "test_name": rec.test_name,
                     "suite_name": rec.suite_name,
                     "file_path": rec.file_path,
+                    "start_line": rec.start_line,
+                    "end_line": rec.end_line,
                     "confidence": rec.confidence,
                     "discovery_source": rec.discovery_source,
                     "linkage_source": rec.linkage_source,
@@ -233,7 +226,6 @@ mod guardrail_tests {
     struct StageCall {
         repo_id: String,
         production_symbol_id: String,
-        commit_sha: Option<String>,
         min_confidence: Option<f64>,
         linkage_source: Option<String>,
         limit: usize,
@@ -311,7 +303,6 @@ mod guardrail_tests {
             &self,
             repo_id: &str,
             production_symbol_id: &str,
-            commit_sha: Option<&str>,
             min_confidence: Option<f64>,
             linkage_source: Option<&str>,
             limit: usize,
@@ -319,7 +310,6 @@ mod guardrail_tests {
             self.calls.lock().expect("calls lock").push(StageCall {
                 repo_id: repo_id.to_string(),
                 production_symbol_id: production_symbol_id.to_string(),
-                commit_sha: commit_sha.map(str::to_string),
                 min_confidence,
                 linkage_source: linkage_source.map(str::to_string),
                 limit,
@@ -399,6 +389,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: Some("suite".into()),
                 file_path: "tests/a.rs".into(),
+                start_line: 3,
+                end_line: 6,
                 confidence: 0.91,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -422,6 +414,8 @@ mod guardrail_tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
         assert_eq!(rows[0]["covering_tests"].as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["covering_tests"][0]["start_line"], 3);
+        assert_eq!(rows[0]["covering_tests"][0]["end_line"], 6);
         assert_eq!(repo.calls().len(), 1);
         assert_eq!(repo.calls()[0].production_symbol_id, "symbol-a");
     }
@@ -436,6 +430,8 @@ mod guardrail_tests {
                     test_name: "covers_a".into(),
                     suite_name: Some("suite-a".into()),
                     file_path: "tests/a.rs".into(),
+                    start_line: 5,
+                    end_line: 9,
                     confidence: 0.8,
                     discovery_source: "static".into(),
                     linkage_source: "coverage".into(),
@@ -449,6 +445,8 @@ mod guardrail_tests {
                     test_name: "covers_b".into(),
                     suite_name: Some("suite-b".into()),
                     file_path: "tests/b.rs".into(),
+                    start_line: 7,
+                    end_line: 12,
                     confidence: 0.82,
                     discovery_source: "static".into(),
                     linkage_source: "coverage".into(),
@@ -486,6 +484,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 10,
+                end_line: 11,
                 confidence: 0.8,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -521,6 +521,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 1,
+                end_line: 2,
                 confidence: 0.5,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -549,7 +551,6 @@ mod guardrail_tests {
         let call = repo.calls().pop().expect("call");
         assert_eq!(call.repo_id, "repo-1");
         assert_eq!(call.production_symbol_id, "symbol-a");
-        assert_eq!(call.commit_sha.as_deref(), Some("commit-old"));
         assert_eq!(call.min_confidence, Some(0.75));
         assert_eq!(call.linkage_source.as_deref(), Some("coverage_ingest"));
         assert_eq!(call.limit, 7);
@@ -564,6 +565,8 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 1,
+                end_line: 2,
                 confidence: 0.5,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
@@ -592,7 +595,6 @@ mod guardrail_tests {
         let call = repo.calls().pop().expect("call");
         assert_eq!(call.repo_id, "repo-1");
         assert_eq!(call.production_symbol_id, "symbol-a");
-        assert_eq!(call.commit_sha.as_deref(), Some("commit-new"));
         assert_eq!(call.min_confidence, Some(0.75));
         assert_eq!(call.linkage_source, None);
         assert_eq!(call.limit, 7);
