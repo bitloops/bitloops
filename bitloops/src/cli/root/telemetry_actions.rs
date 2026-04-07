@@ -468,10 +468,8 @@ fn devql_action(
         crate::cli::devql::DevqlCommand::Init(_) => {
             Some(new_action("bitloops devql init", HashMap::new()))
         }
-        crate::cli::devql::DevqlCommand::Ingest(args) => {
-            let mut props = HashMap::new();
-            insert_count_property(&mut props, "max_checkpoints", args.max_checkpoints);
-            Some(new_action("bitloops devql ingest", props))
+        crate::cli::devql::DevqlCommand::Ingest(_) => {
+            Some(new_action("bitloops devql ingest", HashMap::new()))
         }
         crate::cli::devql::DevqlCommand::Sync(args) => {
             let mut props = HashMap::new();
@@ -649,6 +647,7 @@ fn embeddings_action(
 #[cfg(test)]
 mod telemetry_actions_unit_tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn stage_sequence_from_devql_query_splits_arrow_stages_and_strips_calls() {
@@ -680,5 +679,23 @@ mod telemetry_actions_unit_tests {
 
         let plain = telemetry_action_for_version(false);
         assert!(!plain.properties.contains_key("flags"));
+    }
+
+    #[test]
+    fn telemetry_action_for_devql_ingest_has_no_legacy_checkpoint_limit_property() {
+        let cli = crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest"])
+            .expect("devql ingest should parse");
+        let action = telemetry_action_for_command(
+            cli.command
+                .as_ref()
+                .expect("devql ingest should produce a subcommand"),
+        )
+        .expect("devql ingest telemetry action should be emitted");
+
+        assert_eq!(action.event, "bitloops devql ingest");
+        assert!(
+            action.properties.is_empty(),
+            "devql ingest no longer accepts legacy checkpoint limit flags"
+        );
     }
 }

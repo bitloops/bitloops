@@ -3,6 +3,9 @@ use serde_json::{Value, json};
 use std::time::Instant;
 
 use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
+use crate::config::{
+    SemanticCloneEmbeddingMode, SemanticSummaryMode, resolve_embedding_capability_config_for_repo,
+};
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
@@ -73,10 +76,27 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     }
 
     let cfg = DevqlConfig::from_env(repo_root, repo)?;
+    let enrichment_capability = resolve_embedding_capability_config_for_repo(&cfg.repo_root);
+    let enrichment_enabled = enrichment_capability.semantic_clones.summary_mode
+        != SemanticSummaryMode::Off
+        || (enrichment_capability.semantic_clones.embedding_mode
+            != SemanticCloneEmbeddingMode::Off
+            && enrichment_capability
+                .semantic_clones
+                .embedding_profile
+                .is_some());
+
     match command {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
         DevqlCommand::Ingest(args) => {
-            graphql::run_ingest_via_graphql(&scope, args.max_checkpoints).await
+            if enrichment_enabled {
+                let _ = args;
+                graphql::run_ingest_via_graphql(&scope, None).await
+            } else {
+                let _ = args;
+                crate::daemon::require_current_repo_runtime(&cfg.repo_root, "`devql ingest`")?;
+                crate::host::devql::run_ingest(&cfg).await
+            }
         }
         DevqlCommand::Sync(args) => {
             let (task, merged) = graphql::enqueue_sync_via_graphql(

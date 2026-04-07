@@ -1,11 +1,14 @@
 use super::*;
 
+#[cfg_attr(not(test), allow(dead_code))]
 const BASELINE_SYNC_STATE_KEY: &str = "baseline_commit_sha";
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn discover_baseline_files(repo_root: &Path) -> Result<Vec<String>> {
     discover_baseline_files_at_revision(repo_root, "HEAD")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn discover_baseline_files_at_revision(
     repo_root: &Path,
     revision: &str,
@@ -41,6 +44,7 @@ pub(super) fn discover_baseline_files_at_revision(
     Ok(files)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_supported_baseline_file(path: &str) -> bool {
     let Some(extension) = Path::new(path).extension().and_then(|value| value.to_str()) else {
         return false;
@@ -52,6 +56,7 @@ fn is_supported_baseline_file(path: &str) -> bool {
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn run_baseline_ingestion(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -114,7 +119,8 @@ pub(super) async fn run_baseline_ingestion(
     Ok(())
 }
 
-async fn load_sync_state_value(
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) async fn load_sync_state_value(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     key: &str,
@@ -150,7 +156,7 @@ ON CONFLICT (repo_id, state_key) DO UPDATE SET state_value = EXCLUDED.state_valu
     )
 }
 
-async fn upsert_sync_state_value(
+pub(super) async fn upsert_sync_state_value(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     key: &str,
@@ -160,6 +166,7 @@ async fn upsert_sync_state_value(
     relational.exec(&sql).await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn count_current_file_rows(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -172,6 +179,7 @@ WHERE repo_id = '{}' AND canonical_kind = 'file'",
     count_rows(relational, &sql).await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn count_current_rows(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -185,6 +193,7 @@ async fn count_current_rows(
     count_rows(relational, &sql).await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn count_rows(relational: &RelationalStorage, sql: &str) -> Result<usize> {
     let rows = relational.query_rows(sql).await?;
     let count = rows

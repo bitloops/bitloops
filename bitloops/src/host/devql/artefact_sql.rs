@@ -203,7 +203,7 @@ fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
 
 fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
     if use_historical_tables {
-        "artefacts"
+        "artefacts_historical"
     } else {
         "artefacts_current"
     }
@@ -312,7 +312,7 @@ mod tests {
             pagination: None,
         });
 
-        assert!(sql.contains("FROM artefacts a"));
+        assert!(sql.contains("FROM artefacts_historical a"));
         assert!(sql.contains("a.path = 'src/main.rs'"));
         assert!(sql.contains("a.blob_sha = 'blob-123'"));
         assert!(!sql.contains("FROM file_state fs"));

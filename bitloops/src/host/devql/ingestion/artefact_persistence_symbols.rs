@@ -30,7 +30,7 @@ pub(super) fn symbol_content_hash(item: &LanguageArtefact, content: &str) -> Str
 pub(super) fn build_symbol_records(
     cfg: &DevqlConfig,
     path: &str,
-    blob_sha: &str,
+    _blob_sha: &str,
     file_artefact: &FileArtefactRow,
     items: &[LanguageArtefact],
     content: &str,
@@ -48,8 +48,9 @@ pub(super) fn build_symbol_records(
             .and_then(|fqn| symbol_to_symbol_id.get(fqn))
             .map(String::as_str);
         let symbol_id = structural_symbol_id_for_artefact(item, semantic_parent_symbol_id);
-        let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
         let content_hash = symbol_content_hash(item, content);
+        let artefact_id =
+            historical_symbol_artefact_id(&cfg.repo.repo_id, &symbol_id, &content_hash);
         let parent_symbol_id = item
             .parent_symbol_fqn
             .as_ref()
@@ -105,34 +106,26 @@ pub(super) async fn persist_historical_artefact(
 pub(super) fn build_upsert_historical_artefact_sql(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    path: &str,
-    blob_sha: &str,
+    _path: &str,
+    _blob_sha: &str,
     language: &str,
     record: &PersistedArtefactRecord,
 ) -> String {
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
-    let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
     let signature_sql = sql_nullable_text(record.signature.as_deref());
     let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&record.artefact_id),
         esc_pg(&record.symbol_id),
         esc_pg(&cfg.repo.repo_id),
-        esc_pg(blob_sha),
-        esc_pg(path),
         esc_pg(language),
         canonical_kind_sql,
         esc_pg(&record.language_kind),
         esc_pg(&record.symbol_fqn),
-        parent_artefact_sql,
-        record.start_line,
-        record.end_line,
-        record.start_byte,
-        record.end_byte,
         signature_sql,
         modifiers_sql,
         docstring_sql,

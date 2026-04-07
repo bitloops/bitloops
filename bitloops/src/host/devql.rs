@@ -57,8 +57,10 @@ pub(crate) mod identity;
 pub(crate) mod sync;
 mod types;
 
-pub(crate) use self::commands_ingest::execute_ingest_with_observer;
 pub use self::commands_ingest::run_ingest;
+pub(crate) use self::commands_ingest::{
+    execute_ingest_with_backfill_window, execute_ingest_with_observer,
+};
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
 pub use self::commands_projection::{
@@ -140,12 +142,11 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
-        summary.checkpoints_processed,
+        "DevQL ingest complete: commits_processed={}, checkpoint_companions_processed={}, events_inserted={}, artefacts_upserted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
+        summary.commits_processed,
+        summary.checkpoint_companions_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
-        summary.checkpoints_without_commit,
-        summary.temporary_rows_promoted,
         summary.semantic_feature_rows_upserted,
         summary.semantic_feature_rows_skipped,
         summary.symbol_embedding_rows_upserted,
@@ -643,7 +644,7 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
     }
 }
 
-async fn initialise_devql_schema_for_command(
+pub(crate) async fn ensure_devql_storage_current(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<(RelationalStorage, InitSchemaSummary)> {
@@ -723,7 +724,7 @@ pub(crate) async fn execute_init_schema(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<InitSchemaSummary> {
-    let (_relational, summary) = initialise_devql_schema_for_command(cfg, command).await?;
+    let (_relational, summary) = ensure_devql_storage_current(cfg, command).await?;
     Ok(summary)
 }
 
@@ -760,30 +761,6 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     Ok(())
 }
 
-pub async fn execute_project_bootstrap(
-    cfg: &DevqlConfig,
-    skip_baseline: bool,
-) -> Result<InitSchemaSummary> {
-    let (relational, summary) = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
-
-    if skip_baseline {
-        return Ok(summary);
-    }
-
-    run_baseline_ingestion(cfg, &relational).await?;
-    Ok(summary)
-}
-
-pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
-    let summary = execute_project_bootstrap(cfg, skip_baseline).await?;
-    println!("{}", format_init_schema_summary(&summary));
-
-    if skip_baseline {
-        println!("Baseline ingestion skipped (`--skip-baseline`).");
-    }
-    Ok(())
-}
-
 mod core_contracts;
 mod vocab;
 // ingestion: shared types
@@ -807,6 +784,9 @@ mod ingestion_checkpoint;
 // ingestion: baseline indexing for full tracked codebase at HEAD
 #[path = "devql/ingestion/baseline.rs"]
 mod ingestion_baseline;
+// ingestion: commit-first historical ingest range and ledger helpers
+#[path = "devql/ingestion/history.rs"]
+mod ingestion_history;
 // ingestion: shared record types for artefact persistence
 #[path = "devql/ingestion/artefact_persistence_types.rs"]
 mod ingestion_artefact_persistence_types;
@@ -860,12 +840,14 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
+use self::ingestion_history::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
 pub(crate) use self::ingestion_schema::{
     checkpoint_relational_schema_sql_postgres, checkpoint_relational_schema_sql_sqlite,
-    checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite, knowledge_schema_sql_duckdb,
+    checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite,
+    historical_artefacts_cutover_sqlite_sql, knowledge_schema_sql_duckdb,
     knowledge_schema_sql_sqlite,
 };
 #[cfg(test)]

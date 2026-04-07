@@ -109,64 +109,71 @@ ON CONFLICT(repo_id, path) DO UPDATE SET
         tx.execute(
             r#"
 INSERT INTO artefacts (
-  artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-  language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-  end_byte, signature, modifiers, docstring, content_hash
+  artefact_id, symbol_id, repo_id, language, canonical_kind,
+  language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, ?13, ?14, '[]', NULL, NULL
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', NULL, NULL
 )
 ON CONFLICT(artefact_id) DO UPDATE SET
   symbol_id = excluded.symbol_id,
   repo_id = excluded.repo_id,
-  blob_sha = excluded.blob_sha,
-  path = excluded.path,
   language = excluded.language,
   canonical_kind = excluded.canonical_kind,
   language_kind = excluded.language_kind,
   symbol_fqn = excluded.symbol_fqn,
-  parent_artefact_id = excluded.parent_artefact_id,
-  start_line = excluded.start_line,
-  end_line = excluded.end_line,
-  end_byte = excluded.end_byte,
   signature = excluded.signature
 "#,
             params![
                 artefact.artefact_id,
                 symbol_id,
                 FIXTURE_REPO_ID,
-                blob_sha,
-                artefact.path,
                 artefact.language,
                 artefact.canonical_kind,
                 artefact.language_kind,
                 artefact.symbol_fqn,
-                artefact.parent_artefact_id,
-                artefact.start_line,
-                artefact.end_line,
-                artefact.end_line * 10,
                 artefact.signature,
             ],
         )
         .with_context(|| format!("failed seeding artefact {}", artefact.artefact_id))?;
         tx.execute(
             r#"
-INSERT INTO artefacts_current (
-  repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
-  blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
-  parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring,
-  content_hash
+INSERT INTO artefact_snapshots (
+  repo_id, blob_sha, path, artefact_id, parent_artefact_id, start_line, end_line, start_byte, end_byte
 ) VALUES (
-  ?1, 'main', ?2, ?3, ?4, 'commit', ?4, NULL,
-  ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16, '[]', NULL, NULL
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8
 )
-ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
-  artefact_id = excluded.artefact_id,
-  commit_sha = excluded.commit_sha,
-  revision_kind = excluded.revision_kind,
-  revision_id = excluded.revision_id,
-  temp_checkpoint_id = excluded.temp_checkpoint_id,
-  blob_sha = excluded.blob_sha,
+ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
   path = excluded.path,
+  parent_artefact_id = excluded.parent_artefact_id,
+  start_line = excluded.start_line,
+  end_line = excluded.end_line,
+  start_byte = excluded.start_byte,
+  end_byte = excluded.end_byte
+"#,
+            params![
+                FIXTURE_REPO_ID,
+                blob_sha,
+                artefact.path,
+                artefact.artefact_id,
+                artefact.parent_artefact_id,
+                artefact.start_line,
+                artefact.end_line,
+                artefact.end_line * 10,
+            ],
+        )
+        .with_context(|| format!("failed seeding artefact snapshot {}", artefact.artefact_id))?;
+        tx.execute(
+            r#"
+INSERT INTO artefacts_current (
+  repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind, language_kind,
+  symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte,
+  signature, modifiers, docstring, updated_at
+) VALUES (
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?15, '[]', NULL, '2026-03-18T00:00:00Z'
+)
+ON CONFLICT(repo_id, path, symbol_id) DO UPDATE SET
+  content_id = excluded.content_id,
+  artefact_id = excluded.artefact_id,
   language = excluded.language,
   canonical_kind = excluded.canonical_kind,
   language_kind = excluded.language_kind,
@@ -175,16 +182,19 @@ ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
   parent_artefact_id = excluded.parent_artefact_id,
   start_line = excluded.start_line,
   end_line = excluded.end_line,
+  start_byte = excluded.start_byte,
   end_byte = excluded.end_byte,
-  signature = excluded.signature
+  signature = excluded.signature,
+  modifiers = excluded.modifiers,
+  docstring = excluded.docstring,
+  updated_at = excluded.updated_at
 "#,
             params![
                 FIXTURE_REPO_ID,
+                artefact.path,
+                blob_sha,
                 symbol_id,
                 artefact.artefact_id,
-                commit_sha,
-                blob_sha,
-                artefact.path,
                 artefact.language,
                 artefact.canonical_kind,
                 artefact.language_kind,

@@ -31,6 +31,9 @@ ON file_state (repo_id, blob_sha);
 CREATE INDEX IF NOT EXISTS file_state_commit_idx
 ON file_state (repo_id, commit_sha);
 
+CREATE INDEX IF NOT EXISTS file_state_path_blob_commit_idx
+ON file_state (repo_id, path, blob_sha, commit_sha);
+
 CREATE TABLE IF NOT EXISTS current_file_state (
     repo_id TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -53,17 +56,10 @@ CREATE TABLE IF NOT EXISTS artefacts (
     artefact_id TEXT PRIMARY KEY,
     symbol_id TEXT,
     repo_id TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
     language TEXT NOT NULL,
     canonical_kind TEXT,
     language_kind TEXT,
     symbol_fqn TEXT,
-    parent_artefact_id TEXT,
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    start_byte INTEGER NOT NULL,
-    end_byte INTEGER NOT NULL,
     signature TEXT,
     modifiers TEXT NOT NULL DEFAULT '[]',
     docstring TEXT,
@@ -71,17 +67,69 @@ CREATE TABLE IF NOT EXISTS artefacts (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS artefacts_blob_idx
-ON artefacts (repo_id, blob_sha);
-
-CREATE INDEX IF NOT EXISTS artefacts_path_idx
-ON artefacts (repo_id, path);
-
 CREATE INDEX IF NOT EXISTS artefacts_kind_idx
 ON artefacts (repo_id, canonical_kind);
 
 CREATE INDEX IF NOT EXISTS artefacts_symbol_idx
 ON artefacts (repo_id, symbol_id);
+
+CREATE INDEX IF NOT EXISTS artefacts_symbol_content_hash_idx
+ON artefacts (repo_id, symbol_id, content_hash);
+
+CREATE INDEX IF NOT EXISTS artefacts_fqn_content_hash_idx
+ON artefacts (repo_id, symbol_fqn, content_hash);
+
+CREATE TABLE IF NOT EXISTS artefact_snapshots (
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    parent_artefact_id TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, blob_sha, artefact_id)
+);
+
+CREATE INDEX IF NOT EXISTS artefact_snapshots_path_idx
+ON artefact_snapshots (repo_id, path, blob_sha);
+
+CREATE INDEX IF NOT EXISTS artefact_snapshots_parent_idx
+ON artefact_snapshots (repo_id, parent_artefact_id);
+
+CREATE INDEX IF NOT EXISTS artefact_snapshots_artefact_blob_idx
+ON artefact_snapshots (repo_id, artefact_id, blob_sha);
+
+CREATE INDEX IF NOT EXISTS artefact_snapshots_path_blob_line_idx
+ON artefact_snapshots (repo_id, path, blob_sha, start_line, end_line);
+
+CREATE VIEW IF NOT EXISTS artefacts_historical AS
+SELECT
+    a.artefact_id AS artefact_id,
+    a.symbol_id AS symbol_id,
+    a.repo_id AS repo_id,
+    s.blob_sha AS blob_sha,
+    s.path AS path,
+    a.language AS language,
+    a.canonical_kind AS canonical_kind,
+    a.language_kind AS language_kind,
+    a.symbol_fqn AS symbol_fqn,
+    s.parent_artefact_id AS parent_artefact_id,
+    s.start_line AS start_line,
+    s.end_line AS end_line,
+    s.start_byte AS start_byte,
+    s.end_byte AS end_byte,
+    a.signature AS signature,
+    a.modifiers AS modifiers,
+    a.docstring AS docstring,
+    a.content_hash AS content_hash,
+    a.created_at AS created_at
+FROM artefact_snapshots s
+JOIN artefacts a
+  ON a.repo_id = s.repo_id
+ AND a.artefact_id = s.artefact_id;
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
@@ -144,6 +192,12 @@ ON artefact_edges (repo_id, from_artefact_id, edge_kind);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_to_idx
 ON artefact_edges (repo_id, to_artefact_id, edge_kind);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_from_blob_kind_idx
+ON artefact_edges (repo_id, from_artefact_id, blob_sha, edge_kind);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_to_blob_kind_idx
+ON artefact_edges (repo_id, to_artefact_id, blob_sha, edge_kind);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_kind_idx
 ON artefact_edges (repo_id, edge_kind);

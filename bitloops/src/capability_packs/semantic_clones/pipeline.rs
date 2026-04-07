@@ -208,10 +208,11 @@ async fn load_symbol_churn_counts(
     repo_id: &str,
 ) -> Result<HashMap<String, usize>> {
     let sql = format!(
-        "SELECT symbol_id, COUNT(DISTINCT blob_sha) AS churn_count \
-FROM artefacts \
-WHERE repo_id = '{}' AND symbol_id IS NOT NULL \
-GROUP BY symbol_id",
+        "SELECT a.symbol_id, COUNT(DISTINCT s.blob_sha) AS churn_count \
+FROM artefacts a \
+JOIN artefact_snapshots s ON s.repo_id = a.repo_id AND s.artefact_id = a.artefact_id \
+WHERE a.repo_id = '{}' AND a.symbol_id IS NOT NULL \
+GROUP BY a.symbol_id",
         esc_pg(repo_id),
     );
     let rows = relational.query_rows(&sql).await?;

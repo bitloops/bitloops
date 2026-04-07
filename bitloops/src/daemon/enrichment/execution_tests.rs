@@ -452,7 +452,7 @@ async fn seed_current_state_and_semantics(
     let relational = RelationalStorage::connect(&cfg, &backends.relational, "daemon test")
         .await
         .expect("connect relational storage for daemon test");
-    execute_ingest_with_observer(&cfg, 10, None, None)
+    execute_ingest_with_observer(&cfg, false, 10, None, None)
         .await
         .expect("ingest daemon checkpoint fixtures");
     execute_sync(
