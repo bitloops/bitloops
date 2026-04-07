@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -14,9 +16,8 @@ use uuid::Uuid;
 mod queue;
 
 use crate::host::capability_host::{
-    ChangedArtefact, ChangedFile, HostEvent, HostEventHandler,
-    HostEventKind, RemovedArtefact, RemovedFile, SyncArtefactDiff, SyncCompletedPayload,
-    SyncFileDiff,
+    ChangedArtefact, ChangedFile, HostEvent, HostEventHandler, HostEventKind, RemovedArtefact,
+    RemovedFile, SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff,
 };
 use crate::host::runtime_store::{DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState};
 
@@ -182,6 +183,48 @@ impl From<SyncCompletedPayloadEnvelope> for SyncCompletedPayload {
             },
         }
     }
+}
+
+pub(crate) fn build_sync_completed_runs(
+    host: &crate::host::capability_host::DevqlCapabilityHost,
+    payload: &SyncCompletedPayload,
+) -> Result<Vec<CapabilityEventRunRecord>> {
+    let payload_json = sync_completed_payload_json(payload)?;
+    let handlers = describe_handlers(host);
+    let now = unix_timestamp_now();
+    let runs = handlers
+        .into_iter()
+        .filter(|descriptor| descriptor.event_kind == HostEventKind::SyncCompleted)
+        .map(|descriptor| CapabilityEventRunRecord {
+            capability_id: descriptor.capability_id.clone(),
+            handler_id: descriptor.handler_id.clone(),
+            run_id: format!("capability-event-run-{}", Uuid::new_v4()),
+            repo_id: payload.repo_id.clone(),
+            event_kind: "sync_completed".to_string(),
+            lane_key: build_lane_key(
+                &payload.repo_id,
+                &descriptor.capability_id,
+                &descriptor.handler_id,
+            ),
+            event_payload_json: payload_json.clone(),
+            status: CapabilityEventRunStatus::Queued,
+            attempts: 0,
+            submitted_at_unix: now,
+            started_at_unix: None,
+            updated_at_unix: now,
+            completed_at_unix: None,
+            error: None,
+        })
+        .collect::<Vec<_>>();
+    Ok(runs)
+}
+
+#[cfg(test)]
+pub(crate) fn test_shared_instance_at(db_path: PathBuf) -> Arc<CapabilityEventCoordinator> {
+    CapabilityEventCoordinator::new_shared_instance(
+        DaemonSqliteRuntimeStore::open_at(db_path)
+            .expect("opening test daemon runtime store for capability event queue"),
+    )
 }
 
 #[allow(dead_code)]
@@ -571,6 +614,57 @@ fn save_state(state: &mut PersistedCapabilityEventQueueState) -> Result<()> {
     state.updated_at_unix = unix_timestamp_now();
     prune_terminal_runs(&mut state.runs);
     Ok(())
+}
+
+fn sync_completed_payload_json(payload: &SyncCompletedPayload) -> Result<String> {
+    let files = serde_json::json!({
+        "added": payload.files.added.iter().map(|file| serde_json::json!({
+            "path": file.path,
+            "language": file.language,
+            "content_id": file.content_id,
+        })).collect::<Vec<_>>(),
+        "changed": payload.files.changed.iter().map(|file| serde_json::json!({
+            "path": file.path,
+            "language": file.language,
+            "content_id": file.content_id,
+        })).collect::<Vec<_>>(),
+        "removed": payload.files.removed.iter().map(|file| serde_json::json!({
+            "path": file.path,
+        })).collect::<Vec<_>>(),
+    });
+    let artefacts = serde_json::json!({
+        "added": payload.artefacts.added.iter().map(|artefact| serde_json::json!({
+            "artefact_id": artefact.artefact_id,
+            "symbol_id": artefact.symbol_id,
+            "path": artefact.path,
+            "canonical_kind": artefact.canonical_kind,
+            "name": artefact.name,
+        })).collect::<Vec<_>>(),
+        "changed": payload.artefacts.changed.iter().map(|artefact| serde_json::json!({
+            "artefact_id": artefact.artefact_id,
+            "symbol_id": artefact.symbol_id,
+            "path": artefact.path,
+            "canonical_kind": artefact.canonical_kind,
+            "name": artefact.name,
+        })).collect::<Vec<_>>(),
+        "removed": payload.artefacts.removed.iter().map(|artefact| serde_json::json!({
+            "artefact_id": artefact.artefact_id,
+            "symbol_id": artefact.symbol_id,
+            "path": artefact.path,
+        })).collect::<Vec<_>>(),
+    });
+
+    Ok(serde_json::json!({
+        "repo_id": payload.repo_id,
+        "repo_root": payload.repo_root,
+        "active_branch": payload.active_branch,
+        "head_commit_sha": payload.head_commit_sha,
+        "sync_mode": payload.sync_mode,
+        "sync_completed_at": payload.sync_completed_at,
+        "files": files,
+        "artefacts": artefacts,
+    })
+    .to_string())
 }
 
 #[cfg(test)]
