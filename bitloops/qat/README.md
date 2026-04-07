@@ -25,7 +25,7 @@ cargo qat
 
 Works from both the `bitloops/` crate directory and the repository root.
 
-### 1. Smoke (13 scenarios)
+### 1. Smoke (13 scenarios across 2 features)
 
 Exercises the deterministic hook-driven agent lifecycle for `claude-code`, `cursor`,
 `gemini`, `copilot`, `codex`, and `opencode` with `open-code` accepted as an alias.
@@ -46,7 +46,7 @@ cargo test --test qat_acceptance qat_smoke -- --ignored
 
 - First agent-driven Bitloops session is captured for each supported agent.
 - Follow-up agent edits create progression for each supported agent.
-- Preserve relative-day commit timeline.
+- Preserve relative-day commit timeline in a standalone timeline smoke feature.
 
 The agent outlines cover the same setup for each supported agent: clean start, daemon
 start, Vite scaffold, init commit, `bitloops init --agent <agent> --sync=false`, enable,
