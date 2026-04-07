@@ -20,6 +20,12 @@ use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::{SyncSummary, format_ingestion_summary, format_init_schema_summary};
 use crate::{api::DashboardServerConfig, daemon};
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DaemonStartPolicy {
+    AutoStart,
+    RequireRunning,
+}
+
 #[cfg(test)]
 type IngestDaemonBootstrapHook = dyn Fn(&Path) -> Result<()> + 'static;
 
@@ -86,8 +92,13 @@ pub(crate) async fn fetch_global_schema_sdl_via_daemon() -> Result<String> {
 pub(crate) async fn run_ingest_via_graphql(
     scope: &SlimCliRepoScope,
     backfill: Option<usize>,
+    require_daemon: bool,
 ) -> Result<()> {
-    ensure_daemon_available_for_ingest(scope.repo_root.as_path()).await?;
+    ensure_daemon_available_for_ingest(
+        scope.repo_root.as_path(),
+        daemon_start_policy(require_daemon),
+    )
+    .await?;
     let variables = backfill.map_or_else(
         || json!({}),
         |backfill| {
@@ -111,8 +122,13 @@ pub(crate) async fn enqueue_sync_via_graphql(
     repair: bool,
     validate: bool,
     source: &str,
+    require_daemon: bool,
 ) -> Result<(SyncTaskGraphqlRecord, bool)> {
-    ensure_daemon_available_for_ingest(scope.repo_root.as_path()).await?;
+    ensure_daemon_available_for_ingest(
+        scope.repo_root.as_path(),
+        daemon_start_policy(require_daemon),
+    )
+    .await?;
     let response: EnqueueSyncMutationData = execute_devql_graphql(
         scope,
         ENQUEUE_SYNC_MUTATION,
@@ -242,14 +258,31 @@ fn decode_schema_sdl_response(status: ReqwestStatusCode, body: String) -> Result
     Ok(body)
 }
 
-async fn ensure_daemon_available_for_ingest(_repo_root: &Path) -> Result<()> {
+fn daemon_start_policy(require_daemon: bool) -> DaemonStartPolicy {
+    if require_daemon {
+        DaemonStartPolicy::RequireRunning
+    } else {
+        DaemonStartPolicy::AutoStart
+    }
+}
+
+async fn ensure_daemon_available_for_ingest(
+    _repo_root: &Path,
+    policy: DaemonStartPolicy,
+) -> Result<()> {
     #[cfg(test)]
-    if let Some(result) = maybe_bootstrap_daemon_via_hook(_repo_root) {
+    if matches!(policy, DaemonStartPolicy::AutoStart)
+        && let Some(result) = maybe_bootstrap_daemon_via_hook(_repo_root)
+    {
         return result;
     }
 
     if daemon::daemon_url()?.is_some() {
         return Ok(());
+    }
+
+    if matches!(policy, DaemonStartPolicy::RequireRunning) {
+        bail!("Bitloops daemon is not running. Start it with `bitloops daemon start`.");
     }
 
     let report = daemon::status().await?;

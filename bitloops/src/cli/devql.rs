@@ -235,8 +235,7 @@ where
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
         DevqlCommand::Ingest(args) => {
             if enrichment_enabled {
-                let _ = args;
-                graphql::run_ingest_via_graphql(&scope, None).await
+                graphql::run_ingest_via_graphql(&scope, None, args.require_daemon).await
             } else {
                 let _ = args;
                 crate::daemon::require_current_repo_runtime(&cfg.repo_root, "`devql ingest`")?;
@@ -251,6 +250,7 @@ where
                 args.repair,
                 args.validate,
                 "manual_cli",
+                args.require_daemon,
             )
             .await?;
             if args.status {

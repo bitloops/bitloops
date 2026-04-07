@@ -34,7 +34,11 @@ pub enum DevqlCommand {
 pub struct DevqlInitArgs {}
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct DevqlIngestArgs {}
+pub struct DevqlIngestArgs {
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
+}
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct DevqlSyncArgs {
@@ -57,6 +61,10 @@ pub struct DevqlSyncArgs {
     /// Follow the queued sync task until it reaches a terminal state.
     #[arg(long, default_value_t = false)]
     pub status: bool,
+
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
 }
 
 #[derive(Args, Debug, Clone)]

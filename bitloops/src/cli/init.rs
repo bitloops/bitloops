@@ -177,7 +177,7 @@ async fn run_with_io_async(
         let scope = discover_slim_cli_repo_scope(Some(project_root.as_path()))?;
         if should_sync {
             let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
-                &scope, false, None, false, false, "init",
+                &scope, false, None, false, false, "init", false,
             )
             .await?;
             if let Some(summary) =
@@ -195,6 +195,7 @@ async fn run_with_io_async(
             crate::cli::devql::graphql::run_ingest_via_graphql(
                 &scope,
                 Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
+                false,
             )
             .await?;
         }

@@ -167,7 +167,22 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
-    let _ = ingest;
+    assert!(!ingest.require_daemon);
+}
+
+#[test]
+fn devql_cli_parses_ingest_require_daemon_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "ingest", "--require-daemon"])
+        .expect("devql ingest --require-daemon should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
+        panic!("expected devql ingest command");
+    };
+
+    assert!(ingest.require_daemon);
 }
 
 #[test]
@@ -196,6 +211,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.repair);
     assert!(!sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
         .expect("devql sync repair should parse");
@@ -210,6 +226,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(sync.repair);
     assert!(!sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
         .expect("devql sync full should parse");
@@ -224,6 +241,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.repair);
     assert!(!sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
         .expect("devql sync validate should parse");
@@ -238,6 +256,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.repair);
     assert!(sync.validate);
     assert!(!sync.status);
+    assert!(!sync.require_daemon);
 }
 
 #[test]
@@ -251,6 +270,20 @@ fn devql_cli_parses_sync_status_flag() {
         panic!("expected devql sync command");
     };
     assert!(sync.status);
+    assert!(!sync.require_daemon);
+}
+
+#[test]
+fn devql_cli_parses_sync_require_daemon_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--require-daemon"])
+        .expect("devql sync --require-daemon should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(sync.require_daemon);
 }
 
 #[test]
@@ -981,7 +1014,9 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs::default())),
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                require_daemon: false,
+                            })),
                         }))
                         .expect("devql ingest should succeed");
                 },
@@ -1043,7 +1078,9 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs::default())),
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                require_daemon: false,
+                            })),
                         }))
                         .expect("devql ingest should succeed");
                 },
@@ -1059,6 +1096,43 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
         .expect("graphql mutation should be captured");
     assert!(query.contains("ingest"));
     assert_eq!(variables, json!({}));
+}
+
+fn devql_run_ingest_require_daemon_fails_without_bootstrap() {
+    let repo = seed_devql_cli_repo();
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+
+    with_isolated_daemon_state(repo.path(), || {
+        super::graphql::with_ingest_daemon_bootstrap_hook(
+            {
+                let bootstrap_count = Rc::clone(&bootstrap_count);
+                move |_repo_root: &std::path::Path| {
+                    *bootstrap_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let err = test_runtime()
+                    .block_on(run(DevqlArgs {
+                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                            require_daemon: true,
+                        })),
+                    }))
+                    .expect_err("devql ingest --require-daemon should fail without a daemon");
+
+                assert!(
+                    err.to_string().contains("Bitloops daemon is not running"),
+                    "expected daemon-required error, got: {err:#}"
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        *bootstrap_count.borrow(),
+        0,
+        "daemon bootstrap should not be attempted when require_daemon is set"
+    );
 }
 
 #[test]
@@ -1203,6 +1277,7 @@ fn devql_run_sync_executes_graphql_mutation() {
                                 repair: false,
                                 validate: false,
                                 status: false,
+                                require_daemon: false,
                             })),
                         }))
                         .expect("devql sync should succeed");
@@ -1286,6 +1361,7 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
                                 repair: false,
                                 validate: false,
                                 status: false,
+                                require_daemon: false,
                             })),
                         }))
                         .expect("devql sync with paths should succeed");
@@ -1365,6 +1441,7 @@ fn devql_run_sync_ensures_daemon_available() {
                                 repair: false,
                                 validate: false,
                                 status: false,
+                                require_daemon: false,
                             })),
                         }))
                         .expect("devql sync should succeed");
@@ -1377,6 +1454,49 @@ fn devql_run_sync_ensures_daemon_available() {
         *bootstrap_count.borrow(),
         1,
         "daemon bootstrap should be called once"
+    );
+}
+
+#[test]
+fn devql_run_sync_require_daemon_fails_without_bootstrap() {
+    let repo = seed_devql_cli_repo();
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+
+    with_isolated_daemon_state(repo.path(), || {
+        super::graphql::with_ingest_daemon_bootstrap_hook(
+            {
+                let bootstrap_count = Rc::clone(&bootstrap_count);
+                move |_repo_root: &std::path::Path| {
+                    *bootstrap_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let err = test_runtime()
+                    .block_on(run(DevqlArgs {
+                        command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                            full: false,
+                            paths: None,
+                            repair: false,
+                            validate: false,
+                            status: false,
+                            require_daemon: true,
+                        })),
+                    }))
+                    .expect_err("devql sync --require-daemon should fail without a daemon");
+
+                assert!(
+                    err.to_string().contains("Bitloops daemon is not running"),
+                    "expected daemon-required error, got: {err:#}"
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        *bootstrap_count.borrow(),
+        0,
+        "daemon bootstrap should not be attempted when require_daemon is set"
     );
 }
 
