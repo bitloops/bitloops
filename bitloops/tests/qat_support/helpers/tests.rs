@@ -121,14 +121,32 @@ fn text_has_claude_auth_failure_detects_auth_prompts() {
 #[ignore = "QAT: requires full QAT environment"]
 fn build_init_bitloops_args_supports_no_sync_choice() {
     let args = build_init_bitloops_args("claude-code", false, None);
-    assert_eq!(args, vec!["init", "--agent", "claude-code"]);
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=false",
+            "--ingest=false",
+        ]
+    );
 }
 
 #[test]
 #[ignore = "QAT: requires full QAT environment"]
 fn build_init_bitloops_args_supports_sync_false_choice() {
     let args = build_init_bitloops_args("claude-code", false, Some(false));
-    assert_eq!(args, vec!["init", "--agent", "claude-code", "--sync=false"]);
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=false",
+            "--ingest=false",
+        ]
+    );
 }
 
 #[test]
@@ -137,7 +155,14 @@ fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
     let args = build_init_bitloops_args("codex", true, Some(true));
     assert_eq!(
         args,
-        vec!["init", "--agent", "codex", "--sync=true", "--force"]
+        vec![
+            "init",
+            "--agent",
+            "codex",
+            "--sync=true",
+            "--ingest=false",
+            "--force",
+        ]
     );
 }
 
