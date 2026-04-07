@@ -417,48 +417,7 @@ async fn enqueue_sync_rejects_conflicting_mode_selectors() {
 }
 
 #[tokio::test]
-async fn sync_rejects_conflicting_mode_selectors() {
-    let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
-    let schema = slim_schema_for_repo(repo.path());
-
-    let validate_and_full = schema
-        .execute(async_graphql::Request::new(
-            r#"
-            mutation {
-              sync(input: { validate: true, full: true }) {
-                success
-              }
-            }
-            "#,
-        ))
-        .await;
-    assert_bad_user_input_error(
-        &validate_and_full,
-        "sync",
-        "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
-    );
-
-    let repair_and_paths = schema
-        .execute(async_graphql::Request::new(
-            r#"
-            mutation {
-              sync(input: { repair: true, paths: ["src/lib.rs"] }) {
-                success
-              }
-            }
-            "#,
-        ))
-        .await;
-    assert_bad_user_input_error(
-        &repair_and_paths,
-        "sync",
-        "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
-    );
-}
-
-#[tokio::test]
-async fn sync_without_selector_uses_the_default_auto_behaviour() {
+async fn graphql_sync_mutation_is_not_exposed() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = slim_schema_for_repo(repo.path());
@@ -469,23 +428,18 @@ async fn sync_without_selector_uses_the_default_auto_behaviour() {
             mutation {
               sync(input: {}) {
                 success
-                mode
               }
             }
             "#,
         ))
         .await;
 
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
     assert!(
-        response.errors.is_empty(),
-        "graphql errors: {:?}",
+        response.errors[0].message.contains("Unknown field")
+            && response.errors[0].message.contains("sync"),
+        "expected GraphQL schema validation error for removed sync mutation, got {:?}",
         response.errors
-    );
-    let json = response.data.into_json().expect("graphql data to json");
-    assert_eq!(json["sync"]["success"], true);
-    assert_eq!(
-        json["sync"]["mode"], "full",
-        "auto sync requests currently execute with the full-workspace summary mode"
     );
 }
 

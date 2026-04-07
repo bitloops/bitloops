@@ -163,9 +163,14 @@ pub fn ensure_daemon_config_exists() -> Result<PathBuf> {
 
 pub fn bootstrap_default_daemon_environment() -> Result<PathBuf> {
     let path = ensure_daemon_config_exists()?;
-    let loaded = load_daemon_settings(Some(path.as_path()))?;
-    ensure_local_store_artifacts(&loaded)?;
+    ensure_daemon_store_artifacts(Some(path.as_path()))?;
     Ok(path)
+}
+
+pub fn ensure_daemon_store_artifacts(explicit_path: Option<&Path>) -> Result<PathBuf> {
+    let loaded = load_daemon_settings(explicit_path)?;
+    ensure_local_store_artifacts(&loaded)?;
+    Ok(loaded.path)
 }
 
 pub fn persist_daemon_cli_settings(update: &DaemonCliSettings) -> Result<PathBuf> {
@@ -446,5 +451,37 @@ level = "info"
         assert!(loaded.cli.local_dev, "runtime.local_dev should be parsed");
         assert_eq!(loaded.cli.telemetry, Some(true));
         assert_eq!(loaded.cli.log_level, "info");
+    }
+
+    #[test]
+    fn ensure_daemon_store_artifacts_creates_local_store_files_for_explicit_config() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"
+[runtime]
+local_dev = false
+cli_version = "0.0.12"
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+        )
+        .expect("write daemon config");
+
+        let returned_path =
+            ensure_daemon_store_artifacts(Some(config_path.as_path())).expect("bootstrap stores");
+
+        assert_eq!(returned_path, config_path);
+        assert!(dir.path().join("stores/relational/relational.db").is_file());
+        assert!(dir.path().join("stores/event/events.duckdb").is_file());
+        assert!(dir.path().join("stores/blob").is_dir());
     }
 }

@@ -49,8 +49,7 @@ impl SqliteInteractionSpool {
                 ?6, ?7, ?8, ?9,
                 ?10, ?11, ?12
              )
-             ON CONFLICT(session_id) DO UPDATE SET
-                repo_id = excluded.repo_id,
+             ON CONFLICT(repo_id, session_id) DO UPDATE SET
                 agent_type = CASE
                     WHEN excluded.agent_type = '' THEN interaction_sessions.agent_type
                     ELSE excluded.agent_type
@@ -129,9 +128,8 @@ impl SqliteInteractionSpool {
                 ?14, ?15, ?16, ?17,
                 ?18, ?19, ?20, ?21, ?22, ?23
              )
-             ON CONFLICT(turn_id) DO UPDATE SET
+             ON CONFLICT(repo_id, turn_id) DO UPDATE SET
                 session_id = excluded.session_id,
-                repo_id = excluded.repo_id,
                 turn_number = CASE
                     WHEN excluded.turn_number = 0 THEN interaction_turns.turn_number
                     ELSE excluded.turn_number
@@ -365,16 +363,16 @@ impl InteractionSpool for SqliteInteractionSpool {
                 .context("starting checkpoint assignment spool transaction")?;
             let result = (|| -> Result<()> {
                 let placeholders: Vec<String> = (1..=turn_ids.len())
-                    .map(|idx| format!("?{}", idx + 2))
+                    .map(|idx| format!("?{}", idx + 3))
                     .collect();
                 let sql = format!(
                     "UPDATE interaction_turns
                      SET checkpoint_id = ?1, updated_at = ?2
-                     WHERE turn_id IN ({})",
+                     WHERE repo_id = ?3 AND turn_id IN ({})",
                     placeholders.join(", ")
                 );
                 let mut params: Vec<&dyn rusqlite::types::ToSql> =
-                    vec![&checkpoint_id, &assigned_at];
+                    vec![&checkpoint_id, &assigned_at, &self.repo_id];
                 for turn_id in turn_ids {
                     params.push(turn_id);
                 }

@@ -117,10 +117,8 @@ pub(super) fn tests_result_selections() -> Vec<GraphqlSelection> {
                 GraphqlSelection::scalar("testName"),
                 GraphqlSelection::scalar("suiteName"),
                 GraphqlSelection::scalar("filePath"),
-                GraphqlSelection::scalar("confidence"),
-                GraphqlSelection::scalar("discoverySource"),
-                GraphqlSelection::scalar("linkageSource"),
-                GraphqlSelection::scalar("linkageStatus"),
+                GraphqlSelection::scalar("startLine"),
+                GraphqlSelection::scalar("endLine"),
             ],
         )
         .into(),

@@ -6,4 +6,6 @@ pub mod extension_host;
 pub mod hooks;
 pub mod interactions;
 pub(crate) mod language_adapter;
+pub mod relational_store;
+pub mod runtime_store;
 pub mod validation;

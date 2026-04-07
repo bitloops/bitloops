@@ -45,7 +45,7 @@ fn isolated_test_repo_root() -> PathBuf {
 pub(super) fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
     let repo_root = isolated_test_repo_root();
     crate::host::devql::DevqlConfig {
-        config_root: repo_root.clone(),
+        daemon_config_root: repo_root.clone(),
         repo_root,
         repo: crate::host::devql::RepoIdentity {
             provider: "github".to_string(),
@@ -68,7 +68,7 @@ pub(super) fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
 
 pub(super) fn sync_test_cfg_for_repo(repo_root: &Path) -> crate::host::devql::DevqlConfig {
     crate::host::devql::DevqlConfig {
-        config_root: repo_root.to_path_buf(),
+        daemon_config_root: repo_root.to_path_buf(),
         repo_root: repo_root.to_path_buf(),
         repo: crate::host::devql::RepoIdentity {
             provider: "github".to_string(),

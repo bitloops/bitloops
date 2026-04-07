@@ -16,7 +16,7 @@ use crate::config::{
 use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
-use crate::storage::SqliteConnectionPool;
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::capability_config::build_capability_config_root;
 use super::language_services::{BuiltinLanguageServicesGateway, builtin_language_services};
@@ -48,10 +48,8 @@ impl LocalCapabilityRuntimeResources {
         let backends = resolve_store_backend_config_for_repo(repo_root)?;
         let provider_config = resolve_provider_config_for_repo(repo_root)?;
 
-        let sqlite_path = backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(repo_root)?;
-        let sqlite_pool = SqliteConnectionPool::connect(sqlite_path)?;
+        let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
+        let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
         let relational = SqliteRelationalGateway::new(sqlite_pool.clone());
         let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
         let knowledge_documents =

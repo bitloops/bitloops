@@ -20,6 +20,7 @@ use crate::host::capability_host::gateways::{
 };
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::language_services::BuiltinLanguageServicesGateway;
 
@@ -189,22 +190,12 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         if self.backends.relational.has_postgres() {
             return Ok(());
         }
-        let path = self
-            .backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(self.repo_root)
-            .context("resolving SQLite path for DevQL relational DDL")?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        let conn = rusqlite::Connection::open_with_flags(
-            &path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
+        let relational = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root,
+            &self.backends.relational,
         )
-        .with_context(|| format!("opening SQLite at {}", path.display()))?;
-        conn.execute_batch(sql)
-            .context("applying DevQL SQLite DDL")?;
-        Ok(())
+        .context("opening local relational store for DevQL DDL")?;
+        relational.execute_local_sqlite_batch_allow_create(sql)
     }
 }
 

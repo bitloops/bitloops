@@ -8,6 +8,7 @@ use super::{
 };
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd};
 
@@ -102,24 +103,14 @@ fn turn_end_writes_prompt_and_summary_to_session_metadata() {
         handle_lifecycle_turn_end(&adapter, &event)
             .expect("handle_lifecycle_turn_end should succeed");
 
-        let meta_dir = dir
-            .path()
-            .join(".bitloops")
-            .join("metadata")
-            .join("turn-end-session");
-        let prompt_file = meta_dir.join("prompt.txt");
-        let summary_file = meta_dir.join("summary.txt");
-        assert!(
-            prompt_file.exists(),
-            "session metadata should contain prompt.txt"
-        );
-        assert!(
-            summary_file.exists(),
-            "session metadata should contain summary.txt"
-        );
-
-        let prompt_content = std::fs::read_to_string(&prompt_file).unwrap();
-        let summary_content = std::fs::read_to_string(&summary_file).unwrap();
+        let runtime_store =
+            RepoSqliteRuntimeStore::open(dir.path()).expect("open runtime store for turn-end test");
+        let snapshot = runtime_store
+            .load_latest_session_metadata_snapshot("turn-end-session")
+            .expect("load latest session metadata snapshot")
+            .expect("turn-end should persist a session metadata snapshot");
+        let prompt_content = snapshot.bundle.prompt_text();
+        let summary_content = snapshot.bundle.summary;
         assert!(
             prompt_content.contains("2+2"),
             "prompt.txt should contain user prompt from transcript"

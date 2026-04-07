@@ -28,8 +28,8 @@ impl SqliteRelationalGateway {
         }
 
         self.sqlite
-            .initialise_checkpoint_schema()
-            .context("initialising checkpoint schema for checkpoint resolution")?;
+            .initialise_relational_checkpoint_schema()
+            .context("initialising relational checkpoint schema for checkpoint resolution")?;
 
         let exists = self.sqlite.with_connection(|conn| {
             conn.query_row(

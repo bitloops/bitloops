@@ -7,6 +7,15 @@ title: Configuring Storage
 
 Storage backends are a daemon concern and belong in the global daemon config.
 
+## Storage Boundaries
+
+Bitloops now separates storage by purpose:
+
+- `RuntimeStore`: local-only SQLite used for workflow and daemon runtime state
+- `RelationalStore`: the approved relational boundary for queryable checkpoint and DevQL relational data
+
+The configured `[stores]` sections control `RelationalStore`, the event backend, and the blob backend. `RuntimeStore` paths are derived by the host.
+
 ## Default Behaviour
 
 By default Bitloops uses platform app directories:
@@ -15,6 +24,8 @@ By default Bitloops uses platform app directories:
 - event database in the data directory
 - blob store in the data directory
 - embedding model downloads in the cache directory
+- daemon runtime SQLite in the state directory
+- repo runtime SQLite under the active daemon config root
 
 Linux examples:
 
@@ -24,6 +35,13 @@ Linux examples:
 ~/.local/share/bitloops/stores/event/events.duckdb
 ~/.local/share/bitloops/stores/blob/
 ~/.cache/bitloops/embeddings/models/
+~/.local/state/bitloops/daemon/runtime.sqlite
+```
+
+Repo-scoped runtime state lives in a config-root runtime database, for example:
+
+```text
+<config root>/stores/runtime/runtime.sqlite
 ```
 
 ## Local SQLite, DuckDB, And Blob Defaults
@@ -87,6 +105,17 @@ cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
 
 Embedding model downloads are cache, not durable relational or event store data.
 
+## Internal Runtime Stores
+
+These SQLite files are not configured under `[stores]`:
+
+| Runtime surface | Default path | Purpose |
+| --- | --- | --- |
+| Daemon runtime store | `<state dir>/daemon/runtime.sqlite` | daemon runtime state, service metadata, supervisor metadata, sync queue state, enrichment queue state |
+| Repo runtime store | `<config root>/stores/runtime/runtime.sqlite` | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
+
+`RuntimeStore` is always local SQLite. `RelationalStore` is configured through `[stores.relational]` and can use SQLite or Postgres.
+
 ## Check The Effective State
 
 ```bash
@@ -94,4 +123,10 @@ bitloops status
 bitloops --connection-status
 ```
 
-Store locations come only from the active daemon config. If the global config does not exist yet, create it with `bitloops start --create-default-config` or let interactive `bitloops start` create it at the default location.
+Configured relational, event, and blob store locations come from the active daemon config. If the global config does not exist yet, create it with `bitloops start --create-default-config` or let interactive `bitloops start` create it at the default location.
+
+If you are using an explicit daemon config for a repo-scoped or test setup, create the matching local store artefacts with:
+
+```bash
+bitloops start --config /path/to/config.toml --bootstrap-local-stores
+```
