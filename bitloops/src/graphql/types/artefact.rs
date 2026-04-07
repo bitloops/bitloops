@@ -9,8 +9,9 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, ClonesFilterInput, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
+    CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
+    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
     paginate_items,
 };
 
@@ -114,7 +115,7 @@ pub struct Artefact {
     pub symbol_id: String,
     pub path: String,
     pub language: String,
-    pub canonical_kind: CanonicalKind,
+    pub canonical_kind: Option<CanonicalKind>,
     pub language_kind: Option<String>,
     pub symbol_fqn: Option<String>,
     pub parent_artefact_id: Option<ID>,
@@ -296,6 +297,52 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "depsSummary")]
+    async fn deps_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<DepsSummaryFilterInput>,
+    ) -> Result<DepsSummary> {
+        let filter = filter.unwrap_or_default();
+        let direction = filter.direction.unwrap_or(DepsDirection::Both);
+        let deps_filter = DepsFilterInput {
+            kind: filter.kind,
+            direction,
+            include_unresolved: filter.unresolved,
+        };
+
+        let loaders = ctx.data_unchecked::<DataLoaders>();
+        let outgoing = if matches!(direction, DepsDirection::Out | DepsDirection::Both) {
+            loaders
+                .load_outgoing_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve outgoing dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
+
+        let incoming = if matches!(direction, DepsDirection::In | DepsDirection::Both) {
+            loaders
+                .load_incoming_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve incoming dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
+
+        Ok(DepsSummary::from_edges(&incoming, &outgoing))
+    }
+
     async fn clones(
         &self,
         ctx: &Context<'_>,
@@ -326,11 +373,13 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
+        let summary = CloneSummary::from_clones(&clones);
         let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
+            summary,
         ))
     }
 
@@ -463,7 +512,7 @@ fn artefact_stage_row(artefact: &Artefact) -> Value {
     "artefact_id": artefact.id.as_ref(),
     "symbol_id": &artefact.symbol_id,
     "symbol_fqn": &artefact.symbol_fqn,
-    "canonical_kind": artefact.canonical_kind.as_devql_value(),
+    "canonical_kind": artefact.canonical_kind.map(|kind| kind.as_devql_value()),
     "path": &artefact.path,
     "start_line": artefact.start_line,
     "end_line": artefact.end_line,

@@ -102,8 +102,8 @@ pub(crate) fn condense_session_writes_turn_and_transcript_start_metadata() {
     let session_id = "test-turn-and-transcript-start";
     let mut state = idle_state(session_id, &base_head, vec!["agent.rs".to_string()], 1);
     state.turn_id = "turn-123".to_string();
-    state.transcript_identifier_at_start = "user-1".to_string();
-    state.checkpoint_transcript_start = 1;
+    state.pending.transcript_identifier_at_start = "user-1".to_string();
+    state.pending.checkpoint_transcript_start = 1;
     let transcript_path = write_session_transcript(
         dir.path(),
         session_id,

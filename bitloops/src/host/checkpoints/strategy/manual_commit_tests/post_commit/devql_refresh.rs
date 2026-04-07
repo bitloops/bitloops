@@ -1,10 +1,20 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 use super::helpers::{commit_file, init_devql_schema};
 
 #[test]
 pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_checkpoints() {
     let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
     let head = setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -14,16 +24,29 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
             session_id: "projection-session".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
             agent_type: "claude-code".to_string(),
-            files_touched: vec![
-                "src/projection_a.ts".to_string(),
-                "src/projection_b.ts".to_string(),
-                "src/projection_missing.ts".to_string(),
-            ],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec![
+                    "src/projection_a.ts".to_string(),
+                    "src/projection_b.ts".to_string(),
+                    "src/projection_missing.ts".to_string(),
+                ],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "projection-session",
+        "projection-session-turn",
+        &[
+            "src/projection_a.ts",
+            "src/projection_b.ts",
+            "src/projection_missing.ts",
+        ],
+    );
 
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(
@@ -143,6 +166,15 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
 #[test]
 pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
     let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -185,6 +217,167 @@ pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
         "current_file_state should track the committed blob for clean post-commit refreshes"
     );
     assert_eq!(current_state.1, "head");
+}
+
+#[test]
+pub(crate) fn post_commit_catches_up_missing_historical_commit_segment_before_sync_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
+    setup_git_repo(&dir);
+    let devql_sqlite_path = init_devql_schema(dir.path());
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/history.ts"),
+        "export const first = () => 1;\n",
+    )
+    .unwrap();
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "first history commit"]);
+    let first_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    fs::write(
+        dir.path().join("src/history.ts"),
+        "export const first = () => 1;\nexport const second = () => 2;\n",
+    )
+    .unwrap();
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "second history commit"]);
+    let second_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
+    let first_history_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            rusqlite::params![repo_id.as_str(), first_commit.as_str(), "src/history.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let second_history_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            rusqlite::params![repo_id.as_str(), second_commit.as_str(), "src/history.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let current_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/history.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert!(
+        first_history_rows > 0,
+        "post_commit should backfill the earlier missing commit in file_state"
+    );
+    assert!(
+        second_history_rows > 0,
+        "post_commit should ingest the current HEAD commit into file_state"
+    );
+    assert!(
+        current_rows > 0,
+        "post_commit should still refresh sync-owned current state after historical catch-up"
+    );
+}
+
+#[test]
+pub(crate) fn post_commit_limits_historical_catch_up_to_latest_fifty_commits() {
+    use rusqlite::OptionalExtension;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
+    setup_git_repo(&dir);
+    let devql_sqlite_path = init_devql_schema(dir.path());
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+
+    let mut first_commit = None::<String>;
+    let mut head_commit = None::<String>;
+    for commit_index in 1..=51 {
+        fs::write(
+            dir.path().join("src/history.ts"),
+            format!("export const value{commit_index} = () => {commit_index};\n"),
+        )
+        .unwrap();
+        git_ok(dir.path(), &["add", "."]);
+        git_ok(
+            dir.path(),
+            &["commit", "-m", &format!("history commit {commit_index}")],
+        );
+        let sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+        if first_commit.is_none() {
+            first_commit = Some(sha.clone());
+        }
+        head_commit = Some(sha);
+    }
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+    let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
+    let ingested_commit_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM commit_ingest_ledger WHERE repo_id = ?1 AND history_status = 'completed'",
+            rusqlite::params![repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let first_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![
+                repo_id.as_str(),
+                first_commit.as_deref().expect("first commit sha present")
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap();
+    let head_ledger: Option<String> = sqlite
+        .query_row(
+            "SELECT history_status FROM commit_ingest_ledger WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![
+                repo_id.as_str(),
+                head_commit.as_deref().expect("head commit sha present")
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap();
+
+    assert_eq!(
+        ingested_commit_count, 50,
+        "post_commit should only ingest the latest fifty commits when more history is missing"
+    );
+    assert!(
+        first_ledger.is_none(),
+        "post_commit should leave commits older than the latest fifty outside the automatic catch-up window"
+    );
+    assert_eq!(head_ledger.as_deref(), Some("completed"));
 }
 
 #[test]

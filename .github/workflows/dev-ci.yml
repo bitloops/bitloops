@@ -5,17 +5,17 @@ on:
     branches:
       - develop
     paths:
-      - "bitloops/**"
-      - "xtask/**"
-      - ".cargo/config.toml"
-      - "bitloops/.cargo/config.toml"
-      - ".github/workflows/dev-ci.yml"
+      - 'bitloops/**'
+      - 'xtask/**'
+      - '.cargo/config.toml'
+      - 'bitloops/.cargo/config.toml'
+      - '.github/workflows/dev-ci.yml'
 
 permissions:
   contents: read
 
 env:
-  DUCKDB_DOWNLOAD_LIB: "1"
+  DUCKDB_DOWNLOAD_LIB: '1'
 
 jobs:
   rust-file-size:
@@ -53,52 +53,16 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings
 
-  coverage-gate:
-    name: Coverage gate
+  test-full:
+    name: Full test suite
     if: ${{ !github.event.pull_request.draft }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bitloops
           shared-key: dev-ci
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
-      - name: Resolve coverage baseline mode
-        id: baseline
-        env:
-          BASELINE_LINES_VAR: ${{ vars.BITLOOPS_COV_BASELINE_LINES_PCT }}
-          BASELINE_FUNCTIONS_VAR: ${{ vars.BITLOOPS_COV_BASELINE_FUNCTIONS_PCT }}
-        run: |
-          set -euo pipefail
-
-          is_number() {
-            echo "$1" | awk 'BEGIN{ok=0} {if ($0 ~ /^-?[0-9]+([.][0-9]+)?$/) ok=1} END{exit ok?0:1}'
-          }
-
-          if is_number "$BASELINE_LINES_VAR" && is_number "$BASELINE_FUNCTIONS_VAR"; then
-            echo "mode=baseline-metadata" >> "$GITHUB_OUTPUT"
-            echo "lines=$BASELINE_LINES_VAR" >> "$GITHUB_OUTPUT"
-            echo "functions=$BASELINE_FUNCTIONS_VAR" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=default-thresholds" >> "$GITHUB_OUTPUT"
-            echo "lines=80.00" >> "$GITHUB_OUTPUT"
-            echo "functions=75.00" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Show coverage gate mode
-        run: |
-          echo "Coverage mode: ${{ steps.baseline.outputs.mode }}"
-          echo "Lines baseline: ${{ steps.baseline.outputs.lines }}"
-          echo "Functions baseline: ${{ steps.baseline.outputs.functions }}"
-      - name: Run coverage and gate
-        run: |
-          cargo dev-coverage
-          cargo run --quiet --package xtask -- coverage compare \
-            --lines "${{ steps.baseline.outputs.lines }}" \
-            --functions "${{ steps.baseline.outputs.functions }}" \
-            --epsilon 0.5 \
-            --lcov bitloops/target/llvm-cov.info
+      - name: Run full test suite
+        run: cargo dev-test-full

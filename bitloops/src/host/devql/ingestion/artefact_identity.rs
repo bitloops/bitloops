@@ -79,6 +79,14 @@ pub(crate) fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &st
     ))
 }
 
+pub(super) fn historical_symbol_artefact_id(
+    repo_id: &str,
+    symbol_id: &str,
+    content_hash: &str,
+) -> String {
+    deterministic_uuid(&format!("{repo_id}|{symbol_id}|{content_hash}"))
+}
+
 #[cfg(test)]
 pub(super) fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
     let function_decl = Regex::new(

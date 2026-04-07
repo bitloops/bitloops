@@ -11,14 +11,13 @@ pub(super) const INIT_SCHEMA_MUTATION: &str = r#"
 "#;
 
 pub(super) const INGEST_MUTATION: &str = r#"
-    mutation Ingest($input: IngestInput!) {
+    mutation Ingest($input: IngestInput) {
       ingest(input: $input) {
         success
-        checkpointsProcessed
+        commitsProcessed
+        checkpointCompanionsProcessed
         eventsInserted
         artefactsUpserted
-        checkpointsWithoutCommit
-        temporaryRowsPromoted
         semanticFeatureRowsUpserted
         semanticFeatureRowsSkipped
         symbolEmbeddingRowsUpserted

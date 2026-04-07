@@ -77,6 +77,37 @@ pub(crate) async fn execute_devql_query(
 
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
+    let has_deps_summary_stage = has_registered_deps_summary_stage(parsed)?;
+    let has_clone_summary_stage = has_registered_clone_summary_stage(parsed);
+
+    if has_deps_summary_stage {
+        log_devql_validation_failure(
+            parsed,
+            "deps_summary_graphql_only",
+            "summary(deps:true, ...) is only supported by the GraphQL compiler path",
+        );
+        bail!("summary(deps:true, ...) is only supported by the GraphQL compiler path");
+    }
+
+    if has_clone_summary_stage && !parsed.has_clones_stage {
+        log_devql_validation_failure(
+            parsed,
+            "summary_requires_clones",
+            "summary() requires a clones() stage in the query",
+        );
+        bail!("summary() requires a clones() stage in the query");
+    }
+
+    if has_clone_summary_stage && parsed.registered_stages.len() > 1 {
+        log_devql_validation_failure(
+            parsed,
+            "summary_with_additional_registered_stages",
+            "summary() cannot currently be combined with additional registered capability-pack stages",
+        );
+        bail!(
+            "summary() cannot currently be combined with additional registered capability-pack stages"
+        );
+    }
 
     if has_tests_stage && !parsed.has_artefacts_stage {
         log_devql_validation_failure(
@@ -196,6 +227,7 @@ pub(crate) async fn execute_devql_query(
 pub(crate) fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
+    let has_clone_summary_stage = has_registered_clone_summary_stage(parsed);
     crate::telemetry::logging::warn(
         &crate::telemetry::logging::with_component(
             crate::telemetry::logging::background(),
@@ -219,6 +251,10 @@ pub(crate) fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str
             crate::telemetry::logging::bool_attr("has_tests_stage", has_tests_stage),
             crate::telemetry::logging::bool_attr("has_coverage_stage", has_coverage_stage),
             crate::telemetry::logging::bool_attr(
+                "has_clone_summary_stage",
+                has_clone_summary_stage,
+            ),
+            crate::telemetry::logging::bool_attr(
                 "has_registered_stages",
                 !parsed.registered_stages.is_empty(),
             ),
@@ -240,6 +276,62 @@ pub(crate) fn has_registered_coverage_stage(parsed: &ParsedDevqlQuery) -> bool {
         .any(|stage| is_coverage_stage_name(&stage.stage_name))
 }
 
+pub(crate) fn has_registered_clone_summary_stage(parsed: &ParsedDevqlQuery) -> bool {
+    parsed.registered_stages.iter().any(|stage| {
+        is_clone_summary_stage_name(&stage.stage_name) && !stage.args.contains_key("deps")
+    })
+}
+
+pub(crate) fn has_registered_deps_summary_stage(parsed: &ParsedDevqlQuery) -> Result<bool> {
+    for stage in &parsed.registered_stages {
+        if !is_clone_summary_stage_name(&stage.stage_name) {
+            continue;
+        }
+
+        let Some(deps_arg) = stage.args.get("deps") else {
+            continue;
+        };
+        let deps_enabled = super::super::parse_bool_literal("summary deps", deps_arg)?;
+        if !deps_enabled {
+            bail!("summary(deps:...) requires deps:true");
+        }
+        for key in stage.args.keys() {
+            match key.as_str() {
+                "deps" | "kind" | "direction" | "unresolved" => {}
+                _ => {
+                    bail!(
+                        "summary(deps:true, ...) received unsupported argument `{key}`; allowed args: deps, kind, direction, unresolved"
+                    );
+                }
+            }
+        }
+        if let Some(kind) = stage.args.get("kind")
+            && super::super::DepsKind::from_str(kind).is_none()
+        {
+            bail!(
+                "summary(kind:...) must be one of: {}",
+                super::super::DepsKind::all_names().join(", ")
+            );
+        }
+        if let Some(direction) = stage.args.get("direction")
+            && super::super::DepsDirection::from_str(direction).is_none()
+        {
+            bail!(
+                "summary(direction:...) must be one of: {}",
+                super::super::DepsDirection::all_names().join(", ")
+            );
+        }
+        if let Some(unresolved) = stage.args.get("unresolved") {
+            super::super::parse_bool_literal("summary unresolved", unresolved).map_err(|_| {
+                anyhow::anyhow!("summary(unresolved:...) must be boolean true/false")
+            })?;
+        }
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 pub(crate) fn has_non_tests_or_coverage_registered_stage(parsed: &ParsedDevqlQuery) -> bool {
     parsed.registered_stages.iter().any(|stage| {
         !is_tests_stage_name(&stage.stage_name) && !is_coverage_stage_name(&stage.stage_name)
@@ -248,12 +340,12 @@ pub(crate) fn has_non_tests_or_coverage_registered_stage(parsed: &ParsedDevqlQue
 
 pub(crate) fn is_tests_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ALIAS_ID
+}
+
+pub(crate) fn is_clone_summary_stage_name(stage_name: &str) -> bool {
+    stage_name == crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_STAGE_ID
 }
 
 pub(crate) fn is_coverage_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
 }

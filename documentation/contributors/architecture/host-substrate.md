@@ -11,12 +11,17 @@ flowchart TD
     EXTHOST["host/extension_host"]
     HOOKS["host/hooks"]
     CHECKPOINTS["host/checkpoints"]
+    RUNTIME["host/runtime_store"]
+    RELSTORE["host/relational_store"]
     VALIDATION["host/validation and db_status"]
 
     DEVQL --> CAPHOST
     DEVQL --> EXTHOST
+    DEVQL --> RELSTORE
     HOOKS --> CHECKPOINTS
     HOOKS --> DEVQL
+    CHECKPOINTS --> RUNTIME
+    CHECKPOINTS --> RELSTORE
     CAPHOST --> VALIDATION
     EXTHOST --> VALIDATION
 ```
@@ -30,6 +35,8 @@ flowchart TD
 | `host/extension_host`               | Descriptor registry for language packs and extension capability packs, plus compatibility, readiness, and diagnostics. |
 | `host/hooks`                        | Agent and Git hook dispatch plus shared hook runtime.                                                                  |
 | `host/checkpoints`                  | Session state machine, strategies, transcript parsing, checkpoint storage, and history.                                |
+| `host/runtime_store`                | Local-only SQLite runtime boundary for repo workflow state, interaction spool state, and daemon runtime documents.     |
+| `host/relational_store`             | Approved relational boundary over local SQLite plus optional Postgres-backed relational access.                        |
 | `host/validation`, `host/db_status` | Validation and backend-status helpers used by higher layers.                                                           |
 
 ## `DevqlCapabilityHost`: executable pack runtime
@@ -73,7 +80,7 @@ The main contract is defined by:
 
 - repo identity and repo root
 - merged config root
-- host relational gateway
+- host relational gateway backed by `host/relational_store`
 - knowledge relational repository
 - knowledge document repository
 - blob payload store
@@ -83,6 +90,42 @@ The main contract is defined by:
 - store-health gateway
 
 This is how packs access storage and connectors without opening their own infrastructure directly in normal runtime paths.
+
+## Storage boundaries inside the host
+
+The host now uses two top-level storage boundaries:
+
+- `RuntimeStore`: always-local SQLite for operational workflow state
+- `RelationalStore`: the only approved raw relational boundary for queryable relational state
+
+### `RuntimeStore`
+
+`host/runtime_store` owns state that is local to the running machine or repository:
+
+- repo-scoped session and temporary checkpoint tables
+- pre-prompt and pre-task markers
+- interaction spool state
+- daemon runtime, service, and supervisor documents
+- sync queue state
+- enrichment queue state
+
+The default paths are:
+
+- repo runtime store: `<config root>/stores/runtime/runtime.sqlite`
+- daemon runtime store: `<state dir>/daemon/runtime.sqlite`
+
+### `RelationalStore`
+
+`host/relational_store` wraps the relational backend selection logic and hides the current dual-target helper used by DevQL.
+
+It owns queryable relational state such as:
+
+- committed checkpoint tables
+- checkpoint-to-commit mappings
+- DevQL relational projections and current-state tables
+- SQLite local access plus optional Postgres remote execution
+
+Code outside store implementations should not open raw SQLite paths or legacy daemon JSON state helpers directly.
 
 ### Policy and safety
 

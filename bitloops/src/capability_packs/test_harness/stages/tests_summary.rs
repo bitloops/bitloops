@@ -244,24 +244,11 @@ mod tests {
     }
 
     fn seed_pack_owned_rows(repo: &mut impl TestHarnessRepository, commit_sha: &str) -> Result<()> {
-        let discovery_run = crate::models::TestDiscoveryRunRecord {
-            discovery_run_id: format!("discovery:{commit_sha}"),
-            repo_id: "repo-1".into(),
-            commit_sha: commit_sha.into(),
-            language: Some("rust".into()),
-            started_at: "2026-03-24T00:00:00Z".into(),
-            finished_at: Some("2026-03-24T00:00:01Z".into()),
-            status: "complete".into(),
-            enumeration_status: Some("complete".into()),
-            notes_json: None,
-            stats_json: None,
-        };
         let artefact = crate::models::TestArtefactCurrentRecord {
             artefact_id: "test-artefact-1".into(),
             symbol_id: "test-symbol-1".into(),
             repo_id: "repo-1".into(),
-            commit_sha: commit_sha.into(),
-            blob_sha: "blob-1".into(),
+            content_id: "blob-1".into(),
             path: "tests/example.rs".into(),
             language: "rust".into(),
             canonical_kind: "test_scenario".into(),
@@ -277,16 +264,12 @@ mod tests {
             signature: None,
             modifiers: "[]".into(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".into(),
-            revision_kind: "commit".into(),
-            revision_id: commit_sha.into(),
         };
         let edge = crate::models::TestArtefactEdgeCurrentRecord {
             edge_id: "edge-1".into(),
             repo_id: "repo-1".into(),
-            commit_sha: commit_sha.into(),
-            blob_sha: "blob-1".into(),
+            content_id: "blob-1".into(),
             path: "tests/example.rs".into(),
             from_artefact_id: "test-artefact-1".into(),
             from_symbol_id: "test-symbol-1".into(),
@@ -298,10 +281,8 @@ mod tests {
             start_line: Some(1),
             end_line: Some(10),
             metadata: "{}".into(),
-            revision_kind: "commit".into(),
-            revision_id: commit_sha.into(),
         };
-        repo.replace_test_discovery(commit_sha, &[artefact], &[edge], &discovery_run, &[])?;
+        repo.replace_test_discovery(commit_sha, &[artefact], &[edge])?;
 
         let capture = crate::models::CoverageCaptureRecord {
             capture_id: "capture-1".into(),

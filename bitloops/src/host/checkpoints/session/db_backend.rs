@@ -6,8 +6,8 @@ use serde::de::DeserializeOwned;
 
 use super::backend::SessionBackend;
 use super::phase::SessionPhase;
-use super::state::{PrePromptState, PreTaskState, SessionState};
-use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
+use super::state::{PendingCheckpointState, PrePromptState, PreTaskState, SessionState};
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::host::validation::validators::{validate_session_id, validate_tool_use_id};
 use crate::storage::SqliteConnectionPool;
 
@@ -19,8 +19,8 @@ pub struct DbSessionBackend {
 impl DbSessionBackend {
     pub fn new(repo_id: impl Into<String>, sqlite: SqliteConnectionPool) -> Result<Self> {
         sqlite
-            .initialise_checkpoint_schema()
-            .context("initialising checkpoint schema for DbSessionBackend")?;
+            .initialise_runtime_checkpoint_schema()
+            .context("initialising runtime checkpoint schema for DbSessionBackend")?;
         let backend = Self {
             repo_id: repo_id.into(),
             sqlite,
@@ -34,10 +34,12 @@ impl DbSessionBackend {
     }
 
     pub fn for_repo_root(repo_root: &Path) -> Result<Self> {
-        let sqlite_path = resolve_repo_scoped_sqlite_path(repo_root)?;
-        let repo_identity = crate::host::devql::resolve_repo_identity(repo_root)
-            .context("resolving repo identity for DbSessionBackend")?;
-        Self::from_sqlite_path(repo_identity.repo_id, sqlite_path)
+        let runtime_store = RepoSqliteRuntimeStore::open(repo_root)
+            .context("opening repo runtime store for DbSessionBackend")?;
+        Self::from_sqlite_path(
+            runtime_store.repo_id().to_string(),
+            runtime_store.db_path().to_path_buf(),
+        )
     }
 
     #[cfg(test)]
@@ -76,21 +78,27 @@ impl DbSessionBackend {
                 "turn_checkpoint_ids",
             )?,
             last_interaction_time: row.get("last_interaction_time").unwrap_or(None),
-            step_count,
-            checkpoint_transcript_start: row
-                .get("checkpoint_transcript_start")
-                .context("reading checkpoint_transcript_start")?,
+            pending: PendingCheckpointState {
+                step_count,
+                checkpoint_transcript_start: row
+                    .get("checkpoint_transcript_start")
+                    .context("reading checkpoint_transcript_start")?,
+                files_touched: parse_json_column(
+                    &row.get::<_, String>("files_touched")
+                        .context("reading files_touched")?,
+                    "files_touched",
+                )?,
+                token_usage: parse_optional_json_column(token_usage_raw.as_deref(), "token_usage")?,
+                transcript_identifier_at_start: row
+                    .get("transcript_identifier_at_start")
+                    .context("reading transcript_identifier_at_start")?,
+            },
             condensed_transcript_lines: 0,
             transcript_lines_at_start: 0,
             untracked_files_at_start: parse_json_column(
                 &row.get::<_, String>("untracked_files_at_start")
                     .context("reading untracked_files_at_start")?,
                 "untracked_files_at_start",
-            )?,
-            files_touched: parse_json_column(
-                &row.get::<_, String>("files_touched")
-                    .context("reading files_touched")?,
-                "files_touched",
             )?,
             transcript_path: row
                 .get("transcript_path")
@@ -100,10 +108,6 @@ impl DbSessionBackend {
             last_checkpoint_id: row
                 .get("last_checkpoint_id")
                 .context("reading last_checkpoint_id")?,
-            token_usage: parse_optional_json_column(token_usage_raw.as_deref(), "token_usage")?,
-            transcript_identifier_at_start: row
-                .get("transcript_identifier_at_start")
-                .context("reading transcript_identifier_at_start")?,
             prompt_attributions: parse_json_column(
                 &row.get::<_, String>("prompt_attributions")
                     .context("reading prompt_attributions")?,
@@ -177,13 +181,13 @@ impl SessionBackend for DbSessionBackend {
 
     fn save_session(&self, state: &SessionState) -> Result<()> {
         validate_session_id(&state.session_id)?;
-        let files_touched = serde_json::to_string(&state.files_touched)
+        let files_touched = serde_json::to_string(&state.pending.files_touched)
             .context("serialising files_touched for session row")?;
         let untracked_files_at_start = serde_json::to_string(&state.untracked_files_at_start)
             .context("serialising untracked_files_at_start for session row")?;
         let turn_checkpoint_ids = serde_json::to_string(&state.turn_checkpoint_ids)
             .context("serialising turn_checkpoint_ids for session row")?;
-        let token_usage = serde_json::to_string(&state.token_usage)
+        let token_usage = serde_json::to_string(&state.pending.token_usage)
             .context("serialising token_usage for session row")?;
         let prompt_attributions = serde_json::to_string(&state.prompt_attributions)
             .context("serialising prompt_attributions for session row")?;
@@ -209,7 +213,7 @@ impl SessionBackend for DbSessionBackend {
                     ?20, ?21, ?22,
                     ?23, ?24, ?25, datetime('now')
                  )
-                 ON CONFLICT(session_id) DO UPDATE SET
+                 ON CONFLICT(repo_id, session_id) DO UPDATE SET
                     repo_id = excluded.repo_id,
                     cli_version = excluded.cli_version,
                     base_commit = excluded.base_commit,
@@ -247,8 +251,8 @@ impl SessionBackend for DbSessionBackend {
                     state.ended_at.as_deref(),
                     state.phase.as_str(),
                     state.turn_id.as_str(),
-                    i64::from(state.step_count),
-                    state.checkpoint_transcript_start,
+                    i64::from(state.pending.step_count),
+                    state.pending.checkpoint_transcript_start,
                     state.transcript_path.as_str(),
                     state.first_prompt.as_str(),
                     state.agent_type.as_str(),
@@ -257,7 +261,7 @@ impl SessionBackend for DbSessionBackend {
                     files_touched,
                     untracked_files_at_start,
                     turn_checkpoint_ids,
-                    state.transcript_identifier_at_start.as_str(),
+                    state.pending.transcript_identifier_at_start.as_str(),
                     token_usage,
                     prompt_attributions,
                     pending_prompt_attribution
@@ -310,7 +314,7 @@ impl SessionBackend for DbSessionBackend {
             conn.execute(
                 "INSERT INTO pre_prompt_states (session_id, repo_id, data, created_at)
                  VALUES (?1, ?2, ?3, datetime('now'))
-                 ON CONFLICT(session_id) DO UPDATE SET
+                 ON CONFLICT(repo_id, session_id) DO UPDATE SET
                     repo_id = excluded.repo_id,
                     data = excluded.data,
                     created_at = datetime('now')",
@@ -340,7 +344,7 @@ impl SessionBackend for DbSessionBackend {
             conn.execute(
                 "INSERT INTO pre_task_markers (tool_use_id, session_id, repo_id, data, created_at)
                  VALUES (?1, ?2, ?3, ?4, datetime('now'))
-                 ON CONFLICT(tool_use_id) DO UPDATE SET
+                 ON CONFLICT(repo_id, tool_use_id) DO UPDATE SET
                     session_id = excluded.session_id,
                     repo_id = excluded.repo_id,
                     data = excluded.data,
@@ -406,17 +410,6 @@ impl SessionBackend for DbSessionBackend {
             .context("querying latest pre-task marker")
         })
     }
-}
-
-fn resolve_repo_scoped_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg = resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving backend config for session DB")?;
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .context("resolving configured SQLite path for session DB");
-    }
-
-    Ok(crate::utils::paths::default_relational_db_path(repo_root))
 }
 
 fn parse_json_column<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T> {

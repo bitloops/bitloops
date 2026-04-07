@@ -1,5 +1,7 @@
 use anyhow::{Result, anyhow};
 
+use serde_json::Value;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LifecycleEventType {
     SessionStart,
@@ -9,6 +11,7 @@ pub enum LifecycleEventType {
     SessionEnd,
     SubagentStart,
     SubagentEnd,
+    TodoCheckpoint,
     Unknown(i32),
 }
 
@@ -17,10 +20,14 @@ pub struct LifecycleEvent {
     pub event_type: Option<LifecycleEventType>,
     pub session_id: String,
     pub session_ref: String,
+    pub source: String,
     pub prompt: String,
+    pub tool_name: String,
     pub tool_use_id: String,
+    pub tool_input: Option<Value>,
     pub subagent_id: String,
     pub model: String,
+    pub finalize_open_turn: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

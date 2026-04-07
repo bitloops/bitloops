@@ -157,7 +157,7 @@ mod tests {
     use crate::models::{
         CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
         ResolvedTestScenarioRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-        TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestRunRecord,
+        TestRunRecord,
     };
 
     #[derive(Default)]
@@ -180,8 +180,6 @@ mod tests {
             _commit_sha: &str,
             _test_artefacts: &[TestArtefactCurrentRecord],
             _test_edges: &[TestArtefactEdgeCurrentRecord],
-            _discovery_run: &TestDiscoveryRunRecord,
-            _diagnostics: &[TestDiscoveryDiagnosticRecord],
         ) -> Result<()> {
             unreachable!("unused in results tests")
         }
@@ -227,6 +225,13 @@ mod tests {
 
         fn load_repo_id_for_commit(&self, _commit_sha: &str) -> Result<String> {
             Ok(self.repo_id.clone())
+        }
+
+        fn load_current_production_artefacts(
+            &self,
+            _repo_id: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            unreachable!("unused in results tests")
         }
 
         fn load_production_artefacts(

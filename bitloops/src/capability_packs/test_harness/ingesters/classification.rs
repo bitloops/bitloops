@@ -31,7 +31,7 @@ impl IngesterHandler for ClassificationIngester {
                         "status": "failed",
                         "reason": "test_harness_relational_store_unavailable",
                     }),
-                    "test harness relational store is not available; configure stores.relational, create the database, and run `bitloops testlens init` if needed.",
+                    "test harness relational store is not available; configure stores.relational, create the database, and ensure the daemon is running (`bitloops start`).",
                 ));
             };
 

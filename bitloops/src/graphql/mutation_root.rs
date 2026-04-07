@@ -15,12 +15,6 @@ use super::{
 pub struct MutationRoot;
 
 #[derive(Debug, Clone, InputObject)]
-pub struct IngestInput {
-    #[graphql(default = 500)]
-    pub max_checkpoints: i32,
-}
-
-#[derive(Debug, Clone, InputObject)]
 pub struct AddKnowledgeInput {
     pub url: String,
     pub commit_ref: Option<String>,
@@ -38,22 +32,6 @@ pub struct RefreshKnowledgeInput {
 }
 
 #[derive(Debug, Clone, InputObject)]
-pub struct SyncInput {
-    /// Run a full workspace reconciliation.
-    #[graphql(default = false)]
-    pub full: bool,
-    /// Reconcile only the specified workspace paths (comma-delimited values accepted).
-    #[graphql(default)]
-    pub paths: Option<Vec<String>>,
-    /// Rebuild sync state from the current workspace, ignoring stored manifest trust.
-    #[graphql(default = false)]
-    pub repair: bool,
-    /// Validate current-state tables against a full read-only workspace reconciliation.
-    #[graphql(default = false)]
-    pub validate: bool,
-}
-
-#[derive(Debug, Clone, InputObject)]
 pub struct EnqueueSyncInput {
     #[graphql(default = false)]
     pub full: bool,
@@ -65,6 +43,12 @@ pub struct EnqueueSyncInput {
     pub validate: bool,
     #[graphql(default)]
     pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, InputObject)]
+pub struct IngestInput {
+    #[graphql(default)]
+    pub backfill: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -97,11 +81,10 @@ impl From<crate::host::devql::InitSchemaSummary> for InitSchemaResult {
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct IngestResult {
     pub success: bool,
-    pub checkpoints_processed: i32,
+    pub commits_processed: i32,
+    pub checkpoint_companions_processed: i32,
     pub events_inserted: i32,
     pub artefacts_upserted: i32,
-    pub checkpoints_without_commit: i32,
-    pub temporary_rows_promoted: i32,
     pub semantic_feature_rows_upserted: i32,
     pub semantic_feature_rows_skipped: i32,
     pub symbol_embedding_rows_upserted: i32,
@@ -114,11 +97,12 @@ impl From<crate::host::devql::IngestionCounters> for IngestResult {
     fn from(value: crate::host::devql::IngestionCounters) -> Self {
         Self {
             success: value.success,
-            checkpoints_processed: to_graphql_count(value.checkpoints_processed),
+            commits_processed: to_graphql_count(value.commits_processed),
+            checkpoint_companions_processed: to_graphql_count(
+                value.checkpoint_companions_processed,
+            ),
             events_inserted: to_graphql_count(value.events_inserted),
             artefacts_upserted: to_graphql_count(value.artefacts_upserted),
-            checkpoints_without_commit: to_graphql_count(value.checkpoints_without_commit),
-            temporary_rows_promoted: to_graphql_count(value.temporary_rows_promoted),
             semantic_feature_rows_upserted: to_graphql_count(value.semantic_feature_rows_upserted),
             semantic_feature_rows_skipped: to_graphql_count(value.semantic_feature_rows_skipped),
             symbol_embedding_rows_upserted: to_graphql_count(value.symbol_embedding_rows_upserted),
@@ -361,16 +345,7 @@ impl MutationRoot {
         Ok(summary.into())
     }
 
-    async fn ingest(&self, ctx: &Context<'_>, input: IngestInput) -> Result<IngestResult> {
-        if input.max_checkpoints < 0 {
-            return Err(operation_error(
-                "BAD_USER_INPUT",
-                "validation",
-                "ingest",
-                "maxCheckpoints must be zero or greater",
-            ));
-        }
-
+    async fn ingest(&self, ctx: &Context<'_>, input: Option<IngestInput>) -> Result<IngestResult> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         context
             .require_repo_write_scope()
@@ -378,47 +353,48 @@ impl MutationRoot {
         let cfg = context
             .devql_config()
             .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
+        crate::daemon::require_current_repo_runtime(cfg.repo_root.as_path(), "GraphQL ingest")
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
         let observer = GraphqlIngestionObserver::new(context);
-        let summary = crate::host::devql::execute_ingest_with_observer(
-            &cfg,
-            input.max_checkpoints as usize,
-            Some(&observer),
-            Some(crate::daemon::shared_enrichment_coordinator()),
-        )
-        .await
-        .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
-        Ok(summary.into())
-    }
-
-    async fn sync(&self, ctx: &Context<'_>, input: SyncInput) -> Result<SyncResult> {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        context
-            .require_repo_write_scope()
-            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "sync", err))?;
-        let cfg = context
-            .devql_config()
-            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "sync", err))?;
-
-        let mode = resolve_sync_mode_input(
-            input.full,
-            input.paths,
-            input.repair,
-            input.validate,
-            "sync",
-        )?;
-        let schema_outcome = crate::host::devql::prepare_sync_execution_schema(
-            &cfg,
-            "GraphQL mutation `sync`",
-            &mode,
-        )
-        .await
-        .map_err(|err| operation_error("BACKEND_ERROR", "initialisation", "sync", err))?;
-        let mode =
-            crate::host::devql::effective_sync_mode_after_schema_preparation(mode, schema_outcome);
-
-        let summary = crate::host::devql::run_sync_with_summary(&cfg, mode)
+        let backfill = match input.and_then(|input| input.backfill) {
+            Some(backfill) if backfill <= 0 => {
+                return Err(operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    "ingest",
+                    "`backfill` must be greater than zero",
+                ));
+            }
+            Some(backfill) => Some(usize::try_from(backfill).map_err(|_| {
+                operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    "ingest",
+                    "`backfill` must be greater than zero",
+                )
+            })?),
+            None => None,
+        };
+        let summary = if let Some(backfill) = backfill {
+            crate::host::devql::execute_ingest_with_backfill_window(
+                &cfg,
+                false,
+                backfill,
+                Some(&observer),
+                Some(crate::daemon::shared_enrichment_coordinator()),
+            )
             .await
-            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
+        } else {
+            crate::host::devql::execute_ingest_with_observer(
+                &cfg,
+                false,
+                0,
+                Some(&observer),
+                Some(crate::daemon::shared_enrichment_coordinator()),
+            )
+            .await
+        }
+        .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
         Ok(summary.into())
     }
 
@@ -454,26 +430,6 @@ impl MutationRoot {
             task: queued.task.into(),
             merged: queued.merged,
         })
-    }
-
-    async fn bootstrap_project(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(default = false)] skip_baseline: bool,
-    ) -> Result<InitSchemaResult> {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        context.require_repo_write_scope().map_err(|err| {
-            operation_error("BAD_USER_INPUT", "validation", "bootstrapProject", err)
-        })?;
-        let cfg = context.devql_config().map_err(|err| {
-            operation_error("BACKEND_ERROR", "configuration", "bootstrapProject", err)
-        })?;
-        let summary = crate::host::devql::execute_project_bootstrap(&cfg, skip_baseline)
-            .await
-            .map_err(|err| {
-                operation_error("BACKEND_ERROR", "initialisation", "bootstrapProject", err)
-            })?;
-        Ok(summary.into())
     }
 
     async fn add_knowledge(
@@ -866,100 +822,4 @@ impl crate::host::devql::IngestionObserver for GraphqlIngestionObserver {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_sync_source_accepts_default_and_aliases() {
-        assert_eq!(
-            parse_sync_source(None).expect("default source"),
-            crate::daemon::SyncTaskSource::ManualCli
-        );
-        assert_eq!(
-            parse_sync_source(Some("   ")).expect("blank source"),
-            crate::daemon::SyncTaskSource::ManualCli
-        );
-        assert_eq!(
-            parse_sync_source(Some("manual")).expect("manual alias"),
-            crate::daemon::SyncTaskSource::ManualCli
-        );
-        assert_eq!(
-            parse_sync_source(Some("manual-cli")).expect("manual-cli alias"),
-            crate::daemon::SyncTaskSource::ManualCli
-        );
-        assert_eq!(
-            parse_sync_source(Some("init")).expect("init source"),
-            crate::daemon::SyncTaskSource::Init
-        );
-        assert_eq!(
-            parse_sync_source(Some("watcher")).expect("watcher source"),
-            crate::daemon::SyncTaskSource::Watcher
-        );
-        assert_eq!(
-            parse_sync_source(Some("post-commit")).expect("post-commit source"),
-            crate::daemon::SyncTaskSource::PostCommit
-        );
-        assert_eq!(
-            parse_sync_source(Some("post_merge")).expect("post_merge source"),
-            crate::daemon::SyncTaskSource::PostMerge
-        );
-        assert_eq!(
-            parse_sync_source(Some("post_checkout")).expect("post_checkout source"),
-            crate::daemon::SyncTaskSource::PostCheckout
-        );
-    }
-
-    #[test]
-    fn parse_sync_source_rejects_unknown_values() {
-        let err = parse_sync_source(Some("cronjob")).expect_err("unknown source should fail");
-        assert!(err.contains("unsupported sync source `cronjob`"));
-        assert!(err.contains("manual_cli"));
-    }
-
-    #[test]
-    fn resolve_sync_mode_input_defaults_to_auto_when_no_selector_is_set() {
-        let mode =
-            resolve_sync_mode_input(false, None, false, false, "sync").expect("default mode");
-        assert_eq!(mode, crate::host::devql::SyncMode::Auto);
-    }
-
-    #[test]
-    fn resolve_sync_mode_input_rejects_conflicting_selectors() {
-        let err = resolve_sync_mode_input(
-            true,
-            Some(vec!["src/lib.rs".to_string()]),
-            false,
-            false,
-            "enqueueSync",
-        )
-        .expect_err("conflicting selectors should fail");
-        assert!(
-            err.message.contains(
-                "at most one of `full`, `paths`, `repair`, or `validate` may be specified"
-            )
-        );
-    }
-
-    #[test]
-    fn to_graphql_count_clamps_large_values() {
-        assert_eq!(to_graphql_count(0), 0);
-        assert_eq!(to_graphql_count(42), 42);
-        assert_eq!(
-            to_graphql_count((i32::MAX as usize) + 10),
-            i32::MAX,
-            "values larger than i32::MAX should clamp"
-        );
-    }
-
-    #[test]
-    fn require_non_empty_input_trims_and_rejects_blank_values() {
-        let value =
-            require_non_empty_input("  hello  ".to_string(), "field", "operation").expect("trim");
-        assert_eq!(value, "hello");
-
-        let err = require_non_empty_input("   ".to_string(), "field", "operation")
-            .expect_err("blank input should fail");
-        let message = err.message.clone();
-        assert!(message.contains("field must not be empty"));
-    }
-}
+mod tests;

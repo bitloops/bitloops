@@ -123,7 +123,6 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Explain(args) => Some(explain_action(args)),
         crate::cli::Commands::Debug(_) => None,
         crate::cli::Commands::Devql(args) => devql_action(args),
-        crate::cli::Commands::Testlens(args) => testlens_action(args),
         crate::cli::Commands::Embeddings(args) => embeddings_action(args),
         crate::cli::Commands::EmbeddingsRuntime(_) => None,
         crate::cli::Commands::DevqlWatcher(_) => None,
@@ -138,10 +137,13 @@ pub(crate) fn telemetry_action_for_command(
 }
 
 pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -> bool {
-    matches!(
-        command,
-        crate::cli::Commands::Devql(_) | crate::cli::Commands::Testlens(_)
-    )
+    match command {
+        crate::cli::Commands::Devql(args) => !matches!(
+            args.command.as_ref(),
+            Some(crate::cli::devql::DevqlCommand::Schema(_))
+        ),
+        _ => false,
+    }
 }
 
 fn daemon_start_action(
@@ -151,6 +153,9 @@ fn daemon_start_action(
     let mut flags = Vec::new();
     if args.create_default_config {
         flags.push("create_default_config");
+    }
+    if args.bootstrap_local_stores {
+        flags.push("bootstrap_local_stores");
     }
     if args.detached {
         flags.push("detached");
@@ -469,10 +474,8 @@ fn devql_action(
         crate::cli::devql::DevqlCommand::Init(_) => {
             Some(new_action("bitloops devql init", HashMap::new()))
         }
-        crate::cli::devql::DevqlCommand::Ingest(args) => {
-            let mut props = HashMap::new();
-            insert_count_property(&mut props, "max_checkpoints", args.max_checkpoints);
-            Some(new_action("bitloops devql ingest", props))
+        crate::cli::devql::DevqlCommand::Ingest(_) => {
+            Some(new_action("bitloops devql ingest", HashMap::new()))
         }
         crate::cli::devql::DevqlCommand::Sync(args) => {
             let mut props = HashMap::new();
@@ -518,6 +521,20 @@ fn devql_action(
                 ))
             }
         },
+        crate::cli::devql::DevqlCommand::Schema(args) => {
+            let mut props = HashMap::new();
+            insert_string_property(
+                &mut props,
+                "schema_mode",
+                if args.global { "global" } else { "slim" },
+            );
+            insert_string_property(
+                &mut props,
+                "output_mode",
+                if args.human { "human" } else { "minified" },
+            );
+            Some(new_action("bitloops devql schema", props))
+        }
         crate::cli::devql::DevqlCommand::Query(args) => {
             let mut props = HashMap::new();
             let mut flags = Vec::new();
@@ -596,39 +613,35 @@ fn devql_action(
                 HashMap::new(),
             )),
         },
-    }
-}
-
-fn testlens_action(
-    args: &crate::cli::testlens::TestLensArgs,
-) -> Option<crate::telemetry::analytics::ActionDescriptor> {
-    match args.command.as_ref()? {
-        crate::cli::testlens::TestLensCommand::Init(_) => {
-            Some(new_action("bitloops testlens init", HashMap::new()))
-        }
-        crate::cli::testlens::TestLensCommand::IngestTests(_) => {
-            Some(new_action("bitloops testlens ingest-tests", HashMap::new()))
-        }
-        crate::cli::testlens::TestLensCommand::IngestCoverage(args) => {
-            let mut props = HashMap::new();
-            insert_bool_property(&mut props, "has_lcov", args.lcov.is_some());
-            insert_bool_property(&mut props, "has_input", args.input.is_some());
-            insert_bool_property(
-                &mut props,
-                "has_test_artefact_id",
-                args.test_artefact_id.is_some(),
-            );
-            insert_bool_property(&mut props, "has_format", args.format.is_some());
-            Some(new_action("bitloops testlens ingest-coverage", props))
-        }
-        crate::cli::testlens::TestLensCommand::IngestCoverageBatch(_) => Some(new_action(
-            "bitloops testlens ingest-coverage-batch",
-            HashMap::new(),
-        )),
-        crate::cli::testlens::TestLensCommand::IngestResults(_) => Some(new_action(
-            "bitloops testlens ingest-results",
-            HashMap::new(),
-        )),
+        crate::cli::devql::DevqlCommand::TestHarness(args) => match &args.command {
+            crate::cli::devql::DevqlTestHarnessCommand::IngestTests(_) => Some(new_action(
+                "bitloops devql test-harness ingest-tests",
+                HashMap::new(),
+            )),
+            crate::cli::devql::DevqlTestHarnessCommand::IngestCoverage(args) => {
+                let mut props = HashMap::new();
+                insert_bool_property(&mut props, "has_lcov", args.lcov.is_some());
+                insert_bool_property(&mut props, "has_input", args.input.is_some());
+                insert_bool_property(
+                    &mut props,
+                    "has_test_artefact_id",
+                    args.test_artefact_id.is_some(),
+                );
+                insert_bool_property(&mut props, "has_format", args.format.is_some());
+                Some(new_action(
+                    "bitloops devql test-harness ingest-coverage",
+                    props,
+                ))
+            }
+            crate::cli::devql::DevqlTestHarnessCommand::IngestCoverageBatch(_) => Some(new_action(
+                "bitloops devql test-harness ingest-coverage-batch",
+                HashMap::new(),
+            )),
+            crate::cli::devql::DevqlTestHarnessCommand::IngestResults(_) => Some(new_action(
+                "bitloops devql test-harness ingest-results",
+                HashMap::new(),
+            )),
+        },
     }
 }
 
@@ -654,6 +667,7 @@ fn embeddings_action(
 #[cfg(test)]
 mod telemetry_actions_unit_tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn stage_sequence_from_devql_query_splits_arrow_stages_and_strips_calls() {
@@ -685,5 +699,23 @@ mod telemetry_actions_unit_tests {
 
         let plain = telemetry_action_for_version(false);
         assert!(!plain.properties.contains_key("flags"));
+    }
+
+    #[test]
+    fn telemetry_action_for_devql_ingest_has_no_legacy_checkpoint_limit_property() {
+        let cli = crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest"])
+            .expect("devql ingest should parse");
+        let action = telemetry_action_for_command(
+            cli.command
+                .as_ref()
+                .expect("devql ingest should produce a subcommand"),
+        )
+        .expect("devql ingest telemetry action should be emitted");
+
+        assert_eq!(action.event, "bitloops devql ingest");
+        assert!(
+            action.properties.is_empty(),
+            "devql ingest no longer accepts legacy checkpoint limit flags"
+        );
     }
 }

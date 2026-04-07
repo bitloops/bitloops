@@ -15,6 +15,9 @@ use std::path::Path;
 
 use crate::adapters::agents::TokenUsage;
 use crate::host::checkpoints::session::state::SessionState;
+use crate::host::checkpoints::transcript::metadata::{
+    SessionMetadataBundle, TaskCheckpointMetadataBundle,
+};
 use anyhow::Result;
 
 /// Context passed to `save_step` when a turn ends.
@@ -25,10 +28,7 @@ pub struct StepContext {
     pub modified_files: Vec<String>,
     pub new_files: Vec<String>,
     pub deleted_files: Vec<String>,
-    /// Repo-relative path to the session metadata directory.
-    pub metadata_dir: String,
-    /// Absolute path to the session metadata directory.
-    pub metadata_dir_abs: String,
+    pub metadata: Option<SessionMetadataBundle>,
     pub commit_message: String,
     pub transcript_path: String,
     pub author_name: String,
@@ -49,6 +49,8 @@ pub struct TaskStepContext {
     pub modified_files: Vec<String>,
     pub new_files: Vec<String>,
     pub deleted_files: Vec<String>,
+    pub session_metadata: Option<SessionMetadataBundle>,
+    pub task_metadata: Option<TaskCheckpointMetadataBundle>,
     pub transcript_path: String,
     pub subagent_transcript_path: String,
     pub checkpoint_uuid: String,

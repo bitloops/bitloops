@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tempfile::tempdir;
 
@@ -34,10 +36,17 @@ pub(super) async fn seed_sync_repository_catalog_row(
         .expect("seed sync repository catalog row");
 }
 
+fn isolated_test_repo_root() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("bitloops-devql-sync-test-{id}"))
+}
+
 pub(super) fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
+    let repo_root = isolated_test_repo_root();
     crate::host::devql::DevqlConfig {
-        config_root: std::path::PathBuf::from("/tmp/repo"),
-        repo_root: std::path::PathBuf::from("/tmp/repo"),
+        daemon_config_root: repo_root.clone(),
+        repo_root,
         repo: crate::host::devql::RepoIdentity {
             provider: "github".to_string(),
             organization: "bitloops".to_string(),
@@ -59,7 +68,7 @@ pub(super) fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
 
 pub(super) fn sync_test_cfg_for_repo(repo_root: &Path) -> crate::host::devql::DevqlConfig {
     crate::host::devql::DevqlConfig {
-        config_root: repo_root.to_path_buf(),
+        daemon_config_root: repo_root.to_path_buf(),
         repo_root: repo_root.to_path_buf(),
         repo: crate::host::devql::RepoIdentity {
             provider: "github".to_string(),

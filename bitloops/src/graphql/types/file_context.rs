@@ -3,8 +3,9 @@ use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error};
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, ConnectionPagination,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, paginate_items,
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, CloneSummary, ClonesFilterInput,
+    ConnectionPagination, DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -127,5 +128,39 @@ impl FileContext {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[graphql(name = "cloneSummary")]
+    async fn clone_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(name = "cloneFilter")] clone_filter: Option<ClonesFilterInput>,
+    ) -> Result<CloneSummary> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        if let Some(clone_filter) = clone_filter.as_ref() {
+            clone_filter.validate()?;
+        }
+        if self
+            .scope
+            .temporal_scope()
+            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
+        {
+            return Err(crate::graphql::bad_user_input_error(
+                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+            ));
+        }
+
+        super::clone::resolve_clone_summary(
+            ctx.data_unchecked::<DevqlGraphqlContext>(),
+            Some(self.path.as_str()),
+            filter.as_ref(),
+            clone_filter.as_ref(),
+            &self.scope,
+        )
+        .await
+        .map_err(|err| backend_error(format!("failed to query file clone summary: {err:#}")))
     }
 }

@@ -1,4 +1,5 @@
 pub mod descriptor;
+pub mod event_handlers;
 pub mod health;
 pub mod identity;
 pub mod ingest;

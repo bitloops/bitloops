@@ -8,6 +8,7 @@ pub trait RelationalGateway: Send + Sync {
     fn artefact_exists(&self, repo_id: &str, artefact_id: &str) -> Result<bool>;
 
     fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String>;
+    fn load_current_production_artefacts(&self, repo_id: &str) -> Result<Vec<ProductionArtefact>>;
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>>;
     fn load_artefacts_for_file_lines(
         &self,

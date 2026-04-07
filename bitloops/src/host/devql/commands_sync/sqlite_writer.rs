@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::Connection;
 
+use super::diff_collector::DiffArtefactRecord;
 use super::shared::{determine_retention_class, read_effective_content};
 use super::stats::PreparedPathStats;
 use crate::host::devql::DevqlConfig;
@@ -97,6 +98,8 @@ impl SyncBatch {
 pub(crate) struct WriterCommitOutcome {
     pub(crate) materialized_paths: Vec<String>,
     pub(crate) removed_paths: Vec<String>,
+    pub(crate) pre_artefacts: Vec<DiffArtefactRecord>,
+    pub(crate) post_artefacts: Vec<DiffArtefactRecord>,
     pub(crate) sqlite_commits: usize,
     pub(crate) sqlite_rows_written: usize,
     pub(crate) cache_store_operation_estimate: usize,
@@ -237,6 +240,8 @@ impl SqliteSyncWriter {
             let mut rows_written = 0usize;
             let mut cache_store_operation_estimate = 0usize;
             let mut materialisation_operation_estimate = 0usize;
+            let mut pre_artefacts = Vec::new();
+            let mut post_artefacts = Vec::new();
             let materialized_paths = batch
                 .items
                 .iter()
@@ -253,6 +258,11 @@ impl SqliteSyncWriter {
                                 format!("persisting cached extraction for `{}`", item.desired.path)
                             })?;
                 }
+                pre_artefacts.extend(query_current_artefacts_for_path_tx(
+                    &tx,
+                    &repo_id,
+                    &item.desired.path,
+                )?);
                 materialisation_operation_estimate += item.prepared_rows.row_operation_estimate();
                 rows_written += persist_prepared_materialisation_tx(
                     &tx,
@@ -269,6 +279,11 @@ impl SqliteSyncWriter {
                         item.desired.path
                     )
                 })?;
+                post_artefacts.extend(query_current_artefacts_for_path_tx(
+                    &tx,
+                    &repo_id,
+                    &item.desired.path,
+                )?);
             }
 
             tx.commit()
@@ -276,6 +291,8 @@ impl SqliteSyncWriter {
             Ok(WriterCommitOutcome {
                 materialized_paths,
                 removed_paths: Vec::new(),
+                pre_artefacts,
+                post_artefacts,
                 sqlite_commits: 1,
                 sqlite_rows_written: rows_written,
                 cache_store_operation_estimate,
@@ -307,6 +324,8 @@ impl SqliteSyncWriter {
             Ok(WriterCommitOutcome {
                 materialized_paths: Vec::new(),
                 removed_paths: Vec::new(),
+                pre_artefacts: Vec::new(),
+                post_artefacts: Vec::new(),
                 sqlite_commits: 1,
                 sqlite_rows_written: rows_written,
                 cache_store_operation_estimate: rows_written,
@@ -339,6 +358,10 @@ impl SqliteSyncWriter {
             let tx = connection
                 .transaction()
                 .context("starting SQLite removal transaction")?;
+            let mut pre_artefacts = Vec::new();
+            for path in &removed_paths {
+                pre_artefacts.extend(query_current_artefacts_for_path_tx(&tx, &repo_id, path)?);
+            }
             let rows_written = remove_paths_tx(&tx, &repo_id, &removed_paths)
                 .context("removing deleted sync paths")?;
             tx.commit()
@@ -346,6 +369,8 @@ impl SqliteSyncWriter {
             Ok(WriterCommitOutcome {
                 materialized_paths: Vec::new(),
                 removed_paths,
+                pre_artefacts,
+                post_artefacts: Vec::new(),
                 sqlite_commits: 1,
                 sqlite_rows_written: rows_written,
                 cache_store_operation_estimate: 0,
@@ -373,6 +398,8 @@ impl SqliteSyncWriter {
                 WriterCommitOutcome {
                     materialized_paths: Vec::new(),
                     removed_paths: Vec::new(),
+                    pre_artefacts: Vec::new(),
+                    post_artefacts: Vec::new(),
                     sqlite_commits: 1,
                     sqlite_rows_written: rows_written,
                     cache_store_operation_estimate: rows_written,
@@ -527,6 +554,43 @@ fn open_sync_sqlite_connection(path: &PathBuf) -> Result<Connection> {
         .busy_timeout(Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
     Ok(connection)
+}
+
+fn query_current_artefacts_for_path_tx(
+    tx: &rusqlite::Transaction<'_>,
+    repo_id: &str,
+    path: &str,
+) -> Result<Vec<DiffArtefactRecord>> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT artefact_id, symbol_id, canonical_kind, symbol_fqn \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND path = ?2 \
+             ORDER BY symbol_id",
+        )
+        .context("preparing current artefact snapshot query")?;
+
+    let rows = stmt.query_map(rusqlite::params![repo_id, path], |row| {
+        let symbol_fqn = row.get::<_, String>(3)?;
+        Ok(DiffArtefactRecord::new(
+            path,
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            symbol_name_from_fqn(&symbol_fqn),
+        ))
+    })?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn symbol_name_from_fqn(symbol_fqn: &str) -> String {
+    symbol_fqn
+        .rsplit("::")
+        .next()
+        .unwrap_or(symbol_fqn)
+        .to_string()
 }
 
 pub(crate) fn sync_prepare_worker_count() -> usize {

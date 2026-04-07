@@ -1,9 +1,11 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use super::field_mapping::{
-    KNOWLEDGE_STAGE_NAME, TESTS_SUMMARY_STAGE_NAME, is_coverage_stage_name, is_tests_stage_name,
+    CLONE_SUMMARY_STAGE_NAME, KNOWLEDGE_STAGE_NAME, TESTS_SUMMARY_STAGE_NAME,
+    is_coverage_stage_name, is_tests_stage_name,
 };
-use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageKind};
+use super::types::DepsSummaryStageSpec;
+use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall, RegisteredStageKind};
 
 pub(super) fn resolve_registered_stage(
     parsed: &ParsedDevqlQuery,
@@ -18,6 +20,9 @@ pub(super) fn resolve_registered_stage(
         return Ok(None);
     };
 
+    if stage.stage_name == CLONE_SUMMARY_STAGE_NAME {
+        return Ok(Some(resolve_summary_stage_kind(stage)?));
+    }
     if is_tests_stage_name(&stage.stage_name) {
         return Ok(Some(RegisteredStageKind::Tests(stage)));
     }
@@ -35,6 +40,74 @@ pub(super) fn resolve_registered_stage(
         "the GraphQL compiler does not support capability-pack stage `{}`; register an explicit typed GraphQL/DSL contribution",
         stage.stage_name
     )
+}
+
+fn resolve_summary_stage_kind(stage: &RegisteredStageCall) -> Result<RegisteredStageKind<'_>> {
+    let Some(deps_arg) = stage.args.get("deps") else {
+        if !stage.args.is_empty() {
+            bail!(
+                "summary() for clones does not accept arguments; use summary(deps:true, ...) for dependency summary"
+            );
+        }
+        return Ok(RegisteredStageKind::CloneSummary);
+    };
+
+    let deps_enabled = super::super::parse_bool_literal("summary deps", deps_arg)?;
+    if !deps_enabled {
+        bail!("summary(deps:...) requires deps:true");
+    }
+
+    for key in stage.args.keys() {
+        match key.as_str() {
+            "deps" | "kind" | "direction" | "unresolved" => {}
+            _ => {
+                bail!(
+                    "summary(deps:true, ...) received unsupported argument `{key}`; allowed args: deps, kind, direction, unresolved"
+                );
+            }
+        }
+    }
+
+    let kind = if let Some(kind) = stage.args.get("kind") {
+        Some(super::super::DepsKind::from_str(kind).ok_or_else(|| {
+            anyhow::anyhow!(
+                "summary(kind:...) must be one of: {}",
+                super::super::DepsKind::all_names().join(", ")
+            )
+        })?)
+    } else {
+        None
+    };
+
+    let direction = if let Some(direction) = stage.args.get("direction") {
+        Some(
+            super::super::DepsDirection::from_str(direction).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "summary(direction:...) must be one of: {}",
+                    super::super::DepsDirection::all_names().join(", ")
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+
+    let unresolved = if let Some(unresolved) = stage.args.get("unresolved") {
+        Some(parse_summary_unresolved_flag(unresolved)?)
+    } else {
+        None
+    };
+
+    Ok(RegisteredStageKind::DepsSummary(DepsSummaryStageSpec {
+        kind,
+        direction,
+        unresolved,
+    }))
+}
+
+fn parse_summary_unresolved_flag(value: &str) -> Result<bool> {
+    super::super::parse_bool_literal("summary unresolved", value)
+        .map_err(|_| anyhow!("summary(unresolved:...) must be boolean true/false"))
 }
 
 pub(super) fn validate_graphql_compiler_support(
@@ -81,8 +154,32 @@ pub(super) fn validate_graphql_compiler_support(
 
     let has_tests_stage = matches!(registered_stage, Some(RegisteredStageKind::Tests(_)));
     let has_coverage_stage = matches!(registered_stage, Some(RegisteredStageKind::Coverage));
+    let has_clone_summary_stage =
+        matches!(registered_stage, Some(RegisteredStageKind::CloneSummary));
+    let has_deps_summary_stage =
+        matches!(registered_stage, Some(RegisteredStageKind::DepsSummary(_)));
     let has_tests_summary_stage =
         matches!(registered_stage, Some(RegisteredStageKind::TestsSummary));
+
+    if has_clone_summary_stage && !parsed.has_clones_stage {
+        bail!("summary() requires a clones() stage in the query");
+    }
+
+    if has_clone_summary_stage && !parsed.select_fields.is_empty() {
+        bail!("summary() does not support select() in the GraphQL compiler yet");
+    }
+
+    if has_deps_summary_stage && !parsed.has_artefacts_stage {
+        bail!("summary(deps:true, ...) requires an artefacts() stage in the query");
+    }
+
+    if has_deps_summary_stage && parsed.has_deps_stage {
+        bail!("summary(deps:true, ...) cannot be combined with deps() stage");
+    }
+
+    if has_deps_summary_stage && parsed.has_clones_stage {
+        bail!("summary(deps:true, ...) cannot be combined with clones() stage");
+    }
 
     if has_tests_stage && !parsed.has_artefacts_stage {
         bail!("tests() requires an artefacts() stage in the query");
@@ -205,7 +302,9 @@ pub(super) fn validate_graphql_compiler_support(
         || parsed.has_deps_stage
         || matches!(
             registered_stage,
-            Some(RegisteredStageKind::Knowledge(_)) | Some(RegisteredStageKind::TestsSummary)
+            Some(RegisteredStageKind::Knowledge(_))
+                | Some(RegisteredStageKind::TestsSummary)
+                | Some(RegisteredStageKind::DepsSummary(_))
         )
     {
         return Ok(());
@@ -234,6 +333,8 @@ pub(super) fn should_compile_project_stage(
     }
 
     match registered_stage {
+        RegisteredStageKind::CloneSummary => false,
+        RegisteredStageKind::DepsSummary(_) => false,
         RegisteredStageKind::Tests(_)
         | RegisteredStageKind::Coverage
         | RegisteredStageKind::TestsSummary => parsed.project_path.is_some(),

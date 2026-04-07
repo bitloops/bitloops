@@ -407,6 +407,13 @@ mod tests {
             Ok(self.repo_id.clone())
         }
 
+        fn load_current_production_artefacts(
+            &self,
+            _repo_id: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            unreachable!("unused in coverage tests")
+        }
+
         fn load_production_artefacts(
             &self,
             _commit_sha: &str,

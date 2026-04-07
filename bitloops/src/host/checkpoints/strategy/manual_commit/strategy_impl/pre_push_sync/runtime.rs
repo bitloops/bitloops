@@ -14,15 +14,17 @@ pub(crate) fn run_devql_pre_push_sync(
             .context("resolving repository identity for pre-push DevQL sync")?;
         let backends = crate::config::resolve_store_backend_config_for_repo(&repo_root)
             .context("resolving backend config for pre-push DevQL sync")?;
-        let sqlite_path = backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(&repo_root)
-            .context("resolving SQLite path for pre-push DevQL sync")?;
+        let local_store =
+            crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
+                &repo_root,
+            )
+            .context("opening local relational store for pre-push DevQL sync")?;
+        let sqlite_path = local_store.sqlite_path().to_path_buf();
         if !sqlite_path.exists() {
             return Ok::<(), anyhow::Error>(());
         }
 
-        let local = crate::host::devql::RelationalStorage::local_only(sqlite_path.clone());
+        let local = local_store.to_local_inner();
 
         let remote_dsn = backends
             .relational
@@ -99,8 +101,7 @@ pub(crate) fn run_devql_pre_push_sync(
             }
         });
 
-        let relational =
-            crate::host::devql::RelationalStorage::with_remote_client(sqlite_path, client);
+        let relational = local_store.with_remote_client(client);
         let mut synced_heads: Vec<String> = Vec::new();
         for update in &updates {
             sync_state::mark_branch_sync_pending(

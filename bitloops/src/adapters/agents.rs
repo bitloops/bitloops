@@ -14,6 +14,7 @@ pub mod types;
 
 use anyhow::Result;
 use std::io::Read;
+use std::path::PathBuf;
 
 pub use adapters::*;
 pub use canonical::*;
@@ -22,6 +23,86 @@ pub use policy::*;
 pub use registry::AgentRegistry;
 pub use session::*;
 pub use types::*;
+
+pub(crate) fn managed_hook_command(command: &str) -> String {
+    match std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        Some(path) => format!(
+            "{}={} {}",
+            crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            shell_single_quote(&PathBuf::from(path).to_string_lossy()),
+            command,
+        ),
+        None => command.to_string(),
+    }
+}
+
+pub(crate) fn managed_hook_env_export_script() -> String {
+    match std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        Some(path) => format!(
+            "export {}={}\n",
+            crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            shell_single_quote(&PathBuf::from(path).to_string_lossy()),
+        ),
+        None => String::new(),
+    }
+}
+
+pub(crate) fn is_managed_hook_command(command: &str, prefixes: &[&str]) -> bool {
+    let stripped = strip_leading_shell_env_assignments(command);
+    prefixes.iter().any(|prefix| stripped.starts_with(prefix))
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn strip_leading_shell_env_assignments(mut input: &str) -> &str {
+    loop {
+        let trimmed = input.trim_start();
+        let Some(token_end) = first_unquoted_whitespace(trimmed) else {
+            return trimmed;
+        };
+        let token = &trimmed[..token_end];
+        if !looks_like_shell_env_assignment(token) {
+            return trimmed;
+        }
+        input = &trimmed[token_end..];
+    }
+}
+
+fn first_unquoted_whitespace(input: &str) -> Option<usize> {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if !in_single => escaped = true,
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            _ if ch.is_whitespace() && !in_single && !in_double => return Some(idx),
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn looks_like_shell_env_assignment(token: &str) -> bool {
+    let Some((name, _value)) = token.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
 
 pub trait Agent: Send + Sync {
     fn name(&self) -> String;
@@ -85,6 +166,36 @@ pub trait Agent: Send + Sync {
 
     fn format_resume_command(&self, _session_id: &str) -> String {
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod hook_command_tests {
+    use super::{is_managed_hook_command, managed_hook_command};
+    use crate::test_support::process_state::with_env_var;
+
+    #[test]
+    fn managed_hook_command_prefixes_explicit_daemon_config_override() {
+        with_env_var(
+            crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some("/tmp/config root/config.toml"),
+            || {
+                let command = managed_hook_command("bitloops hooks claude-code session-start");
+                assert_eq!(
+                    command,
+                    "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start"
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn is_managed_hook_command_accepts_env_prefixed_commands() {
+        let command = "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start";
+        assert!(is_managed_hook_command(
+            command,
+            &["bitloops hooks claude-code "]
+        ));
     }
 }
 

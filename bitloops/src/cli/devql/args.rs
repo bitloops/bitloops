@@ -16,6 +16,8 @@ pub enum DevqlCommand {
     Sync(DevqlSyncArgs),
     /// Backfill or repair DevQL relational projections.
     Projection(DevqlProjectionArgs),
+    /// Print the DevQL GraphQL schema SDL.
+    Schema(DevqlSchemaArgs),
     /// Execute a DevQL query.
     Query(DevqlQueryArgs),
     /// Check backend connectivity for Postgres and ClickHouse.
@@ -24,16 +26,18 @@ pub enum DevqlCommand {
     Packs(DevqlPacksArgs),
     /// Manage repository-scoped external knowledge.
     Knowledge(DevqlKnowledgeArgs),
+    /// Test harness ingestion for DevQL production artefacts.
+    TestHarness(DevqlTestHarnessArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlInitArgs {}
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Default)]
 pub struct DevqlIngestArgs {
-    /// Limit checkpoints processed (newest-first).
-    #[arg(long, default_value_t = 500)]
-    pub max_checkpoints: usize,
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -57,6 +61,10 @@ pub struct DevqlSyncArgs {
     /// Follow the queued sync task until it reaches a terminal state.
     #[arg(long, default_value_t = false)]
     pub status: bool,
+
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -88,6 +96,17 @@ pub struct DevqlCheckpointFileSnapshotsArgs {
     /// Report counters without mutating checkpoint_file_snapshots.
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlSchemaArgs {
+    /// Print the full/global DevQL GraphQL schema.
+    #[arg(long = "global", default_value_t = false)]
+    pub global: bool,
+
+    /// Print human-readable formatted SDL instead of minified SDL.
+    #[arg(long, default_value_t = false)]
+    pub human: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -163,4 +182,62 @@ pub struct DevqlKnowledgeAssociateArgs {
 #[derive(Args, Debug, Clone)]
 pub struct DevqlKnowledgeRefArgs {
     pub knowledge_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessArgs {
+    #[command(subcommand)]
+    pub command: DevqlTestHarnessCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlTestHarnessCommand {
+    /// Parse test files, discover suites/scenarios, and link tests to production artefacts.
+    IngestTests(DevqlTestHarnessIngestTestsArgs),
+    /// Ingest coverage report (LCOV or LLVM JSON).
+    IngestCoverage(DevqlTestHarnessIngestCoverageArgs),
+    /// Batch-ingest coverage from a JSON manifest.
+    IngestCoverageBatch(DevqlTestHarnessIngestCoverageBatchArgs),
+    /// Ingest Jest JSON test results.
+    IngestResults(DevqlTestHarnessIngestResultsArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestTestsArgs {
+    #[arg(long)]
+    pub commit: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestCoverageArgs {
+    #[arg(long)]
+    pub lcov: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub input: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub commit: String,
+    #[arg(long)]
+    pub scope: String,
+    #[arg(long, default_value = "unknown")]
+    pub tool: String,
+    #[arg(long)]
+    pub test_artefact_id: Option<String>,
+    #[arg(long)]
+    pub format: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestCoverageBatchArgs {
+    #[arg(long)]
+    pub manifest: std::path::PathBuf,
+    #[arg(long)]
+    pub commit: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestResultsArgs {
+    #[arg(long)]
+    pub jest_json: std::path::PathBuf,
+    #[arg(long)]
+    pub commit: String,
 }

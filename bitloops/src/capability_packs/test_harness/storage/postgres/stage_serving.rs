@@ -13,7 +13,6 @@ pub(super) async fn load_stage_covering_tests(
     client: &mut tokio_postgres::Client,
     repo_id: String,
     production_symbol_id: String,
-    commit_sha: Option<String>,
     linkage_source_owned: Option<String>,
     min_confidence: Option<f64>,
     limit: usize,
@@ -22,6 +21,7 @@ pub(super) async fn load_stage_covering_tests(
     let mut sql = String::from(
         "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
          parent.name AS suite_name, ts.path AS file_path, \
+         ts.start_line, ts.end_line, \
          COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) AS confidence, \
          ts.discovery_source, \
          COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') AS linkage_source, \
@@ -38,10 +38,6 @@ pub(super) async fn load_stage_covering_tests(
            AND ts.canonical_kind = 'test_scenario'",
     );
     let mut next_param = 3usize;
-    if commit_sha.is_some() {
-        sql.push_str(&format!(" AND te.commit_sha = ${next_param}"));
-        next_param += 1;
-    }
     if min_confidence.is_some() {
         sql.push_str(&format!(
             " AND COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) >= ${next_param}"
@@ -57,47 +53,23 @@ pub(super) async fn load_stage_covering_tests(
         " ORDER BY confidence DESC, ts.path, ts.name LIMIT {limit}"
     ));
 
-    let rows = match (
-        commit_sha.as_deref(),
-        min_confidence,
-        linkage_source_owned.as_deref(),
-    ) {
-        (Some(sha), Some(mc), Some(ls)) => {
-            client
-                .query(&sql, &[&repo_id, &production_symbol_id, &sha, &mc, &ls])
-                .await
-        }
-        (Some(sha), Some(mc), None) => {
-            client
-                .query(&sql, &[&repo_id, &production_symbol_id, &sha, &mc])
-                .await
-        }
-        (Some(sha), None, Some(ls)) => {
-            client
-                .query(&sql, &[&repo_id, &production_symbol_id, &sha, &ls])
-                .await
-        }
-        (Some(sha), None, None) => {
-            client
-                .query(&sql, &[&repo_id, &production_symbol_id, &sha])
-                .await
-        }
-        (None, Some(mc), Some(ls)) => {
+    let rows = match (min_confidence, linkage_source_owned.as_deref()) {
+        (Some(mc), Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &mc, &ls])
                 .await
         }
-        (None, Some(mc), None) => {
+        (Some(mc), None) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &mc])
                 .await
         }
-        (None, None, Some(ls)) => {
+        (None, Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &ls])
                 .await
         }
-        (None, None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
+        (None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
     }
     .context("failed querying stage covering tests")?;
 
@@ -108,10 +80,12 @@ pub(super) async fn load_stage_covering_tests(
                 test_name: get(&row, 1, "test_name")?,
                 suite_name: row.try_get::<_, Option<String>>(2).context("suite_name")?,
                 file_path: get(&row, 3, "file_path")?,
-                confidence: row.try_get::<_, f64>(4).context("confidence")?,
-                discovery_source: get(&row, 5, "discovery_source")?,
-                linkage_source: get(&row, 6, "linkage_source")?,
-                linkage_status: get(&row, 7, "linkage_status")?,
+                start_line: get_i64(&row, 4, "start_line")?,
+                end_line: get_i64(&row, 5, "end_line")?,
+                confidence: row.try_get::<_, f64>(6).context("confidence")?,
+                discovery_source: get(&row, 7, "discovery_source")?,
+                linkage_source: get(&row, 8, "linkage_source")?,
+                linkage_status: get(&row, 9, "linkage_status")?,
             })
         })
         .collect()

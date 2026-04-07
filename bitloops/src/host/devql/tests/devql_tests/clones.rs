@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6)->limit(5)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6,raw:true)->limit(5)"#,
     )
     .unwrap();
 
@@ -13,6 +13,31 @@ fn parse_devql_clones_stage_basic() {
         Some("similar_implementation")
     );
     assert_eq!(parsed.clones.min_score, Some(0.6));
+    assert!(parsed.clones.raw);
+}
+
+#[test]
+fn parse_devql_clones_stage_accepts_raw_false() {
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(raw:false)->limit(5)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_clones_stage);
+    assert!(!parsed.clones.raw);
+}
+
+#[test]
+fn parse_devql_clones_stage_rejects_invalid_raw_literal() {
+    let err = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(raw:"maybe")->limit(5)"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("invalid boolean value for clones raw")
+    );
 }
 
 #[tokio::test]
@@ -552,4 +577,320 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
         rows[0]["target_symbol_fqn"],
         Value::String("src/target-a.ts::targetA".to_string())
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_clone_candidate_fixture(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    symbol_id: &str,
+    artefact_id: &str,
+    path: &str,
+    symbol_fqn: &str,
+    normalized_name: &str,
+    summary: &str,
+    provider: &str,
+    model: &str,
+    dimension: i64,
+    embedding: &str,
+) {
+    conn.execute(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, content_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function_declaration', ?6, NULL, 1, 12, 0, 120, ?7, '[]', ?8)",
+        rusqlite::params![
+            artefact_id,
+            symbol_id,
+            repo_id,
+            format!("blob-{symbol_id}"),
+            path,
+            symbol_fqn,
+            format!("function {normalized_name}(id: string)"),
+            format!("hash-{symbol_id}"),
+        ],
+    )
+    .expect("insert artefact history");
+
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, signature, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function_declaration', ?6, 1, 12, 0, 120, ?7, '[]', '2026-03-26T09:00:00Z')",
+        rusqlite::params![
+            repo_id,
+            path,
+            format!("blob-{symbol_id}"),
+            symbol_id,
+            artefact_id,
+            symbol_fqn,
+            format!("function {normalized_name}(id: string)"),
+        ],
+    )
+    .expect("insert current artefact");
+
+    conn.execute(
+        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, template_summary, summary, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0.9)",
+        rusqlite::params![
+            artefact_id,
+            repo_id,
+            format!("blob-{symbol_id}"),
+            format!("semantic-hash-{symbol_id}"),
+            format!("Function {normalized_name}."),
+            summary,
+        ],
+    )
+    .expect("insert semantics");
+
+    conn.execute(
+        "INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[\"invoice\",\"document\"]', '[\"render\",\"invoice\",\"document\"]', 'module', '[\"src\",\"billing\"]')",
+        rusqlite::params![
+            artefact_id,
+            repo_id,
+            format!("blob-{symbol_id}"),
+            format!("semantic-hash-{symbol_id}"),
+            normalized_name,
+            format!("function {normalized_name}(id: string)"),
+        ],
+    )
+    .expect("insert features");
+
+    conn.execute(
+        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            artefact_id,
+            repo_id,
+            format!("blob-{symbol_id}"),
+            provider,
+            model,
+            dimension,
+            format!("embed-hash-{symbol_id}"),
+            embedding,
+        ],
+    )
+    .expect("insert embedding");
+}
+
+#[tokio::test]
+async fn rebuild_symbol_clone_edges_uses_only_active_embedding_setup_candidates() {
+    let cfg = test_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    crate::capability_packs::semantic_clones::ensure_semantic_embeddings_schema(&relational)
+        .await
+        .expect("ensure semantic embedding schema");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::source",
+        "artefact::source",
+        "src/source.ts",
+        "src/source.ts::renderInvoice",
+        "render_invoice",
+        "Function render invoice. Renders the invoice document.",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+        "[0.91,0.09,0.0]",
+    );
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::target_current",
+        "artefact::target_current",
+        "src/target-current.ts",
+        "src/target-current.ts::renderInvoiceDocument",
+        "render_invoice_document",
+        "Function render invoice document. Renders the invoice document for an order.",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+        "[0.89,0.11,0.0]",
+    );
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::target_stale",
+        "artefact::target_stale",
+        "src/target-stale.ts",
+        "src/target-stale.ts::renderInvoiceDraft",
+        "render_invoice_draft",
+        "Function render invoice draft. Renders the invoice document for an order.",
+        "voyage",
+        "voyage-code-3",
+        3,
+        "[0.92,0.08,0.0]",
+    );
+    conn.execute(
+        "INSERT INTO semantic_clone_embedding_setup_state (repo_id, provider, model, dimension, setup_fingerprint)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            repo_id,
+            "local_fastembed",
+            "jinaai/jina-embeddings-v2-base-code",
+            3_i64,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+                "local_fastembed",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            )
+            .setup_fingerprint,
+        ],
+    )
+    .expect("insert active setup");
+
+    let clone_result = rebuild_symbol_clone_edges(&relational, repo_id)
+        .await
+        .expect("rebuild clone edges");
+
+    assert!(
+        clone_result
+            .edges
+            .iter()
+            .any(|edge| edge.target_symbol_id == "sym::target_current")
+    );
+    assert!(
+        clone_result
+            .edges
+            .iter()
+            .all(|edge| edge.target_symbol_id != "sym::target_stale")
+    );
+}
+
+#[tokio::test]
+async fn rebuild_symbol_clone_edges_bootstraps_single_current_embedding_setup() {
+    let cfg = test_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    crate::capability_packs::semantic_clones::ensure_semantic_embeddings_schema(&relational)
+        .await
+        .expect("ensure semantic embedding schema");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::source",
+        "artefact::source",
+        "src/source.ts",
+        "src/source.ts::renderInvoice",
+        "render_invoice",
+        "Function render invoice. Renders the invoice document.",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+        "[0.91,0.09,0.0]",
+    );
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::target",
+        "artefact::target",
+        "src/target.ts",
+        "src/target.ts::renderInvoiceDocument",
+        "render_invoice_document",
+        "Function render invoice document. Renders the invoice document for an order.",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+        "[0.89,0.11,0.0]",
+    );
+
+    let clone_result = rebuild_symbol_clone_edges(&relational, repo_id)
+        .await
+        .expect("rebuild clone edges");
+
+    assert!(!clone_result.edges.is_empty());
+
+    let persisted_setup = relational
+        .query_rows("SELECT provider, model, dimension FROM semantic_clone_embedding_setup_state")
+        .await
+        .expect("read persisted setup");
+    assert_eq!(persisted_setup.len(), 1);
+    assert_eq!(
+        persisted_setup[0]["provider"],
+        Value::String("local_fastembed".to_string())
+    );
+}
+
+#[tokio::test]
+async fn rebuild_symbol_clone_edges_refuses_to_bootstrap_mixed_current_embedding_setups() {
+    let cfg = test_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    crate::capability_packs::semantic_clones::ensure_semantic_embeddings_schema(&relational)
+        .await
+        .expect("ensure semantic embedding schema");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::source",
+        "artefact::source",
+        "src/source.ts",
+        "src/source.ts::renderInvoice",
+        "render_invoice",
+        "Function render invoice. Renders the invoice document.",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+        "[0.91,0.09,0.0]",
+    );
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::target_current",
+        "artefact::target_current",
+        "src/target-current.ts",
+        "src/target-current.ts::renderInvoiceDocument",
+        "render_invoice_document",
+        "Function render invoice document. Renders the invoice document for an order.",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+        "[0.89,0.11,0.0]",
+    );
+    insert_clone_candidate_fixture(
+        &conn,
+        repo_id,
+        "sym::target_stale",
+        "artefact::target_stale",
+        "src/target-stale.ts",
+        "src/target-stale.ts::renderInvoiceDraft",
+        "render_invoice_draft",
+        "Function render invoice draft. Renders the invoice document for an order.",
+        "voyage",
+        "voyage-code-3",
+        1024,
+        "[0.92,0.08,0.0]",
+    );
+
+    let clone_result = rebuild_symbol_clone_edges(&relational, repo_id)
+        .await
+        .expect("rebuild clone edges");
+
+    assert!(clone_result.edges.is_empty());
+
+    let persisted_setup = relational
+        .query_rows("SELECT provider, model, dimension FROM semantic_clone_embedding_setup_state")
+        .await
+        .expect("read persisted setup");
+    assert!(persisted_setup.is_empty());
+
+    let stored_edges = relational
+        .query_rows("SELECT source_symbol_id, target_symbol_id FROM symbol_clone_edges")
+        .await
+        .expect("read stored clone edges");
+    assert!(stored_edges.is_empty());
 }

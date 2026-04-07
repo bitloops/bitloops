@@ -530,54 +530,6 @@ pub(crate) fn build_tree(
     Ok(tree)
 }
 
-/// Builds a git tree using explicit `(disk_path → tree_path)` file pairs.
-///
-/// Unlike `build_tree`, this function allows files to be stored at arbitrary tree
-/// paths regardless of their actual on-disk location. Useful for the checkpoints
-/// branch where files live in `.bitloops/tmp/` but must appear at sharded paths
-/// like `<cp[:2]>/<cp[2:]>/metadata.json` in the tree.
-///
-/// Uses `git hash-object -w` to create blob objects, then
-/// `git update-index --cacheinfo` to register them at the desired tree paths.
-pub(crate) fn build_tree_with_explicit_paths(
-    repo_root: &Path,
-    parent_tree: Option<&str>,
-    files: &[(PathBuf, String)],
-) -> Result<String> {
-    let tmp = TempIndexPath::new();
-    let idx_path = tmp.path().to_string_lossy().to_string();
-
-    // Start from parent tree if provided.
-    if let Some(tree) = parent_tree {
-        run_git_env(
-            repo_root,
-            &["read-tree", tree],
-            &[("GIT_INDEX_FILE", &idx_path)],
-        )?;
-    }
-
-    // Hash each file and register it at the desired tree path.
-    for (disk_path, tree_path) in files {
-        let hash = run_git(
-            repo_root,
-            &["hash-object", "-w", &disk_path.to_string_lossy()],
-        )?;
-        run_git_env(
-            repo_root,
-            &[
-                "update-index",
-                "--add",
-                "--cacheinfo",
-                &format!("100644,{hash},{tree_path}"),
-            ],
-            &[("GIT_INDEX_FILE", &idx_path)],
-        )?;
-    }
-
-    let tree = run_git_env(repo_root, &["write-tree"], &[("GIT_INDEX_FILE", &idx_path)])?;
-    Ok(tree)
-}
-
 /// Returns `(modified, new_files, deleted)` from `git status --porcelain`.
 pub(crate) fn working_tree_changes(
     repo_root: &Path,
