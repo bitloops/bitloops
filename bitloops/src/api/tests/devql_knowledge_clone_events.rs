@@ -504,6 +504,13 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
                 project(path: "packages/api") {
                   clones(filter: { minScore: 0.75 }, first: 10) {
                     totalCount
+                    summary {
+                      totalCount
+                      groups {
+                        relationKind
+                        count
+                      }
+                    }
                     edges {
                       node {
                         relationKind
@@ -524,6 +531,13 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
                         node {
                           clones(filter: { minScore: 0.70 }, first: 10) {
                             totalCount
+                            summary {
+                              totalCount
+                              groups {
+                                relationKind
+                                count
+                              }
+                            }
                             edges {
                               node {
                                 relationKind
@@ -554,8 +568,20 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
     let json = response.data.into_json().expect("graphql data to json");
     assert_eq!(json["repo"]["project"]["clones"]["totalCount"], 1);
     assert_eq!(
+        json["repo"]["project"]["clones"]["summary"]["totalCount"],
+        1
+    );
+    assert_eq!(
         json["repo"]["project"]["clones"]["edges"][0]["node"]["relationKind"],
         "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["summary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["summary"]["groups"][0]["count"],
+        1
     );
     assert_eq!(
         json["repo"]["project"]["clones"]["edges"][0]["node"]["score"],
@@ -571,6 +597,20 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
     );
     assert_eq!(
         json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"]
+            [0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"]
+            [0]["count"],
         2
     );
     assert_eq!(

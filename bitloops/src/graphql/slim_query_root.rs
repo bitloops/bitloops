@@ -462,11 +462,13 @@ impl SlimQueryRoot {
             .list_project_clones(&scope, filter.as_ref())
             .await
             .map_err(|err| backend_error(format!("failed to query semantic clones: {err:#}")))?;
+        let summary = CloneSummary::from_clones(&clones);
         let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
+            summary,
         ))
     }
 

@@ -214,6 +214,7 @@ type CloneConnection {
 	edges: [CloneEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+	summary: CloneSummary!
 }
 
 type CloneEdge {

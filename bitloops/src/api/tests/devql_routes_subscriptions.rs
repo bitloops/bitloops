@@ -558,6 +558,13 @@ async fn devql_post_route_executes_slim_clone_queries() {
         {
           clones(filter: { minScore: 0.75 }, first: 10) {
             totalCount
+            summary {
+              totalCount
+              groups {
+                relationKind
+                count
+              }
+            }
             edges {
               node {
                 relationKind
@@ -583,6 +590,7 @@ async fn devql_post_route_executes_slim_clone_queries() {
         payload.get("errors")
     );
     assert_eq!(payload["data"]["clones"]["totalCount"], 0);
+    assert_eq!(payload["data"]["clones"]["summary"]["totalCount"], 0);
 }
 
 #[tokio::test]
