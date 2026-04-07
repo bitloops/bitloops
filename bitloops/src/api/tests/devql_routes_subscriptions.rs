@@ -586,6 +586,55 @@ async fn devql_post_route_executes_slim_clone_queries() {
 }
 
 #[tokio::test]
+async fn devql_post_route_executes_slim_clone_summary_queries() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          cloneSummary(
+            filter: { kind: FUNCTION }
+            cloneFilter: { minScore: 0.68 }
+          ) {
+            totalCount
+            groups {
+              relationKind
+              count
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["totalCount"], 3);
+    assert_eq!(
+        payload["data"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["groups"][0]["count"], 2);
+    assert_eq!(
+        payload["data"]["cloneSummary"]["groups"][1]["relationKind"],
+        "contextual_neighbor"
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["groups"][1]["count"], 1);
+}
+
+#[tokio::test]
 async fn devql_post_route_executes_slim_test_harness_stage_queries() {
     let repo = seed_graphql_devql_repo();
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);

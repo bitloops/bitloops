@@ -49,6 +49,31 @@ fn compile_project_asof_artefacts_pipeline() {
 }
 
 #[test]
+fn compile_clone_summary_stage_ignores_limit_and_targets_typed_field() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.75)->summary()->limit(1)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    cloneSummary(filter: { kind: FUNCTION }, cloneFilter: { minScore: 0.75 }) {
+      totalCount
+      groups {
+        relationKind
+        count
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_file_artefacts_with_chat_history_enrichment() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->chatHistory()->limit(5)"#,

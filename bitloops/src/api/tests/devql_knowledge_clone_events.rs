@@ -586,6 +586,92 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
 }
 
 #[tokio::test]
+async fn devql_graphql_clone_summary_queries_resolve_grouped_counts() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                cloneSummary(
+                  filter: { kind: FUNCTION }
+                  cloneFilter: { minScore: 0.68 }
+                ) {
+                  totalCount
+                  groups {
+                    relationKind
+                    count
+                  }
+                }
+                project(path: "packages/api") {
+                  filtered: cloneSummary(
+                    filter: { symbolFqn: "packages/api/src/caller.ts::caller" }
+                    cloneFilter: { relationKind: "similar_implementation", minScore: 0.75 }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                  empty: cloneSummary(
+                    filter: { symbolFqn: "packages/api/src/caller.ts::caller" }
+                    cloneFilter: { relationKind: "exact_duplicate" }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["cloneSummary"]["totalCount"], 3);
+    assert_eq!(
+        json["repo"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(json["repo"]["cloneSummary"]["groups"][0]["count"], 2);
+    assert_eq!(
+        json["repo"]["cloneSummary"]["groups"][1]["relationKind"],
+        "contextual_neighbor"
+    );
+    assert_eq!(json["repo"]["cloneSummary"]["groups"][1]["count"], 1);
+    assert_eq!(json["repo"]["project"]["filtered"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["project"]["filtered"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(json["repo"]["project"]["filtered"]["groups"][0]["count"], 1);
+    assert_eq!(json["repo"]["project"]["empty"]["totalCount"], 0);
+    assert_eq!(
+        json["repo"]["project"]["empty"]["groups"]
+            .as_array()
+            .expect("groups array")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn devql_graphql_clone_source_target_loader_caches_within_a_request_and_resets_per_request() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_clone_data(repo.path());

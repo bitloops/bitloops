@@ -141,6 +141,10 @@ fn extract_connection_nodes(map: &serde_json::Map<String, Value>) -> Option<Vec<
 }
 
 fn render_cli_payload(payload: &Value) -> Result<String> {
+    if let Some(rendered) = render_clone_summary_payload(payload) {
+        return Ok(rendered);
+    }
+
     match payload {
         Value::Array(rows) => render_array_rows(rows),
         Value::Object(row) => render_object_rows(&[row]),
@@ -152,6 +156,12 @@ fn render_cli_payload(payload: &Value) -> Result<String> {
 fn render_array_rows(rows: &[Value]) -> Result<String> {
     if rows.is_empty() {
         return Ok("No results.".to_string());
+    }
+
+    if rows.len() == 1
+        && let Some(rendered) = render_clone_summary_payload(&rows[0])
+    {
+        return Ok(rendered);
     }
 
     if rows.iter().all(is_scalar_like) {
@@ -194,6 +204,44 @@ fn render_object_rows(rows: &[&serde_json::Map<String, Value>]) -> Result<String
         .map(|column| cli_header(column))
         .collect::<Vec<_>>();
     Ok(render_table(&headers, &values))
+}
+
+fn render_clone_summary_payload(payload: &Value) -> Option<String> {
+    let Value::Object(map) = payload else {
+        return None;
+    };
+
+    let total_count = map
+        .get("totalCount")
+        .or_else(|| map.get("total_count"))
+        .and_then(Value::as_i64)?;
+    let groups = map.get("groups")?.as_array()?;
+    if groups.is_empty() {
+        return Some(format!("total_count: {total_count}"));
+    }
+
+    let rows = groups
+        .iter()
+        .filter_map(|group| {
+            let group = group.as_object()?;
+            Some(vec![
+                group
+                    .get("relationKind")
+                    .or_else(|| group.get("relation_kind"))
+                    .map(render_table_cell)
+                    .unwrap_or_default(),
+                group.get("count").map(render_table_cell).unwrap_or_default(),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Some(format!("total_count: {total_count}"));
+    }
+
+    Some(format!(
+        "total_count: {total_count}\n{}",
+        render_table(&["relation_kind".to_string(), "count".to_string()], &rows)
+    ))
 }
 
 fn collect_table_columns(rows: &[&serde_json::Map<String, Value>]) -> Vec<String> {
@@ -547,5 +595,36 @@ mod tests {
 
         assert!(rendered.contains("\"pageInfo\""));
         assert!(rendered.contains("\"hasNextPage\": false"));
+    }
+
+    #[test]
+    fn format_query_output_renders_clone_summary_object() {
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "cloneSummary": {
+                        "totalCount": 3,
+                        "groups": [
+                            {
+                                "relationKind": "similar_implementation",
+                                "count": 2
+                            },
+                            {
+                                "relationKind": "contextual_neighbor",
+                                "count": 1
+                            }
+                        ]
+                    }
+                }
+            }),
+            false,
+            false,
+        )
+        .expect("clone summary should render");
+
+        assert!(rendered.contains("total_count: 3"));
+        assert!(rendered.contains("| relation_kind"));
+        assert!(rendered.contains("similar_implementation"));
+        assert!(rendered.contains("contextual_neighbor"));
     }
 }

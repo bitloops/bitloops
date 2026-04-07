@@ -5,6 +5,8 @@ use super::document_builder::{GraphqlArgument, GraphqlField, GraphqlSelection};
 use super::*;
 
 pub(super) const KNOWLEDGE_STAGE_NAME: &str = "knowledge";
+pub(super) const CLONE_SUMMARY_STAGE_NAME: &str =
+    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_STAGE_ID;
 pub(super) const TESTS_SUMMARY_STAGE_NAME: &str =
     crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
 
@@ -208,6 +210,21 @@ pub(super) fn tests_summary_result_selections() -> Vec<GraphqlSelection> {
         )
         .into(),
         GraphqlSelection::scalar("coveragePresent"),
+    ]
+}
+
+pub(super) fn clone_summary_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("totalCount"),
+        GraphqlField::new(
+            "groups",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("relationKind"),
+                GraphqlSelection::scalar("count"),
+            ],
+        )
+        .into(),
     ]
 }
 

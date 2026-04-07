@@ -1,8 +1,13 @@
+use anyhow::Result as AnyResult;
 use async_graphql::{ComplexObject, Context, ID, InputObject, Result, SimpleObject};
+use serde::Deserialize;
+use std::collections::{BTreeMap, HashSet};
 
-use crate::graphql::{ResolverScope, backend_error, bad_user_input_error, loaders::DataLoaders};
+use crate::graphql::{
+    DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error, loaders::DataLoaders,
+};
 
-use super::{Artefact, JsonScalar};
+use super::{Artefact, ArtefactFilterInput, JsonScalar};
 
 #[derive(Debug, Clone, InputObject, Default)]
 pub struct ClonesFilterInput {
@@ -42,6 +47,55 @@ pub struct SemanticClone {
     pub(crate) scope: ResolverScope,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct CloneSummaryGroup {
+    pub relation_kind: String,
+    pub count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct CloneSummary {
+    pub total_count: i32,
+    pub groups: Vec<CloneSummaryGroup>,
+}
+
+impl CloneSummary {
+    pub(crate) fn empty() -> Self {
+        Self {
+            total_count: 0,
+            groups: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_counts(counts: BTreeMap<String, usize>) -> Self {
+        if counts.is_empty() {
+            return Self::empty();
+        }
+
+        let total_count = counts
+            .values()
+            .copied()
+            .sum::<usize>()
+            .try_into()
+            .unwrap_or(i32::MAX);
+        let mut groups = counts
+            .into_iter()
+            .map(|(relation_kind, count)| CloneSummaryGroup {
+                relation_kind,
+                count: count.try_into().unwrap_or(i32::MAX),
+            })
+            .collect::<Vec<_>>();
+        groups.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.relation_kind.cmp(&right.relation_kind))
+        });
+
+        Self { total_count, groups }
+    }
+}
+
 impl SemanticClone {
     pub fn cursor(&self) -> String {
         self.id.to_string()
@@ -51,6 +105,36 @@ impl SemanticClone {
         self.scope = scope;
         self
     }
+}
+
+pub(crate) async fn resolve_clone_summary(
+    context: &DevqlGraphqlContext,
+    path: Option<&str>,
+    artefact_filter: Option<&ArtefactFilterInput>,
+    clone_filter: Option<&ClonesFilterInput>,
+    scope: &ResolverScope,
+) -> AnyResult<CloneSummary> {
+    let artefacts = context.list_artefacts(path, artefact_filter, scope).await?;
+    if artefacts.is_empty() {
+        return Ok(CloneSummary::empty());
+    }
+
+    let mut counts = BTreeMap::<String, usize>::new();
+    let mut seen_clone_ids = HashSet::<String>::new();
+
+    for artefact in artefacts {
+        let clones = context
+            .list_artefact_clones(artefact.id.as_ref(), clone_filter, scope)
+            .await?;
+        for clone in clones {
+            if !seen_clone_ids.insert(clone.id.to_string()) {
+                continue;
+            }
+            *counts.entry(clone.relation_kind).or_default() += 1;
+        }
+    }
+
+    Ok(CloneSummary::from_counts(counts))
 }
 
 #[ComplexObject]
