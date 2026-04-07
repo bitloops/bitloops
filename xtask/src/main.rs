@@ -25,7 +25,7 @@ const MERGE_SMOKE_TARGETS: &[&str] = &[
     "agent_cli_smoke",
     "checkpoint_rewind_smoke",
     "dashboard_bundle_lifecycle_e2e",
-    "graphql",
+    "graphql_smoke",
 ];
 const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
 const DEFAULT_FAST_TEST_THREADS: u64 = 8;

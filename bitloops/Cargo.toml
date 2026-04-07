@@ -79,6 +79,11 @@ path = "tests/graphql.rs"
 required-features = ["slow-tests"]
 
 [[test]]
+name = "graphql_smoke"
+path = "tests/graphql_smoke.rs"
+required-features = ["slow-tests"]
+
+[[test]]
 name = "performance"
 path = "tests/performance.rs"
 required-features = ["slow-tests"]

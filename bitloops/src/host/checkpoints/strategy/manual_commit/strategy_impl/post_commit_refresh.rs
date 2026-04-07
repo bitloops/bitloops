@@ -1,12 +1,24 @@
 use super::*;
 
 const DEFAULT_POST_COMMIT_HISTORY_BACKFILL: usize = 50;
+const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
+
+fn should_skip_post_commit_devql_refresh() -> bool {
+    std::env::var(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV).is_ok_and(|value| {
+        let trimmed = value.trim();
+        !trimmed.is_empty() && trimmed != "0"
+    })
+}
 
 pub(crate) fn run_devql_post_commit_refresh(
     repo_root: &Path,
     commit_sha: &str,
     committed_files: &std::collections::HashSet<String>,
 ) -> Result<()> {
+    if should_skip_post_commit_devql_refresh() {
+        return Ok(());
+    }
+
     let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
     changed_files.sort();
 
@@ -55,6 +67,10 @@ pub(crate) fn run_devql_post_commit_checkpoint_projection_refresh(
     commit_sha: &str,
     checkpoint_id: &str,
 ) -> Result<()> {
+    if should_skip_post_commit_devql_refresh() {
+        return Ok(());
+    }
+
     run_post_commit_future(repo_root, async {
         let repo = crate::host::devql::resolve_repo_identity(repo_root).context(
             "resolving repository identity for post-commit checkpoint projection refresh",

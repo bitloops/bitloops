@@ -3,8 +3,8 @@ mod test_command_support;
 
 use agent_smoke_support::{
     checkpoint_id_for_head, claude_stop, claude_user_prompt_submit, committed_content,
-    committed_summary, init_and_enable_cursor, init_claude, init_repo, run_git_expect_success,
-    write_claude_transcript, write_cursor_transcript,
+    committed_summary, init_and_enable_cursor, init_claude, init_repo, write_claude_transcript,
+    write_cursor_transcript,
 };
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
@@ -22,6 +22,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
 
 #[test]
 fn claude_cli_smoke_condenses_checkpoint_on_commit() {
@@ -50,8 +52,8 @@ fn claude_cli_smoke_condenses_checkpoint_on_commit() {
     );
     claude_stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
 
-    run_git_expect_success(dir.path(), &["add", "src/auth.rs"], "stage auth module");
-    run_git_expect_success(
+    run_git_expect_success_with_smoke_env(dir.path(), &["add", "src/auth.rs"], "stage auth module");
+    run_git_expect_success_with_smoke_env(
         dir.path(),
         &["commit", "-m", "feat: add auth module"],
         "commit auth module",
@@ -101,12 +103,12 @@ fn cursor_cli_smoke_maps_basic_workflow_commit() {
     );
     agent_smoke_support::cursor_stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
 
-    run_git_expect_success(
+    run_git_expect_success_with_smoke_env(
         dir.path(),
         &["add", "cursor_hello.rs"],
         "stage cursor_hello.rs",
     );
-    run_git_expect_success(
+    run_git_expect_success_with_smoke_env(
         dir.path(),
         &["commit", "-m", "add cursor hello file"],
         "commit cursor_hello.rs",
@@ -120,6 +122,37 @@ fn cursor_cli_smoke_maps_basic_workflow_commit() {
 
 fn bitloops_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bitloops"))
+}
+
+fn run_git_output_with_smoke_env(repo: &Path, args: &[&str]) -> Output {
+    let mut search_paths = vec![
+        bitloops_bin()
+            .parent()
+            .expect("bitloops test binary should have a parent directory")
+            .to_path_buf(),
+    ];
+    if let Some(existing_path) = env::var_os("PATH") {
+        search_paths.extend(env::split_paths(&existing_path));
+    }
+    let path = env::join_paths(search_paths).expect("failed to construct PATH");
+
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(repo)
+        .env("PATH", path)
+        .env(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV, "1");
+    crate::test_command_support::apply_repo_app_env(&mut cmd, repo);
+    cmd.output().expect("failed to run git")
+}
+
+fn run_git_expect_success_with_smoke_env(repo: &Path, args: &[&str], context: &str) {
+    let out = run_git_output_with_smoke_env(repo, args);
+    assert!(
+        out.status.success(),
+        "{context}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 struct HomeEnvPaths {
@@ -278,7 +311,10 @@ fn run_git_output_with_home(repo: &Path, home: &Path, args: &[&str]) -> Output {
     let path = env::join_paths(search_paths).expect("failed to construct PATH");
 
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(repo).env("PATH", path);
+    cmd.args(args)
+        .current_dir(repo)
+        .env("PATH", path)
+        .env(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV, "1");
     apply_home_env(&mut cmd, home);
     cmd.output().expect("failed to run git")
 }
