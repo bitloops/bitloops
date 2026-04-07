@@ -1132,6 +1132,7 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
     assert_eq!(variables, json!({}));
 }
 
+#[test]
 fn devql_run_ingest_require_daemon_fails_without_bootstrap() {
     let repo = seed_devql_cli_repo();
     let bootstrap_count = Rc::new(RefCell::new(0usize));
