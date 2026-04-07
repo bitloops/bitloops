@@ -167,18 +167,15 @@ fn wait_for_daemon_ready(
             return Ok((runtime_state_path, state));
         }
 
-        match child
+        if let Some(status) = child
             .try_wait()
             .with_context(|| format!("polling daemon child process {child_pid}"))?
         {
-            Some(status) => {
-                let stderr = read_daemon_stderr_log(stderr_log_path);
-                bail!(
-                    "daemon process exited before readiness check succeeded\nchild pid: {child_pid}\nchild status: {status}\nstderr log: {}\nchild stderr:\n{stderr}",
-                    stderr_log_path.display()
-                );
-            }
-            None => {}
+            let stderr = read_daemon_stderr_log(stderr_log_path);
+            bail!(
+                "daemon process exited before readiness check succeeded\nchild pid: {child_pid}\nchild status: {status}\nstderr log: {}\nchild stderr:\n{stderr}",
+                stderr_log_path.display()
+            );
         }
 
         if started.elapsed() >= DAEMON_READY_TIMEOUT {
