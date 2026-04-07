@@ -149,11 +149,13 @@ fn write_committed_checkpoint_metadata_with_mappings(
     run_git_cmd(root, &["checkout", "--orphan", "bitloops/checkpoints/v1"]);
     run_git_cmd(root, &["rm", "-rf", "--ignore-unmatch", "."]);
 
+    let mut buckets_to_stage = std::collections::BTreeSet::new();
     for (checkpoint_id, _) in checkpoints {
         let bucket = &checkpoint_id[..2];
         let suffix = &checkpoint_id[2..];
         let metadata_dir = root.join(bucket).join(suffix);
         std::fs::create_dir_all(&metadata_dir).expect("failed to create metadata dir");
+        buckets_to_stage.insert(bucket.to_string());
         let metadata_path = metadata_dir.join("metadata.json");
         let metadata_json = serde_json::json!({
             "checkpoint_id": checkpoint_id,
@@ -169,9 +171,13 @@ fn write_committed_checkpoint_metadata_with_mappings(
         .expect("write metadata");
     }
 
-    run_git_cmd(root, &["add", "."]);
+    for bucket in buckets_to_stage {
+        run_git_cmd(root, &["add", bucket.as_str()]);
+    }
     run_git_cmd(root, &["commit", "-m", "seed checkpoint metadata"]);
     run_git_cmd(root, &["checkout", &current_branch]);
+    crate::test_support::git_fixtures::write_test_daemon_config(root);
+    ensure_relational_store_file(root);
 
     for (checkpoint_id, commit_sha) in checkpoints {
         insert_committed_checkpoint_row(root, checkpoint_id);
