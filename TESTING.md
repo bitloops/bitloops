@@ -27,6 +27,7 @@ Run commands from the repository root.
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `dev-test-*` aliases run with terse test output (`.` style) by default.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
+`cargo qat` runs the onboarding and DevQL sync suites as a parallel bundle.
 
 ## macOS code-signing for local development
 

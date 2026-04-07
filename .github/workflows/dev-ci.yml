@@ -112,5 +112,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: dev-ci
+
       - name: Run QAT acceptance suites
         run: cargo qat

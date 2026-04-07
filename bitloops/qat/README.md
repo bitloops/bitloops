@@ -14,7 +14,7 @@ Cargo aliases are configured in `.cargo/config.toml` and only resolve from this 
 
 ### Onboarding + DevQL sync (CI bundle)
 
-Runs both suites below sequentially (28 scenarios). This is what CI executes.
+Runs both suites below in parallel (28 scenarios total). This is what CI executes.
 
 ```bash
 cargo qat
@@ -139,7 +139,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 ## Environment variables
 
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
-- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`)
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the onboarding + DevQL sync bundle running in parallel under `cargo qat`)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)
