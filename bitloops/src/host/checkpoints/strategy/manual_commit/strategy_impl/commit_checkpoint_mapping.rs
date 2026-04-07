@@ -3,13 +3,14 @@ use super::*;
 fn open_commit_checkpoint_mapping_db(
     repo_root: &Path,
 ) -> Result<(crate::storage::SqliteConnectionPool, String)> {
-    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)
-        .context("resolving SQLite path for commit_checkpoints")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(repo_root)
+            .context("opening relational store for commit_checkpoints")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context("initialising relational checkpoint schema for commit_checkpoints")?;
+    let sqlite = crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational)
         .context("opening SQLite for commit_checkpoints")?;
-    sqlite
-        .initialise_checkpoint_schema()
-        .context("initialising checkpoint schema for commit_checkpoints")?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for commit_checkpoints")?

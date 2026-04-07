@@ -1,4 +1,7 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::{
+    SessionMetadataBundle, TaskCheckpointMetadataBundle,
+};
 
 // ── Checkpoint metadata structs ───────────────────────────────────────────────
 
@@ -191,8 +194,7 @@ pub(crate) struct WriteTemporaryOptions {
     pub(crate) modified_files: Vec<String>,
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted_files: Vec<String>,
-    pub(crate) metadata_dir: String,
-    pub(crate) metadata_dir_abs: String,
+    pub(crate) session_metadata: Option<SessionMetadataBundle>,
     pub(crate) commit_message: String,
     pub(crate) author_name: String,
     pub(crate) author_email: String,
@@ -215,9 +217,8 @@ pub(crate) struct WriteTemporaryTaskOptions {
     pub(crate) modified_files: Vec<String>,
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted_files: Vec<String>,
-    pub(crate) transcript_path: String,
-    pub(crate) subagent_transcript_path: String,
-    pub(crate) checkpoint_uuid: String,
+    pub(crate) session_metadata: Option<SessionMetadataBundle>,
+    pub(crate) task_metadata: Option<TaskCheckpointMetadataBundle>,
     pub(crate) is_incremental: bool,
     pub(crate) incremental_sequence: u32,
     pub(crate) incremental_type: String,

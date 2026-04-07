@@ -416,7 +416,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     let discovery_run = TestDiscoveryRunRecord {
         discovery_run_id: format!("discovery:{commit_sha}"),
         repo_id: repo_id.clone(),
-        commit_sha: commit_sha.to_string(),
+        sync_mode: "full".to_string(),
         language: Some("typescript".to_string()),
         started_at: "2026-03-26T11:00:00Z".to_string(),
         finished_at: Some("2026-03-26T11:00:01Z".to_string()),
@@ -444,8 +444,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             artefact_id: suite_artefact_id.clone(),
             symbol_id: suite_symbol_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-suite-{index}"),
+            content_id: format!("test-blob-suite-{index}"),
             path: test_path.clone(),
             language: "typescript".to_string(),
             canonical_kind: "test_suite".to_string(),
@@ -461,18 +460,14 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         test_artefacts.push(TestArtefactCurrentRecord {
             artefact_id: test_artefact_id.clone(),
             symbol_id: test_symbol_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-scenario-{index}"),
+            content_id: format!("test-blob-scenario-{index}"),
             path: test_path.clone(),
             language: "typescript".to_string(),
             canonical_kind: "test_scenario".to_string(),
@@ -488,17 +483,13 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         test_edges.push(TestArtefactEdgeCurrentRecord {
             edge_id: format!("test-edge-{index}"),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-edge-{index}"),
+            content_id: format!("test-blob-edge-{index}"),
             path: test_path,
             from_artefact_id: test_artefact_id.clone(),
             from_symbol_id: test_symbol_id.clone(),
@@ -515,8 +506,6 @@ pub(super) fn seed_graphql_test_harness_stage_data(
                 "linkage_status": "linked"
             })
             .to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         coverage_captures.push(CoverageCaptureRecord {

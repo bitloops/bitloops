@@ -131,6 +131,7 @@ Starts the Bitloops daemon.
 ```bash
 bitloops start
 bitloops start --create-default-config
+bitloops start --config ./config.toml --bootstrap-local-stores
 bitloops daemon start
 bitloops daemon start -d
 bitloops daemon start --until-stopped
@@ -149,6 +150,7 @@ Key flags:
 | `--bundle-dir` | Override the dashboard bundle directory for this run |
 | `--config` | Use an explicit daemon config file |
 | `--create-default-config` | Create the default global daemon config plus local default store files before starting |
+| `--bootstrap-local-stores` | Create the local SQLite, DuckDB, and blob-store artefacts required by the selected daemon config before starting |
 | `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version |
 
 Notes:
@@ -157,6 +159,8 @@ Notes:
 - On a fresh machine, `bitloops start --create-default-config` remains the explicit non-interactive bootstrap path for the default daemon config plus the default SQLite, DuckDB, and blob-store paths.
 - When you pass `--config` and the file does not exist, `start` fails.
 - `--create-default-config` only works with the default daemon config location. It cannot be combined with `--config`.
+- `--bootstrap-local-stores` is the explicit bootstrap path for an existing custom config. It does not create the config file itself; it only creates the local file-backed store artefacts referenced by that config.
+- `--bootstrap-local-stores` can be combined with `--config`, which makes it useful for repo-scoped test configs and other non-default daemon setups.
 - When `start` creates the default daemon config and no explicit telemetry flag is present, interactive mode prompts for telemetry consent before the daemon continues.
 - In non-interactive mode, creating the default daemon config requires an explicit telemetry flag.
 

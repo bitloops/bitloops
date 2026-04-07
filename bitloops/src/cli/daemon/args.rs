@@ -36,6 +36,10 @@ pub struct DaemonStartArgs {
     #[arg(long, default_value_t = false, conflicts_with = "config")]
     pub create_default_config: bool,
 
+    /// Create local store artefacts for the selected config before starting.
+    #[arg(long, default_value_t = false)]
+    pub bootstrap_local_stores: bool,
+
     /// Start detached instead of holding the current terminal open.
     #[arg(
         short = 'd',

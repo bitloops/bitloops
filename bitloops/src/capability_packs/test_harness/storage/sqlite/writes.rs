@@ -27,31 +27,19 @@ pub(super) fn clear_existing_test_discovery_data(
         params![commit_sha],
     )
     .context("failed clearing existing coverage_captures for commit")?;
-    conn.execute(
-        "DELETE FROM test_artefact_edges_current WHERE commit_sha = ?1",
-        params![commit_sha],
-    )
-    .context("failed clearing existing test edges for commit")?;
+    conn.execute("DELETE FROM test_artefact_edges_current", params![])
+        .context("failed clearing existing test edges")?;
     conn.execute(
         "DELETE FROM test_runs WHERE commit_sha = ?1",
         params![commit_sha],
     )
     .context("failed clearing existing test runs for commit")?;
-    conn.execute(
-        "DELETE FROM test_discovery_diagnostics WHERE commit_sha = ?1",
-        params![commit_sha],
-    )
-    .context("failed clearing existing discovery diagnostics for commit")?;
-    conn.execute(
-        "DELETE FROM test_discovery_runs WHERE commit_sha = ?1",
-        params![commit_sha],
-    )
-    .context("failed clearing existing discovery runs for commit")?;
-    conn.execute(
-        "DELETE FROM test_artefacts_current WHERE commit_sha = ?1",
-        params![commit_sha],
-    )
-    .context("failed clearing existing test artefacts for commit")?;
+    conn.execute("DELETE FROM test_discovery_diagnostics", params![])
+        .context("failed clearing existing discovery diagnostics")?;
+    conn.execute("DELETE FROM test_discovery_runs", params![])
+        .context("failed clearing existing discovery runs")?;
+    conn.execute("DELETE FROM test_artefacts_current", params![])
+        .context("failed clearing existing test artefacts")?;
     Ok(())
 }
 
@@ -62,20 +50,16 @@ pub(super) fn upsert_test_artefact_current(
     conn.execute(
         r#"
 INSERT INTO test_artefacts_current (
-  artefact_id, symbol_id, repo_id, commit_sha, blob_sha, path, language, canonical_kind,
-  language_kind, symbol_fqn, name, parent_artefact_id, parent_symbol_id, start_line,
-  end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash,
-  discovery_source, revision_kind, revision_id
+  repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+  language_kind, symbol_fqn, name, parent_symbol_id, parent_artefact_id, start_line,
+  end_line, start_byte, end_byte, signature, modifiers, docstring, discovery_source
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-  ?21, ?22, ?23, ?24
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
 )
-ON CONFLICT(repo_id, symbol_id) DO UPDATE SET
+ON CONFLICT(repo_id, path, symbol_id) DO UPDATE SET
+  content_id = excluded.content_id,
   artefact_id = excluded.artefact_id,
-  commit_sha = excluded.commit_sha,
-  blob_sha = excluded.blob_sha,
   language = excluded.language,
-  path = excluded.path,
   canonical_kind = excluded.canonical_kind,
   language_kind = excluded.language_kind,
   name = excluded.name,
@@ -89,26 +73,22 @@ ON CONFLICT(repo_id, symbol_id) DO UPDATE SET
   signature = excluded.signature,
   modifiers = excluded.modifiers,
   docstring = excluded.docstring,
-  content_hash = excluded.content_hash,
   discovery_source = excluded.discovery_source,
-  revision_kind = excluded.revision_kind,
-  revision_id = excluded.revision_id,
   updated_at = datetime('now')
 "#,
         params![
-            artefact.artefact_id,
-            artefact.symbol_id,
             artefact.repo_id,
-            artefact.commit_sha,
-            artefact.blob_sha,
             artefact.path,
+            artefact.content_id,
+            artefact.symbol_id,
+            artefact.artefact_id,
             artefact.language,
             artefact.canonical_kind,
             artefact.language_kind,
             artefact.symbol_fqn,
             artefact.name,
-            artefact.parent_artefact_id,
             artefact.parent_symbol_id,
+            artefact.parent_artefact_id,
             artefact.start_line,
             artefact.end_line,
             artefact.start_byte,
@@ -116,10 +96,7 @@ ON CONFLICT(repo_id, symbol_id) DO UPDATE SET
             artefact.signature,
             artefact.modifiers,
             artefact.docstring,
-            artefact.content_hash,
-            artefact.discovery_source,
-            artefact.revision_kind,
-            artefact.revision_id
+            artefact.discovery_source
         ],
     )
     .with_context(|| format!("failed upserting test artefact {}", artefact.symbol_id))?;
@@ -133,13 +110,11 @@ pub(super) fn upsert_test_artefact_edge_current(
     conn.execute(
         r#"
 INSERT INTO test_artefact_edges_current (
-  edge_id, repo_id, commit_sha, blob_sha, path, from_artefact_id, from_symbol_id, to_artefact_id,
-  to_symbol_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata,
-  revision_kind, revision_id
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-ON CONFLICT(edge_id) DO UPDATE SET
-  commit_sha = excluded.commit_sha,
-  blob_sha = excluded.blob_sha,
+  repo_id, path, content_id, edge_id, from_artefact_id, from_symbol_id, to_artefact_id,
+  to_symbol_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+ON CONFLICT(repo_id, edge_id) DO UPDATE SET
+  content_id = excluded.content_id,
   path = excluded.path,
   from_artefact_id = excluded.from_artefact_id,
   from_symbol_id = excluded.from_symbol_id,
@@ -151,16 +126,13 @@ ON CONFLICT(edge_id) DO UPDATE SET
   start_line = excluded.start_line,
   end_line = excluded.end_line,
   metadata = excluded.metadata,
-  revision_kind = excluded.revision_kind,
-  revision_id = excluded.revision_id,
   updated_at = datetime('now')
 "#,
         params![
-            edge.edge_id,
             edge.repo_id,
-            edge.commit_sha,
-            edge.blob_sha,
             edge.path,
+            edge.content_id,
+            edge.edge_id,
             edge.from_artefact_id,
             edge.from_symbol_id,
             edge.to_artefact_id,
@@ -170,9 +142,7 @@ ON CONFLICT(edge_id) DO UPDATE SET
             edge.language,
             edge.start_line,
             edge.end_line,
-            edge.metadata,
-            edge.revision_kind,
-            edge.revision_id
+            edge.metadata
         ],
     )
     .with_context(|| format!("failed upserting test edge {}", edge.edge_id))?;
@@ -247,12 +217,12 @@ pub(super) fn upsert_test_discovery_run(
     conn.execute(
         r#"
 INSERT INTO test_discovery_runs (
-  discovery_run_id, repo_id, commit_sha, language, started_at, finished_at, status,
+  discovery_run_id, repo_id, sync_mode, language, started_at, finished_at, status,
   enumeration_status, notes_json, stats_json
 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
 ON CONFLICT(discovery_run_id) DO UPDATE SET
   repo_id = excluded.repo_id,
-  commit_sha = excluded.commit_sha,
+  sync_mode = excluded.sync_mode,
   language = excluded.language,
   started_at = excluded.started_at,
   finished_at = excluded.finished_at,
@@ -264,7 +234,7 @@ ON CONFLICT(discovery_run_id) DO UPDATE SET
         params![
             run.discovery_run_id,
             run.repo_id,
-            run.commit_sha,
+            run.sync_mode,
             run.language,
             run.started_at,
             run.finished_at,
@@ -285,13 +255,11 @@ pub(super) fn upsert_test_discovery_diagnostic(
     conn.execute(
         r#"
 INSERT INTO test_discovery_diagnostics (
-  diagnostic_id, discovery_run_id, repo_id, commit_sha, path, line, severity, code,
-  message, metadata_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+  diagnostic_id, discovery_run_id, repo_id, path, line, severity, code, message, metadata_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
 ON CONFLICT(diagnostic_id) DO UPDATE SET
   discovery_run_id = excluded.discovery_run_id,
   repo_id = excluded.repo_id,
-  commit_sha = excluded.commit_sha,
   path = excluded.path,
   line = excluded.line,
   severity = excluded.severity,
@@ -303,7 +271,6 @@ ON CONFLICT(diagnostic_id) DO UPDATE SET
             diagnostic.diagnostic_id,
             diagnostic.discovery_run_id,
             diagnostic.repo_id,
-            diagnostic.commit_sha,
             diagnostic.path,
             diagnostic.line,
             diagnostic.severity,

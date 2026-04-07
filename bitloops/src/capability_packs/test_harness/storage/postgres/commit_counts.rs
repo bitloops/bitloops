@@ -6,6 +6,15 @@ pub(super) async fn load_test_harness_commit_counts(
     client: &mut tokio_postgres::Client,
     commit_sha: &str,
 ) -> Result<TestHarnessCommitCounts> {
+    async fn cnt_all(client: &mut tokio_postgres::Client, sql: &str) -> Result<u64> {
+        let row = client
+            .query_one(sql, &[])
+            .await
+            .context("test harness commit count query")?;
+        let n: i64 = row.get(0);
+        Ok(n.max(0) as u64)
+    }
+
     async fn cnt(client: &mut tokio_postgres::Client, sql: &str, commit_sha: &str) -> Result<u64> {
         let row = client
             .query_one(sql, &[&commit_sha])
@@ -16,16 +25,14 @@ pub(super) async fn load_test_harness_commit_counts(
     }
 
     Ok(TestHarnessCommitCounts {
-        test_artefacts: cnt(
+        test_artefacts: cnt_all(
             client,
-            "SELECT COUNT(*)::bigint FROM test_artefacts_current WHERE commit_sha = $1",
-            commit_sha,
+            "SELECT COUNT(*)::bigint FROM test_artefacts_current",
         )
         .await?,
-        test_artefact_edges: cnt(
+        test_artefact_edges: cnt_all(
             client,
-            "SELECT COUNT(*)::bigint FROM test_artefact_edges_current WHERE commit_sha = $1",
-            commit_sha,
+            "SELECT COUNT(*)::bigint FROM test_artefact_edges_current",
         )
         .await?,
         test_classifications: cnt(

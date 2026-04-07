@@ -12,7 +12,7 @@ use crate::models::{ProductionArtefact, TestArtefactCurrentRecord, TestArtefactE
 
 pub(crate) struct MaterializationContext<'a> {
     pub(crate) repo_id: &'a str,
-    pub(crate) commit_sha: &'a str,
+    pub(crate) content_ids: &'a HashMap<String, String>,
     pub(crate) production: &'a [ProductionArtefact],
     pub(crate) production_index: &'a ProductionIndex,
     pub(crate) test_artefacts: &'a mut Vec<TestArtefactCurrentRecord>,
@@ -23,15 +23,9 @@ pub(crate) struct MaterializationContext<'a> {
 
 struct RecordContext<'a> {
     repo_id: &'a str,
-    commit_sha: &'a str,
+    content_id: &'a str,
     path: &'a str,
     language: &'a str,
-}
-
-impl RecordContext<'_> {
-    fn blob_sha(&self) -> String {
-        crate::host::devql::deterministic_uuid(&format!("{}|{}", self.commit_sha, self.path))
-    }
 }
 
 struct TestArtefactSpec<'a> {
@@ -52,7 +46,6 @@ pub(crate) fn materialize_source_discovery(
     files: &[DiscoveredTestFile],
 ) {
     let repo_id = context.repo_id;
-    let commit_sha = context.commit_sha;
 
     for file in files {
         context.stats.files += 1;
@@ -60,9 +53,14 @@ pub(crate) fn materialize_source_discovery(
             continue;
         }
 
+        let content_id = context
+            .content_ids
+            .get(&file.relative_path)
+            .map(String::as_str)
+            .unwrap_or("");
         let record_context = RecordContext {
             repo_id,
-            commit_sha,
+            content_id,
             path: &file.relative_path,
             language: &file.language,
         };
@@ -142,13 +140,17 @@ pub(crate) fn materialize_enumerated_scenarios(
     scenarios_out: &[EnumeratedTestScenario],
 ) {
     let repo_id = context.repo_id;
-    let commit_sha = context.commit_sha;
     let mut synthetic_suites: HashMap<String, (String, String)> = HashMap::new();
 
     for enumerated in scenarios_out {
+        let content_id = context
+            .content_ids
+            .get(&enumerated.relative_path)
+            .map(String::as_str)
+            .unwrap_or("");
         let record_context = RecordContext {
             repo_id,
-            commit_sha,
+            content_id,
             path: &enumerated.relative_path,
             language: &enumerated.language,
         };
@@ -256,7 +258,6 @@ fn build_test_artefact_current_record(
     context: &RecordContext<'_>,
     spec: &TestArtefactSpec<'_>,
 ) -> TestArtefactCurrentRecord {
-    let blob_sha = context.blob_sha();
     let symbol_id = test_structural_symbol_id(
         context.path,
         spec.canonical_kind,
@@ -265,14 +266,13 @@ fn build_test_artefact_current_record(
         spec.name,
         spec.signature,
     );
-    let artefact_id = test_revision_artefact_id(context.repo_id, &blob_sha, &symbol_id);
+    let artefact_id = test_revision_artefact_id(context.repo_id, context.content_id, &symbol_id);
 
     TestArtefactCurrentRecord {
         artefact_id,
         symbol_id,
         repo_id: context.repo_id.to_string(),
-        commit_sha: context.commit_sha.to_string(),
-        blob_sha,
+        content_id: context.content_id.to_string(),
         path: context.path.to_string(),
         language: context.language.to_string(),
         canonical_kind: spec.canonical_kind.to_string(),
@@ -288,10 +288,7 @@ fn build_test_artefact_current_record(
         signature: spec.signature.map(str::to_string),
         modifiers: "[]".to_string(),
         docstring: None,
-        content_hash: None,
         discovery_source: spec.discovery_source.as_str().to_string(),
-        revision_kind: "commit".to_string(),
-        revision_id: context.commit_sha.to_string(),
     }
 }
 
@@ -312,8 +309,7 @@ fn build_test_artefact_edge_current_record(
             &production_artefact.symbol_id,
         ),
         repo_id: context.repo_id.to_string(),
-        commit_sha: context.commit_sha.to_string(),
-        blob_sha: context.blob_sha(),
+        content_id: context.content_id.to_string(),
         path: context.path.to_string(),
         from_artefact_id: from.artefact_id.clone(),
         from_symbol_id: from.symbol_id.clone(),
@@ -325,7 +321,5 @@ fn build_test_artefact_edge_current_record(
         start_line: Some(from.start_line),
         end_line: Some(from.end_line),
         metadata,
-        revision_kind: "commit".to_string(),
-        revision_id: context.commit_sha.to_string(),
     }
 }

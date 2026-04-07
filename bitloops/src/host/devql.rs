@@ -524,15 +524,15 @@ async fn init_relational_schema_with_mode(
     relational: &RelationalStorage,
     mode: RelationalSchemaInitMode,
 ) -> Result<SyncExecutionSchemaOutcome> {
-    init_sqlite_schema(&relational.local.path).await?;
+    init_sqlite_schema(relational.sqlite_path()).await?;
     let mut outcome = SyncExecutionSchemaOutcome::default();
-    if let Some(remote) = relational.remote.as_ref() {
+    if let Some(remote_client) = relational.remote_client() {
         let init_outcome = match mode {
             RelationalSchemaInitMode::SafeBootstrap => {
-                init_postgres_schema(cfg, &remote.client).await?
+                init_postgres_schema(cfg, remote_client).await?
             }
             RelationalSchemaInitMode::SyncExecution => {
-                init_postgres_schema_for_sync_execution(cfg, &remote.client).await?
+                init_postgres_schema_for_sync_execution(cfg, remote_client).await?
             }
         };
         outcome.remote_current_state_rebuilt = init_outcome.rebuilt_current_state;
@@ -566,10 +566,10 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
 }
 
 fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     embeddings::EmbeddingProviderConfig {
         daemon_config_path: crate::config::default_daemon_config_path()
-            .unwrap_or_else(|_| cfg.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
+            .unwrap_or_else(|_| cfg.daemon_config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
         embedding_profile: capability.semantic_clones.embedding_profile,
         runtime_command: capability.embeddings.runtime.command,
         runtime_args: capability.embeddings.runtime.args,
@@ -601,7 +601,7 @@ async fn initialise_devql_schema_for_command_with_mode(
     InitSchemaSummary,
     SyncExecutionSchemaOutcome,
 )> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
@@ -800,8 +800,13 @@ use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
 pub(crate) use self::ingestion_schema::{
-    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
-    knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
+    checkpoint_relational_schema_sql_postgres, checkpoint_relational_schema_sql_sqlite,
+    checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite, knowledge_schema_sql_duckdb,
+    knowledge_schema_sql_sqlite,
+};
+#[cfg(test)]
+pub(crate) use self::ingestion_schema::{
+    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite,
 };
 use self::ingestion_types::*;
 pub(crate) use self::ingestion_types::{

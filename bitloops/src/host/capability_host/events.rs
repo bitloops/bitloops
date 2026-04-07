@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::gateways::{HostServicesGateway, LanguageServicesGateway};
+use super::gateways::{HostServicesGateway, LanguageServicesGateway, RelationalGateway};
 use crate::host::devql::RelationalStorage;
 
 #[derive(Debug, Clone)]
@@ -83,6 +83,7 @@ pub struct RemovedArtefact {
 #[derive(Clone)]
 pub struct EventHandlerContext {
     pub storage: Arc<RelationalStorage>,
+    pub relational: Arc<dyn RelationalGateway>,
     pub language_services: Arc<dyn LanguageServicesGateway>,
     pub host_services: Arc<dyn HostServicesGateway>,
 }

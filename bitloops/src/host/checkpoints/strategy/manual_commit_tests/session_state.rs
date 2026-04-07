@@ -26,8 +26,7 @@ pub(crate) fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
         modified_files: vec![],
         new_files: vec!["file.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -75,8 +74,7 @@ pub(crate) fn save_step_checkpoint_tree_has_modified_file() {
         modified_files: vec![],
         new_files: vec!["src.rs".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -121,8 +119,7 @@ pub(crate) fn save_step_skips_when_no_changes() {
         modified_files: vec![],
         new_files: vec!["file.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -170,8 +167,7 @@ pub(crate) fn save_step_increments_step_count() {
         modified_files: vec![],
         new_files: vec!["a.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -212,8 +208,7 @@ pub(crate) fn save_step_sets_base_commit() {
         modified_files: vec![],
         new_files: vec!["b.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -342,12 +337,8 @@ pub(crate) fn initialize_session_prompt_attribution_uses_latest_temporary_checkp
     let session_id = "attr-latest-temp-tree";
 
     fs::write(dir.path().join("README.md"), "agent baseline\n").unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), session_id);
-    let result = write_temporary(
-        dir.path(),
-        first_checkpoint_opts(session_id, &base_commit, &metadata_dir_abs),
-    )
-    .unwrap();
+    let result =
+        write_temporary(dir.path(), first_checkpoint_opts(session_id, &base_commit)).unwrap();
     assert!(!result.skipped);
 
     // Ensure there is no shadow-branch fallback available.
@@ -412,8 +403,7 @@ pub(crate) fn save_step_consumes_pending_prompt_attribution() {
         modified_files: vec!["tracked.txt".to_string()],
         new_files: vec![],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -465,8 +455,7 @@ pub(crate) fn save_step_includes_transcript_in_checkpoint_tree() {
         modified_files: vec![],
         new_files: vec!["changed.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: transcript_path.to_string_lossy().to_string(),
         author_name: String::new(),
@@ -528,8 +517,7 @@ pub(crate) fn save_step_with_untracked_dir_does_not_crash() {
         modified_files: vec![],
         new_files: vec![],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -558,8 +546,7 @@ pub(crate) fn save_step_no_head_is_noop() {
         modified_files: vec![],
         new_files: vec!["file.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
