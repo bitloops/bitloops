@@ -410,11 +410,22 @@ fn value_as_usize(value: &Value) -> Option<usize> {
 
 #[cfg(test)]
 mod semantic_clone_pipeline_tests {
+    use crate::host::devql::{
+        RelationalStorage, devql_schema_sql_sqlite, sqlite_exec_path_allow_create,
+    };
+    use tempfile::tempdir;
+
     use super::super::schema::{
         semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql,
     };
-
-    use super::build_symbol_clone_candidate_lookup_sql;
+    use super::super::{
+        init_sqlite_semantic_embeddings_schema, init_sqlite_semantic_features_schema,
+    };
+    use super::{
+        build_symbol_clone_candidate_lookup_sql, rebuild_symbol_clone_edges,
+        rebuild_symbol_clone_edges_with_options,
+    };
+    use crate::capability_packs::semantic_clones::scoring::CloneScoringOptions;
 
     #[test]
     fn semantic_clone_schema_includes_clone_edge_table() {
@@ -436,5 +447,66 @@ mod semantic_clone_pipeline_tests {
         assert!(sql.contains("e.model AS embedding_model"));
         assert!(sql.contains("repo''1"));
         assert!(!sql.contains(" IN ("));
+    }
+
+    #[tokio::test]
+    async fn rebuild_wrapper_matches_default_options_on_empty_snapshot() {
+        let tmp = tempdir().expect("temp dir");
+        let sqlite_path = tmp.path().join("devql.sqlite");
+
+        sqlite_exec_path_allow_create(&sqlite_path, devql_schema_sql_sqlite())
+            .await
+            .expect("core devql schema");
+        init_sqlite_semantic_features_schema(&sqlite_path)
+            .await
+            .expect("semantic feature schema");
+        init_sqlite_semantic_embeddings_schema(&sqlite_path)
+            .await
+            .expect("semantic embedding schema");
+        sqlite_exec_path_allow_create(&sqlite_path, semantic_clones_sqlite_schema_sql())
+            .await
+            .expect("semantic clone schema");
+
+        let relational = RelationalStorage::local_only(sqlite_path.clone());
+        let wrapper = rebuild_symbol_clone_edges(&relational, "repo-1")
+            .await
+            .expect("wrapper rebuild");
+        let explicit = rebuild_symbol_clone_edges_with_options(
+            &relational,
+            "repo-1",
+            CloneScoringOptions::default(),
+        )
+        .await
+        .expect("explicit rebuild");
+        assert_eq!(wrapper, explicit);
+        assert!(wrapper.edges.is_empty());
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(symbol_clone_edges)")
+            .expect("prepare pragma table info");
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query table columns")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("read table columns");
+        assert_eq!(
+            columns,
+            vec![
+                "repo_id",
+                "source_symbol_id",
+                "source_artefact_id",
+                "target_symbol_id",
+                "target_artefact_id",
+                "relation_kind",
+                "score",
+                "semantic_score",
+                "lexical_score",
+                "structural_score",
+                "clone_input_hash",
+                "explanation_json",
+                "generated_at",
+            ]
+        );
     }
 }

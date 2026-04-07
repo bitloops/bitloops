@@ -92,16 +92,19 @@ pub const LABEL_PREFERRED_LOCAL_PATTERN: &str = "preferred_local_pattern";
 pub const DEFAULT_ANN_NEIGHBORS: usize = 5;
 pub const MIN_ANN_NEIGHBORS: usize = 1;
 pub const MAX_ANN_NEIGHBORS: usize = 50;
+pub const DISABLE_ANN_ENV: &str = "BITLOOPS_SEMANTIC_CLONES_DISABLE_ANN";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CloneScoringOptions {
     pub ann_neighbors: usize,
+    pub ann_enabled: bool,
 }
 
 impl Default for CloneScoringOptions {
     fn default() -> Self {
         Self {
             ann_neighbors: DEFAULT_ANN_NEIGHBORS,
+            ann_enabled: true,
         }
     }
 }
@@ -110,6 +113,7 @@ impl CloneScoringOptions {
     pub fn new(ann_neighbors: usize) -> Self {
         Self {
             ann_neighbors: ann_neighbors.clamp(MIN_ANN_NEIGHBORS, MAX_ANN_NEIGHBORS),
+            ann_enabled: true,
         }
     }
 
@@ -123,6 +127,30 @@ impl CloneScoringOptions {
         };
         Self::new(value)
     }
+
+    pub fn with_ann_enabled(mut self, ann_enabled: bool) -> Self {
+        self.ann_enabled = ann_enabled;
+        self
+    }
+
+    fn apply_env_overrides(mut self) -> Self {
+        if ann_disabled_from_env() {
+            self.ann_enabled = false;
+        }
+        self
+    }
+}
+
+fn ann_disabled_from_env() -> bool {
+    std::env::var(DISABLE_ANN_ENV)
+        .ok()
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +258,7 @@ fn build_symbol_clone_edges_for_sources(
             sources_considered: sources.len(),
         };
     }
+    let options = options.apply_env_overrides();
 
     let mut group_indices = HashMap::<CandidateGroupKey, Vec<usize>>::new();
     for (idx, candidate) in candidates.iter().enumerate() {
@@ -239,7 +268,11 @@ fn build_symbol_clone_edges_for_sources(
             .push(idx);
     }
 
-    let group_ann_indexes = build_group_ann_indexes(candidates, &group_indices);
+    let group_ann_indexes = if options.ann_enabled {
+        build_group_ann_indexes(candidates, &group_indices)
+    } else {
+        HashMap::new()
+    };
     let duplicate_buckets = build_duplicate_buckets(candidates, &group_indices);
 
     let mut candidate_index_by_symbol_id =
@@ -260,17 +293,25 @@ fn build_symbol_clone_edges_for_sources(
         let group_key = candidate_group_key(source);
         let mut target_indices = HashSet::<usize>::new();
 
-        if let Some(group_ann_index) = group_ann_indexes.get(&group_key)
-            && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
-        {
-            let ann_local = group_ann_index
-                .index
-                .nearest(*source_local_idx, options.ann_neighbors.saturating_add(1));
-            for local_idx in ann_local {
-                if let Some(global_idx) = group_ann_index.global_indices.get(local_idx).copied()
-                    && global_idx != source_idx
-                {
-                    target_indices.insert(global_idx);
+        if options.ann_enabled {
+            if let Some(group_ann_index) = group_ann_indexes.get(&group_key)
+                && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
+            {
+                let ann_local = group_ann_index
+                    .index
+                    .nearest(*source_local_idx, options.ann_neighbors.saturating_add(1));
+                for local_idx in ann_local {
+                    if let Some(global_idx) = group_ann_index.global_indices.get(local_idx).copied()
+                        && global_idx != source_idx
+                    {
+                        target_indices.insert(global_idx);
+                    }
+                }
+            }
+        } else if let Some(group_member_indices) = group_indices.get(&group_key) {
+            for global_idx in group_member_indices {
+                if *global_idx != source_idx {
+                    target_indices.insert(*global_idx);
                 }
             }
         }
@@ -532,6 +573,7 @@ mod tests {
             CloneScoringOptions::default().ann_neighbors,
             DEFAULT_ANN_NEIGHBORS
         );
+        assert!(CloneScoringOptions::default().ann_enabled);
         assert_eq!(CloneScoringOptions::new(0).ann_neighbors, MIN_ANN_NEIGHBORS);
         assert_eq!(
             CloneScoringOptions::new(MAX_ANN_NEIGHBORS + 10).ann_neighbors,
@@ -541,6 +583,29 @@ mod tests {
             CloneScoringOptions::from_i64_clamped(-10).ann_neighbors,
             MIN_ANN_NEIGHBORS
         );
+        assert!(
+            !CloneScoringOptions::new(5)
+                .with_ann_enabled(false)
+                .ann_enabled
+        );
+    }
+
+    #[test]
+    fn clone_scoring_options_disable_ann_env_turns_off_prefilter() {
+        crate::test_support::process_state::with_env_var(DISABLE_ANN_ENV, Some("true"), || {
+            let options = CloneScoringOptions::new(5).apply_env_overrides();
+            assert!(!options.ann_enabled);
+        });
+    }
+
+    #[test]
+    fn clone_scoring_options_disable_ann_env_is_case_insensitive() {
+        crate::test_support::process_state::with_env_var(DISABLE_ANN_ENV, Some("YeS"), || {
+            assert!(ann_disabled_from_env());
+        });
+        crate::test_support::process_state::with_env_var(DISABLE_ANN_ENV, Some("0"), || {
+            assert!(!ann_disabled_from_env());
+        });
     }
 
     #[test]
@@ -873,6 +938,40 @@ mod tests {
             &[source, nearest_non_duplicate, exact_duplicate],
             "source",
             CloneScoringOptions::new(1),
+        );
+
+        assert!(result.edges.iter().any(|edge| {
+            edge.source_symbol_id == "source"
+                && edge.target_symbol_id == "duplicate"
+                && edge.relation_kind == RELATION_KIND_EXACT_DUPLICATE
+        }));
+    }
+
+    #[test]
+    fn disabling_ann_keeps_exact_duplicate_recall() {
+        let mut source = sample_input("source", "fetch_order");
+        source.embedding = vec![1.0, 0.0, 0.0];
+
+        let mut nearest_non_duplicate = sample_input("nearest", "fetch_order_nearest");
+        nearest_non_duplicate.path = "src/services/nearest.ts".to_string();
+        nearest_non_duplicate.symbol_fqn =
+            "src/services/nearest.ts::fetch_order_nearest".to_string();
+        nearest_non_duplicate.normalized_name = "fetch_order_nearest".to_string();
+        nearest_non_duplicate.normalized_body_tokens =
+            vec!["fetch".to_string(), "nearest".to_string()];
+        nearest_non_duplicate.normalized_signature =
+            Some("function fetch_order_nearest(id: string)".to_string());
+        nearest_non_duplicate.embedding = vec![0.99, 0.01, 0.0];
+
+        let mut exact_duplicate = sample_input("duplicate", "fetch_order");
+        exact_duplicate.path = "src/services/duplicate.ts".to_string();
+        exact_duplicate.symbol_fqn = "src/services/duplicate.ts::fetch_order".to_string();
+        exact_duplicate.embedding = vec![0.0, 1.0, 0.0];
+
+        let result = build_symbol_clone_edges_for_source_with_options(
+            &[source, nearest_non_duplicate, exact_duplicate],
+            "source",
+            CloneScoringOptions::new(1).with_ann_enabled(false),
         );
 
         assert!(result.edges.iter().any(|edge| {

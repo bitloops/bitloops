@@ -398,6 +398,205 @@ pub(super) fn seed_graphql_clone_data(repo_root: &Path) {
     }
 }
 
+pub(super) fn seed_graphql_clone_scoring_inputs(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open clone scoring sqlite");
+
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS symbol_semantics (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS symbol_features (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
+    parent_kind TEXT,
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"#,
+    )
+    .expect("initialise clone scoring tables");
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .expect("initialise clone edge table");
+
+    for (artefact_id, blob_sha, semantic_hash, template_summary, summary) in [
+        (
+            "artefact::api-caller",
+            "blob-api-caller",
+            "semantic-hash-api-caller",
+            "Caller helper summary",
+            "Calls API target and web render helpers to build a response payload.",
+        ),
+        (
+            "artefact::api-target",
+            "blob-api-target",
+            "semantic-hash-api-target",
+            "Target helper summary",
+            "Builds API response payload fields and returns the transformed target result.",
+        ),
+        (
+            "artefact::web-render",
+            "blob-web-page",
+            "semantic-hash-web-render",
+            "Render helper summary",
+            "Renders a web payload fragment used by API caller output assembly.",
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                template_summary, summary, confidence
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                blob_sha,
+                semantic_hash,
+                template_summary,
+                summary,
+                0.92_f64,
+            ],
+        )
+        .expect("insert clone scoring semantics");
+    }
+
+    for (
+        artefact_id,
+        blob_sha,
+        semantic_hash,
+        normalized_name,
+        normalized_signature,
+        identifier_tokens,
+        body_tokens,
+        context_tokens,
+    ) in [
+        (
+            "artefact::api-caller",
+            "blob-api-caller",
+            "semantic-hash-api-caller",
+            "caller",
+            "function caller()",
+            r#"["api","caller","payload","target","render"]"#,
+            r#"["compose","payload","target","result"]"#,
+            r#"["packages","api","src"]"#,
+        ),
+        (
+            "artefact::api-target",
+            "blob-api-target",
+            "semantic-hash-api-target",
+            "target",
+            "function caller()",
+            r#"["api","target","payload","response"]"#,
+            r#"["compose","payload","target","result"]"#,
+            r#"["packages","api","src"]"#,
+        ),
+        (
+            "artefact::web-render",
+            "blob-web-page",
+            "semantic-hash-web-render",
+            "render",
+            "function render()",
+            r#"["web","render","payload","response"]"#,
+            r#"["render","payload","fragment","page"]"#,
+            r#"["packages","web","src"]"#,
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_features (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                blob_sha,
+                semantic_hash,
+                normalized_name,
+                normalized_signature,
+                identifier_tokens,
+                body_tokens,
+                "module",
+                context_tokens,
+            ],
+        )
+        .expect("insert clone scoring features");
+    }
+
+    for (artefact_id, blob_sha, input_hash, embedding) in [
+        (
+            "artefact::api-caller",
+            "blob-api-caller",
+            "embed-hash-api-caller",
+            "[0.95,0.05,0.0]",
+        ),
+        (
+            "artefact::api-target",
+            "blob-api-target",
+            "embed-hash-api-target",
+            "[0.93,0.07,0.0]",
+        ),
+        (
+            "artefact::web-render",
+            "blob-web-page",
+            "embed-hash-web-render",
+            "[0.81,0.19,0.0]",
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_embeddings (
+                artefact_id, repo_id, blob_sha, provider, model, dimension,
+                embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                blob_sha,
+                "local_fastembed",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+                input_hash,
+                embedding,
+            ],
+        )
+        .expect("insert clone scoring embeddings");
+    }
+}
+
 pub(super) fn seed_graphql_test_harness_stage_data(
     repo_root: &Path,
     commit_sha: &str,

@@ -1,66 +1,56 @@
-#[derive(Debug)]
+use std::fmt;
+
+use hnsw_rs::prelude::{DistCosine, Hnsw};
+
+const HNSW_MAX_CONNECTIONS: usize = 24;
+const HNSW_MAX_LAYERS: usize = 16;
+const HNSW_EF_CONSTRUCTION: usize = 200;
+const HNSW_EF_SEARCH: usize = 64;
+
 pub(super) struct HnswLikeIndex {
     vectors: Vec<Vec<f32>>,
-    norms: Vec<f32>,
+    index: Hnsw<'static, f32, DistCosine>,
 }
 
 impl HnswLikeIndex {
     pub(super) fn build(vectors: &[Vec<f32>]) -> Self {
         let vectors = vectors.to_vec();
-        let norms = vectors
-            .iter()
-            .map(|vector| vector.iter().map(|value| value * value).sum::<f32>().sqrt())
-            .collect::<Vec<_>>();
-        Self { vectors, norms }
+        let mut index = Hnsw::<f32, DistCosine>::new(
+            HNSW_MAX_CONNECTIONS,
+            vectors.len().max(1),
+            HNSW_MAX_LAYERS,
+            HNSW_EF_CONSTRUCTION,
+            DistCosine {},
+        );
+        for (idx, vector) in vectors.iter().enumerate() {
+            index.insert((vector.as_slice(), idx));
+        }
+        index.set_searching_mode(true);
+        Self { vectors, index }
     }
 
     pub(super) fn nearest(&self, query_idx: usize, limit: usize) -> Vec<usize> {
-        if limit == 0 || query_idx >= self.vectors.len() {
+        if limit == 0 {
             return Vec::new();
         }
-        let query = match self.vectors.get(query_idx) {
-            Some(query) => query,
-            None => return Vec::new(),
+        let Some(query) = self.vectors.get(query_idx) else {
+            return Vec::new();
         };
-        let query_norm = self.norms.get(query_idx).copied().unwrap_or_default();
-        if query_norm <= f32::EPSILON {
-            return Vec::new();
-        }
-
-        let mut scored = self
-            .vectors
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, vector)| {
-                let similarity = cosine_similarity(query, query_norm, vector, self.norms[idx])?;
-                Some((idx, similarity))
-            })
-            .collect::<Vec<_>>();
-        scored.sort_by(|left, right| {
-            right
-                .1
-                .partial_cmp(&left.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-        scored.into_iter().take(limit).map(|(idx, _)| idx).collect()
+        let search_width = limit.max(HNSW_EF_SEARCH);
+        self.index
+            .search(query.as_slice(), limit, search_width)
+            .into_iter()
+            .map(|neighbor| neighbor.d_id)
+            .collect()
     }
 }
 
-fn cosine_similarity(left: &[f32], left_norm: f32, right: &[f32], right_norm: f32) -> Option<f32> {
-    if left.len() != right.len()
-        || left_norm <= f32::EPSILON
-        || right_norm <= f32::EPSILON
-        || left.is_empty()
-    {
-        return None;
+impl fmt::Debug for HnswLikeIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HnswLikeIndex")
+            .field("vector_count", &self.vectors.len())
+            .finish()
     }
-
-    let dot = left
-        .iter()
-        .zip(right.iter())
-        .fold(0.0_f32, |acc, (left, right)| acc + (left * right));
-    Some(dot / (left_norm * right_norm))
 }
 
 #[cfg(test)]

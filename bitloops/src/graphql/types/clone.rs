@@ -37,6 +37,15 @@ impl ClonesFilterInput {
             .map(|value| value.clamp(MIN_ANN_NEIGHBORS as i32, MAX_ANN_NEIGHBORS as i32))
             .map(|value| CloneScoringOptions::new(value as usize))
     }
+
+    pub(crate) fn validate_project_scope(&self) -> Result<()> {
+        if self.neighbors_override().is_some() {
+            return Err(bad_user_input_error(
+                "`neighbors` override is only supported for artefact-scoped `clones` queries",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, SimpleObject)]
@@ -60,6 +69,44 @@ impl SemanticClone {
     pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
         self.scope = scope;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neighbors_override_is_clamped_to_scoring_bounds() {
+        let low = ClonesFilterInput {
+            neighbors: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            low.neighbors_override().map(|opts| opts.ann_neighbors),
+            Some(MIN_ANN_NEIGHBORS)
+        );
+
+        let high = ClonesFilterInput {
+            neighbors: Some(999),
+            ..Default::default()
+        };
+        assert_eq!(
+            high.neighbors_override().map(|opts| opts.ann_neighbors),
+            Some(MAX_ANN_NEIGHBORS)
+        );
+    }
+
+    #[test]
+    fn project_scope_validation_rejects_neighbors_override() {
+        let filter = ClonesFilterInput {
+            neighbors: Some(5),
+            ..Default::default()
+        };
+        let err = filter
+            .validate_project_scope()
+            .expect_err("must reject neighbors");
+        assert!(format!("{err:?}").contains("only supported for artefact-scoped `clones` queries"));
     }
 }
 

@@ -931,3 +931,82 @@ fn escape_like_literal(value: &str) -> String {
         .replace('%', "\\%")
         .replace('_', "\\_")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capability_packs::semantic_clones::scoring::SymbolCloneEdgeRow;
+    use serde_json::json;
+
+    #[test]
+    fn clone_edge_filter_applies_relation_and_min_score() {
+        let edge = SymbolCloneEdgeRow {
+            repo_id: "repo-1".to_string(),
+            source_symbol_id: "sym-source".to_string(),
+            source_artefact_id: "a-source".to_string(),
+            target_symbol_id: "sym-target".to_string(),
+            target_artefact_id: "a-target".to_string(),
+            relation_kind: "similar_implementation".to_string(),
+            score: 0.77,
+            semantic_score: 0.8,
+            lexical_score: 0.6,
+            structural_score: 0.4,
+            clone_input_hash: "hash".to_string(),
+            explanation_json: json!({}),
+        };
+
+        let matching = ClonesFilterInput {
+            relation_kind: Some("similar_implementation".to_string()),
+            min_score: Some(0.75),
+            neighbors: None,
+        };
+        assert!(clone_edge_matches_filter(&edge, Some(&matching)));
+
+        let wrong_relation = ClonesFilterInput {
+            relation_kind: Some("exact_duplicate".to_string()),
+            min_score: None,
+            neighbors: None,
+        };
+        assert!(!clone_edge_matches_filter(&edge, Some(&wrong_relation)));
+
+        let high_min_score = ClonesFilterInput {
+            relation_kind: None,
+            min_score: Some(0.9),
+            neighbors: None,
+        };
+        assert!(!clone_edge_matches_filter(&edge, Some(&high_min_score)));
+    }
+
+    #[test]
+    fn clone_from_edge_preserves_metadata_shape() {
+        let edge = SymbolCloneEdgeRow {
+            repo_id: "repo-1".to_string(),
+            source_symbol_id: "sym-source".to_string(),
+            source_artefact_id: "a-source".to_string(),
+            target_symbol_id: "sym-target".to_string(),
+            target_artefact_id: "a-target".to_string(),
+            relation_kind: "similar_implementation".to_string(),
+            score: 0.77,
+            semantic_score: 0.8,
+            lexical_score: 0.6,
+            structural_score: 0.4,
+            clone_input_hash: "hash".to_string(),
+            explanation_json: json!({"labels":["preferred_local_pattern"]}),
+        };
+
+        let clone = clone_from_edge(edge).expect("clone row");
+        assert_eq!(clone.relation_kind, "similar_implementation");
+        assert!((clone.score - 0.77_f64).abs() < 1e-6);
+        let metadata = clone
+            .metadata
+            .expect("metadata")
+            .0
+            .as_object()
+            .cloned()
+            .expect("metadata object");
+        assert!(metadata.contains_key("semanticScore"));
+        assert!(metadata.contains_key("lexicalScore"));
+        assert!(metadata.contains_key("structuralScore"));
+        assert!(metadata.contains_key("explanation"));
+    }
+}

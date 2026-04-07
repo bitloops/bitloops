@@ -282,9 +282,7 @@ async fn execute_clone_edges_rebuild_job(
             Err(err) => JobExecutionOutcome::failed(err),
         };
     }
-    let options = crate::capability_packs::semantic_clones::scoring::CloneScoringOptions::new(
-        capability.semantic_clones.ann_neighbors,
-    );
+    let options = clone_rebuild_scoring_options(&capability);
 
     match crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
         relational,
@@ -296,6 +294,14 @@ async fn execute_clone_edges_rebuild_job(
         Ok(_) => JobExecutionOutcome::ok(),
         Err(err) => JobExecutionOutcome::failed(err),
     }
+}
+
+fn clone_rebuild_scoring_options(
+    capability: &crate::config::EmbeddingCapabilityConfig,
+) -> crate::capability_packs::semantic_clones::scoring::CloneScoringOptions {
+    crate::capability_packs::semantic_clones::scoring::CloneScoringOptions::new(
+        capability.semantic_clones.ann_neighbors,
+    )
 }
 
 fn symbol_embeddings_follow_up(
@@ -364,4 +370,22 @@ async fn load_enrichment_job_inputs(
                 job.id, job.repo_id
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_rebuild_scoring_options_uses_semantic_clone_ann_neighbors() {
+        let capability = crate::config::EmbeddingCapabilityConfig {
+            semantic_clones: crate::config::SemanticClonesConfig {
+                ann_neighbors: 17,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = clone_rebuild_scoring_options(&capability);
+        assert_eq!(options.ann_neighbors, 17);
+    }
 }
