@@ -309,14 +309,14 @@ The schema is versioned in two places:
 - Generated at runtime from the `async-graphql` schema
 - Checked in as `bitloops/schema.graphql` for review and client code generation
 
-The CLI can print SDL directly without requiring a daemon or repository context:
+The CLI fetches SDL from the running daemon so schema export stays aligned with the daemon's current stitched schema:
 
 ```bash
 bitloops devql schema
 bitloops devql schema --global
 ```
 
-`bitloops devql schema` defaults to minified SDL so the output is shorter for LLM and prompt workflows. Use `--human` when you want the normal formatted SDL.
+`bitloops devql schema` defaults to minified SDL so the output is shorter for LLM and prompt workflows. Use `--human` when you want the normal formatted SDL. The slim form requires running the command from within a repository; use `--global` when you want the daemon's global schema from outside a repository.
 
 Export the current checked-in schema snapshots from the repository root with:
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::io::Write;
 use std::time::Instant;
@@ -35,25 +35,43 @@ pub use args::{
 };
 
 pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
+const SCHEMA_SCOPE_REQUIRED_MESSAGE: &str = "`bitloops devql schema` requires a Git repository scope. Run it from within a repository or use `bitloops devql schema --global`.";
 
-fn render_schema_sdl(args: &DevqlSchemaArgs) -> String {
-    let sdl = if args.global {
-        crate::graphql::schema_sdl()
-    } else {
-        crate::graphql::slim_schema_sdl()
-    };
-
+fn format_schema_sdl_output(args: &DevqlSchemaArgs, sdl: &str) -> String {
     if args.human {
-        sdl
+        sdl.to_string()
     } else {
-        minify_schema_sdl(&sdl)
+        minify_schema_sdl(sdl)
     }
 }
 
-fn write_schema_sdl<W: Write>(args: &DevqlSchemaArgs, writer: &mut W) -> Result<()> {
+async fn write_schema_sdl<F, W>(
+    args: &DevqlSchemaArgs,
+    writer: &mut W,
+    discover_scope: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<SlimCliRepoScope>,
+    W: Write,
+{
+    let sdl = if args.global {
+        graphql::fetch_global_schema_sdl_via_daemon().await?
+    } else {
+        let scope = discover_scope().map_err(map_schema_scope_error)?;
+        graphql::fetch_slim_schema_sdl_via_daemon(&scope).await?
+    };
+
     writer
-        .write_all(render_schema_sdl(args).as_bytes())
+        .write_all(format_schema_sdl_output(args, &sdl).as_bytes())
         .context("writing DevQL schema SDL")
+}
+
+fn map_schema_scope_error(err: anyhow::Error) -> anyhow::Error {
+    if format!("{err:#}").contains("failed to resolve git repository root for DevQL scope") {
+        anyhow!(SCHEMA_SCOPE_REQUIRED_MESSAGE)
+    } else {
+        err
+    }
 }
 
 fn minify_schema_sdl(sdl: &str) -> String {
@@ -163,13 +181,13 @@ where
         bail!(MISSING_SUBCOMMAND_MESSAGE);
     };
 
-    if let DevqlCommand::Schema(args) = &command {
-        return write_schema_sdl(args, schema_writer);
-    }
-
-    if matches!(&command, DevqlCommand::ConnectionStatus(_)) {
-        return run_connection_status().await;
-    }
+    let command = match command {
+        DevqlCommand::Schema(args) => {
+            return write_schema_sdl(&args, schema_writer, discover_scope).await;
+        }
+        DevqlCommand::ConnectionStatus(_) => return run_connection_status().await,
+        command => command,
+    };
 
     let scope = discover_scope()?;
     let repo_root = scope.repo_root.clone();

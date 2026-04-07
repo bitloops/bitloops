@@ -322,7 +322,9 @@ bitloops devql packs --with-health
 
 Highlights:
 
-- `devql schema` prints SDL locally and does not require a running daemon or a Git repository
+- `devql schema` is daemon-backed and fetches SDL from the running DevQL daemon
+- `devql schema` without `--global` requires running the command from within a Git repository
+- `devql schema --global` can be used outside a repository
 - `devql schema` defaults to minified SDL so the output is easier to pass to LLMs and other prompt-driven tooling
 - `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL

@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use reqwest::StatusCode as ReqwestStatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
@@ -42,6 +43,16 @@ thread_local! {
 type GraphqlExecutorHook =
     dyn Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static;
 
+#[cfg(test)]
+thread_local! {
+    static SCHEMA_SDL_FETCH_HOOK: std::cell::RefCell<Option<std::rc::Rc<SchemaSdlFetchHook>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+type SchemaSdlFetchHook =
+    dyn Fn(&str, Option<&SlimCliRepoScope>) -> Result<(u16, String)> + 'static;
+
 pub(crate) async fn execute_devql_graphql<T: DeserializeOwned>(
     scope: &SlimCliRepoScope,
     query: &str,
@@ -62,6 +73,14 @@ pub(crate) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()>
         execute_devql_graphql(scope, INIT_SCHEMA_MUTATION, json!({})).await?;
     println!("{}", format_init_schema_summary(&response.init_schema));
     Ok(())
+}
+
+pub(crate) async fn fetch_slim_schema_sdl_via_daemon(scope: &SlimCliRepoScope) -> Result<String> {
+    fetch_schema_sdl_via_daemon("/devql/sdl", Some(scope)).await
+}
+
+pub(crate) async fn fetch_global_schema_sdl_via_daemon() -> Result<String> {
+    fetch_schema_sdl_via_daemon("/devql/global/sdl", None).await
 }
 
 pub(crate) async fn run_ingest_via_graphql(
@@ -178,6 +197,51 @@ pub(crate) async fn watch_sync_task_via_graphql(
     }
 }
 
+async fn fetch_schema_sdl_via_daemon(
+    endpoint_path: &str,
+    scope: Option<&SlimCliRepoScope>,
+) -> Result<String> {
+    #[cfg(test)]
+    if let Some(result) = maybe_fetch_schema_sdl_via_hook(endpoint_path, scope) {
+        let (status, body) = result?;
+        return decode_schema_sdl_response(
+            ReqwestStatusCode::from_u16(status)
+                .context("decoding test DevQL schema SDL response status")?,
+            body,
+        );
+    }
+
+    let daemon_url = daemon::daemon_url()?
+        .context("Bitloops daemon is not running. Start it with `bitloops daemon start`.")?;
+    let client = daemon::daemon_http_client(&daemon_url)?;
+    let endpoint = format!("{}{}", daemon_url.trim_end_matches('/'), endpoint_path);
+
+    let mut request = client.get(endpoint);
+    if let Some(scope) = scope {
+        request = crate::devql_transport::attach_slim_cli_scope_headers(request, scope);
+    }
+
+    let response = request
+        .send()
+        .await
+        .context("sending DevQL schema SDL request to Bitloops daemon")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("decoding DevQL schema SDL response from Bitloops daemon")?;
+
+    decode_schema_sdl_response(status, body)
+}
+
+fn decode_schema_sdl_response(status: ReqwestStatusCode, body: String) -> Result<String> {
+    if status != ReqwestStatusCode::OK {
+        bail!("Bitloops daemon returned HTTP {status} for DevQL schema SDL");
+    }
+
+    Ok(body)
+}
+
 async fn ensure_daemon_available_for_ingest(_repo_root: &Path) -> Result<()> {
     #[cfg(test)]
     if let Some(result) = maybe_bootstrap_daemon_via_hook(_repo_root) {
@@ -232,6 +296,43 @@ fn maybe_bootstrap_daemon_via_hook(repo_root: &Path) -> Option<Result<()>> {
     INGEST_DAEMON_BOOTSTRAP_HOOK.with(|hook: &IngestDaemonBootstrapHookCell| {
         hook.borrow().as_ref().map(|hook| hook(repo_root))
     })
+}
+
+#[cfg(test)]
+pub(crate) fn with_schema_sdl_fetch_hook<T>(
+    hook: impl Fn(&str, Option<&SlimCliRepoScope>) -> Result<(u16, String)> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    SCHEMA_SDL_FETCH_HOOK.with(
+        |cell: &std::cell::RefCell<Option<std::rc::Rc<SchemaSdlFetchHook>>>| {
+            assert!(
+                cell.borrow().is_none(),
+                "schema SDL fetch hook already installed"
+            );
+            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+        },
+    );
+    let result = f();
+    SCHEMA_SDL_FETCH_HOOK.with(
+        |cell: &std::cell::RefCell<Option<std::rc::Rc<SchemaSdlFetchHook>>>| {
+            *cell.borrow_mut() = None;
+        },
+    );
+    result
+}
+
+#[cfg(test)]
+fn maybe_fetch_schema_sdl_via_hook(
+    endpoint_path: &str,
+    scope: Option<&SlimCliRepoScope>,
+) -> Option<Result<(u16, String)>> {
+    SCHEMA_SDL_FETCH_HOOK.with(
+        |hook: &std::cell::RefCell<Option<std::rc::Rc<SchemaSdlFetchHook>>>| {
+            hook.borrow()
+                .as_ref()
+                .map(|hook| hook(endpoint_path, scope))
+        },
+    )
 }
 
 #[cfg(test)]
