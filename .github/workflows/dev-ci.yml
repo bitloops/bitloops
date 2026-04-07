@@ -4,12 +4,6 @@ on:
   pull_request:
     branches:
       - develop
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - labeled
-      - unlabeled
     paths:
       - 'bitloops/**'
       - 'xtask/**'
@@ -108,21 +102,3 @@ jobs:
             --functions "${{ steps.baseline.outputs.functions }}" \
             --epsilon 0.5 \
             --lcov bitloops/target/llvm-cov.info
-
-  qat:
-    name: QAT
-    if: ${{ !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'run-qat') }}
-    runs-on: self-hosted
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: bitloops
-          shared-key: dev-ci
-
-      - name: Run QAT acceptance suites
-        run: cargo qat

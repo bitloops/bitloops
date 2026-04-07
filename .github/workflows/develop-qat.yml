@@ -1,0 +1,28 @@
+name: Develop QAT
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DUCKDB_DOWNLOAD_LIB: '1'
+
+jobs:
+  qat:
+    name: QAT
+    runs-on: self-hosted
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: develop-qat
+
+      - name: Run QAT acceptance suites
+        run: cargo qat

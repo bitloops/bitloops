@@ -14,7 +14,10 @@ Cargo aliases are configured in `.cargo/config.toml` and only resolve from this 
 
 ### Onboarding + DevQL sync (CI bundle)
 
-Runs both suites below in parallel (28 scenarios total). This is what CI executes.
+Runs both suites below in parallel (28 scenarios total).
+
+- PRs targeting `main`: runs automatically in `.github/workflows/ci.yml`
+- For develop-target work: run `.github/workflows/develop-qat.yml` manually from the GitHub Actions UI and select the branch you want to test
 
 ```bash
 cargo qat
