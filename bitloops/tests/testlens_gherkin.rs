@@ -97,7 +97,13 @@ fn initialize_repository_with_production(
 fn when_ingest_tests(world: &mut TestHarnessWorld, commit_sha: String) {
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
-        &["devql", "test-harness", "ingest-tests", "--commit", &commit_sha],
+        &[
+            "devql",
+            "test-harness",
+            "ingest-tests",
+            "--commit",
+            &commit_sha,
+        ],
     );
     world.ingest_output = Some(output);
 }
@@ -400,7 +406,13 @@ fn given_coverage_repository_with_tests(world: &mut TestHarnessWorld, commit_sha
     // Ingest tests so covering-test queries work
     run_bitloops_or_panic(
         world.workspace().repo_dir(),
-        &["devql", "test-harness", "ingest-tests", "--commit", &commit_sha],
+        &[
+            "devql",
+            "test-harness",
+            "ingest-tests",
+            "--commit",
+            &commit_sha,
+        ],
     );
 }
 

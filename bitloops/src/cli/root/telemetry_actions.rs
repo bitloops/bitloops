@@ -610,14 +610,15 @@ fn devql_action(
                     args.test_artefact_id.is_some(),
                 );
                 insert_bool_property(&mut props, "has_format", args.format.is_some());
-                Some(new_action("bitloops devql test-harness ingest-coverage", props))
+                Some(new_action(
+                    "bitloops devql test-harness ingest-coverage",
+                    props,
+                ))
             }
-            crate::cli::devql::DevqlTestHarnessCommand::IngestCoverageBatch(_) => Some(
-                new_action(
-                    "bitloops devql test-harness ingest-coverage-batch",
-                    HashMap::new(),
-                ),
-            ),
+            crate::cli::devql::DevqlTestHarnessCommand::IngestCoverageBatch(_) => Some(new_action(
+                "bitloops devql test-harness ingest-coverage-batch",
+                HashMap::new(),
+            )),
             crate::cli::devql::DevqlTestHarnessCommand::IngestResults(_) => Some(new_action(
                 "bitloops devql test-harness ingest-results",
                 HashMap::new(),

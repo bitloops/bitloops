@@ -31,10 +31,7 @@ pub(super) async fn run(args: DevqlTestHarnessArgs, repo_root: &Path) -> Result<
     }
 }
 
-async fn run_ingest_tests(
-    repo_root: &Path,
-    args: &DevqlTestHarnessIngestTestsArgs,
-) -> Result<()> {
+async fn run_ingest_tests(repo_root: &Path, args: &DevqlTestHarnessIngestTestsArgs) -> Result<()> {
     let repo = resolve_repo_identity(repo_root)?;
     let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
@@ -153,10 +150,7 @@ async fn run_ingest_coverage_batch(
     Ok(())
 }
 
-fn run_ingest_results(
-    repo_root: &Path,
-    args: &DevqlTestHarnessIngestResultsArgs,
-) -> Result<()> {
+fn run_ingest_results(repo_root: &Path, args: &DevqlTestHarnessIngestResultsArgs) -> Result<()> {
     let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
     let pool = relational_store.local_sqlite_pool_allow_create()?;
     let relational = crate::host::capability_host::gateways::SqliteRelationalGateway::new(pool);
