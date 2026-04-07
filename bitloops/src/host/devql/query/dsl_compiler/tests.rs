@@ -49,6 +49,88 @@ fn compile_project_asof_artefacts_pipeline() {
 }
 
 #[test]
+fn compile_clone_summary_stage_ignores_limit_and_targets_typed_field() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.75)->summary()->limit(1)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    cloneSummary(filter: { kind: FUNCTION }, cloneFilter: { minScore: 0.75 }) {
+      totalCount
+      groups {
+        relationKind
+        count
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_file_clone_summary_stage_preserves_all_filters() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(kind:"function",symbol_fqn:"src/main.rs::main",lines:1..20,agent:"codex",since:"2026-03-01")->clones(relation_kind:"similar_implementation",min_score:0.75)->summary()"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    file(path: "src/main.rs") {
+      cloneSummary(filter: { kind: FUNCTION, symbolFqn: "src/main.rs::main", lines: { start: 1, end: 20 }, agent: "codex", since: "2026-03-01T00:00:00Z" }, cloneFilter: { relationKind: "similar_implementation", minScore: 0.75 }) {
+        totalCount
+        groups {
+          relationKind
+          count
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_clone_summary_stage_rejects_select_projection() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->summary()->select(total_count)"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("summary select() should fail");
+    assert!(
+        err.to_string()
+            .contains("summary() does not support select() in the GraphQL compiler yet"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_clone_summary_stage_rejects_invalid_since_literal() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(since:"not-a-date")->clones()->summary()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("invalid datetime should fail");
+    assert!(
+        err.to_string()
+            .contains("invalid datetime value `not-a-date`"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn compile_file_artefacts_with_chat_history_enrichment() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->chatHistory()->limit(5)"#,

@@ -76,6 +76,19 @@ pub(super) fn compile_clones_args(
     args
 }
 
+pub(super) fn compile_clone_summary_args(
+    parsed: &ParsedDevqlQuery,
+) -> Result<Vec<GraphqlArgument>> {
+    let mut args = Vec::new();
+    if let Some(filter) = compile_artefact_filter_input(parsed)? {
+        args.push(GraphqlArgument::new("filter", filter));
+    }
+    if let Some(clone_filter) = compile_clones_filter_input(parsed) {
+        args.push(GraphqlArgument::new("cloneFilter", clone_filter));
+    }
+    Ok(args)
+}
+
 pub(super) fn compile_knowledge_args(
     stage: &RegisteredStageCall,
     first: Option<usize>,

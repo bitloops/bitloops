@@ -12,6 +12,7 @@ pub mod register;
 pub mod schema;
 pub mod schema_module;
 pub mod scoring;
+pub mod stages;
 pub mod types;
 
 mod stage_embeddings;
