@@ -27,6 +27,80 @@ pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
     apply_repo_app_paths(cmd, &paths);
 }
 
+pub fn write_test_daemon_config(repo: &Path) {
+    fs::write(
+        repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write repo daemon config");
+}
+
+pub fn ensure_repo_daemon_stores(repo: &Path) {
+    write_test_daemon_config(repo);
+
+    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo)
+        .expect("resolve backend config for integration test repo");
+
+    if !cfg.relational.has_postgres() {
+        let sqlite_path = if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            bitloops::config::resolve_sqlite_db_path_for_repo(repo, Some(path))
+                .expect("resolve configured sqlite path")
+        } else {
+            bitloops::utils::paths::default_relational_db_path(repo)
+        };
+        let sqlite = bitloops::storage::SqliteConnectionPool::connect(sqlite_path)
+            .expect("create relational sqlite file");
+        sqlite
+            .initialise_checkpoint_schema()
+            .expect("initialise checkpoint schema");
+    }
+
+    if !cfg.events.has_clickhouse() {
+        let duckdb_path = if let Some(path) = cfg.events.duckdb_path.as_deref() {
+            bitloops::config::resolve_duckdb_db_path_for_repo(repo, Some(path))
+        } else {
+            bitloops::utils::paths::default_events_db_path(repo)
+        };
+        if let Some(parent) = duckdb_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).expect("create duckdb parent");
+        }
+        let _conn = duckdb::Connection::open(duckdb_path).expect("create events duckdb file");
+    }
+
+    fs::create_dir_all(
+        cfg.blobs
+            .resolve_local_path_for_repo(repo)
+            .expect("resolve blob store path"),
+    )
+    .expect("create local blob store directory");
+
+    let runtime_path = bitloops::config::resolve_repo_runtime_db_path_for_repo(repo)
+        .expect("resolve runtime sqlite path for integration test repo");
+    if let Some(parent) = runtime_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime = bitloops::storage::SqliteConnectionPool::connect(runtime_path)
+        .expect("create runtime sqlite file");
+    runtime
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema");
+}
+
 pub fn apply_repo_app_paths(cmd: &mut Command, paths: &RepoAppPaths) {
     cmd.env("HOME", &paths.home)
         .env("USERPROFILE", &paths.home)
