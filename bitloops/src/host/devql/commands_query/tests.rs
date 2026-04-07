@@ -356,6 +356,10 @@ fn format_query_output_keeps_clone_raw_mode_opted_in() {
                                                 "id": "clone::a::b::similar_implementation",
                                                 "sourceArtefactId": "artefact::invoice_pdf",
                                                 "targetArtefactId": "artefact::invoice_doc",
+                                                "sourceStartLine": 8,
+                                                "sourceEndLine": 22,
+                                                "targetStartLine": 10,
+                                                "targetEndLine": 24,
                                                 "relationKind": "similar_implementation",
                                                 "score": 0.91,
                                                 "metadata": {
@@ -388,6 +392,10 @@ fn format_query_output_keeps_clone_raw_mode_opted_in() {
                 "id": "clone::a::b::similar_implementation",
                 "sourceArtefactId": "artefact::invoice_pdf",
                 "targetArtefactId": "artefact::invoice_doc",
+                "sourceStartLine": 8,
+                "sourceEndLine": 22,
+                "targetStartLine": 10,
+                "targetEndLine": 24,
                 "relationKind": "similar_implementation",
                 "score": 0.91,
                 "metadata": {

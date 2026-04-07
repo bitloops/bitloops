@@ -284,6 +284,10 @@ fn compile_artefact_clones_pipeline_keeps_raw_mode_opt_in() {
                 id
                 sourceArtefactId
                 targetArtefactId
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
                 relationKind
                 score
                 metadata
