@@ -66,7 +66,7 @@ fn print_usage() {
     eprintln!("  file-size [root]");
     eprintln!("  dev-loop");
     eprintln!("  install");
-    eprintln!("  test <lib|core|cli|fast|merge|slow|full>");
+    eprintln!("  test <lib|core|cli|fast|smoke|merge|slow|full>");
     eprintln!("  coverage run-lcov [--lcov <path>]");
     eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
@@ -542,13 +542,16 @@ fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
         "slow" => {
             return Ok(slow_test_lane_args(SLOW_TEST_TARGETS));
         }
+        "smoke" => {
+            return Ok(slow_test_lane_args(MERGE_SMOKE_TARGETS));
+        }
         "full" => {
             args.push("--features".to_string());
             args.push("slow-tests".to_string());
         }
         _ => {
             return Err(format!(
-                "unknown test lane `{lane}` (expected: lib|core|cli|fast|merge|slow|full)"
+                "unknown test lane `{lane}` (expected: lib|core|cli|fast|smoke|merge|slow|full)"
             ));
         }
     }
@@ -558,10 +561,7 @@ fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
 
 fn test_lane_command_groups(lane: &str) -> Result<Vec<Vec<String>>, String> {
     match lane {
-        "merge" => Ok(vec![
-            test_lane_args("fast")?,
-            slow_test_lane_args(MERGE_SMOKE_TARGETS),
-        ]),
+        "merge" => Ok(vec![test_lane_args("fast")?, test_lane_args("smoke")?]),
         _ => Ok(vec![test_lane_args(lane)?]),
     }
 }
@@ -1177,6 +1177,19 @@ mod tests {
 
         assert_eq!(test_lane_args("fast").unwrap(), base());
 
+        let smoke = test_lane_args("smoke").unwrap();
+        assert!(smoke.contains(&"slow-tests".to_string()));
+        assert_eq!(
+            smoke.iter().filter(|s| *s == "--test").count(),
+            MERGE_SMOKE_TARGETS.len()
+        );
+        for target in MERGE_SMOKE_TARGETS {
+            assert!(
+                smoke.contains(&(*target).to_string()),
+                "smoke lane should include smoke target {target}"
+            );
+        }
+
         let args = test_lane_args("slow").unwrap();
         assert!(args.contains(&"slow-tests".to_string()));
         assert_eq!(
@@ -1202,18 +1215,7 @@ mod tests {
             base(),
             "merge lane should start with fast lane args"
         );
-        let merge_smokes = &merge[1];
-        assert!(merge_smokes.contains(&"slow-tests".to_string()));
-        assert_eq!(
-            merge_smokes.iter().filter(|s| *s == "--test").count(),
-            MERGE_SMOKE_TARGETS.len()
-        );
-        for target in MERGE_SMOKE_TARGETS {
-            assert!(
-                merge_smokes.contains(&(*target).to_string()),
-                "merge lane should include smoke target {target}"
-            );
-        }
+        assert_eq!(merge[1], smoke, "merge lane should append smoke-only args");
 
         assert!(
             test_lane_args("nope")

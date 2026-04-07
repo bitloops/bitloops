@@ -1213,18 +1213,6 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
 #[tokio::test]
 async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subscription_hub() {
     let repo = seed_dashboard_repo();
-    let daemon_state = TempDir::new().expect("temp dir");
-    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[
-            ("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", Some("disabled")),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(daemon_state_str.as_str()),
-            ),
-        ],
-    );
     write_envelope_config(
         repo.path(),
         json!({

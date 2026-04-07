@@ -81,7 +81,7 @@ jobs:
       - name: Run fast test lane
         run: cargo dev-test-fast
 
-  test-merge:
+  test-smoke:
     name: Merge smoke lane
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
@@ -94,7 +94,7 @@ jobs:
           shared-key: dev-ci
           cache-workspace-crates: true
       - name: Run merge smoke lane
-        run: cargo dev-test-merge
+        run: cargo dev-test-smoke
 
   test-full:
     name: Full test suite

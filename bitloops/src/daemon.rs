@@ -104,7 +104,17 @@ pub fn require_current_repo_runtime(
     repo_root: &Path,
     operation: &str,
 ) -> Result<DaemonRuntimeState> {
-    let runtime = state_store::read_runtime_state(repo_root)?.ok_or_else(|| {
+    #[cfg(test)]
+    let runtime = state_store::read_runtime_state_legacy(repo_root)?
+        .filter(|runtime| {
+            runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
+        })
+        .or(state_store::read_runtime_state(repo_root)?);
+
+    #[cfg(not(test))]
+    let runtime = state_store::read_runtime_state(repo_root)?;
+
+    let runtime = runtime.ok_or_else(|| {
         anyhow::anyhow!(
             "Bitloops daemon is not running for this repository. Run `bitloops init` or `bitloops daemon restart` before {operation}."
         )

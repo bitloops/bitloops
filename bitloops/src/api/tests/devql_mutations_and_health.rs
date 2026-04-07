@@ -163,7 +163,6 @@ async fn devql_schema_builds_and_executes_in_process() {
 #[tokio::test]
 async fn global_mutation_updates_cli_telemetry_consent() {
     let temp = TempDir::new().expect("temp dir");
-    let (_app_root, _guard) = enter_isolated_app_process_state(temp.path());
     let config_path = temp
         .path()
         .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
@@ -250,7 +249,6 @@ enabled = false
 #[tokio::test]
 async fn slim_graphql_health_and_default_branch_after_init() {
     let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = slim_schema_for_repo(repo.path());
 
     let init_response = schema
@@ -291,15 +289,6 @@ async fn slim_graphql_health_and_default_branch_after_init() {
 #[tokio::test]
 async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
-    let daemon_state = TempDir::new().expect("daemon state temp dir");
-    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(daemon_state_str.as_str()),
-        )],
-    );
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
@@ -428,15 +417,6 @@ async fn devql_ingest_mutation_with_backfill_limits_history_window() {
     let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     let previous_sha = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
 
-    let daemon_state = TempDir::new().expect("daemon state temp dir");
-    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(daemon_state_str.as_str()),
-        )],
-    );
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
@@ -523,15 +503,6 @@ async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
     let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     let previous_sha = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
 
-    let daemon_state = TempDir::new().expect("daemon state temp dir");
-    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(daemon_state_str.as_str()),
-        )],
-    );
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
@@ -603,7 +574,6 @@ async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
 #[tokio::test]
 async fn enqueue_sync_rejects_conflicting_mode_selectors() {
     let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = slim_schema_for_repo(repo.path());
 
     let validate_and_full = schema
@@ -644,7 +614,6 @@ async fn enqueue_sync_rejects_conflicting_mode_selectors() {
 #[tokio::test]
 async fn graphql_sync_mutation_is_not_exposed() {
     let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = slim_schema_for_repo(repo.path());
 
     let response = schema
@@ -671,7 +640,6 @@ async fn graphql_sync_mutation_is_not_exposed() {
 #[tokio::test]
 async fn enqueue_sync_without_selector_defaults_to_auto_mode() {
     let repo = seed_graphql_mutation_repo();
-    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
     let response = schema
@@ -773,7 +741,6 @@ async fn daemon_bootstrap_creates_devql_schema_tables() {
 #[tokio::test]
 async fn devql_mutations_report_validation_and_backend_errors() {
     let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = slim_schema_for_repo(repo.path());
 
     let missing_schema = schema
@@ -812,7 +779,6 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
         return;
     }
     let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let server = match MockSequentialHttpServer::try_start(vec![
         MockHttpResponse::json(
             200,
@@ -1076,7 +1042,6 @@ async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flo
         return;
     }
     let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let server = match MockSequentialHttpServer::try_start(vec![MockHttpResponse::json(
         500,
         json!({ "errorMessages": ["provider boom"] }),
@@ -1165,7 +1130,6 @@ async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flo
 #[tokio::test]
 async fn devql_global_repo_mutations_require_slim_cli_scope() {
     let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
         repo.path().to_path_buf(),
         super::super::db::DashboardDbPools::default(),
