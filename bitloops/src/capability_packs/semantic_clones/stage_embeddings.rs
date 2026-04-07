@@ -188,6 +188,7 @@ pub(crate) async fn upsert_symbol_embedding_rows(
     Ok(stats)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn upsert_current_symbol_embedding_rows(
     relational: &RelationalStorage,
     path: &str,
@@ -260,6 +261,7 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
     relational.exec(&sql).await
 }
 
+#[allow(dead_code)]
 pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -373,6 +375,7 @@ async fn load_semantic_summary_map(
     load_semantic_summary_map_from_table(relational, artefact_ids, "symbol_semantics").await
 }
 
+#[allow(dead_code)]
 async fn load_current_semantic_summary_map(
     relational: &RelationalStorage,
     artefact_ids: &[String],
@@ -415,6 +418,7 @@ async fn persist_symbol_embedding_row(
     relational.exec(&sql).await
 }
 
+#[allow(dead_code)]
 async fn persist_current_symbol_embedding_row(
     relational: &RelationalStorage,
     input: &semantic::SemanticFeatureInput,
@@ -590,6 +594,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = e
     ))
 }
 
+#[allow(dead_code)]
 fn build_current_symbol_embedding_persist_sql(
     input: &semantic::SemanticFeatureInput,
     path: &str,

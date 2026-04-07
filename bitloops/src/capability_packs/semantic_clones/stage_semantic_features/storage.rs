@@ -383,6 +383,7 @@ WHERE artefact_id = '{artefact_id}'",
     )
 }
 
+#[allow(dead_code)]
 pub(super) fn build_delete_current_symbol_semantics_sql(repo_id: &str, path: &str) -> String {
     format!(
         "DELETE FROM symbol_semantics_current WHERE repo_id = '{}' AND path = '{}'",
@@ -391,6 +392,7 @@ pub(super) fn build_delete_current_symbol_semantics_sql(repo_id: &str, path: &st
     )
 }
 
+#[allow(dead_code)]
 pub(super) fn build_delete_current_symbol_features_sql(repo_id: &str, path: &str) -> String {
     format!(
         "DELETE FROM symbol_features_current WHERE repo_id = '{}' AND path = '{}'",
@@ -465,6 +467,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
     ))
 }
 
+#[allow(dead_code)]
 pub(super) fn build_current_semantic_persist_rows_sql(
     rows: &semantic::SemanticFeatureRows,
     symbol_id: Option<&str>,
@@ -541,6 +544,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
     ))
 }
 
+#[allow(dead_code)]
 fn build_current_semantic_persist_summary_sql(
     semantics: &semantic::SymbolSemanticsRow,
     semantic_features_input_hash: &str,

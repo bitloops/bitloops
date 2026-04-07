@@ -169,6 +169,7 @@ pub(crate) async fn rebuild_symbol_clone_edges(
     Ok(historical)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn rebuild_current_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -508,6 +509,7 @@ pub(crate) async fn delete_repo_symbol_clone_edges(
         .await
 }
 
+#[allow(dead_code)]
 pub(crate) async fn delete_repo_current_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,

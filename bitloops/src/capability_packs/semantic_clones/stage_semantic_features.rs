@@ -100,6 +100,7 @@ pub(crate) async fn upsert_semantic_feature_rows(
     Ok(stats)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn upsert_current_semantic_feature_rows(
     relational: &RelationalStorage,
     path: &str,
@@ -138,6 +139,7 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
     Ok(stats)
 }
 
+#[allow(dead_code)]
 pub(crate) async fn clear_current_semantic_feature_rows_for_path(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -351,6 +353,7 @@ async fn persist_semantic_feature_rows(
         .await
 }
 
+#[allow(dead_code)]
 async fn persist_current_semantic_feature_rows(
     relational: &RelationalStorage,
     symbol_id: Option<&str>,
