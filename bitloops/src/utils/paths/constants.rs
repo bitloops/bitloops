@@ -1,4 +1,5 @@
 pub const BITLOOPS_DIR: &str = ".bitloops";
+pub const BITLOOPS_TEST_STATE_DIR: &str = ".bitloops-test-state";
 pub const LEGACY_BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
 pub const BITLOOPS_STORES_DIR: &str = ".bitloops/stores";
 pub const BITLOOPS_RELATIONAL_STORE_DIR: &str = ".bitloops/stores/relational";

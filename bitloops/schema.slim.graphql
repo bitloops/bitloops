@@ -214,11 +214,22 @@ type CloneConnection {
 	edges: [CloneEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+	summary: CloneSummary!
 }
 
 type CloneEdge {
 	node: Clone!
 	cursor: String!
+}
+
+type CloneSummary {
+	totalCount: Int!
+	groups: [CloneSummaryGroup!]!
+}
+
+type CloneSummaryGroup {
+	relationKind: String!
+	count: Int!
 }
 
 input ClonesFilterInput {
@@ -316,6 +327,7 @@ type FileContext {
 	blobSha: String
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 }
 
 type HealthBackendStatus {
@@ -522,6 +534,7 @@ type Project {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
@@ -561,6 +574,7 @@ type SlimQueryRoot {
 	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!

@@ -4,28 +4,30 @@ Run commands from the repository root.
 
 ## Default commands (Cargo aliases)
 
-| Goal | Command |
-| --- | --- |
-| Fast compile check | `cargo dev-check` |
-| Library tests only | `cargo dev-test-lib` |
-| Fast lane tests | `cargo dev-test-fast` |
-| Slow lane tests | `cargo dev-test-slow` |
-| Full lane tests | `cargo dev-test-full` |
-| Coverage (LCOV) | `cargo dev-coverage` |
-| Coverage (LCOV + HTML, one instrumented run) | `cargo dev-coverage-all` |
-| Coverage metrics (lines/functions) | `cargo dev-coverage-metrics` |
+| Goal                                             | Command                      |
+| ------------------------------------------------ | ---------------------------- |
+| Fast compile check                               | `cargo dev-check`            |
+| Library tests only                               | `cargo dev-test-lib`         |
+| Fast lane tests                                  | `cargo dev-test-fast`        |
+| Slow lane tests                                  | `cargo dev-test-slow`        |
+| Full lane tests                                  | `cargo dev-test-full`        |
+| Coverage (LCOV)                                  | `cargo dev-coverage`         |
+| Coverage (LCOV + HTML, one instrumented run)     | `cargo dev-coverage-all`     |
+| Coverage metrics (lines/functions)               | `cargo dev-coverage-metrics` |
 | Coverage compare (default 80/75 fallback policy) | `cargo dev-coverage-compare` |
-| Coverage (HTML) | `cargo dev-coverage-html` |
-| Install local CLI (signed on macOS) | `cargo dev-install` |
-| File-size guardrail | `cargo dev-file-size` |
-| Format (write fixes) | `cargo dev-fmt` |
-| Format (check only) | `cargo dev-fmt-check` |
-| Clippy (warnings denied) | `cargo dev-clippy` |
-| One-command local gate | `cargo dev-loop` |
+| Coverage (HTML)                                  | `cargo dev-coverage-html`    |
+| Install local CLI (signed on macOS)              | `cargo dev-install`          |
+| File-size guardrail                              | `cargo dev-file-size`        |
+| Format (write fixes)                             | `cargo dev-fmt`              |
+| Format (check only)                              | `cargo dev-fmt-check`        |
+| Clippy (warnings denied)                         | `cargo dev-clippy`           |
+| One-command local gate                           | `cargo dev-loop`             |
+| Quality Assurance Tests                          | `cargo qat`                  |
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `dev-test-*` aliases run with terse test output (`.` style) by default.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
+`cargo qat` runs the onboarding and DevQL sync suites as a parallel bundle.
 
 ## macOS code-signing for local development
 
@@ -108,6 +110,7 @@ If your change touches e2e/integration surfaces, also run:
 
 ```bash
 cargo dev-test-slow
+cargo qat
 ```
 
 ## Coverage

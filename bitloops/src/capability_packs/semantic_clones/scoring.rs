@@ -3,6 +3,8 @@ use std::collections::{BTreeSet, HashSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup;
+
 const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v2";
 const MAX_CLONE_EDGES_PER_SOURCE: usize = 20;
 const MIN_SIMILAR_IMPLEMENTATION_SCORE: f32 = 0.55;
@@ -104,6 +106,7 @@ pub struct SymbolCloneCandidateInput {
     pub normalized_body_tokens: Vec<String>,
     pub parent_kind: Option<String>,
     pub context_tokens: Vec<String>,
+    pub embedding_setup: EmbeddingSetup,
     pub embedding: Vec<f32>,
     pub call_targets: Vec<String>,
     pub dependency_targets: Vec<String>,
@@ -288,6 +291,11 @@ mod tests {
             ],
             parent_kind: Some("module".to_string()),
             context_tokens: vec!["services".to_string(), "orders".to_string()],
+            embedding_setup: EmbeddingSetup::new(
+                "local_fastembed",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            ),
             embedding: vec![0.9, 0.1, 0.0],
             call_targets: vec!["db.fetchOrder".to_string()],
             dependency_targets: vec!["references:order_repository::entity".to_string()],
@@ -553,5 +561,28 @@ mod tests {
             edge.explanation_json["evidence"]["shared_signals"]["dependency_targets"][0],
             Value::String("implements:path_validator".to_string())
         );
+    }
+
+    #[test]
+    fn semantic_similarity_requires_matching_provider_and_model() {
+        let source = sample_input("source", "fetch_order");
+        let mut target = sample_input("target", "fetch_order_copy");
+        target.embedding_setup =
+            EmbeddingSetup::new("voyage", "voyage-code-3", target.embedding_setup.dimension);
+
+        assert_eq!(semantic_similarity(&source, &target), 0.0);
+    }
+
+    #[test]
+    fn semantic_similarity_requires_matching_dimension() {
+        let source = sample_input("source", "fetch_order");
+        let mut target = sample_input("target", "fetch_order_copy");
+        target.embedding_setup = EmbeddingSetup::new(
+            target.embedding_setup.provider.clone(),
+            target.embedding_setup.model.clone(),
+            6,
+        );
+
+        assert_eq!(semantic_similarity(&source, &target), 0.0);
     }
 }

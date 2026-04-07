@@ -1,14 +1,10 @@
 use super::world::QatWorld;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use bitloops::adapters::agents::AGENT_NAME_CLAUDE_CODE;
-use bitloops::adapters::agents::AgentAdapterRegistry;
-use bitloops::adapters::agents::claude_code::git_hooks;
-use bitloops::config::settings::{
-    DEFAULT_STRATEGY, load_settings, set_capture_enabled, write_project_bootstrap_settings,
-};
+use bitloops::config::settings::load_settings;
 use bitloops::config::{
-    REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy, resolve_duckdb_db_path_for_repo,
-    resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
+    resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
+    resolve_store_backend_config_for_repo,
 };
 use bitloops::daemon::resolve_daemon_config;
 use bitloops::host::checkpoints::session::create_session_backend_or_local;
@@ -59,6 +55,7 @@ struct RunMetadata<'a> {
 }
 
 include!("core.rs");
+include!("daemon_harness.rs");
 include!("deps_and_testlens.rs");
 include!("semantic_clones.rs");
 include!("knowledge.rs");

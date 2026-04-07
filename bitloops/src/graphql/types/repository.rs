@@ -8,9 +8,10 @@ use crate::host::interactions::types::InteractionEventType;
 use super::interaction::{InteractionEventObject, InteractionSessionObject, InteractionTurnObject};
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
-    CheckpointEdge, CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar,
-    FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, Project,
-    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, paginate_items,
+    CheckpointEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
+    ConnectionPagination, DateTimeScalar, FileContext, KnowledgeItemConnection, KnowledgeItemEdge,
+    KnowledgeProvider, Project, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -347,6 +348,40 @@ impl Repository {
             page_info,
             total_count,
         ))
+    }
+
+    #[graphql(name = "cloneSummary")]
+    async fn clone_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(name = "cloneFilter")] clone_filter: Option<ClonesFilterInput>,
+    ) -> Result<CloneSummary> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        if let Some(clone_filter) = clone_filter.as_ref() {
+            clone_filter.validate()?;
+        }
+        if self
+            .scope
+            .temporal_scope()
+            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
+        {
+            return Err(bad_user_input_error(
+                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+            ));
+        }
+
+        super::clone::resolve_clone_summary(
+            ctx.data_unchecked::<DevqlGraphqlContext>(),
+            None,
+            filter.as_ref(),
+            clone_filter.as_ref(),
+            &self.scope,
+        )
+        .await
+        .map_err(|err| backend_error(format!("failed to query repository clone summary: {err:#}")))
     }
 
     async fn knowledge(
