@@ -86,7 +86,17 @@ pub(crate) async fn execute_devql_query(
 
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
+    let has_deps_summary_stage = has_registered_deps_summary_stage(parsed)?;
     let has_clone_summary_stage = has_registered_clone_summary_stage(parsed);
+
+    if has_deps_summary_stage {
+        log_devql_validation_failure(
+            parsed,
+            "deps_summary_graphql_only",
+            "summary(deps:true, ...) is only supported by the GraphQL compiler path",
+        );
+        bail!("summary(deps:true, ...) is only supported by the GraphQL compiler path");
+    }
 
     if has_clone_summary_stage && !parsed.has_clones_stage {
         log_devql_validation_failure(
@@ -276,10 +286,60 @@ pub(crate) fn has_registered_coverage_stage(parsed: &ParsedDevqlQuery) -> bool {
 }
 
 pub(crate) fn has_registered_clone_summary_stage(parsed: &ParsedDevqlQuery) -> bool {
-    parsed
-        .registered_stages
-        .iter()
-        .any(|stage| is_clone_summary_stage_name(&stage.stage_name))
+    parsed.registered_stages.iter().any(|stage| {
+        is_clone_summary_stage_name(&stage.stage_name) && !stage.args.contains_key("deps")
+    })
+}
+
+pub(crate) fn has_registered_deps_summary_stage(parsed: &ParsedDevqlQuery) -> Result<bool> {
+    for stage in &parsed.registered_stages {
+        if !is_clone_summary_stage_name(&stage.stage_name) {
+            continue;
+        }
+
+        let Some(deps_arg) = stage.args.get("deps") else {
+            continue;
+        };
+        let deps_enabled = super::super::parse_bool_literal("summary deps", deps_arg)?;
+        if !deps_enabled {
+            bail!("summary(deps:...) requires deps:true");
+        }
+        for key in stage.args.keys() {
+            match key.as_str() {
+                "deps" | "kind" | "direction" | "unresolved" => {}
+                _ => {
+                    bail!(
+                        "summary(deps:true, ...) received unsupported argument `{key}`; allowed args: deps, kind, direction, unresolved"
+                    );
+                }
+            }
+        }
+        if let Some(kind) = stage.args.get("kind")
+            && super::super::DepsKind::from_str(kind).is_none()
+        {
+            bail!(
+                "summary(kind:...) must be one of: {}",
+                super::super::DepsKind::all_names().join(", ")
+            );
+        }
+        if let Some(direction) = stage.args.get("direction")
+            && super::super::DepsDirection::from_str(direction).is_none()
+        {
+            bail!(
+                "summary(direction:...) must be one of: {}",
+                super::super::DepsDirection::all_names().join(", ")
+            );
+        }
+        if let Some(unresolved) = stage.args.get("unresolved") {
+            match unresolved.trim().to_ascii_lowercase().as_str() {
+                "all" | "resolved" | "unresolved" => {}
+                _ => bail!("summary(unresolved:...) must be one of: all, resolved, unresolved"),
+            }
+        }
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 pub(crate) fn has_non_tests_or_coverage_registered_stage(parsed: &ParsedDevqlQuery) -> bool {

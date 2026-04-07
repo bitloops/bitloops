@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use super::document_builder::{GraphqlArgument, GraphqlField, GraphqlSelection};
 use super::field_mapping::{compile_datetime_literal, enum_literal, quote_graphql_string};
+use super::types::DepsSummaryStageSpec;
 use super::{ParsedDevqlQuery, RegisteredStageCall};
 
 pub(super) fn compile_artefact_args(
@@ -87,6 +88,46 @@ pub(super) fn compile_clone_summary_args(
         args.push(GraphqlArgument::new("cloneFilter", clone_filter));
     }
     Ok(args)
+}
+
+pub(super) fn compile_deps_summary_args(spec: DepsSummaryStageSpec) -> Vec<GraphqlArgument> {
+    let mut fields = Vec::new();
+    if let Some(kind) = spec.kind {
+        let kind = match kind {
+            super::super::DepsKind::Imports => "imports",
+            super::super::DepsKind::Calls => "calls",
+            super::super::DepsKind::References => "references",
+            super::super::DepsKind::Extends => "extends",
+            super::super::DepsKind::Implements => "implements",
+            super::super::DepsKind::Exports => "exports",
+        };
+        fields.push(format!("kind: {}", enum_literal(kind)));
+    }
+    if let Some(direction) = spec.direction {
+        let direction = match direction {
+            super::super::DepsDirection::Out => "out",
+            super::super::DepsDirection::In => "in",
+            super::super::DepsDirection::Both => "both",
+        };
+        fields.push(format!("direction: {}", enum_literal(direction)));
+    }
+    if let Some(unresolved) = spec.unresolved {
+        let unresolved = match unresolved {
+            super::types::DepsSummaryUnresolvedSelector::All => "all",
+            super::types::DepsSummaryUnresolvedSelector::Resolved => "resolved",
+            super::types::DepsSummaryUnresolvedSelector::Unresolved => "unresolved",
+        };
+        fields.push(format!("unresolved: {}", enum_literal(unresolved)));
+    }
+
+    if fields.is_empty() {
+        return Vec::new();
+    }
+
+    vec![GraphqlArgument::new(
+        "filter",
+        format!("{{ {} }}", fields.join(", ")),
+    )]
 }
 
 pub(super) fn compile_knowledge_args(

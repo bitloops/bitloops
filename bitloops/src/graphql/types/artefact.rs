@@ -10,8 +10,9 @@ use crate::graphql::{
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
     CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult,
-    TestHarnessTestsResult, paginate_items,
+    DependencyConnectionEdge, DependencyEdge, DependencyEdgeConnection, DepsDirection,
+    DepsFilterInput, DepsSummary, DepsSummaryFilterInput, DepsSummaryUnresolvedMode,
+    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -296,6 +297,56 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "depsSummary")]
+    async fn deps_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<DepsSummaryFilterInput>,
+    ) -> Result<DepsSummary> {
+        let filter = filter.unwrap_or_default();
+        let direction = filter.direction.unwrap_or(DepsDirection::Both);
+        let unresolved_mode = filter.unresolved.unwrap_or(DepsSummaryUnresolvedMode::All);
+        let include_unresolved = !matches!(unresolved_mode, DepsSummaryUnresolvedMode::Resolved);
+        let deps_filter = DepsFilterInput {
+            kind: filter.kind,
+            direction,
+            include_unresolved,
+        };
+
+        let loaders = ctx.data_unchecked::<DataLoaders>();
+        let outgoing = if matches!(direction, DepsDirection::Out | DepsDirection::Both) {
+            let edges = loaders
+                .load_outgoing_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve outgoing dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?;
+            filter_edges_by_unresolved_mode(edges, unresolved_mode)
+        } else {
+            Vec::new()
+        };
+
+        let incoming = if matches!(direction, DepsDirection::In | DepsDirection::Both) {
+            let edges = loaders
+                .load_incoming_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve incoming dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?;
+            filter_edges_by_unresolved_mode(edges, unresolved_mode)
+        } else {
+            Vec::new()
+        };
+
+        Ok(DepsSummary::from_edges(&incoming, &outgoing))
+    }
+
     async fn clones(
         &self,
         ctx: &Context<'_>,
@@ -440,6 +491,23 @@ fn stage_limit(first: i32) -> Result<usize> {
         return Err(bad_user_input_error("`first` must be greater than 0"));
     }
     Ok(first as usize)
+}
+
+fn filter_edges_by_unresolved_mode(
+    edges: Vec<DependencyEdge>,
+    unresolved_mode: DepsSummaryUnresolvedMode,
+) -> Vec<DependencyEdge> {
+    match unresolved_mode {
+        DepsSummaryUnresolvedMode::All => edges,
+        DepsSummaryUnresolvedMode::Resolved => edges
+            .into_iter()
+            .filter(|edge| edge.to_artefact_id.is_some())
+            .collect(),
+        DepsSummaryUnresolvedMode::Unresolved => edges
+            .into_iter()
+            .filter(|edge| edge.to_artefact_id.is_none())
+            .collect(),
+    }
 }
 
 fn build_tests_stage_args(

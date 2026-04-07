@@ -130,9 +130,41 @@ Do not mix the two modes in the same field call.
 }
 ```
 
+### DevQL `summary()` stage
+
+In the DevQL DSL, `summary()` is overloaded: it either aggregates **clone detection** results or attaches **dependency edge counts** to each artefact row. Both shapes compile to typed GraphQL; they are not interchangeable.
+
+**Clone aggregate (project-level `cloneSummary`).** Use a plain `summary()` with **no arguments** immediately after `clones(...)`. Earlier `artefacts(...)` and `clones(...)` arguments become the `filter` / `cloneFilter` passed to GraphQL `cloneSummary`. You must include `clones()`; `summary()` does not accept `select()` in this path yet.
+
+```bash
+# Same idea as raw GraphQL cloneSummary(filter:, cloneFilter:)
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.75)->summary()'
+
+bitloops devql query 'repo("bitloops")->file("bitloops/src/main.rs")->artefacts(kind:"function",symbol_fqn:"bitloops/src/main.rs::main")->clones(min_score:0.8)->summary()'
+```
+
+**Per-artefact dependency counts (`depsSummary`).** Use `summary(deps:true, ...)`. This requires an `artefacts()` stage and **must not** be combined with `deps()` or `clones()` in the same query. Optional arguments (all string literals in the DSL):
+
+| Argument | Values | Role |
+| --- | --- | --- |
+| `deps` | `true` only | Selects dependency-summary mode (`deps:false` is rejected). |
+| `kind` | `imports`, `calls`, `references`, `extends`, `implements`, `exports` | Restrict counts to one edge kind; omit for all kinds. |
+| `direction` | `out`, `in`, `both` | Which directions to include; if omitted in raw GraphQL, `depsSummary` defaults to both directions. |
+| `unresolved` | `all`, `resolved`, `unresolved` | Whether unresolved targets are included in the counts. |
+
+The compiler emits `artefacts { edges { node { depsSummary(filter: ...) { ... } } } }`. Counts are **for each returned artefact’s edges** in the current dependency graph (same data plane as `outgoingDeps` / `incomingDeps`). Filters on `artefacts(...)` only restrict **which artefacts appear** as rows, not “edges only to other rows on this page.”
+
+```bash
+bitloops devql query 'repo("bitloops")->file("bitloops/src/lib.rs")->artefacts(kind:"function")->summary(deps:true,direction:"both",unresolved:"all",kind:"calls")'
+```
+
+`summary(deps:true, ...)` is **only** supported when the pipeline is compiled and executed on the **GraphQL** path (the default for DSL queries that contain `->`). The relational executor rejects this shape.
+
+**Note:** When `summary(deps:true, ...)` is present, the DSL `limit()` stage is not currently forwarded as `first` on the `artefacts` connection; use raw GraphQL with `artefacts(first: N)` if you need pagination.
+
 ### Semantic clone summaries
 
-Use `cloneSummary(...)` when you want one aggregate summary over the whole filtered artefact set:
+The DSL form `...->artefacts(...)->clones(...)->summary()` compiles to the `cloneSummary` field shown below. Use `cloneSummary(...)` when you want one aggregate summary over the whole filtered artefact set:
 
 ```graphql
 {
@@ -173,6 +205,38 @@ Use nested `clones { summary { ... } }` when you want the summary for one resolv
                   relationKind
                   count
                 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Per-artefact dependency summaries (same field the DSL `summary(deps:true, ...)` selects on each node):
+
+```graphql
+{
+  repo(name: "bitloops") {
+    file(path: "bitloops/src/lib.rs") {
+      artefacts(first: 10, filter: { kind: FUNCTION }) {
+        edges {
+          node {
+            path
+            symbolFqn
+            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: ALL }) {
+              totalCount
+              incomingCount
+              outgoingCount
+              kindCounts {
+                imports
+                calls
+                references
+                extends
+                implements
+                exports
               }
             }
           }
