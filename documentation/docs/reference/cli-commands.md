@@ -337,14 +337,13 @@ There is no `bitloops devql knowledge ingest` command in the current CLI.
 ## Test Harness
 
 ```bash
-bitloops testlens init
-bitloops testlens ingest-tests --commit <sha>
-bitloops testlens ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
-bitloops testlens ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
-bitloops testlens ingest-results --jest-json reports/jest.json --commit <sha>
+bitloops devql test-harness ingest-tests --commit <sha>
+bitloops devql test-harness ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
+bitloops devql test-harness ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
+bitloops devql test-harness ingest-results --jest-json reports/jest.json --commit <sha>
 ```
 
-Use `testlens` to initialise and ingest test-linkage, coverage, and results data for the test-harness capability pack.
+Use `devql test-harness` to ingest test-linkage, coverage, and results data for the test-harness capability pack. Schema initialisation is handled automatically by the daemon on `bitloops start`.
 
 ## Embeddings
 

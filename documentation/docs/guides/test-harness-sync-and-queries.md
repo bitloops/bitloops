@@ -35,11 +35,11 @@ the daemon runs a current-state sync. After a successful non-`validate` sync, it
 
 Sync-side updates cover source-based discovery and linkage refresh for current test artefacts.
 
-Coverage and test-run results are separate ingestion flows. Use `testlens` commands for those:
+Coverage and test-run results are separate ingestion flows. Use `devql test-harness` commands for those:
 
 ```bash
-bitloops testlens ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
-bitloops testlens ingest-results --jest-json reports/jest.json --commit <sha>
+bitloops devql test-harness ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
+bitloops devql test-harness ingest-results --jest-json reports/jest.json --commit <sha>
 ```
 
 ## Query One Artefact And Its Covering Tests
@@ -91,6 +91,112 @@ Typical shape:
 
 ```bash
 bitloops devql query 'artefacts(symbol_fqn:"src/lib.rs::add")->tests(min_confidence:0.6, linkage_source:"static_analysis")'
+```
+
+## GraphQL Equivalents (Concrete Example)
+
+If you prefer raw GraphQL instead of DSL, this is the same flow with a real symbol from this codebase.
+
+### 1) Find one artefact by `symbolFqn`
+
+```bash
+bitloops devql query --compact '{
+  artefacts(
+    filter: { symbolFqn: "bitloops/src/host/checkpoints/lifecycle/adapters.rs::impl@64::parse_hook_event" }
+    first: 1
+  ) {
+    edges {
+      node {
+        id
+        path
+        symbolFqn
+        canonicalKind
+        startLine
+        endLine
+      }
+    }
+  }
+}'
+```
+
+### 2) Fetch covering tests for that artefact
+
+```bash
+bitloops devql query --compact '{
+  artefacts(
+    filter: { symbolFqn: "bitloops/src/host/checkpoints/lifecycle/adapters.rs::impl@64::parse_hook_event" }
+    first: 1
+  ) {
+    edges {
+      node {
+        symbolFqn
+        tests {
+          coveringTests {
+            testId
+            testName
+            suiteName
+            filePath
+            startLine
+            endLine
+          }
+          summary {
+            totalCoveringTests
+          }
+        }
+      }
+    }
+  }
+}'
+```
+
+If you want only the list quickly:
+
+```bash
+bitloops devql query --compact '{
+  artefacts(
+    filter: { symbolFqn: "bitloops/src/host/checkpoints/lifecycle/adapters.rs::impl@64::parse_hook_event" }
+    first: 1
+  ) {
+    edges {
+      node {
+        tests {
+          coveringTests { testId testName suiteName filePath startLine endLine }
+        }
+      }
+    }
+  }
+}' | jq '.artefacts.edges[0].node.tests[0].coveringTests'
+```
+
+### 3) Validate summary count matches returned list
+
+`tests.summary.totalCoveringTests` should match the number of rows in `coveringTests` for the same query window.
+
+```bash
+bitloops devql query --compact '{
+  artefacts(
+    filter: { symbolFqn: "bitloops/src/host/checkpoints/lifecycle/adapters.rs::impl@64::parse_hook_event" }
+    first: 1
+  ) {
+    edges {
+      node {
+        tests {
+          summary { totalCoveringTests }
+          coveringTests { testId }
+        }
+      }
+    }
+  }
+}' | jq '.artefacts.edges[0].node.tests[0] | {summary: .summary.totalCoveringTests, list: (.coveringTests|length)}'
+```
+
+Example output:
+
+```json
+{
+  "summary": 25,
+  "list": 25
+}
 ```
 
 ## DSL Notes
