@@ -130,6 +130,59 @@ Do not mix the two modes in the same field call.
 }
 ```
 
+### Semantic clone summaries
+
+Use `cloneSummary(...)` when you want one aggregate summary over the whole filtered artefact set:
+
+```graphql
+{
+  repo(name: "bitloops") {
+    cloneSummary(
+      filter: { kind: FUNCTION, symbolFqn: "bitloops/src/main.rs::main" }
+      cloneFilter: { minScore: 0.75 }
+    ) {
+      totalCount
+      groups {
+        relationKind
+        count
+      }
+    }
+  }
+}
+```
+
+Use nested `clones { summary { ... } }` when you want the summary for one resolved artefact node:
+
+```graphql
+{
+  repo(name: "bitloops") {
+    file(path: "bitloops/src/main.rs") {
+      artefacts(
+        filter: { kind: FUNCTION, symbolFqn: "bitloops/src/main.rs::main" }
+        first: 1
+      ) {
+        edges {
+          node {
+            path
+            symbolFqn
+            clones(first: 10, filter: { minScore: 0.75 }) {
+              totalCount
+              summary {
+                totalCount
+                groups {
+                  relationKind
+                  count
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ```graphql
 {
   repo(name: "bitloops") {

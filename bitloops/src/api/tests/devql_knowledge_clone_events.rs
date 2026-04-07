@@ -769,7 +769,8 @@ async fn devql_graphql_file_clone_summary_queries_resolve_grouped_counts() {
 }
 
 #[tokio::test]
-async fn devql_graphql_same_file_method_clone_summaries_match_across_repo_file_and_artefact_views() {
+async fn devql_graphql_same_file_method_clone_summaries_match_across_repo_file_and_artefact_views()
+{
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_same_file_method_clone_data(repo.path());
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -873,13 +874,12 @@ async fn devql_graphql_same_file_method_clone_summaries_match_across_repo_file_a
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"][0]
-            ["relationKind"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"][0]["relationKind"],
         "weak_clone_candidate"
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
-            ["targetArtefact"]["symbolFqn"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]["targetArtefact"]
+            ["symbolFqn"],
         "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command"
     );
 }

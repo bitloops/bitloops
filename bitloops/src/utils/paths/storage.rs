@@ -27,7 +27,8 @@ fn should_use_test_app_dirs(repo_root: &Path) -> bool {
 
 #[cfg(test)]
 fn test_runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
+    if let Some(path) =
+        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
     {
         return Some(PathBuf::from(path).join("bitloops").join("daemon"));
     }

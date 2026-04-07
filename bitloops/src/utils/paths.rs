@@ -92,7 +92,10 @@ mod tests {
             (".bitloops/metadata/test", true),
             (".bitloops", true),
             (".bitloops\\metadata\\test", true),
-            (".bitloops-test-state/daemon/repos/hash/tmp/pre-prompt.json", true),
+            (
+                ".bitloops-test-state/daemon/repos/hash/tmp/pre-prompt.json",
+                true,
+            ),
             (".bitloopsfile", false),
         ];
 

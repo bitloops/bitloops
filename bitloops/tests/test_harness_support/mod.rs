@@ -41,10 +41,7 @@ fn write_test_daemon_config(config_root: &Path) -> PathBuf {
         .join("stores")
         .join("relational")
         .join("relational.db");
-    let duckdb_path = data_root
-        .join("stores")
-        .join("event")
-        .join("events.duckdb");
+    let duckdb_path = data_root.join("stores").join("event").join("events.duckdb");
     let blob_path = data_root.join("stores").join("blob");
     let config_contents = format!(
         r#"[runtime]

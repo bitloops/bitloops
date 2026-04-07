@@ -4,9 +4,9 @@ use std::path::Path;
 use std::process::Command;
 
 #[cfg(test)]
-use anyhow::{Context, Result, bail};
-#[cfg(test)]
 use crate::test_support::process_state::git_command;
+#[cfg(test)]
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::adapters::agents::claude_code::transcript as claude_transcript;
