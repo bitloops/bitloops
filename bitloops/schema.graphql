@@ -22,7 +22,7 @@ type Artefact {
 	symbolId: String!
 	path: String!
 	language: String!
-	canonicalKind: CanonicalKind!
+	canonicalKind: CanonicalKind
 	languageKind: String
 	symbolFqn: String
 	parentArtefactId: ID
@@ -203,6 +203,10 @@ type Clone {
 	id: ID!
 	sourceArtefactId: ID!
 	targetArtefactId: ID!
+	sourceStartLine: Int
+	sourceEndLine: Int
+	targetStartLine: Int
+	targetEndLine: Int
 	relationKind: String!
 	score: Float!
 	metadata: JSON

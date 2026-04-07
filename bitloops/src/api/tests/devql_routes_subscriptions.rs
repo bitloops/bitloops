@@ -562,6 +562,10 @@ async fn devql_post_route_executes_slim_clone_queries() {
               node {
                 relationKind
                 score
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
                 sourceArtefact {
                   symbolFqn
                 }

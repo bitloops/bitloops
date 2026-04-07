@@ -49,6 +49,53 @@ fn compile_project_asof_artefacts_pipeline() {
 }
 
 #[test]
+fn compile_artefacts_with_clone_spans() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          id
+          path
+          symbolFqn
+          canonicalKind
+          languageKind
+          startLine
+          endLine
+          language
+          clones(first: 10) {
+            edges {
+              node {
+                id
+                sourceArtefactId
+                targetArtefactId
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
+                relationKind
+                score
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_file_artefacts_with_chat_history_enrichment() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->chatHistory()->limit(5)"#,
