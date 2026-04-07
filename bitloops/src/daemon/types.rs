@@ -221,7 +221,7 @@ pub struct SupervisorServiceMetadata {
     pub service_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DaemonHealthSummary {
     pub relational_backend: Option<String>,
     pub relational_connected: Option<bool>,
@@ -293,7 +293,7 @@ impl Default for EnrichmentQueueState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EnrichmentQueueStatus {
     pub state: EnrichmentQueueState,
     pub persisted: bool,
@@ -364,7 +364,7 @@ impl Default for CapabilityEventQueueState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CapabilityEventQueueStatus {
     pub state: CapabilityEventQueueState,
     pub persisted: bool,
@@ -497,14 +497,14 @@ impl Default for SyncQueueState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SyncQueueStatus {
     pub state: SyncQueueState,
     pub persisted: bool,
     pub current_repo_task: Option<SyncTaskRecord>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DaemonStatusReport {
     pub runtime: Option<DaemonRuntimeState>,
     pub service: Option<DaemonServiceMetadata>,

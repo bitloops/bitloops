@@ -18,6 +18,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
+        if let Some(capability_events) = report.capability_events.as_ref() {
+            append_capability_event_lines(&mut lines, capability_events);
+        }
         if let Some(sync) = report.sync.as_ref() {
             append_sync_lines(&mut lines, sync);
         }
@@ -47,6 +50,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
+        if let Some(capability_events) = report.capability_events.as_ref() {
+            append_capability_event_lines(&mut lines, capability_events);
+        }
         if let Some(sync) = report.sync.as_ref() {
             append_sync_lines(&mut lines, sync);
         }
@@ -58,6 +64,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     lines.push(format!("Log file: {}", log_path.display()));
     if let Some(enrichment) = report.enrichment.as_ref() {
         append_enrichment_lines(&mut lines, enrichment);
+    }
+    if let Some(capability_events) = report.capability_events.as_ref() {
+        append_capability_event_lines(&mut lines, capability_events);
     }
     if let Some(sync) = report.sync.as_ref() {
         append_sync_lines(&mut lines, sync);
@@ -188,6 +197,46 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     }
     lines.push(format!(
         "Enrichment persisted: {}",
+        if status.persisted { "yes" } else { "no" }
+    ));
+}
+
+fn append_capability_event_lines(lines: &mut Vec<String>, status: &daemon::CapabilityEventQueueStatus) {
+    lines.push("Capability event queue: available".to_string());
+    lines.push(format!(
+        "Capability event pending runs: {}",
+        status.state.pending_runs
+    ));
+    lines.push(format!(
+        "Capability event running runs: {}",
+        status.state.running_runs
+    ));
+    lines.push(format!(
+        "Capability event failed runs: {}",
+        status.state.failed_runs
+    ));
+    lines.push(format!(
+        "Capability event completed recent runs: {}",
+        status.state.completed_recent_runs
+    ));
+    if let Some(action) = status.state.last_action.as_ref() {
+        lines.push(format!("Capability event last action: {action}"));
+    }
+    if let Some(run) = status.current_repo_run.as_ref() {
+        lines.push(format!(
+            "Current repo capability event run: {} ({}, capability={}, handler={}, event_kind={})",
+            run.run_id,
+            run.status,
+            run.capability_id,
+            run.handler_id,
+            run.event_kind
+        ));
+        if let Some(error) = run.error.as_ref() {
+            lines.push(format!("Current repo capability event error: {error}"));
+        }
+    }
+    lines.push(format!(
+        "Capability event persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
 }

@@ -98,6 +98,10 @@ pub struct DaemonStatusArgs {
     /// Path to the Bitloops daemon config file.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
+
+    /// Emit daemon status as JSON.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
