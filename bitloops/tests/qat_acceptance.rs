@@ -80,7 +80,11 @@ async fn run_bundle(binary: PathBuf) -> Result<()> {
     combine_bundle_results(onboarding, devql_sync, smoke)
 }
 
-fn combine_bundle_results(onboarding: Result<()>, devql_sync: Result<()>, smoke: Result<()>) -> Result<()> {
+fn combine_bundle_results(
+    onboarding: Result<()>,
+    devql_sync: Result<()>,
+    smoke: Result<()>,
+) -> Result<()> {
     match (onboarding, devql_sync, smoke) {
         (Ok(()), Ok(()), Ok(())) => Ok(()),
         (Err(err), Ok(()), Ok(())) => Err(err),
