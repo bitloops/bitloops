@@ -133,7 +133,7 @@ fn compile_clone_summary_stage_rejects_invalid_since_literal() {
 #[test]
 fn compile_deps_summary_stage_under_artefacts() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",unresolved:"all",kind:"calls")->limit(5)"#,
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",unresolved:true,kind:"calls")->limit(5)"#,
     )
     .expect("query parses");
 
@@ -155,7 +155,7 @@ fn compile_deps_summary_stage_under_artefacts() {
             startLine
             endLine
             language
-            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: ALL }) {
+            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: true }) {
               totalCount
               incomingCount
               outgoingCount
@@ -174,6 +174,21 @@ fn compile_deps_summary_stage_under_artefacts() {
     }
   }
 }"#
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_defaults_to_resolved_when_unresolved_is_omitted() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",kind:"calls")->limit(5)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+    assert!(
+        graphql
+            .contains("depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: false })"),
+        "unexpected graphql: {graphql}"
     );
 }
 
@@ -257,7 +272,7 @@ fn compile_deps_summary_stage_rejects_invalid_unresolved_value() {
     let err = compile_devql_to_graphql(&parsed).expect_err("invalid unresolved value must fail");
     assert!(
         err.to_string()
-            .contains("summary(unresolved:...) must be one of: all, resolved, unresolved"),
+            .contains("summary(unresolved:...) must be boolean true/false"),
         "unexpected error: {err:#}"
     );
 }

@@ -331,10 +331,9 @@ pub(crate) fn has_registered_deps_summary_stage(parsed: &ParsedDevqlQuery) -> Re
             );
         }
         if let Some(unresolved) = stage.args.get("unresolved") {
-            match unresolved.trim().to_ascii_lowercase().as_str() {
-                "all" | "resolved" | "unresolved" => {}
-                _ => bail!("summary(unresolved:...) must be one of: all, resolved, unresolved"),
-            }
+            super::super::parse_bool_literal("summary unresolved", unresolved).map_err(|_| {
+                anyhow::anyhow!("summary(unresolved:...) must be boolean true/false")
+            })?;
         }
         return Ok(true);
     }

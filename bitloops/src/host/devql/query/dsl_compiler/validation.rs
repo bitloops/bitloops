@@ -1,10 +1,10 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use super::field_mapping::{
     CLONE_SUMMARY_STAGE_NAME, KNOWLEDGE_STAGE_NAME, TESTS_SUMMARY_STAGE_NAME,
     is_coverage_stage_name, is_tests_stage_name,
 };
-use super::types::{DepsSummaryStageSpec, DepsSummaryUnresolvedSelector};
+use super::types::DepsSummaryStageSpec;
 use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall, RegisteredStageKind};
 
 pub(super) fn resolve_registered_stage(
@@ -93,7 +93,7 @@ fn resolve_summary_stage_kind(stage: &RegisteredStageCall) -> Result<RegisteredS
     };
 
     let unresolved = if let Some(unresolved) = stage.args.get("unresolved") {
-        Some(parse_summary_unresolved_selector(unresolved)?)
+        Some(parse_summary_unresolved_flag(unresolved)?)
     } else {
         None
     };
@@ -105,13 +105,9 @@ fn resolve_summary_stage_kind(stage: &RegisteredStageCall) -> Result<RegisteredS
     }))
 }
 
-fn parse_summary_unresolved_selector(value: &str) -> Result<DepsSummaryUnresolvedSelector> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "all" => Ok(DepsSummaryUnresolvedSelector::All),
-        "resolved" => Ok(DepsSummaryUnresolvedSelector::Resolved),
-        "unresolved" => Ok(DepsSummaryUnresolvedSelector::Unresolved),
-        _ => bail!("summary(unresolved:...) must be one of: all, resolved, unresolved"),
-    }
+fn parse_summary_unresolved_flag(value: &str) -> Result<bool> {
+    super::super::parse_bool_literal("summary unresolved", value)
+        .map_err(|_| anyhow!("summary(unresolved:...) must be boolean true/false"))
 }
 
 pub(super) fn validate_graphql_compiler_support(

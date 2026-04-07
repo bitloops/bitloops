@@ -310,7 +310,7 @@ type DepsSummary {
 input DepsSummaryFilterInput {
 	kind: EdgeKind
 	direction: DepsDirection
-	unresolved: DepsSummaryUnresolvedMode
+	unresolved: Boolean! = false
 }
 
 type DepsSummaryKindCounts {
@@ -320,12 +320,6 @@ type DepsSummaryKindCounts {
 	extends: Int!
 	implements: Int!
 	exports: Int!
-}
-
-enum DepsSummaryUnresolvedMode {
-	ALL
-	RESOLVED
-	UNRESOLVED
 }
 
 enum EdgeKind {

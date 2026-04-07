@@ -31,8 +31,7 @@ pub use connection::{
     KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge, paginate_items,
 };
 pub use dependency_edge::{
-    DependencyEdge, DepsDirection, DepsFilterInput, DepsSummary, DepsSummaryFilterInput,
-    DepsSummaryUnresolvedMode, EdgeKind,
+    DependencyEdge, DepsDirection, DepsFilterInput, DepsSummary, DepsSummaryFilterInput, EdgeKind,
 };
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};

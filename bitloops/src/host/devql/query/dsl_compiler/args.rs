@@ -111,18 +111,14 @@ pub(super) fn compile_deps_summary_args(spec: DepsSummaryStageSpec) -> Vec<Graph
         };
         fields.push(format!("direction: {}", enum_literal(direction)));
     }
-    if let Some(unresolved) = spec.unresolved {
-        let unresolved = match unresolved {
-            super::types::DepsSummaryUnresolvedSelector::All => "all",
-            super::types::DepsSummaryUnresolvedSelector::Resolved => "resolved",
-            super::types::DepsSummaryUnresolvedSelector::Unresolved => "unresolved",
-        };
-        fields.push(format!("unresolved: {}", enum_literal(unresolved)));
-    }
-
-    if fields.is_empty() {
-        return Vec::new();
-    }
+    fields.push(format!(
+        "unresolved: {}",
+        if spec.unresolved.unwrap_or(false) {
+            "true"
+        } else {
+            "false"
+        }
+    ));
 
     vec![GraphqlArgument::new(
         "filter",

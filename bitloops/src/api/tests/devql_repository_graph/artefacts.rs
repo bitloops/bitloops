@@ -783,7 +783,7 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                           incomingCount
                           outgoingCount
                         }
-                        unresolvedOnly: depsSummary(filter: { unresolved: UNRESOLVED }) {
+                        includeUnresolved: depsSummary(filter: { unresolved: true }) {
                           totalCount
                           incomingCount
                           outgoingCount
@@ -791,7 +791,7 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                             calls
                           }
                         }
-                        resolvedOnly: depsSummary(filter: { unresolved: RESOLVED }) {
+                        resolvedOnly: depsSummary(filter: { unresolved: false }) {
                           totalCount
                           incomingCount
                           outgoingCount
@@ -892,8 +892,8 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["unresolvedOnly"]["totalCount"],
-        0
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["includeUnresolved"]["totalCount"],
+        1
     );
 
     assert_eq!(
@@ -902,22 +902,22 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
     );
     assert_eq!(
         json["repo"]["file"]["artefacts"]["edges"][1]["node"]["depsSummary"]["totalCount"],
-        1
+        0
     );
     assert_eq!(
         json["repo"]["file"]["artefacts"]["edges"][1]["node"]["outOnly"]["outgoingCount"],
-        1
+        0
     );
     assert_eq!(
         json["repo"]["file"]["artefacts"]["edges"][1]["node"]["resolvedOnly"]["totalCount"],
         0
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["unresolvedOnly"]["totalCount"],
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["includeUnresolved"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["unresolvedOnly"]["kindCounts"]["calls"],
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["includeUnresolved"]["kindCounts"]["calls"],
         1
     );
 

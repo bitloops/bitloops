@@ -35,13 +35,6 @@ pub enum DepsDirection {
     Both,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
-pub enum DepsSummaryUnresolvedMode {
-    All,
-    Resolved,
-    Unresolved,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, InputObject)]
 pub struct DepsFilterInput {
     pub kind: Option<EdgeKind>,
@@ -65,7 +58,8 @@ impl Default for DepsFilterInput {
 pub struct DepsSummaryFilterInput {
     pub kind: Option<EdgeKind>,
     pub direction: Option<DepsDirection>,
-    pub unresolved: Option<DepsSummaryUnresolvedMode>,
+    #[graphql(default)]
+    pub unresolved: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, SimpleObject)]

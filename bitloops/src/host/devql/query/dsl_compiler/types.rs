@@ -7,17 +7,10 @@ pub(crate) enum GraphqlCompileMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DepsSummaryUnresolvedSelector {
-    All,
-    Resolved,
-    Unresolved,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DepsSummaryStageSpec {
     pub(super) kind: Option<DepsKind>,
     pub(super) direction: Option<DepsDirection>,
-    pub(super) unresolved: Option<DepsSummaryUnresolvedSelector>,
+    pub(super) unresolved: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
