@@ -28,20 +28,41 @@ pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
 }
 
 pub fn write_test_daemon_config(repo: &Path) {
+    let daemon_state_root = repo
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            repo.file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        );
+    let sqlite_path = daemon_state_root
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
+    let duckdb_path = daemon_state_root
+        .join("stores")
+        .join("event")
+        .join("events.duckdb");
+    let blob_path = daemon_state_root.join("stores").join("blob");
     fs::write(
         repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
-        r#"[runtime]
+        format!(
+            r#"[runtime]
 local_dev = false
 
 [stores.relational]
-sqlite_path = "stores/relational/relational.db"
+sqlite_path = {sqlite_path:?}
 
 [stores.events]
-duckdb_path = "stores/event/events.duckdb"
+duckdb_path = {duckdb_path:?}
 
 [stores.blob]
-local_path = "stores/blob"
+local_path = {blob_path:?}
 "#,
+        ),
     )
     .expect("write repo daemon config");
 }
