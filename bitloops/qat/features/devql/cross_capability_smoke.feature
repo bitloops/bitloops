@@ -17,15 +17,15 @@ Feature: Cross-capability change-planning smoke
     And I ensure Claude Code auth in bitloops
     And I run DevQL init in bitloops
     And I run DevQL ingest in bitloops
-    And I run TestLens ingest-tests for latest commit in bitloops
-    And I run TestLens ingest-coverage for latest commit in bitloops
+    And I run TestHarness ingest-tests for latest commit in bitloops
+    And I run TestHarness ingest-coverage for latest commit in bitloops
 
     # Step 1: Inspect impact before making a change
     Then DevQL artefacts query returns results in bitloops
     And DevQL deps query for "UserService.createUser" with direction "in" returns at least 1 result in bitloops
 
     # Step 2: Inspect verification state
-    And TestLens query for "createUser" at latest commit with view "summary" returns results in bitloops
+    And TestHarness query for "createUser" at current workspace state with view "summary" returns results in bitloops
 
     # Step 3: Make the change with Claude Code and commit
     Given I make a first change using Claude Code to bitloops
