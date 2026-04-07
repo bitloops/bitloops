@@ -71,6 +71,10 @@ name = "performance"
 path = "tests/performance.rs"
 required-features = ["slow-tests"]
 
+[[test]]
+name = "qat_acceptance"
+path = "tests/qat_acceptance.rs"
+
 [dependencies]
 anyhow = "1"
 async-graphql = { version = "7", features = ["dataloader"] }
@@ -93,6 +97,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.24.1"
 tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
 sha2 = "0.11"
 sha1 = "0.11"
 hex = "0.4"
@@ -127,6 +132,7 @@ libc = "0.2"
 cucumber = "0.22.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

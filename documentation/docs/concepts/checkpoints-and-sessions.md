@@ -19,9 +19,9 @@ A checkpoint is a persisted summary of a meaningful step in that session, usuall
 
 Under the current architecture:
 
-- durable session and checkpoint data live in the configured stores
-- daemon runtime metadata lives in the platform state directory
-- repo-local runtime directories are no longer the default source of truth
+- queryable checkpoint and session history live in the configured relational and event stores
+- daemon runtime metadata and queue state live in the platform state directory runtime store
+- repo-scoped workflow runtime state lives in `<config root>/stores/runtime/runtime.sqlite`
 
 ## Repo Policy
 

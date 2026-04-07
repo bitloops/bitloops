@@ -396,12 +396,12 @@ impl DevqlGraphqlContext {
     }
 
     pub(crate) fn devql_sqlite_path(&self) -> Result<std::path::PathBuf> {
-        self.backend_config
-            .as_ref()
-            .context("store backend configuration unavailable")?
-            .relational
-            .resolve_sqlite_db_path_for_repo(&self.config_root)
-            .context("resolving SQLite path for GraphQL DevQL queries")
+        let relational =
+            crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
+                &self.config_root,
+            )
+            .context("opening relational store for GraphQL DevQL queries")?;
+        Ok(relational.sqlite_path().to_path_buf())
     }
 
     pub(crate) fn current_branch_name(&self, scope: &ResolverScope) -> String {

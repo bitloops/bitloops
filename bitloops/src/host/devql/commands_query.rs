@@ -43,7 +43,7 @@ pub(crate) async fn execute_query_json_with_composition(
     composition: Option<RegisteredStageCompositionContext>,
 ) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql query`")?;
     let relational = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         None
@@ -243,6 +243,10 @@ fn clone_string_field(value: Option<&Value>) -> Option<String> {
 }
 
 fn render_cli_payload(payload: &Value) -> Result<String> {
+    if let Some(rendered) = render_clone_summary_payload(payload) {
+        return Ok(rendered);
+    }
+
     match payload {
         Value::Array(rows) => render_array_rows(rows),
         Value::Object(row) => render_object_rows(&[row]),
@@ -254,6 +258,12 @@ fn render_cli_payload(payload: &Value) -> Result<String> {
 fn render_array_rows(rows: &[Value]) -> Result<String> {
     if rows.is_empty() {
         return Ok("No results.".to_string());
+    }
+
+    if rows.len() == 1
+        && let Some(rendered) = render_clone_summary_payload(&rows[0])
+    {
+        return Ok(rendered);
     }
 
     if rows.iter().all(is_scalar_like) {
@@ -296,6 +306,47 @@ fn render_object_rows(rows: &[&serde_json::Map<String, Value>]) -> Result<String
         .map(|column| cli_header(column))
         .collect::<Vec<_>>();
     Ok(render_table(&headers, &values))
+}
+
+fn render_clone_summary_payload(payload: &Value) -> Option<String> {
+    let Value::Object(map) = payload else {
+        return None;
+    };
+
+    let total_count = map
+        .get("totalCount")
+        .or_else(|| map.get("total_count"))
+        .and_then(Value::as_i64)?;
+    let groups = map.get("groups")?.as_array()?;
+    if groups.is_empty() {
+        return Some(format!("total_count: {total_count}"));
+    }
+
+    let rows = groups
+        .iter()
+        .filter_map(|group| {
+            let group = group.as_object()?;
+            Some(vec![
+                group
+                    .get("relationKind")
+                    .or_else(|| group.get("relation_kind"))
+                    .map(render_table_cell)
+                    .unwrap_or_default(),
+                group
+                    .get("count")
+                    .map(render_table_cell)
+                    .unwrap_or_default(),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Some(format!("total_count: {total_count}"));
+    }
+
+    Some(format!(
+        "total_count: {total_count}\n{}",
+        render_table(&["relation_kind".to_string(), "count".to_string()], &rows)
+    ))
 }
 
 fn collect_table_columns(rows: &[&serde_json::Map<String, Value>]) -> Vec<String> {
@@ -895,5 +946,126 @@ mod tests {
             rendered,
             r#"[{"id":"clone::a","relationKind":"similar_implementation","score":0.91,"sourceArtefactId":"artefact::source","targetArtefactId":"artefact::target"}]"#
         );
+    }
+
+    #[test]
+    fn format_query_output_renders_clone_summary_object() {
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "cloneSummary": {
+                        "totalCount": 3,
+                        "groups": [
+                            {
+                                "relationKind": "similar_implementation",
+                                "count": 2
+                            },
+                            {
+                                "relationKind": "contextual_neighbor",
+                                "count": 1
+                            }
+                        ]
+                    }
+                }
+            }),
+            false,
+            false,
+            None,
+        )
+        .expect("clone summary should render");
+
+        assert!(rendered.contains("total_count: 3"));
+        assert!(rendered.contains("| relation_kind"));
+        assert!(rendered.contains("similar_implementation"));
+        assert!(rendered.contains("contextual_neighbor"));
+    }
+
+    #[test]
+    fn format_query_output_renders_clone_summary_arrays_and_empty_groups() {
+        let rendered = format_query_output(
+            &json!([{
+                "total_count": 0,
+                "groups": []
+            }]),
+            false,
+            false,
+            None,
+        )
+        .expect("clone summary array should render");
+
+        assert_eq!(rendered, "total_count: 0");
+    }
+
+    #[test]
+    fn format_query_output_renders_scalar_arrays_as_single_column_tables() {
+        let rendered = format_query_output(&json!(["alpha", "beta"]), false, false, None)
+            .expect("scalar array should render");
+
+        assert!(rendered.contains("| value"));
+        assert!(rendered.contains("alpha"));
+        assert!(rendered.contains("beta"));
+    }
+
+    #[test]
+    fn format_query_output_falls_back_to_json_for_mixed_arrays() {
+        let rendered = format_query_output(&json!(["alpha", { "count": 2 }]), false, false, None)
+            .expect("mixed array should render");
+
+        assert!(rendered.contains("\"alpha\""));
+        assert!(rendered.contains("\"count\": 2"));
+    }
+
+    #[test]
+    fn format_query_output_preserves_multiple_non_null_root_fields() {
+        let rendered = format_query_output(
+            &json!({
+                "left": { "count": 1 },
+                "right": { "count": 2 }
+            }),
+            false,
+            false,
+            None,
+        )
+        .expect("multi-root payload should render");
+
+        assert!(rendered.contains("| left"));
+        assert!(rendered.contains("| right"));
+        assert!(rendered.contains(r#"{"count":1}"#));
+        assert!(rendered.contains(r#"{"count":2}"#));
+    }
+
+    #[test]
+    fn format_query_output_treats_all_null_objects_as_no_results() {
+        let rendered = format_query_output(
+            &json!({
+                "repo": null
+            }),
+            false,
+            false,
+            None,
+        )
+        .expect("null payload should render");
+
+        assert_eq!(rendered, "No results.");
+    }
+
+    #[test]
+    fn format_query_output_handles_clone_summary_groups_without_objects() {
+        let rendered = format_query_output(
+            &json!({
+                "repo": {
+                    "cloneSummary": {
+                        "totalCount": 4,
+                        "groups": ["unexpected"]
+                    }
+                }
+            }),
+            false,
+            false,
+            None,
+        )
+        .expect("malformed clone summary groups should still render");
+
+        assert_eq!(rendered, "total_count: 4");
     }
 }

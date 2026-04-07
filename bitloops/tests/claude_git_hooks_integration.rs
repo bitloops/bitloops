@@ -108,24 +108,8 @@ fn git_ref_exists(repo: &Path, reference: &str) -> bool {
         .success()
 }
 
-fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
-        .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
-}
-
 fn ensure_relational_store_file(repo_root: &Path) {
-    let sqlite =
-        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
-            .expect("create relational sqlite file");
-    sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+    test_command_support::ensure_repo_daemon_stores(repo_root);
 }
 
 fn init_repo(repo: &Path) {
@@ -553,7 +537,7 @@ fn stop_creates_shadow_checkpoint_and_metadata_files() {
     let state = session_state(dir.path(), sid);
     assert_eq!(state.phase, SessionPhase::Idle);
     assert!(
-        state.step_count > 0,
+        state.pending.step_count > 0,
         "checkpoint_count should increase after stop with changes"
     );
 
@@ -605,7 +589,7 @@ fn stop_handles_already_committed_files_gracefully() {
     let state = session_state(dir.path(), sid);
     assert_eq!(state.phase, SessionPhase::Idle);
     assert_eq!(
-        state.step_count, 0,
+        state.pending.step_count, 0,
         "checkpoint should be skipped when no working tree changes remain"
     );
 
@@ -651,11 +635,12 @@ fn stop_subagent_only_changes_still_create_checkpoint() {
 
     let state = session_state(dir.path(), sid);
     assert!(
-        state.step_count > 0,
+        state.pending.step_count > 0,
         "checkpoint_count should increase for subagent-only file changes"
     );
     assert!(
         state
+            .pending
             .files_touched
             .iter()
             .any(|f| f == "subagent_output.rs"),
@@ -780,7 +765,7 @@ fn stop_creates_shadow_branch_named_after_head_prefix() {
     let state = session_state(dir.path(), sid);
     assert_eq!(state.phase, SessionPhase::Idle);
     assert!(
-        state.step_count > 0,
+        state.pending.step_count > 0,
         "stop should create a pending checkpoint"
     );
 
@@ -861,7 +846,7 @@ fn commit_condenses_metadata_to_checkpoints_branch() {
     let state = session_state(dir.path(), sid);
     assert_eq!(state.last_checkpoint_id, checkpoint_id);
     assert_eq!(
-        state.step_count, 0,
+        state.pending.step_count, 0,
         "checkpoint_count should be reset after condensation"
     );
 }

@@ -6,6 +6,7 @@ use crate::host::checkpoints::lifecycle::UNKNOWN_SESSION_ID;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::local_backend::LocalFileBackend;
 use crate::host::checkpoints::session::phase::SessionPhase;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 use crate::host::checkpoints::strategy::manual_commit::ManualCommitStrategy;
 use crate::host::checkpoints::strategy::noop::NoOpStrategy;
 use crate::host::checkpoints::strategy::registry;
@@ -19,6 +20,7 @@ use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::{
     git_command, isolated_git_command, with_cwd, with_process_state,
 };
+use anyhow::anyhow;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -28,6 +30,7 @@ use tempfile::TempDir;
 fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join(".git")).unwrap();
+    ensure_test_store_backends(dir.path());
     let backend = LocalFileBackend::new(dir.path());
     (dir, backend, NoOpStrategy)
 }
@@ -44,9 +47,10 @@ fn setup_git_repo(dir: &TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
+    fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    ensure_test_store_backends(dir.path());
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
-    ensure_test_store_backends(dir.path());
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
@@ -54,11 +58,103 @@ fn run_git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {:?} failed", args);
 }
 
+fn open_events_duckdb(repo_root: &Path) -> duckdb::Connection {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve store backends");
+    let path = backends.events.resolve_duckdb_db_path_for_repo(repo_root);
+    duckdb::Connection::open(path).expect("open events duckdb")
+}
+
+fn interaction_event_types(repo_root: &Path) -> Vec<String> {
+    let conn = open_events_duckdb(repo_root);
+    let mut stmt = conn
+        .prepare("SELECT event_type FROM interaction_events ORDER BY event_time ASC, event_id ASC")
+        .expect("prepare event type query");
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("query event types");
+    rows.collect::<Result<Vec<_>, _>>()
+        .expect("collect event types")
+}
+
+fn assert_sorted_event_types(repo_root: &Path, mut expected: Vec<&str>) {
+    let mut actual = interaction_event_types(repo_root);
+    actual.sort();
+    expected.sort();
+    assert_eq!(
+        actual,
+        expected.into_iter().map(str::to_string).collect::<Vec<_>>()
+    );
+}
+
+fn interaction_row_counts(repo_root: &Path) -> (i64, i64, i64) {
+    let conn = open_events_duckdb(repo_root);
+    let sessions = conn
+        .query_row("SELECT COUNT(*) FROM interaction_sessions", [], |row| {
+            row.get(0)
+        })
+        .expect("count interaction sessions");
+    let turns = conn
+        .query_row("SELECT COUNT(*) FROM interaction_turns", [], |row| {
+            row.get(0)
+        })
+        .expect("count interaction turns");
+    let events = conn
+        .query_row("SELECT COUNT(*) FROM interaction_events", [], |row| {
+            row.get(0)
+        })
+        .expect("count interaction events");
+    (sessions, turns, events)
+}
+
+fn interaction_turn_fragment(repo_root: &Path) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT transcript_fragment FROM interaction_turns ORDER BY updated_at DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn transcript_fragment")
+}
+
+fn interaction_session_model(repo_root: &Path, session_id: &str) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_sessions WHERE session_id = ?1 ORDER BY updated_at DESC LIMIT 1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .expect("read interaction session model")
+}
+
+fn interaction_turn_model(repo_root: &Path, session_id: &str) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT model FROM interaction_turns WHERE session_id = ?1 ORDER BY updated_at DESC LIMIT 1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .expect("read interaction turn model")
+}
+
+fn interaction_turn_end_payload(repo_root: &Path) -> serde_json::Value {
+    let conn = open_events_duckdb(repo_root);
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM interaction_events WHERE event_type = 'turn_end' ORDER BY event_time DESC, event_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read turn_end payload");
+    serde_json::from_str(&payload).expect("parse turn_end payload")
+}
+
 fn write_claude_write_transcript(path: &Path, file_path: &str) {
     let line = json!({
         "type":"assistant",
         "uuid":"a1",
         "message":{
+            "model":"claude-opus-4-1",
             "content":[
                 {
                     "type":"tool_use",
@@ -96,6 +192,39 @@ impl Strategy for RecordingStrategy {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(ctx.clone());
         Ok(())
+    }
+
+    fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
+    fn commit_msg(&self, _commit_msg_file: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn post_commit(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn pre_push(&self, _remote: &str, _stdin_lines: &[String]) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct FailingStrategy;
+
+impl Strategy for FailingStrategy {
+    fn name(&self) -> &str {
+        "failing"
+    }
+
+    fn save_step(&self, _ctx: &StepContext) -> Result<()> {
+        Err(anyhow!("save_step failed"))
+    }
+
+    fn save_task_step(&self, _ctx: &TaskStepContext) -> Result<()> {
+        Err(anyhow!("save_task_step failed"))
     }
 
     fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
@@ -173,71 +302,77 @@ fn session_start_resets_ended_session() {
 
 #[test]
 fn user_prompt_submit_transitions_to_active() {
-    let (_dir, backend, _strat) = setup();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
 
-    let input = UserPromptSubmitInput {
-        session_id: "s3".to_string(),
-        transcript_path: "/tmp/t.jsonl".to_string(),
-        prompt: "Fix the bug".to_string(),
-    };
-    handle_user_prompt_submit(input, &backend, None).unwrap();
+        let input = UserPromptSubmitInput {
+            session_id: "s3".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            prompt: "Fix the bug".to_string(),
+        };
+        handle_user_prompt_submit(input, &backend, None).unwrap();
 
-    let state = backend.load_session("s3").unwrap().unwrap();
-    assert_eq!(state.phase, SessionPhase::Active);
-    assert_eq!(state.turn_id.len(), 12);
-    assert!(
-        state
-            .turn_id
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-        "turn_id should be 12 lowercase hex chars, got {}",
-        state.turn_id
-    );
+        let state = backend.load_session("s3").unwrap().unwrap();
+        assert_eq!(state.phase, SessionPhase::Active);
+        assert_eq!(state.turn_id.len(), 12);
+        assert!(
+            state
+                .turn_id
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "turn_id should be 12 lowercase hex chars, got {}",
+            state.turn_id
+        );
 
-    // Pre-prompt state should be saved.
-    let pp = backend.load_pre_prompt("s3").unwrap();
-    assert!(pp.is_some());
-    assert_eq!(pp.unwrap().prompt, "Fix the bug");
+        // Pre-prompt state should be saved.
+        let pp = backend.load_pre_prompt("s3").unwrap();
+        assert!(pp.is_some());
+        assert_eq!(pp.unwrap().prompt, "Fix the bug");
+    });
 }
 
 #[test]
 fn user_prompt_submit_rejects_empty_session_id() {
-    let (_dir, backend, _strat) = setup();
-    let err = handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: " ".to_string(),
-            transcript_path: "/tmp/t.jsonl".to_string(),
-            prompt: "Fix the bug".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .expect_err("expected validation error");
-    assert!(
-        err.to_string()
-            .contains("turn-start requires non-empty session_id"),
-        "unexpected error: {err:#}"
-    );
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let err = handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: " ".to_string(),
+                transcript_path: "/tmp/t.jsonl".to_string(),
+                prompt: "Fix the bug".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .expect_err("expected validation error");
+        assert!(
+            err.to_string()
+                .contains("turn-start requires non-empty session_id"),
+            "unexpected error: {err:#}"
+        );
+    });
 }
 
 #[test]
 fn user_prompt_submit_records_first_prompt() {
-    let (_dir, backend, _strat) = setup();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
 
-    let long_prompt = "A".repeat(200);
-    let input = UserPromptSubmitInput {
-        session_id: "s4".to_string(),
-        transcript_path: "/tmp/t.jsonl".to_string(),
-        prompt: long_prompt,
-    };
-    handle_user_prompt_submit(input, &backend, None).unwrap();
+        let long_prompt = "A".repeat(200);
+        let input = UserPromptSubmitInput {
+            session_id: "s4".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            prompt: long_prompt,
+        };
+        handle_user_prompt_submit(input, &backend, None).unwrap();
 
-    let state = backend.load_session("s4").unwrap().unwrap();
-    assert_eq!(
-        state.first_prompt.chars().count(),
-        100,
-        "first_prompt truncated to 100 chars"
-    );
+        let state = backend.load_session("s4").unwrap().unwrap();
+        assert_eq!(
+            state.first_prompt.chars().count(),
+            100,
+            "first_prompt truncated to 100 chars"
+        );
+    });
 }
 
 #[test]
@@ -296,6 +431,187 @@ fn session_end_sets_ended_phase() {
 }
 
 #[test]
+fn claude_stop_persists_interactions_before_save_step_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = FailingStrategy;
+
+    handle_session_start_with_profile(
+        SessionInfoInput {
+            session_id: "claude-event-first".to_string(),
+            transcript_path: "/tmp/claude-event-first.jsonl".to_string(),
+        },
+        &backend,
+        Some(dir.path()),
+        Some(CLAUDE_HOOK_AGENT_PROFILE),
+    )
+    .unwrap();
+
+    handle_user_prompt_submit_with_strategy_and_profile(
+        UserPromptSubmitInput {
+            session_id: "claude-event-first".to_string(),
+            transcript_path: "/tmp/claude-event-first.jsonl".to_string(),
+            prompt: "Update tracked file".to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(dir.path().join("tracked.txt"), "claude-event-first\n").unwrap();
+
+    let err = handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "claude-event-first".to_string(),
+            transcript_path: "/tmp/claude-event-first.jsonl".to_string(),
+        },
+        &backend,
+        &strategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .expect_err("stop should fail after interaction capture");
+    assert!(
+        err.to_string().contains("save_step failed"),
+        "unexpected error: {err:#}"
+    );
+
+    assert_eq!(interaction_row_counts(dir.path()), (1, 1, 3));
+    assert_sorted_event_types(dir.path(), vec!["session_start", "turn_start", "turn_end"]);
+}
+
+#[test]
+fn claude_stop_persists_transcript_fragment_in_event_store() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let transcript_path = transcript_dir.path().join("claude-fragment.jsonl");
+
+    handle_session_start_with_profile(
+        SessionInfoInput {
+            session_id: "claude-fragment".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+        },
+        &backend,
+        Some(dir.path()),
+        Some(CLAUDE_HOOK_AGENT_PROFILE),
+    )
+    .unwrap();
+
+    handle_user_prompt_submit_with_strategy_and_profile(
+        UserPromptSubmitInput {
+            session_id: "claude-fragment".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+            prompt: "Update tracked file".to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(
+        &transcript_path,
+        "{\"type\":\"user\",\"message\":{\"content\":\"Update tracked file\"}}\n\
+{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-1\",\"content\":[{\"type\":\"text\",\"text\":\"Implemented the change\"}]}}\n",
+    )
+    .unwrap();
+
+    handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "claude-fragment".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    let transcript_fragment = interaction_turn_fragment(dir.path());
+    assert!(
+        transcript_fragment.contains("Implemented the change"),
+        "turn row should persist the completed transcript fragment"
+    );
+
+    let payload = interaction_turn_end_payload(dir.path());
+    assert_eq!(
+        payload["transcript_fragment"].as_str().unwrap_or_default(),
+        transcript_fragment,
+        "turn_end event payload should mirror the persisted transcript fragment"
+    );
+    assert_eq!(
+        interaction_session_model(dir.path(), "claude-fragment"),
+        "claude-opus-4-1"
+    );
+    assert_eq!(
+        interaction_turn_model(dir.path(), "claude-fragment"),
+        "claude-opus-4-1"
+    );
+}
+
+#[test]
+fn cursor_stop_persists_structured_transcript_fragment_in_event_store() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let transcript_path = transcript_dir.path().join("cursor-fragment.json");
+    let strategy = RecordingStrategy::default();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::BeforeSubmitPrompt,
+        &format!(
+            r#"{{"conversation_id":"cursor-fragment","transcript_path":"{}","prompt":"Update tracked file"}}"#,
+            transcript_path.to_string_lossy()
+        ),
+        &backend,
+        &strategy,
+        dir.path(),
+        "before-submit-prompt",
+    )
+    .unwrap();
+
+    fs::write(
+        &transcript_path,
+        r#"{"messages":[{"type":"user","content":"Update tracked file"},{"type":"assistant","content":"Implemented the change"}]}"#,
+    )
+    .unwrap();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::Stop,
+        &format!(
+            r#"{{"conversation_id":"cursor-fragment","transcript_path":"{}"}}"#,
+            transcript_path.to_string_lossy()
+        ),
+        &backend,
+        &strategy,
+        dir.path(),
+        "stop",
+    )
+    .unwrap();
+
+    let transcript_fragment = interaction_turn_fragment(dir.path());
+    assert!(
+        transcript_fragment.contains("Implemented the change"),
+        "turn row should persist the completed structured transcript fragment"
+    );
+
+    let payload = interaction_turn_end_payload(dir.path());
+    assert_eq!(
+        payload["transcript_fragment"].as_str().unwrap_or_default(),
+        transcript_fragment,
+        "turn_end event payload should mirror the persisted structured transcript fragment"
+    );
+}
+
+#[test]
 fn cursor_session_start_creates_or_updates_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -320,13 +636,13 @@ fn cursor_session_start_creates_or_updates_session_state() {
 
 #[test]
 fn cursor_session_start_rejects_empty_conversation_id() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
     let err = dispatch_cursor_hook(
         &CursorHookVerb::SessionStart,
         r#"{"conversation_id":"  ","transcript_path":"/tmp/cursor-empty.jsonl"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "session-start",
     )
     .expect_err("expected validation error");
@@ -337,17 +653,66 @@ fn cursor_session_start_rejects_empty_conversation_id() {
 }
 
 #[test]
-fn cursor_before_submit_prompt_creates_pre_prompt_state() {
-    let (_dir, backend, strat) = setup();
+fn cursor_stop_persists_interactions_before_save_step_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = FailingStrategy;
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::SessionStart,
+        r#"{"conversation_id":"cursor-event-first","transcript_path":"/tmp/cursor-event-first.jsonl"}"#,
+        &backend,
+        &strategy,
+        dir.path(),
+        "session-start",
+    )
+    .unwrap();
 
     dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
-        r#"{"conversation_id":"cursor-s2","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
+        r#"{"conversation_id":"cursor-event-first","transcript_path":"/tmp/cursor-event-first.jsonl","prompt":"Update tracked file"}"#,
         &backend,
-        &strat,
-        Path::new("/tmp"),
+        &strategy,
+        dir.path(),
         "before-submit-prompt",
     )
+    .unwrap();
+
+    fs::write(dir.path().join("tracked.txt"), "cursor-event-first\n").unwrap();
+
+    let err = dispatch_cursor_hook(
+        &CursorHookVerb::Stop,
+        r#"{"conversation_id":"cursor-event-first","transcript_path":"/tmp/cursor-event-first.jsonl"}"#,
+        &backend,
+        &strategy,
+        dir.path(),
+        "stop",
+    )
+    .expect_err("stop should fail after interaction capture");
+    assert!(
+        err.to_string().contains("save_step failed"),
+        "unexpected error: {err:#}"
+    );
+
+    assert_eq!(interaction_row_counts(dir.path()), (1, 1, 3));
+    assert_sorted_event_types(dir.path(), vec!["session_start", "turn_start", "turn_end"]);
+}
+
+#[test]
+fn cursor_before_submit_prompt_creates_pre_prompt_state() {
+    let (dir, backend, strat) = setup();
+
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeSubmitPrompt,
+            r#"{"conversation_id":"cursor-s2","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "before-submit-prompt",
+        )
+    })
     .unwrap();
 
     let state = backend.load_session("cursor-s2").unwrap().unwrap();
@@ -359,14 +724,43 @@ fn cursor_before_submit_prompt_creates_pre_prompt_state() {
 }
 
 #[test]
+fn cursor_before_submit_prompt_persists_model_from_hook_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = create_session_backend_or_local(dir.path());
+    let strategy = RecordingStrategy::default();
+
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeSubmitPrompt,
+            r#"{"conversation_id":"cursor-model-1","transcript_path":"/tmp/cursor-model-1.jsonl","prompt":"Fix bug in parser","modelSlug":"gpt-5.4-mini"}"#,
+            backend.as_ref(),
+            &strategy,
+            dir.path(),
+            "before-submit-prompt",
+        )
+    })
+    .expect("before-submit-prompt should succeed");
+
+    assert_eq!(
+        interaction_session_model(dir.path(), "cursor-model-1"),
+        "gpt-5.4-mini"
+    );
+    assert_eq!(
+        interaction_turn_model(dir.path(), "cursor-model-1"),
+        "gpt-5.4-mini"
+    );
+}
+
+#[test]
 fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
     let err = dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
         r#"{"conversation_id":" ","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "before-submit-prompt",
     )
     .expect_err("expected validation error");
@@ -378,16 +772,18 @@ fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
 
 #[test]
 fn cursor_before_shell_execution_creates_shell_fallback_pre_prompt() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::BeforeShellExecution,
-        r#"{"conversation_id":"cursor-shell-1","transcript_path":"/tmp/cursor-shell-1.jsonl","command":"npm test"}"#,
-        &backend,
-        &strat,
-        Path::new("/tmp"),
-        "before-shell-execution",
-    )
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeShellExecution,
+            r#"{"conversation_id":"cursor-shell-1","transcript_path":"/tmp/cursor-shell-1.jsonl","command":"npm test"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "before-shell-execution",
+        )
+    })
     .unwrap();
 
     let state = backend.load_session("cursor-shell-1").unwrap().unwrap();
@@ -616,7 +1012,7 @@ fn claude_before_submit_prompt_sets_claude_agent_type() {
 
 #[test]
 fn cursor_session_end_marks_session_ended() {
-    let (_dir, backend, strat) = setup();
+    let (dir, backend, strat) = setup();
     backend
         .save_session(&SessionState {
             session_id: "cursor-s3".to_string(),
@@ -630,7 +1026,7 @@ fn cursor_session_end_marks_session_ended() {
         r#"{"conversation_id":"cursor-s3","transcript_path":"/tmp/cursor-s3.jsonl"}"#,
         &backend,
         &strat,
-        Path::new("/tmp"),
+        dir.path(),
         "session-end",
     )
     .unwrap();
@@ -686,7 +1082,7 @@ fn cursor_session_end_with_idle_zero_steps_still_saves_checkpoint() {
         .save_session(&SessionState {
             session_id: "cursor-s3-idle-zero".to_string(),
             phase: SessionPhase::Idle,
-            step_count: 0,
+            pending: PendingCheckpointState::default(),
             ..Default::default()
         })
         .unwrap();
@@ -749,7 +1145,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
         .unwrap()
         .unwrap();
     assert!(
-        state_before_session_end.step_count > 0,
+        state_before_session_end.pending.step_count > 0,
         "manual strategy should record a step at stop"
     );
 
@@ -768,7 +1164,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        state.step_count, state_before_session_end.step_count,
+        state.pending.step_count, state_before_session_end.pending.step_count,
         "session-end should not re-run turn-end when stop already completed the turn"
     );
     assert_eq!(state.phase, SessionPhase::Ended);
@@ -838,13 +1234,73 @@ fn pre_task_creates_marker() {
 }
 
 #[test]
+fn claude_post_task_persists_subagent_events_before_save_task_step_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = FailingStrategy;
+
+    backend
+        .save_session(&SessionState {
+            session_id: "claude-subagent-events".to_string(),
+            phase: SessionPhase::Active,
+            turn_id: "turn-subagent".to_string(),
+            agent_type: AGENT_TYPE_CLAUDE_CODE.to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    handle_pre_task_with_profile(
+        TaskHookInput {
+            session_id: "claude-subagent-events".to_string(),
+            transcript_path: "/tmp/claude-subagent-events.jsonl".to_string(),
+            tool_use_id: "tool-subagent".to_string(),
+            tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
+        },
+        &backend,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(dir.path().join("tracked.txt"), "claude-subagent-events\n").unwrap();
+
+    let err = handle_post_task_with_profile(
+        PostTaskInput {
+            session_id: "claude-subagent-events".to_string(),
+            transcript_path: "/tmp/claude-subagent-events.jsonl".to_string(),
+            tool_use_id: "tool-subagent".to_string(),
+            tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
+            tool_response: TaskToolResponse {
+                agent_id: "agent-subagent".to_string(),
+            },
+        },
+        &backend,
+        &strategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .expect_err("post-task should fail after interaction capture");
+    assert!(
+        err.to_string().contains("save_task_step failed"),
+        "unexpected error: {err:#}"
+    );
+
+    assert_eq!(interaction_row_counts(dir.path()), (0, 0, 2));
+    assert_sorted_event_types(dir.path(), vec!["subagent_start", "subagent_end"]);
+}
+
+#[test]
 fn post_task_deletes_marker_without_mutating_step_count() {
     let (_dir, backend, strat) = setup();
 
     let state = SessionState {
         session_id: "s8".to_string(),
         phase: SessionPhase::Active,
-        step_count: 2,
+        pending: PendingCheckpointState {
+            step_count: 2,
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -871,7 +1327,10 @@ fn post_task_deletes_marker_without_mutating_step_count() {
     );
 
     let loaded = backend.load_session("s8").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 2, "step_count should be unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 2,
+        "step_count should be unchanged"
+    );
 }
 
 #[test]
@@ -881,7 +1340,7 @@ fn post_todo_noop_when_no_changes_in_subagent() {
     let state = SessionState {
         session_id: "s9".to_string(),
         phase: SessionPhase::Active,
-        step_count: 0,
+        pending: PendingCheckpointState::default(),
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -903,7 +1362,10 @@ fn post_todo_noop_when_no_changes_in_subagent() {
     handle_post_todo(input, &backend, &strat, None).unwrap();
 
     let loaded = backend.load_session("s9").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 0, "step_count should be unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 0,
+        "step_count should be unchanged"
+    );
 }
 
 #[test]
@@ -913,7 +1375,10 @@ fn post_todo_noop_when_not_in_subagent() {
     let state = SessionState {
         session_id: "s10".to_string(),
         phase: SessionPhase::Active,
-        step_count: 5,
+        pending: PendingCheckpointState {
+            step_count: 5,
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -929,7 +1394,10 @@ fn post_todo_noop_when_not_in_subagent() {
     handle_post_todo(input, &backend, &strat, None).unwrap();
 
     let loaded = backend.load_session("s10").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 5, "step_count should be unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 5,
+        "step_count should be unchanged"
+    );
 }
 
 #[test]
@@ -1167,7 +1635,7 @@ fn stop_preserves_strategy_checkpoint_count_updates() {
     let loaded = backend.load_session("stop-manual").unwrap().unwrap();
     assert_eq!(loaded.phase, SessionPhase::Idle);
     assert!(
-        loaded.step_count > 0,
+        loaded.pending.step_count > 0,
         "stop should preserve checkpoint_count updates from strategy.save_step"
     );
 }
@@ -1290,7 +1758,10 @@ fn post_task_saves_task_step_when_changes_exist() {
         .save_session(&SessionState {
             session_id: "post-task".to_string(),
             phase: SessionPhase::Active,
-            step_count: 7,
+            pending: PendingCheckpointState {
+                step_count: 7,
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
@@ -1338,7 +1809,10 @@ fn post_task_saves_task_step_when_changes_exist() {
         call.new_files
     );
     let loaded = backend.load_session("post-task").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 7, "step_count should stay unchanged");
+    assert_eq!(
+        loaded.pending.step_count, 7,
+        "step_count should stay unchanged"
+    );
 }
 
 #[test]
@@ -1899,6 +2373,16 @@ fn copilot_hooks_cmd_has_logging_hooks() {
 }
 
 #[test]
+fn opencode_hooks_cmd_has_logging_hooks() {
+    let hooks_cmd =
+        <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
+    let has_opencode = hooks_cmd
+        .get_subcommands()
+        .any(|cmd| cmd.get_name() == "opencode");
+    assert!(has_opencode);
+}
+
+#[test]
 fn hook_command_sets_current_hook_agent_name() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -1939,115 +2423,123 @@ fn hook_command_sets_current_hook_agent_name() {
 
 #[test]
 fn pre_prompt_state_with_transcript_position() {
-    let (_dir, backend, _strat) = setup();
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript.jsonl");
-    fs::write(
-        &transcript_path,
-        "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n",
-    )
-    .unwrap();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript.jsonl");
+        fs::write(
+            &transcript_path,
+            "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n",
+        )
+        .unwrap();
 
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-123".to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-123".to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-123")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 3);
+        let state = backend
+            .load_pre_prompt("test-session-123")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 3);
+    });
 }
 
 // Capture transcript position AND last transcript identifier at turn start.
 #[test]
 fn pre_prompt_state_captures_last_transcript_identifier() {
-    let (_dir, backend, _strat) = setup();
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript.jsonl");
-    fs::write(
-        &transcript_path,
-        r#"{"uuid":"user-1","type":"user","message":{"content":"first"}}
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript.jsonl");
+        fs::write(
+            &transcript_path,
+            r#"{"uuid":"user-1","type":"user","message":{"content":"first"}}
 {"uuid":"assistant-1","type":"assistant","message":{"content":"ok"}}
 {"uuid":"user-2","type":"user","message":{"content":"second"}}
 "#,
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-last-uuid".to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-last-uuid".to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-last-uuid")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 3);
-    assert_eq!(state.last_transcript_identifier, "user-2");
+        let state = backend
+            .load_pre_prompt("test-session-last-uuid")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 3);
+        assert_eq!(state.last_transcript_identifier, "user-2");
+    });
 }
 
 #[test]
 fn pre_prompt_state_with_empty_transcript_path() {
-    let (_dir, backend, _strat) = setup();
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-empty-transcript".to_string(),
-            transcript_path: String::new(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-empty-transcript".to_string(),
+                transcript_path: String::new(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-empty-transcript")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 0);
+        let state = backend
+            .load_pre_prompt("test-session-empty-transcript")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 0);
+    });
 }
 
 #[test]
 fn pre_prompt_state_with_summary_only_transcript() {
-    let (_dir, backend, _strat) = setup();
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript-summary.jsonl");
-    fs::write(
-        &transcript_path,
-        "{\"type\":\"summary\",\"leafUuid\":\"leaf-1\"}\n{\"type\":\"summary\",\"leafUuid\":\"leaf-2\"}\n",
-    )
-    .unwrap();
+    with_process_state(None, &[], || {
+        let (_dir, backend, _strat) = setup();
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript-summary.jsonl");
+        fs::write(
+            &transcript_path,
+            "{\"type\":\"summary\",\"leafUuid\":\"leaf-1\"}\n{\"type\":\"summary\",\"leafUuid\":\"leaf-2\"}\n",
+        )
+        .unwrap();
 
-    handle_user_prompt_submit(
-        UserPromptSubmitInput {
-            session_id: "test-session-summary-only".to_string(),
-            transcript_path: transcript_path.to_string_lossy().to_string(),
-            prompt: "hello".to_string(),
-        },
-        &backend,
-        None,
-    )
-    .unwrap();
+        handle_user_prompt_submit(
+            UserPromptSubmitInput {
+                session_id: "test-session-summary-only".to_string(),
+                transcript_path: transcript_path.to_string_lossy().to_string(),
+                prompt: "hello".to_string(),
+            },
+            &backend,
+            None,
+        )
+        .unwrap();
 
-    let state = backend
-        .load_pre_prompt("test-session-summary-only")
-        .unwrap()
-        .expect("pre-prompt state");
-    assert_eq!(state.transcript_offset, 2);
+        let state = backend
+            .load_pre_prompt("test-session-summary-only")
+            .unwrap()
+            .expect("pre-prompt state");
+        assert_eq!(state.transcript_offset, 2);
+    });
 }
 
 #[test]
@@ -2083,7 +2575,7 @@ fn filter_and_normalize_paths_sibling_directories() {
 
     let files = vec![
         "/repo/src/file.ts".to_string(),
-        "/repo/.bitloops/metadata/session.json".to_string(),
+        "/repo/.bitloops/internal/sessions/session.json".to_string(),
     ];
     let got = filter_and_normalize_paths(&files, "/repo");
     assert_eq!(got, vec!["src/file.ts".to_string()]);

@@ -11,6 +11,7 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::config::resolve_repo_runtime_db_path_for_repo;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use bitloops::utils::paths;
 use rusqlite::{Connection, params};
@@ -30,6 +31,34 @@ struct AppPaths {
     xdg_data: PathBuf,
     xdg_cache: PathBuf,
     xdg_state: PathBuf,
+}
+
+fn write_test_daemon_config(config_root: &Path) -> PathBuf {
+    let config_path = config_root.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let app_paths = app_paths_for_repo(config_root);
+    let data_root = app_paths.xdg_data.join("bitloops");
+    let sqlite_path = data_root
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
+    let duckdb_path = data_root.join("stores").join("event").join("events.duckdb");
+    let blob_path = data_root.join("stores").join("blob");
+    let config_contents = format!(
+        r#"[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = {sqlite_path:?}
+
+[stores.events]
+duckdb_path = {duckdb_path:?}
+
+[stores.blob]
+local_path = {blob_path:?}
+"#,
+    );
+    fs::write(&config_path, config_contents).expect("write test daemon config");
+    config_path
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -96,6 +125,17 @@ pub fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {
 }
 
 pub fn prepare_graphql_workspace(workspace: &Workspace) {
+    fs::write(
+        workspace
+            .repo_dir()
+            .join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            "[stores.relational]\nsqlite_path = {:?}\n",
+            workspace.db_path()
+        ),
+    )
+    .expect("write GraphQL workspace store config");
+
     bootstrap_codex_workspace(workspace);
 
     with_repo_app_env(workspace.repo_dir(), || {
@@ -110,12 +150,18 @@ pub fn prepare_graphql_workspace(workspace: &Workspace) {
             .expect("build tokio runtime for GraphQL workspace")
             .block_on(bitloops::host::devql::run_init(&cfg))
             .expect("initialise DevQL schema for GraphQL workspace");
+
+        bitloops::capability_packs::test_harness::storage::init_test_domain_database(
+            workspace.db_path(),
+        )
+        .expect("initialise test-harness schema for GraphQL workspace");
     });
 }
 
 pub fn bootstrap_codex_workspace(workspace: &Workspace) {
     let repo_root = workspace.repo_dir();
     with_repo_app_env(repo_root, || {
+        write_test_daemon_config(repo_root);
         ensure_relational_store_file(repo_root);
         let policy_path = repo_root.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
         bitloops::config::settings::write_project_bootstrap_settings(
@@ -734,12 +780,13 @@ fn init_git_repo(repo_dir: &Path) {
 fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
     let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_relational_store_file(repo_root: &Path) {
@@ -749,6 +796,19 @@ fn ensure_relational_store_file(repo_root: &Path) {
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
+
+    let runtime_path = resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path for test workspace");
+    if let Some(parent) = runtime_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime = bitloops::storage::SqliteConnectionPool::connect(runtime_path)
+        .expect("create runtime sqlite file");
+    runtime
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema");
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {

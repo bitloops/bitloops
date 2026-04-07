@@ -127,8 +127,7 @@ fn stale_test_artefacts() -> Vec<TestArtefactCurrentRecord> {
             artefact_id: "test-artefact:suite:stale".to_string(),
             symbol_id: "suite:stale".to_string(),
             repo_id: REPO_ID.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: "blob:test:stale".to_string(),
+            content_id: "blob:test:stale".to_string(),
             path: "tests/stale.rs".to_string(),
             language: "rust".to_string(),
             canonical_kind: "test_suite".to_string(),
@@ -144,17 +143,13 @@ fn stale_test_artefacts() -> Vec<TestArtefactCurrentRecord> {
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static_analysis".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: COMMIT_SHA.to_string(),
         },
         TestArtefactCurrentRecord {
             artefact_id: "test-artefact:scenario:stale".to_string(),
             symbol_id: "scenario:stale".to_string(),
             repo_id: REPO_ID.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: "blob:test:stale".to_string(),
+            content_id: "blob:test:stale".to_string(),
             path: "tests/stale.rs".to_string(),
             language: "rust".to_string(),
             canonical_kind: "test_scenario".to_string(),
@@ -170,10 +165,7 @@ fn stale_test_artefacts() -> Vec<TestArtefactCurrentRecord> {
             signature: Some("fn stale_test()".to_string()),
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static_analysis".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: COMMIT_SHA.to_string(),
         },
     ]
 }
@@ -182,8 +174,7 @@ fn stale_test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
     vec![TestArtefactEdgeCurrentRecord {
         edge_id: "link:stale".to_string(),
         repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        blob_sha: "blob:test:stale".to_string(),
+        content_id: "blob:test:stale".to_string(),
         path: "tests/stale.rs".to_string(),
         from_artefact_id: "test-artefact:scenario:stale".to_string(),
         from_symbol_id: "scenario:stale".to_string(),
@@ -195,8 +186,6 @@ fn stale_test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
         start_line: Some(3),
         end_line: Some(5),
         metadata: "{\"imports\":[\"create_user\"]}".to_string(),
-        revision_kind: "commit".to_string(),
-        revision_id: COMMIT_SHA.to_string(),
     }]
 }
 
@@ -204,7 +193,7 @@ fn stale_discovery_run() -> TestDiscoveryRunRecord {
     TestDiscoveryRunRecord {
         discovery_run_id: "discovery:stale".to_string(),
         repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
+        sync_mode: "full".to_string(),
         language: Some("rust".to_string()),
         started_at: "2026-03-24T00:00:00Z".to_string(),
         finished_at: Some("2026-03-24T00:00:01Z".to_string()),
@@ -220,7 +209,6 @@ fn stale_diagnostic() -> TestDiscoveryDiagnosticRecord {
         diagnostic_id: "diag:stale".to_string(),
         discovery_run_id: "discovery:stale".to_string(),
         repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
         path: Some("tests/stale.rs".to_string()),
         line: Some(1),
         severity: "warning".to_string(),
@@ -234,7 +222,7 @@ fn test_discovery_run() -> TestDiscoveryRunRecord {
     TestDiscoveryRunRecord {
         discovery_run_id: "discovery:user-service".to_string(),
         repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
+        sync_mode: "full".to_string(),
         language: Some("rust".to_string()),
         started_at: "2026-03-24T00:00:00Z".to_string(),
         finished_at: Some("2026-03-24T00:00:01Z".to_string()),
@@ -249,8 +237,7 @@ fn test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
     vec![TestArtefactEdgeCurrentRecord {
         edge_id: TEST_LINK_ID.to_string(),
         repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        blob_sha: "blob:test:user-service".to_string(),
+        content_id: "blob:test:user-service".to_string(),
         path: "tests/user_service.rs".to_string(),
         from_artefact_id: SCENARIO_ARTEFACT_ID.to_string(),
         from_symbol_id: SCENARIO_ID.to_string(),
@@ -262,8 +249,6 @@ fn test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
         start_line: Some(8),
         end_line: Some(14),
         metadata: "{\"calls\":[\"create_user\"]}".to_string(),
-        revision_kind: "commit".to_string(),
-        revision_id: COMMIT_SHA.to_string(),
     }]
 }
 
@@ -325,8 +310,7 @@ fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {
             artefact_id: SUITE_ARTEFACT_ID.to_string(),
             symbol_id: SUITE_ID.to_string(),
             repo_id: REPO_ID.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: "blob:test:user-service".to_string(),
+            content_id: "blob:test:user-service".to_string(),
             path: "tests/user_service.rs".to_string(),
             language: "rust".to_string(),
             canonical_kind: "test_suite".to_string(),
@@ -342,17 +326,13 @@ fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "hybrid_enumeration".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: COMMIT_SHA.to_string(),
         },
         TestArtefactCurrentRecord {
             artefact_id: SCENARIO_ARTEFACT_ID.to_string(),
             symbol_id: SCENARIO_ID.to_string(),
             repo_id: REPO_ID.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: "blob:test:user-service".to_string(),
+            content_id: "blob:test:user-service".to_string(),
             path: "tests/user_service.rs".to_string(),
             language: "rust".to_string(),
             canonical_kind: "test_scenario".to_string(),
@@ -368,10 +348,7 @@ fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {
             signature: Some("fn checks_email_domain()".to_string()),
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "hybrid_enumeration".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: COMMIT_SHA.to_string(),
         },
     ]
 }

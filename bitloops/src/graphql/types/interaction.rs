@@ -1,7 +1,8 @@
 use async_graphql::{ID, SimpleObject};
 
+use crate::graphql::types::JsonScalar;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
-use crate::host::interactions::types::{InteractionSession, InteractionTurn};
+use crate::host::interactions::types::{InteractionEvent, InteractionSession, InteractionTurn};
 
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InteractionSessionObject {
@@ -26,6 +27,18 @@ pub struct InteractionTurnObject {
     pub token_usage: Option<InteractionTokenUsage>,
     pub files_modified: Vec<String>,
     pub checkpoint_id: Option<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionEventObject {
+    pub id: ID,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub event_type: String,
+    pub event_time: String,
+    pub agent_type: String,
+    pub model: Option<String>,
+    pub payload: Option<JsonScalar>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -84,6 +97,21 @@ impl InteractionTokenUsage {
             cache_creation_tokens: metadata.cache_creation_tokens,
             cache_read_tokens: metadata.cache_read_tokens,
             api_call_count: metadata.api_call_count,
+        }
+    }
+}
+
+impl InteractionEventObject {
+    pub fn from_domain(event: &InteractionEvent) -> Self {
+        Self {
+            id: ID(event.event_id.clone()),
+            session_id: event.session_id.clone(),
+            turn_id: event.turn_id.clone(),
+            event_type: event.event_type.as_str().to_string(),
+            event_time: event.event_time.clone(),
+            agent_type: event.agent_type.clone(),
+            model: non_empty(&event.model),
+            payload: Some(async_graphql::types::Json(event.payload.clone())),
         }
     }
 }
@@ -156,8 +184,14 @@ mod tests {
                 api_call_count: 3,
                 subagent_tokens: None,
             }),
+            summary: "fixed bug".into(),
+            prompt_count: 2,
+            transcript_offset_start: Some(4),
+            transcript_offset_end: Some(9),
+            transcript_fragment: String::new(),
             files_modified: vec!["src/main.rs".into(), "src/lib.rs".into()],
             checkpoint_id: Some("cp-1".into()),
+            updated_at: "2026-04-04T10:02:00Z".into(),
         };
         let obj = InteractionTurnObject::from_domain(&turn);
         assert_eq!(obj.id.as_str(), "turn-1");
@@ -192,8 +226,14 @@ mod tests {
             started_at: "2026-04-04T10:01:00Z".into(),
             ended_at: None,
             token_usage: None,
+            summary: String::new(),
+            prompt_count: 0,
+            transcript_offset_start: None,
+            transcript_offset_end: None,
+            transcript_fragment: String::new(),
             files_modified: Vec::new(),
             checkpoint_id: None,
+            updated_at: "2026-04-04T10:01:00Z".into(),
         };
         let obj = InteractionTurnObject::from_domain(&turn);
         assert_eq!(obj.id.as_str(), "turn-2");

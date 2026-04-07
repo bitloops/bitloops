@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 #[test]
 pub(crate) fn get_git_author_from_repo_global_fallback() {
@@ -157,7 +158,7 @@ pub(crate) fn prepare_commit_msg_is_noop_for_idle_sessions_without_pending_steps
         .save_session(&SessionState {
             session_id: "idle-no-steps".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
-            step_count: 0,
+            pending: PendingCheckpointState::default(),
             ..Default::default()
         })
         .unwrap();

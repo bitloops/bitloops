@@ -4,7 +4,5 @@ mod coordinator;
 mod queue;
 #[path = "sync/state.rs"]
 mod state;
-#[path = "sync/state_lock.rs"]
-mod state_lock;
 
 pub use self::coordinator::{SyncCoordinator, SyncEnqueueResult};

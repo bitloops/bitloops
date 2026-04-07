@@ -4,9 +4,9 @@ use tempfile::TempDir;
 
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
+use crate::host::checkpoints::transcript::metadata::SessionMetadataBundle;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::git_command;
-use crate::utils::paths;
 
 use super::*;
 
@@ -36,6 +36,19 @@ fn setup_git_repo(dir: &TempDir) {
 
 fn commit_tree_hash(dir: &TempDir, rev: &str) -> String {
     run_git(dir.path(), &["show", "-s", "--format=%T", rev]).expect("read tree hash")
+}
+
+fn session_metadata_bundle(
+    transcript: &str,
+    prompts: &[&str],
+    context: Option<&str>,
+) -> SessionMetadataBundle {
+    SessionMetadataBundle {
+        transcript: transcript.as_bytes().to_vec(),
+        prompts: prompts.iter().map(|prompt| (*prompt).to_string()).collect(),
+        summary: String::new(),
+        context: context.unwrap_or_default().as_bytes().to_vec(),
+    }
 }
 
 #[test]
@@ -122,21 +135,10 @@ fn auto_commit_save_step_writes_checkpoint_to_db() {
     let test_file = dir.path().join("test.rs");
     fs::write(&test_file, "package main").expect("write test.rs");
 
-    let session_id = "2025-12-04-test-session-123";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(
-        metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME),
-        "test session log",
-    )
-    .expect("write transcript");
-
     let ctx = StepContext {
-        session_id: session_id.to_string(),
+        session_id: "2025-12-04-test-session-123".to_string(),
         commit_message: "Test session commit".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle("test session log", &[], None)),
         new_files: vec!["test.rs".to_string()],
         modified_files: vec![],
         deleted_files: vec![],
@@ -169,21 +171,10 @@ fn auto_commit_save_step_checkpoint_maps_head_to_db() {
     let test_file = dir.path().join("test.rs");
     fs::write(&test_file, "package main").expect("write test.rs");
 
-    let session_id = "2025-12-04-test-session-456";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(
-        metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME),
-        "test session log",
-    )
-    .expect("write transcript");
-
     let ctx = StepContext {
-        session_id: session_id.to_string(),
+        session_id: "2025-12-04-test-session-456".to_string(),
         commit_message: "Test session commit".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle("test session log", &[], None)),
         new_files: vec!["test.rs".to_string()],
         modified_files: vec![],
         deleted_files: vec![],
@@ -230,6 +221,7 @@ fn auto_commit_save_task_step_writes_checkpoint_to_db() {
         tool_use_id: "toolu_abc123".to_string(),
         checkpoint_uuid: "checkpoint-uuid-456".to_string(),
         agent_id: "agent-xyz".to_string(),
+        session_metadata: Some(session_metadata_bundle(r#"{"type":"test"}"#, &[], None)),
         transcript_path: transcript_path.to_string_lossy().to_string(),
         new_files: vec!["task_output.txt".to_string()],
         modified_files: vec![],
@@ -303,27 +295,17 @@ fn auto_commit_get_session_context() {
     fs::write(&test_file, "package main").expect("write test.rs");
 
     let session_id = "2025-12-10-test-session-context";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(
-        metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME),
-        "test session log",
-    )
-    .expect("write transcript");
     let context_content =
         "# Session Context\n\nThis is a test context.\n\n## Details\n\n- Item 1\n- Item 2";
-    fs::write(
-        metadata_dir_abs.join(paths::CONTEXT_FILE_NAME),
-        context_content,
-    )
-    .expect("write context");
 
     let ctx = StepContext {
         session_id: session_id.to_string(),
         commit_message: "Test checkpoint".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle(
+            "test session log",
+            &[],
+            Some(context_content),
+        )),
         new_files: vec!["test.rs".to_string()],
         modified_files: vec![],
         deleted_files: vec![],
@@ -354,27 +336,16 @@ fn auto_commit_list_sessions_has_description() {
     fs::write(&test_file, "package main").expect("write test.rs");
 
     let session_id = "2025-12-10-test-session-description";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(
-        metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME),
-        "test session log",
-    )
-    .expect("write transcript");
-
     let expected_description = "Fix the authentication bug in login.rs";
-    fs::write(
-        metadata_dir_abs.join(paths::PROMPT_FILE_NAME),
-        format!("{expected_description}\n\nMore details here..."),
-    )
-    .expect("write prompt");
 
     let ctx = StepContext {
         session_id: session_id.to_string(),
         commit_message: "Test checkpoint".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle(
+            "test session log",
+            &[&format!("{expected_description}\n\nMore details here...")],
+            None,
+        )),
         new_files: vec!["test.rs".to_string()],
         modified_files: vec![],
         deleted_files: vec![],
@@ -425,8 +396,8 @@ fn auto_commit_initialize_session_creates_session_state() {
 
     assert_eq!(state.session_id, session_id);
     assert_eq!(state.cli_version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(state.step_count, 0);
-    assert_eq!(state.checkpoint_transcript_start, 0);
+    assert_eq!(state.pending.step_count, 0);
+    assert_eq!(state.pending.checkpoint_transcript_start, 0);
 }
 
 #[test]
@@ -450,6 +421,7 @@ fn auto_commit_get_checkpoint_log_reads_full_jsonl() {
         tool_use_id: "toolu_jsonl_test".to_string(),
         checkpoint_uuid: "checkpoint-uuid-jsonl".to_string(),
         agent_id: "agent-jsonl".to_string(),
+        session_metadata: Some(session_metadata_bundle(expected_content, &[], None)),
         transcript_path: transcript_path.to_string_lossy().to_string(),
         new_files: vec!["task_output.txt".to_string()],
         modified_files: vec![],
@@ -513,21 +485,10 @@ fn auto_commit_save_step_files_already_committed() {
             .map(|v| v.len())
             .unwrap_or(0);
 
-    let session_id = "2025-12-22-already-committed-test";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(
-        metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME),
-        "test session log",
-    )
-    .expect("write transcript");
-
     let ctx = StepContext {
-        session_id: session_id.to_string(),
+        session_id: "2025-12-22-already-committed-test".to_string(),
         commit_message: "Should be skipped - file already committed".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle("test session log", &[], None)),
         new_files: vec!["test.rs".to_string()],
         modified_files: vec![],
         deleted_files: vec![],
@@ -569,21 +530,10 @@ fn auto_commit_save_step_no_changes_skipped() {
             .map(|v| v.len())
             .unwrap_or(0);
 
-    let session_id = "2025-12-22-no-changes-test";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(
-        metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME),
-        "test session log",
-    )
-    .expect("write transcript");
-
     let ctx = StepContext {
-        session_id: session_id.to_string(),
+        session_id: "2025-12-22-no-changes-test".to_string(),
         commit_message: "Should be skipped".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle("test session log", &[], None)),
         new_files: vec![],
         modified_files: vec![],
         deleted_files: vec![],
@@ -620,16 +570,11 @@ fn list_sessions_with_checkpoints_returns_entries() {
 
     fs::write(dir.path().join("x.rs"), "package x").expect("write x.rs");
     let session_id = "list-with-checkpoints";
-    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
-    let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-    fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-    fs::write(metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME), "log").expect("write log");
 
     let ctx = StepContext {
         session_id: session_id.to_string(),
         commit_message: "checkpoint".to_string(),
-        metadata_dir: metadata_dir_rel,
-        metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+        metadata: Some(session_metadata_bundle("log", &[], None)),
         new_files: vec!["x.rs".to_string()],
         modified_files: vec![],
         deleted_files: vec![],
@@ -656,15 +601,10 @@ fn list_sessions_supports_multiple_sessions() {
 
     for (name, file) in [("sess-a", "a.rs"), ("sess-b", "b.rs")] {
         fs::write(dir.path().join(file), format!("package {}", &file[..1])).expect("write file");
-        let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, name);
-        let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
-        fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
-        fs::write(metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME), "log").expect("write log");
         let ctx = StepContext {
             session_id: name.to_string(),
             commit_message: format!("checkpoint {name}"),
-            metadata_dir: metadata_dir_rel,
-            metadata_dir_abs: metadata_dir_abs.to_string_lossy().to_string(),
+            metadata: Some(session_metadata_bundle("log", &[], None)),
             new_files: vec![file.to_string()],
             modified_files: vec![],
             deleted_files: vec![],

@@ -16,14 +16,33 @@ pub(crate) use tempfile::TempDir;
 pub(crate) const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
 pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
-    let sqlite_path = paths::default_relational_db_path(repo_root);
+    fs::write(
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .unwrap();
+
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root).unwrap();
+
+    let sqlite_path = backends
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .unwrap();
     if let Some(parent) = sqlite_path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
     let sqlite = SqliteConnectionPool::connect(sqlite_path).unwrap();
     sqlite.initialise_checkpoint_schema().unwrap();
 
-    let duckdb_path = paths::default_events_db_path(repo_root);
+    let duckdb_path = backends.events.resolve_duckdb_db_path_for_repo(repo_root);
     if let Some(parent) = duckdb_path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
@@ -47,7 +66,13 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
         )
         .unwrap();
 
-    fs::create_dir_all(paths::default_blob_store_path(repo_root)).unwrap();
+    fs::create_dir_all(
+        backends
+            .blobs
+            .resolve_local_path_for_repo(repo_root)
+            .unwrap(),
+    )
+    .unwrap();
 }
 
 /// Creates a real git repository with an initial commit for testing.
@@ -69,6 +94,7 @@ pub(crate) fn setup_git_repo(dir: &TempDir) -> String {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
+    fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
     ensure_test_store_backends(dir.path());
     fs::write(dir.path().join("README.md"), "initial content").unwrap();
     run(&["add", "."]);
@@ -222,7 +248,24 @@ pub(crate) fn commit_files(repo_root: &Path, files: &[(&str, &str)], message: &s
 }
 
 pub(crate) fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
-    paths::default_relational_db_path(repo_root)
+    crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+        repo_root,
+    )
+    .unwrap_or_else(|_| {
+        crate::config::resolve_store_backend_config_for_repo(repo_root)
+            .expect("resolve test store backends")
+            .relational
+            .resolve_sqlite_db_path_for_repo(repo_root)
+            .expect("resolve relational sqlite path")
+    })
+}
+
+pub(crate) fn relational_checkpoints_db_path(repo_root: &Path) -> PathBuf {
+    crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve test store backends")
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .expect("resolve relational sqlite path")
 }
 
 pub(crate) fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
@@ -272,8 +315,8 @@ pub(crate) fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> 
 }
 
 pub(crate) fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
         .repo_id;
@@ -297,8 +340,8 @@ pub(crate) fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> 
 }
 
 pub(crate) fn query_commit_checkpoint_count(repo_root: &Path, commit_sha: &str) -> i64 {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
-    sqlite.initialise_checkpoint_schema().unwrap();
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_relational_checkpoint_schema().unwrap();
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .unwrap()
         .repo_id;
@@ -325,7 +368,11 @@ pub(crate) struct CheckpointBlobRow {
 }
 
 pub(crate) fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
-    paths::default_blob_store_path(repo_root)
+    crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve test store backends")
+        .blobs
+        .resolve_local_path_for_repo(repo_root)
+        .expect("resolve blob store path")
 }
 
 pub(crate) fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u8> {
@@ -343,8 +390,8 @@ pub(crate) fn query_checkpoint_session_content_hash(
     checkpoint_id: &str,
     session_id: &str,
 ) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -367,8 +414,8 @@ pub(crate) fn query_checkpoint_subagent_transcript_path(
     checkpoint_id: &str,
     session_id: &str,
 ) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -391,8 +438,8 @@ pub(crate) fn query_checkpoint_session_content_hash_by_index(
     checkpoint_id: &str,
     session_index: i64,
 ) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -416,8 +463,8 @@ pub(crate) fn query_checkpoint_blob_row(
     session_index: i64,
     blob_type: &str,
 ) -> Option<CheckpointBlobRow> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -439,6 +486,34 @@ pub(crate) fn query_checkpoint_blob_row(
         })
         .ok()
         .flatten()
+}
+
+pub(crate) fn query_checkpoint_file_session_ids(
+    repo_root: &Path,
+    checkpoint_id: &str,
+) -> Vec<String> {
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_relational_checkpoint_schema().unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .unwrap()
+        .repo_id;
+
+    sqlite
+        .with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT session_id
+                 FROM checkpoint_files
+                 WHERE checkpoint_id = ?1 AND repo_id = ?2
+                 ORDER BY session_id ASC",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![checkpoint_id, repo_id])?;
+            let mut session_ids = Vec::new();
+            while let Some(row) = rows.next()? {
+                session_ids.push(row.get::<_, String>(0)?);
+            }
+            Ok(session_ids)
+        })
+        .unwrap()
 }
 
 pub(crate) fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {

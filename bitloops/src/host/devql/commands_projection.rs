@@ -45,7 +45,7 @@ pub async fn run_checkpoint_file_snapshot_backfill(
 ) -> Result<()> {
     options.resume_after = normalise_optional_resume_after(options.resume_after);
     validate_backfill_options(&options)?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql projection checkpoint-provenance`")?;
     let relational = RelationalStorage::connect(
         cfg,
@@ -81,9 +81,12 @@ pub(crate) async fn execute_checkpoint_file_snapshot_backfill_with_relational(
     };
 
     let checkpoint_db_path =
-        crate::host::checkpoints::strategy::manual_commit::resolve_temporary_checkpoint_sqlite_path(
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
             &cfg.repo_root,
-        )?;
+        )?
+        .into_inner()
+        .local
+        .path;
     if !checkpoint_db_path.is_file() {
         summary.success = true;
         return Ok(summary);

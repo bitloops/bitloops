@@ -78,6 +78,7 @@ pub use self::commands_refresh::{
 pub use self::commands_sync::{
     SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
     SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
+    run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
@@ -90,6 +91,8 @@ pub mod watch;
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync_validation;
+#[allow(unused_imports)]
+pub(crate) use self::commands_sync::execute_sync_with_observer_and_stats_and_diffs;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::execute_sync_with_stats;
@@ -112,6 +115,8 @@ const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 #[cfg(test)]
 const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
+#[cfg(test)]
+const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -135,7 +140,7 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}, interaction_events_attempted={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
         summary.checkpoints_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
@@ -147,7 +152,6 @@ pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
         summary.symbol_clone_sources_scored,
-        summary.interaction_events_attempted
     )
 }
 
@@ -520,15 +524,15 @@ async fn init_relational_schema_with_mode(
     relational: &RelationalStorage,
     mode: RelationalSchemaInitMode,
 ) -> Result<SyncExecutionSchemaOutcome> {
-    init_sqlite_schema(&relational.local.path).await?;
+    init_sqlite_schema(relational.sqlite_path()).await?;
     let mut outcome = SyncExecutionSchemaOutcome::default();
-    if let Some(remote) = relational.remote.as_ref() {
+    if let Some(remote_client) = relational.remote_client() {
         let init_outcome = match mode {
             RelationalSchemaInitMode::SafeBootstrap => {
-                init_postgres_schema(cfg, &remote.client).await?
+                init_postgres_schema(cfg, remote_client).await?
             }
             RelationalSchemaInitMode::SyncExecution => {
-                init_postgres_schema_for_sync_execution(cfg, &remote.client).await?
+                init_postgres_schema_for_sync_execution(cfg, remote_client).await?
             }
         };
         outcome.remote_current_state_rebuilt = init_outcome.rebuilt_current_state;
@@ -562,10 +566,10 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
 }
 
 fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     embeddings::EmbeddingProviderConfig {
         daemon_config_path: crate::config::default_daemon_config_path()
-            .unwrap_or_else(|_| cfg.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
+            .unwrap_or_else(|_| cfg.daemon_config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
         embedding_profile: capability.semantic_clones.embedding_profile,
         runtime_command: capability.embeddings.runtime.command,
         runtime_args: capability.embeddings.runtime.args,
@@ -597,7 +601,7 @@ async fn initialise_devql_schema_for_command_with_mode(
     InitSchemaSummary,
     SyncExecutionSchemaOutcome,
 )> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
@@ -757,9 +761,6 @@ mod ingestion_artefact_persistence_edges;
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
 #[path = "devql/ingestion/artefact_persistence.rs"]
 mod ingestion_artefact_persistence;
-// ingestion: interaction event propagation from checkpoint SQLite to events store
-#[path = "devql/ingestion/interaction_events.rs"]
-mod ingestion_interaction_events;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
 // ingestion: Rust dependency edge orchestration
@@ -795,13 +796,17 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
-use self::ingestion_interaction_events::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
 pub(crate) use self::ingestion_schema::{
-    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
-    knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
+    checkpoint_relational_schema_sql_postgres, checkpoint_relational_schema_sql_sqlite,
+    checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite, knowledge_schema_sql_duckdb,
+    knowledge_schema_sql_sqlite,
+};
+#[cfg(test)]
+pub(crate) use self::ingestion_schema::{
+    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite,
 };
 use self::ingestion_types::*;
 pub(crate) use self::ingestion_types::{

@@ -384,7 +384,9 @@ impl HookSupport for GeminiCliAgent {
 
         if !force {
             let existing_cmd = Self::get_first_bitloops_hook_command(&session_start);
-            let expected_cmd = format!("{cmd_prefix}session-start");
+            let expected_cmd = crate::adapters::agents::managed_hook_command(&format!(
+                "{cmd_prefix}session-start"
+            ));
             if existing_cmd == expected_cmd {
                 return Ok(0);
             }
@@ -406,73 +408,75 @@ impl HookSupport for GeminiCliAgent {
             session_start,
             "",
             "bitloops-session-start",
-            format!("{cmd_prefix}session-start"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-start")),
         );
         session_end = Self::add_gemini_hook(
             session_end,
             "exit",
             "bitloops-session-end-exit",
-            format!("{cmd_prefix}session-end"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-end")),
         );
         session_end = Self::add_gemini_hook(
             session_end,
             "logout",
             "bitloops-session-end-logout",
-            format!("{cmd_prefix}session-end"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-end")),
         );
         before_agent = Self::add_gemini_hook(
             before_agent,
             "",
             "bitloops-before-agent",
-            format!("{cmd_prefix}before-agent"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}before-agent")),
         );
         after_agent = Self::add_gemini_hook(
             after_agent,
             "",
             "bitloops-after-agent",
-            format!("{cmd_prefix}after-agent"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}after-agent")),
         );
         before_model = Self::add_gemini_hook(
             before_model,
             "",
             "bitloops-before-model",
-            format!("{cmd_prefix}before-model"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}before-model")),
         );
         after_model = Self::add_gemini_hook(
             after_model,
             "",
             "bitloops-after-model",
-            format!("{cmd_prefix}after-model"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}after-model")),
         );
         before_tool_selection = Self::add_gemini_hook(
             before_tool_selection,
             "",
             "bitloops-before-tool-selection",
-            format!("{cmd_prefix}before-tool-selection"),
+            crate::adapters::agents::managed_hook_command(&format!(
+                "{cmd_prefix}before-tool-selection"
+            )),
         );
         before_tool = Self::add_gemini_hook(
             before_tool,
             "*",
             "bitloops-before-tool",
-            format!("{cmd_prefix}before-tool"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}before-tool")),
         );
         after_tool = Self::add_gemini_hook(
             after_tool,
             "*",
             "bitloops-after-tool",
-            format!("{cmd_prefix}after-tool"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}after-tool")),
         );
         pre_compress = Self::add_gemini_hook(
             pre_compress,
             "",
             "bitloops-pre-compress",
-            format!("{cmd_prefix}pre-compress"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}pre-compress")),
         );
         notification = Self::add_gemini_hook(
             notification,
             "",
             "bitloops-notification",
-            format!("{cmd_prefix}notification"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}notification")),
         );
 
         Self::marshal_gemini_hook_type(&mut raw_hooks, "SessionStart", &session_start);
@@ -804,9 +808,7 @@ impl GeminiCliAgent {
     }
 
     fn is_bitloops_hook(command: &str) -> bool {
-        BITLOOPS_HOOK_PREFIXES
-            .iter()
-            .any(|prefix| command.starts_with(prefix))
+        crate::adapters::agents::is_managed_hook_command(command, &BITLOOPS_HOOK_PREFIXES)
     }
 
     fn parse_gemini_hook_type(

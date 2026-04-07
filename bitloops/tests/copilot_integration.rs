@@ -228,12 +228,29 @@ fn git_commit_message(repo: &Path, home: &Path, rev: &str) -> String {
     run_git(repo, home, &["show", "-s", "--format=%B", rev])
 }
 
+fn write_repo_config(repo: &Path) {
+    fs::write(
+        repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write repo config");
+}
+
 fn init_repo(repo: &Path, home: &Path) {
     run_git(repo, home, &["init"]);
     run_git(repo, home, &["config", "user.email", "t@t.com"]);
     run_git(repo, home, &["config", "user.name", "Test"]);
     run_git(repo, home, &["config", "commit.gpgsign", "false"]);
     run_git(repo, home, &["config", "tag.gpgsign", "false"]);
+    write_repo_config(repo);
     fs::write(repo.join("README.md"), "init\n").unwrap();
     run_git(repo, home, &["add", "."]);
     run_git(repo, home, &["commit", "-m", "initial"]);
@@ -289,6 +306,11 @@ fn checkpoint_sqlite_path(repo_root: &Path, _home: &Path) -> PathBuf {
     }
 }
 
+fn runtime_sqlite_path(repo_root: &Path) -> PathBuf {
+    bitloops::config::resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path")
+}
+
 fn ensure_relational_store_file(repo_root: &Path, home: &Path) {
     let sqlite =
         bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root, home))
@@ -317,7 +339,7 @@ fn init(repo: &Path, home: &Path) {
 
 fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -> i64 {
     with_home_env(home, || {
-        let conn = Connection::open(checkpoint_sqlite_path(repo_root, home)).expect("open sqlite");
+        let conn = Connection::open(runtime_sqlite_path(repo_root)).expect("open runtime sqlite");
         conn.query_row(
             "SELECT COUNT(*) FROM temporary_checkpoints WHERE session_id = ?1",
             [session_id],
@@ -467,7 +489,7 @@ fn copilot_basic_workflow() {
         .expect("load copilot session")
         .expect("copilot session should exist");
     assert_eq!(state.phase, SessionPhase::Ended);
-    assert_eq!(state.step_count, 0);
+    assert_eq!(state.pending.step_count, 0);
     assert!(state.turn_checkpoint_ids.is_empty());
     assert!(
         !state.last_checkpoint_id.is_empty(),

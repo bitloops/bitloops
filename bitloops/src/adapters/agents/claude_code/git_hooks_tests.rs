@@ -1,5 +1,6 @@
 use super::*;
-use crate::test_support::process_state::{git_command, with_cwd};
+use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
+use crate::test_support::process_state::{git_command, with_cwd, with_env_var};
 use std::collections::BTreeSet;
 use tempfile::TempDir;
 
@@ -505,34 +506,62 @@ fn install_scripts_clear_inherited_git_env() {
 }
 
 #[test]
+fn install_scripts_export_explicit_daemon_config_override() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some("/tmp/config root/config.toml"),
+        || {
+            install_git_hooks(dir.path(), false).unwrap();
+        },
+    );
+
+    let hooks_dir = get_hooks_dir(dir.path()).unwrap();
+    for name in expected_hooks {
+        let content = fs::read_to_string(hooks_dir.join(name)).unwrap();
+        assert!(
+            content.contains(
+                "export BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml'"
+            ),
+            "{name} should export the explicit daemon config override"
+        );
+    }
+}
+
+#[test]
 fn install_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let expected_hooks = expected_hooks_for_repo(dir.path());
-    let first_count = install_git_hooks(dir.path(), false).unwrap();
-    assert!(first_count > 0, "first install should install hooks");
+    with_env_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+        let first_count = install_git_hooks(dir.path(), false).unwrap();
+        assert!(first_count > 0, "first install should install hooks");
 
-    let hooks_dir = get_hooks_dir(dir.path()).unwrap();
-    let mut first_contents = std::collections::BTreeMap::new();
-    for hook in &expected_hooks {
-        let data = fs::read_to_string(hooks_dir.join(hook)).unwrap();
-        assert!(
-            data.contains(HOOK_MARKER),
-            "{hook} should contain the Bitloops marker"
-        );
-        first_contents.insert(hook.to_string(), data);
-    }
+        let hooks_dir = get_hooks_dir(dir.path()).unwrap();
+        let mut first_contents = std::collections::BTreeMap::new();
+        for hook in &expected_hooks {
+            let data = fs::read_to_string(hooks_dir.join(hook)).unwrap();
+            assert!(
+                data.contains(HOOK_MARKER),
+                "{hook} should contain the Bitloops marker"
+            );
+            first_contents.insert(hook.to_string(), data);
+        }
 
-    let second_count = install_git_hooks(dir.path(), false).unwrap();
-    assert_eq!(second_count, 0, "second install should report 0 new hooks");
+        let second_count = install_git_hooks(dir.path(), false).unwrap();
+        assert_eq!(second_count, 0, "second install should report 0 new hooks");
 
-    for hook in &expected_hooks {
-        let data = fs::read_to_string(hooks_dir.join(hook)).unwrap();
-        assert_eq!(
-            data, first_contents[*hook],
-            "{hook} content changed after idempotent reinstall"
-        );
-    }
+        for hook in &expected_hooks {
+            let data = fs::read_to_string(hooks_dir.join(hook)).unwrap();
+            assert_eq!(
+                data, first_contents[*hook],
+                "{hook} content changed after idempotent reinstall"
+            );
+        }
+    });
 }
 
 #[test]
@@ -810,10 +839,12 @@ fn install_idempotent_with_chaining() {
     )
     .unwrap();
 
-    let first_count = install_git_hooks(dir.path(), false).unwrap();
-    assert!(first_count > 0);
-    let second_count = install_git_hooks(dir.path(), false).unwrap();
-    assert_eq!(second_count, 0);
+    with_env_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+        let first_count = install_git_hooks(dir.path(), false).unwrap();
+        assert!(first_count > 0);
+        let second_count = install_git_hooks(dir.path(), false).unwrap();
+        assert_eq!(second_count, 0);
+    });
 }
 
 #[test]

@@ -17,8 +17,7 @@ pub(crate) fn save_step_empty_base_commit_recovery() {
     let ctx = StepContext {
         session_id: "save-recovery".to_string(),
         commit_message: "checkpoint".to_string(),
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         new_files: vec![],
         modified_files: vec![],
         deleted_files: vec![],

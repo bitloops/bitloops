@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LanguageKind {
     Go(GoKind),
+    Java(JavaKind),
     Python(PythonKind),
     Rust(RustKind),
     TsJs(TsJsKind),
@@ -15,6 +16,10 @@ impl LanguageKind {
         Self::Python(kind)
     }
 
+    pub(crate) const fn java(kind: JavaKind) -> Self {
+        Self::Java(kind)
+    }
+
     pub(crate) const fn rust(kind: RustKind) -> Self {
         Self::Rust(kind)
     }
@@ -26,6 +31,7 @@ impl LanguageKind {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Go(kind) => kind.as_str(),
+            Self::Java(kind) => kind.as_str(),
             Self::Python(kind) => kind.as_str(),
             Self::Rust(kind) => kind.as_str(),
             Self::TsJs(kind) => kind.as_str(),
@@ -78,6 +84,47 @@ impl GoKind {
             "import_spec" => Some(Self::ImportSpec),
             "var_spec" => Some(Self::VarSpec),
             "const_spec" => Some(Self::ConstSpec),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum JavaKind {
+    Package,
+    Import,
+    Class,
+    Interface,
+    Enum,
+    Constructor,
+    Method,
+    Field,
+}
+
+impl JavaKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Package => "package_declaration",
+            Self::Import => "import_declaration",
+            Self::Class => "class_declaration",
+            Self::Interface => "interface_declaration",
+            Self::Enum => "enum_declaration",
+            Self::Constructor => "constructor_declaration",
+            Self::Method => "method_declaration",
+            Self::Field => "field_declaration",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "package_declaration" => Some(Self::Package),
+            "import_declaration" => Some(Self::Import),
+            "class_declaration" => Some(Self::Class),
+            "interface_declaration" => Some(Self::Interface),
+            "enum_declaration" => Some(Self::Enum),
+            "constructor_declaration" => Some(Self::Constructor),
+            "method_declaration" => Some(Self::Method),
+            "field_declaration" => Some(Self::Field),
             _ => None,
         }
     }
@@ -233,6 +280,12 @@ impl From<GoKind> for LanguageKind {
     }
 }
 
+impl From<JavaKind> for LanguageKind {
+    fn from(value: JavaKind) -> Self {
+        Self::Java(value)
+    }
+}
+
 impl From<PythonKind> for LanguageKind {
     fn from(value: PythonKind) -> Self {
         Self::Python(value)
@@ -259,8 +312,9 @@ impl TryFrom<&str> for LanguageKind {
         let ts_js = TsJsKind::from_tree_sitter_kind(value).map(Self::TsJs);
         let python = PythonKind::from_tree_sitter_kind(value).map(Self::Python);
         let go = GoKind::from_tree_sitter_kind(value).map(Self::Go);
+        let java = JavaKind::from_tree_sitter_kind(value).map(Self::Java);
 
-        match [rust, ts_js, python, go]
+        match [rust, ts_js, python, go, java]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
@@ -274,7 +328,7 @@ impl TryFrom<&str> for LanguageKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+    use super::{GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind};
 
     #[test]
     fn per_language_kind_parsers_round_trip() {
@@ -303,6 +357,20 @@ mod tests {
         ];
         for kind in python_cases {
             assert_eq!(PythonKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+
+        let java_cases = [
+            JavaKind::Package,
+            JavaKind::Import,
+            JavaKind::Class,
+            JavaKind::Interface,
+            JavaKind::Enum,
+            JavaKind::Constructor,
+            JavaKind::Method,
+            JavaKind::Field,
+        ];
+        for kind in java_cases {
+            assert_eq!(JavaKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
         }
 
         let rust_cases = [
@@ -345,9 +413,13 @@ mod tests {
 
     #[test]
     fn top_level_parser_rejects_ambiguous_or_unknown_kinds() {
-        assert_eq!(LanguageKind::try_from("function_declaration").ok(), None);
-        assert_eq!(LanguageKind::try_from("import_statement").ok(), None);
-        assert_eq!(LanguageKind::try_from("totally_unknown_kind").ok(), None);
+        assert!(LanguageKind::try_from("function_declaration").is_err());
+        assert!(LanguageKind::try_from("import_statement").is_err());
+        assert!(LanguageKind::try_from("class_declaration").is_err());
+        assert!(LanguageKind::try_from("interface_declaration").is_err());
+        assert!(LanguageKind::try_from("enum_declaration").is_err());
+        assert!(LanguageKind::try_from("method_declaration").is_err());
+        assert!(LanguageKind::try_from("totally_unknown_kind").is_err());
 
         assert_eq!(
             LanguageKind::try_from("impl_item").ok(),
@@ -356,6 +428,43 @@ mod tests {
         assert_eq!(
             LanguageKind::try_from("assignment").ok(),
             Some(LanguageKind::python(PythonKind::Assignment))
+        );
+        assert_eq!(
+            LanguageKind::try_from("package_declaration").ok(),
+            Some(LanguageKind::java(JavaKind::Package))
+        );
+
+        assert_eq!(
+            TsJsKind::from_tree_sitter_kind("class_declaration"),
+            Some(TsJsKind::ClassDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("class_declaration"),
+            Some(JavaKind::Class)
+        );
+        assert_eq!(
+            TsJsKind::from_tree_sitter_kind("interface_declaration"),
+            Some(TsJsKind::InterfaceDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("interface_declaration"),
+            Some(JavaKind::Interface)
+        );
+        assert_eq!(
+            TsJsKind::from_tree_sitter_kind("enum_declaration"),
+            Some(TsJsKind::EnumDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("enum_declaration"),
+            Some(JavaKind::Enum)
+        );
+        assert_eq!(
+            GoKind::from_tree_sitter_kind("method_declaration"),
+            Some(GoKind::MethodDeclaration)
+        );
+        assert_eq!(
+            JavaKind::from_tree_sitter_kind("method_declaration"),
+            Some(JavaKind::Method)
         );
     }
 }

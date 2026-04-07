@@ -38,22 +38,6 @@ pub struct RefreshKnowledgeInput {
 }
 
 #[derive(Debug, Clone, InputObject)]
-pub struct SyncInput {
-    /// Run a full workspace reconciliation.
-    #[graphql(default = false)]
-    pub full: bool,
-    /// Reconcile only the specified workspace paths (comma-delimited values accepted).
-    #[graphql(default)]
-    pub paths: Option<Vec<String>>,
-    /// Rebuild sync state from the current workspace, ignoring stored manifest trust.
-    #[graphql(default = false)]
-    pub repair: bool,
-    /// Validate current-state tables against a full read-only workspace reconciliation.
-    #[graphql(default = false)]
-    pub validate: bool,
-}
-
-#[derive(Debug, Clone, InputObject)]
 pub struct EnqueueSyncInput {
     #[graphql(default = false)]
     pub full: bool,
@@ -387,38 +371,6 @@ impl MutationRoot {
         )
         .await
         .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
-        Ok(summary.into())
-    }
-
-    async fn sync(&self, ctx: &Context<'_>, input: SyncInput) -> Result<SyncResult> {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        context
-            .require_repo_write_scope()
-            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "sync", err))?;
-        let cfg = context
-            .devql_config()
-            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "sync", err))?;
-
-        let mode = resolve_sync_mode_input(
-            input.full,
-            input.paths,
-            input.repair,
-            input.validate,
-            "sync",
-        )?;
-        let schema_outcome = crate::host::devql::prepare_sync_execution_schema(
-            &cfg,
-            "GraphQL mutation `sync`",
-            &mode,
-        )
-        .await
-        .map_err(|err| operation_error("BACKEND_ERROR", "initialisation", "sync", err))?;
-        let mode =
-            crate::host::devql::effective_sync_mode_after_schema_preparation(mode, schema_outcome);
-
-        let summary = crate::host::devql::run_sync_with_summary(&cfg, mode)
-            .await
-            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "sync", err))?;
         Ok(summary.into())
     }
 

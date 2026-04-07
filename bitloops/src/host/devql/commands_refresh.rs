@@ -68,7 +68,7 @@ pub async fn run_post_commit_checkpoint_projection_refresh(
         return Ok(());
     }
 
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for post-commit checkpoint projection refresh")?;
     let relational = RelationalStorage::connect(
         cfg,
@@ -216,7 +216,7 @@ mod tests {
                 repo_provider: "local".to_string(),
                 repo_organisation: "local".to_string(),
                 repo_identity: "local/demo".to_string(),
-                config_root: PathBuf::from("/tmp/repo"),
+                daemon_config_root: PathBuf::from("/tmp/repo"),
                 repo_root: PathBuf::from("/tmp/repo"),
                 source: SyncTaskSource::PostCommit,
                 mode: SyncTaskMode::Paths {

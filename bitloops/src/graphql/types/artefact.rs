@@ -9,9 +9,9 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, ClonesFilterInput, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -114,7 +114,7 @@ pub struct Artefact {
     pub symbol_id: String,
     pub path: String,
     pub language: String,
-    pub canonical_kind: CanonicalKind,
+    pub canonical_kind: Option<CanonicalKind>,
     pub language_kind: Option<String>,
     pub symbol_fqn: Option<String>,
     pub parent_artefact_id: Option<ID>,
@@ -335,11 +335,13 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
+        let summary = CloneSummary::from_clones(&clones);
         let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
+            summary,
         ))
     }
 
@@ -472,7 +474,7 @@ fn artefact_stage_row(artefact: &Artefact) -> Value {
     "artefact_id": artefact.id.as_ref(),
     "symbol_id": &artefact.symbol_id,
     "symbol_fqn": &artefact.symbol_fqn,
-    "canonical_kind": artefact.canonical_kind.as_devql_value(),
+    "canonical_kind": artefact.canonical_kind.map(|kind| kind.as_devql_value()),
     "path": &artefact.path,
     "start_line": artefact.start_line,
     "end_line": artefact.end_line,

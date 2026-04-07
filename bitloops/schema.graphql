@@ -22,7 +22,7 @@ type Artefact {
 	symbolId: String!
 	path: String!
 	language: String!
-	canonicalKind: CanonicalKind!
+	canonicalKind: CanonicalKind
 	languageKind: String
 	symbolFqn: String
 	parentArtefactId: ID
@@ -214,11 +214,22 @@ type CloneConnection {
 	edges: [CloneEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+	summary: CloneSummary!
 }
 
 type CloneEdge {
 	node: Clone!
 	cursor: String!
+}
+
+type CloneSummary {
+	totalCount: Int!
+	groups: [CloneSummaryGroup!]!
+}
+
+type CloneSummaryGroup {
+	relationKind: String!
+	count: Int!
 }
 
 input ClonesFilterInput {
@@ -316,6 +327,7 @@ type FileContext {
 	blobSha: String
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 }
 
 type HealthBackendStatus {
@@ -376,6 +388,17 @@ type InitSchemaResult {
 	repoId: String!
 	relationalBackend: String!
 	eventsBackend: String!
+}
+
+type InteractionEventObject {
+	id: ID!
+	sessionId: String!
+	turnId: String
+	eventType: String!
+	eventTime: String!
+	agentType: String!
+	model: String
+	payload: JSON
 }
 
 type InteractionSessionObject {
@@ -531,7 +554,6 @@ type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
-	sync(input: SyncInput!): SyncResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
@@ -557,6 +579,7 @@ type Project {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
@@ -599,9 +622,11 @@ type Repository {
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
 	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
+	interactionEvents(sessionId: String, turnId: String, type: String, since: String, first: Int): [InteractionEventObject!]!
 }
 
 enum SaveSelector {
@@ -612,25 +637,6 @@ type SubscriptionRoot {
 	checkpointIngested(repoName: String!): Checkpoint!
 	ingestionProgress(repoName: String!): IngestionProgressEvent!
 	syncProgress(taskId: String!): SyncProgressEvent!
-}
-
-input SyncInput {
-	"""
-	Run a full workspace reconciliation.
-	"""
-	full: Boolean! = false
-	"""
-	Reconcile only the specified workspace paths (comma-delimited values accepted).
-	"""
-	paths: [String!] = null
-	"""
-	Rebuild sync state from the current workspace, ignoring stored manifest trust.
-	"""
-	repair: Boolean! = false
-	"""
-	Validate current-state tables against a full read-only workspace reconciliation.
-	"""
-	validate: Boolean! = false
 }
 
 type SyncProgressEvent {
@@ -827,6 +833,8 @@ type TestHarnessCoveringTest {
 	testName: String!
 	suiteName: String
 	filePath: String!
+	startLine: Int!
+	endLine: Int!
 	confidence: Float!
 	discoverySource: String!
 	linkageSource: String!
