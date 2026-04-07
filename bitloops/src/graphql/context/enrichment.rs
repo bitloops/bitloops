@@ -924,7 +924,7 @@ fn escape_like_literal(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod clone_summary_tests {
     use super::*;
     use crate::artefact_query_planner::{
         ArtefactQuerySpec, ArtefactScope, ArtefactStructuralFilter, ArtefactTemporalScope,
