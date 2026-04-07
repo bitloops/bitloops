@@ -28,6 +28,7 @@ const MERGE_SMOKE_TARGETS: &[&str] = &[
     "graphql",
 ];
 const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
+const DEFAULT_FAST_TEST_THREADS: u64 = 8;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -130,6 +131,7 @@ fn run_dev_install() -> Result<(), String> {
 fn run_test_lane(lane: &str) -> Result<(), String> {
     let workspace_root = workspace_root()?;
     let lane_commands = test_lane_command_groups(lane)?;
+    let test_threads = test_threads_for_lane(lane)?;
 
     if should_sign() {
         let mut compiled_binaries = BTreeSet::new();
@@ -151,6 +153,9 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
         let mut run_args = lane_args;
         run_args.push("--".to_string());
         run_args.push("--format=terse".to_string());
+        if let Some(test_threads) = test_threads {
+            run_args.push(format!("--test-threads={test_threads}"));
+        }
         let mut command = vec!["cargo".to_string()];
         command.extend(run_args.iter().cloned());
         run_command_owned(
@@ -566,6 +571,30 @@ fn test_lane_command_groups(lane: &str) -> Result<Vec<Vec<String>>, String> {
     }
 }
 
+fn test_threads_for_lane(lane: &str) -> Result<Option<u64>, String> {
+    if lane != "fast" {
+        return Ok(None);
+    }
+
+    match env::var("BITLOOPS_TEST_THREADS") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(Some(DEFAULT_FAST_TEST_THREADS));
+            }
+
+            let parsed = trimmed
+                .parse::<u64>()
+                .map_err(|_| "BITLOOPS_TEST_THREADS must be an integer".to_string())?;
+            if parsed == 0 {
+                return Err("BITLOOPS_TEST_THREADS must be greater than zero".to_string());
+            }
+            Ok(Some(parsed))
+        }
+        Err(_) => Ok(Some(DEFAULT_FAST_TEST_THREADS)),
+    }
+}
+
 fn collect_test_binaries(cwd: &Path, args: &[String]) -> Result<Vec<PathBuf>, String> {
     println!("==> cargo {}", args.join(" "));
 
@@ -963,14 +992,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BITLOOPS_MANIFEST, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS, SLOW_TEST_TARGETS,
+        BITLOOPS_MANIFEST, DEFAULT_FAST_TEST_THREADS, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS,
+        SLOW_TEST_TARGETS,
         collect_rs_files, count_lines, env_u64, is_regression, is_test_file,
         llvm_cov_lcov_cargo_args, llvm_cov_lcov_display_command, llvm_cov_report_html_cargo_args,
         llvm_cov_report_html_display_command, otool_list_output_links_libduckdb,
         otool_load_output_contains_rpath, parse_compare_options, parse_coverage_all_paths,
         parse_f64_flag, parse_lcov_metrics, parse_lcov_path, parse_test_binary_json_line,
         parse_u64_value, percentage, prepend_cargo, read_lcov_metrics, resolve_workspace_path,
-        run_file_size_check, test_lane_args, test_lane_command_groups,
+        run_file_size_check, test_lane_args, test_lane_command_groups, test_threads_for_lane,
         unknown_coverage_subcommand_error, workspace_root,
     };
 
@@ -1149,6 +1179,38 @@ mod tests {
         assert!(env_u64(&key, 0).unwrap_err().contains("must be an integer"));
         unsafe {
             env::remove_var(&key);
+        }
+    }
+
+    #[test]
+    fn fast_lane_uses_eight_threads_by_default_and_allows_override() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        unsafe {
+            env::remove_var("BITLOOPS_TEST_THREADS");
+        }
+
+        assert_eq!(
+            test_threads_for_lane("fast").unwrap(),
+            Some(DEFAULT_FAST_TEST_THREADS)
+        );
+        assert_eq!(test_threads_for_lane("smoke").unwrap(), None);
+
+        unsafe {
+            env::set_var("BITLOOPS_TEST_THREADS", "12");
+        }
+        assert_eq!(test_threads_for_lane("fast").unwrap(), Some(12));
+
+        unsafe {
+            env::set_var("BITLOOPS_TEST_THREADS", "0");
+        }
+        assert!(
+            test_threads_for_lane("fast")
+                .unwrap_err()
+                .contains("greater than zero")
+        );
+
+        unsafe {
+            env::remove_var("BITLOOPS_TEST_THREADS");
         }
     }
 

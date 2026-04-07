@@ -55,8 +55,7 @@ pub(super) fn create_sqlite_file_if_missing(db_path: &Path) -> Result<()> {
 
     let conn = rusqlite::Connection::open(db_path)
         .with_context(|| format!("creating SQLite database at {}", db_path.display()))?;
-    conn.busy_timeout(std::time::Duration::from_secs(30))
-        .context("setting SQLite busy timeout")?;
+    configure_sqlite_connection(&conn)?;
     Ok(())
 }
 
@@ -76,9 +75,16 @@ pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connect
     let conn =
         rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+    configure_sqlite_connection(&conn)?;
+    Ok(conn)
+}
+
+fn configure_sqlite_connection(conn: &rusqlite::Connection) -> Result<()> {
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .context("enabling SQLite foreign keys")?;
-    Ok(conn)
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+    )
+    .context("configuring SQLite pragmas")?;
+    Ok(())
 }

@@ -41,6 +41,20 @@ fn test_runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+fn test_global_runtime_state_dir() -> PathBuf {
+    if let Some(path) =
+        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
+    {
+        return PathBuf::from(path).join("bitloops").join("daemon");
+    }
+
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("daemon")
+}
+
+#[cfg(test)]
 pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
     if should_use_test_app_dirs(repo_root) {
         return bitloops_data_dir()
@@ -157,6 +171,12 @@ pub fn default_repo_runtime_db_path(repo_root: &Path) -> PathBuf {
 }
 
 pub fn default_global_runtime_db_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        test_global_runtime_state_dir().join(RUNTIME_DB_FILE_NAME)
+    }
+
+    #[cfg(not(test))]
     default_runtime_state_dir(Path::new(".")).join(RUNTIME_DB_FILE_NAME)
 }
 

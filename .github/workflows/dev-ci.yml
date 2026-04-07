@@ -79,7 +79,7 @@ jobs:
           shared-key: dev-ci
           cache-workspace-crates: true
       - name: Run fast test lane
-        run: cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast --no-default-features -- --format=terse --test-threads=8
+        run: cargo dev-test-fast
 
   test-smoke:
     name: Merge smoke lane

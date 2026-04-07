@@ -804,27 +804,29 @@ fn cursor_after_shell_execution_triggers_stop_for_shell_fallback() {
     let backend = LocalFileBackend::new(dir.path());
     let strat = RecordingStrategy::default();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::BeforeShellExecution,
-        r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
-        &backend,
-        &strat,
-        dir.path(),
-        "before-shell-execution",
-    )
-    .unwrap();
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeShellExecution,
+            r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "before-shell-execution",
+        )
+        .unwrap();
 
-    fs::write(dir.path().join("tracked.txt"), "cursor-shell-change\n").unwrap();
+        fs::write(dir.path().join("tracked.txt"), "cursor-shell-change\n").unwrap();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::AfterShellExecution,
-        r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
-        &backend,
-        &strat,
-        dir.path(),
-        "after-shell-execution",
-    )
-    .unwrap();
+        dispatch_cursor_hook(
+            &CursorHookVerb::AfterShellExecution,
+            r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "after-shell-execution",
+        )
+        .unwrap();
+    });
 
     let calls = strat
         .step_calls
@@ -1777,21 +1779,23 @@ fn post_task_saves_task_step_when_changes_exist() {
         .unwrap();
     fs::write(dir.path().join("tracked.txt"), "three\n").unwrap();
 
-    handle_post_task(
-        PostTaskInput {
-            session_id: "post-task".to_string(),
-            transcript_path: "/tmp/transcript.jsonl".to_string(),
-            tool_use_id: "tool-post".to_string(),
-            tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
-            tool_response: TaskToolResponse {
-                agent_id: "agent-1".to_string(),
+    with_process_state(Some(dir.path()), &[], || {
+        handle_post_task(
+            PostTaskInput {
+                session_id: "post-task".to_string(),
+                transcript_path: "/tmp/transcript.jsonl".to_string(),
+                tool_use_id: "tool-post".to_string(),
+                tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
+                tool_response: TaskToolResponse {
+                    agent_id: "agent-1".to_string(),
+                },
             },
-        },
-        &backend,
-        &strat,
-        Some(dir.path()),
-    )
-    .unwrap();
+            &backend,
+            &strat,
+            Some(dir.path()),
+        )
+        .unwrap();
+    });
 
     assert!(backend.load_pre_task_marker("tool-post").unwrap().is_none());
     let calls = strat
