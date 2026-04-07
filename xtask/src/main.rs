@@ -120,12 +120,12 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
     let workspace_root = workspace_root()?;
     let lane_args = test_lane_args(lane)?;
 
-    let mut compile_args = lane_args.clone();
-    compile_args.push("--no-run".to_string());
-    compile_args.push("--message-format=json-render-diagnostics".to_string());
-
-    let compiled_binaries = collect_test_binaries(&workspace_root, &compile_args)?;
     if should_sign() {
+        let mut compile_args = lane_args.clone();
+        compile_args.push("--no-run".to_string());
+        compile_args.push("--message-format=json-render-diagnostics".to_string());
+
+        let compiled_binaries = collect_test_binaries(&workspace_root, &compile_args)?;
         for binary in compiled_binaries {
             codesign_binary(&binary)?;
         }

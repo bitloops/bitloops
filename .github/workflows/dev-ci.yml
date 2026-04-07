@@ -48,8 +48,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: bitloops
+          workspaces: . -> target
           shared-key: dev-ci
+          cache-workspace-crates: true
       - name: cargo clippy
         run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings
 
@@ -62,7 +63,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: bitloops
+          workspaces: . -> target
           shared-key: dev-ci
+          cache-workspace-crates: true
       - name: Run full test suite
         run: cargo dev-test-full

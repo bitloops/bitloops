@@ -21,8 +21,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: bitloops
+          workspaces: . -> target
           shared-key: develop-qat
+          cache-workspace-crates: true
 
       - name: Run QAT acceptance suites
         run: cargo qat
