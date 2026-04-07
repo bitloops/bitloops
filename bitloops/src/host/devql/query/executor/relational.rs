@@ -116,9 +116,8 @@ JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
 JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id AND tgt.artefact_id = ce.target_artefact_id \
 LEFT JOIN {target_semantics_table} ss ON ss.artefact_id = tgt.artefact_id \
 WHERE {} \
-ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn",
+	ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn",
         clone_filters.join(" AND "),
-        parsed.limit.max(1),
         clone_edges_table = clone_edges_table,
         target_artefacts_table = target_artefacts_table,
         target_semantics_table = target_semantics_table,

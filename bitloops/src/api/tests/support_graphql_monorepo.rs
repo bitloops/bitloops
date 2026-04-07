@@ -380,32 +380,37 @@ pub(super) fn seed_graphql_clone_data(repo_root: &Path) {
             r#"{"reason":"cross-package helper overlap"}"#,
         ),
     ] {
-        conn.execute(
-            "INSERT INTO symbol_clone_edges (
-                repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
-                relation_kind, score, semantic_score, lexical_score, structural_score,
-                clone_input_hash, explanation_json
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12
-            )",
-            rusqlite::params![
-                repo_id.as_str(),
-                source_symbol_id,
-                source_artefact_id,
-                target_symbol_id,
-                target_artefact_id,
-                relation_kind,
-                score,
-                semantic_score,
-                lexical_score,
-                structural_score,
-                clone_input_hash,
-                explanation_json,
-            ],
-        )
-        .expect("insert clone edge");
+        for table in ["symbol_clone_edges", "symbol_clone_edges_current"] {
+            let sql = format!(
+                "INSERT INTO {table} (
+                    repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+                    relation_kind, score, semantic_score, lexical_score, structural_score,
+                    clone_input_hash, explanation_json
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5,
+                    ?6, ?7, ?8, ?9, ?10,
+                    ?11, ?12
+                )"
+            );
+            conn.execute(
+                &sql,
+                rusqlite::params![
+                    repo_id.as_str(),
+                    source_symbol_id,
+                    source_artefact_id,
+                    target_symbol_id,
+                    target_artefact_id,
+                    relation_kind,
+                    score,
+                    semantic_score,
+                    lexical_score,
+                    structural_score,
+                    clone_input_hash,
+                    explanation_json,
+                ],
+            )
+            .expect("insert clone edge");
+        }
     }
 }
 
@@ -508,19 +513,21 @@ pub(super) fn seed_graphql_same_file_method_clone_data(repo_root: &Path) {
         .expect("insert method artefact current row");
     }
 
-    conn.execute(
-        "INSERT INTO symbol_clone_edges (
-            repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
-            relation_kind, score, semantic_score, lexical_score, structural_score,
-            clone_input_hash, explanation_json
-        ) VALUES (
-            ?1, 'method::execute', 'artefact::method-execute', 'method::command', 'artefact::method-command',
-            'weak_clone_candidate', 0.61, 0.58, 0.44, 0.73,
-            'clone-hash-method-same-file', '{\"reason\":\"same file helper overlap\"}'
-        )",
-        rusqlite::params![repo_id.as_str()],
-    )
-    .expect("insert same-file method clone edge");
+    for table in ["symbol_clone_edges", "symbol_clone_edges_current"] {
+        let sql = format!(
+            "INSERT INTO {table} (
+                repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+                relation_kind, score, semantic_score, lexical_score, structural_score,
+                clone_input_hash, explanation_json
+            ) VALUES (
+                ?1, 'method::execute', 'artefact::method-execute', 'method::command', 'artefact::method-command',
+                'weak_clone_candidate', 0.61, 0.58, 0.44, 0.73,
+                'clone-hash-method-same-file', '{{\"reason\":\"same file helper overlap\"}}'
+            )"
+        );
+        conn.execute(&sql, rusqlite::params![repo_id.as_str()])
+            .expect("insert same-file method clone edge");
+    }
 }
 
 pub(super) fn seed_graphql_test_harness_stage_data(

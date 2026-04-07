@@ -215,7 +215,13 @@ pub(super) fn parse_cached_language_kind(
 
     let parsed = match language {
         "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
-        "java" => JavaKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::java),
+        "java" => JavaKind::from_tree_sitter_kind(raw_kind)
+            .or_else(|| match raw_kind {
+                // Historical caches may carry TS-flavoured names for Java class nodes.
+                "class_declaration" => Some(JavaKind::Class),
+                _ => None,
+            })
+            .map(LanguageKind::java),
         "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
         "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
         "typescript" | "javascript" => {

@@ -61,7 +61,7 @@ async fn build_relational_clones_query_uses_shared_filtered_artefact_cte() {
 
     assert!(sql.contains("WITH filtered AS"));
     assert!(sql.contains("FROM checkpoint_files cf"));
-    assert!(sql.contains("JOIN filtered src ON src.symbol_id = ce.source_symbol_id"));
+    assert!(sql.contains("JOIN filtered src ON src.artefact_id = ce.source_artefact_id"));
     assert!(sql.contains("cf.path_after = a.path"));
     assert!(sql.contains("cf.blob_sha_after = a.content_id"));
     assert!(sql.contains("cf.agent = 'codex'"));

@@ -6,6 +6,8 @@ mod sql;
 #[cfg(test)]
 mod tests;
 mod types;
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
@@ -293,10 +295,18 @@ fn parse_cached_language_kind(
     language: &str,
     raw_kind: &str,
 ) -> Result<crate::host::language_adapter::LanguageKind> {
-    use crate::host::language_adapter::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+    use crate::host::language_adapter::{
+        GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
+    };
 
     let parsed = match language {
         "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
+        "java" => JavaKind::from_tree_sitter_kind(raw_kind)
+            .or_else(|| match raw_kind {
+                "class_declaration" => Some(JavaKind::Class),
+                _ => None,
+            })
+            .map(LanguageKind::java),
         "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
         "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
         "typescript" | "javascript" => {
@@ -591,10 +601,6 @@ fn non_empty_text(value: &str) -> Option<String> {
     }
 }
 
-#[cfg(test)]
-use self::derive::parse_cached_language_kind;
 pub(crate) use self::derive::prepare_materialization_rows;
-#[cfg(test)]
-pub(crate) use self::persist::{materialize_path, remove_path};
 pub(crate) use self::persist::{persist_prepared_materialisation_tx, remove_paths_tx};
 pub(crate) use self::types::PreparedMaterialisationRows;

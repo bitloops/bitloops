@@ -258,27 +258,21 @@ fn build_project_clones_sql(
 
     format!(
         "{filtered_cte} \
-         SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
+         SELECT ce.source_artefact_id, ce.target_artefact_id, \
+                src.start_line AS source_start_line, src.end_line AS source_end_line, \
+                tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
+                ce.relation_kind, ce.score, \
                 ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
            FROM {clone_edges_table} ce \
            JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
            JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
                                             AND tgt.artefact_id = ce.target_artefact_id \
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, \
-                src.start_line AS source_start_line, src.end_line AS source_end_line, \
-                tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
-                ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
-          WHERE {} \
+          WHERE {clauses} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
-        clauses.join(" AND "),
         filtered_cte = filtered_cte,
         clone_edges_table = clone_edges_table,
         target_artefacts_table = target_artefacts_table,
+        clauses = clauses.join(" AND "),
     )
 }
 
@@ -294,27 +288,21 @@ fn build_artefact_clones_sql(
 
     format!(
         "{filtered_cte} \
-         SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
+         SELECT ce.source_artefact_id, ce.target_artefact_id, \
+                src.start_line AS source_start_line, src.end_line AS source_end_line, \
+                tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
+                ce.relation_kind, ce.score, \
                 ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
            FROM {clone_edges_table} ce \
            JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
            JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
                                             AND tgt.artefact_id = ce.target_artefact_id \
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, \
-                src.start_line AS source_start_line, src.end_line AS source_end_line, \
-                tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
-                ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
-          WHERE {} \
+          WHERE {clauses} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
-        clauses.join(" AND "),
         filtered_cte = filtered_cte,
         clone_edges_table = clone_edges_table,
         target_artefacts_table = target_artefacts_table,
+        clauses = clauses.join(" AND "),
     )
 }
 

@@ -270,6 +270,10 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
         "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(repo_id),
         esc_pg(path),
+    );
+    relational.exec(&sql).await
+}
+
 pub(crate) async fn clear_repo_active_embedding_setup(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -442,12 +446,20 @@ WHERE repo_id = '{}'",
 
 fn build_current_repo_embedding_setups_sql(repo_id: &str) -> String {
     format!(
-        "SELECT DISTINCT e.provider, e.model, e.dimension \
-FROM artefacts_current a \
-JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
-WHERE a.repo_id = '{}' \
-ORDER BY e.provider, e.model, e.dimension",
-        esc_pg(repo_id),
+        "SELECT provider, model, dimension \
+FROM ( \
+    SELECT e.provider AS provider, e.model AS model, e.dimension AS dimension \
+    FROM artefacts_current a \
+    JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
+    WHERE a.repo_id = '{repo_id}' \
+    UNION \
+    SELECT e.provider AS provider, e.model AS model, e.dimension AS dimension \
+    FROM artefacts_current a \
+    JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
+    WHERE a.repo_id = '{repo_id}' \
+) setups \
+ORDER BY provider, model, dimension",
+        repo_id = esc_pg(repo_id),
     )
 }
 
@@ -482,7 +494,6 @@ fn parse_symbol_embedding_index_state_rows(
     }
 }
 
-fn build_semantic_summary_lookup_sql(artefact_ids: &[String], table: &str) -> String {
 fn parse_embedding_setup_rows(rows: &[Value]) -> Vec<embeddings::EmbeddingSetup> {
     let mut setups = BTreeSet::new();
     for row in rows {
@@ -520,7 +531,7 @@ fn value_as_positive_usize(value: &Value) -> Option<usize> {
     value.as_str()?.trim().parse::<usize>().ok()
 }
 
-fn build_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
+fn build_semantic_summary_lookup_sql(artefact_ids: &[String], table: &str) -> String {
     format!(
         "SELECT artefact_id, summary \
 FROM {table} \
