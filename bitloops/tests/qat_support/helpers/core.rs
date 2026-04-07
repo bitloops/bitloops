@@ -34,96 +34,145 @@ pub fn ensure_bitloops_repo_name(repo_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn find_available_port() -> Result<u16> {
-    if let Ok(raw) = std::env::var("BITLOOPS_QAT_DAEMON_PORT")
-        && let Ok(port) = raw.trim().parse::<u16>()
-        && port > 1024
-    {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).with_context(|| {
-            format!("configured BITLOOPS_QAT_DAEMON_PORT {port} is not available on 127.0.0.1")
-        })?;
-        drop(listener);
-        return Ok(port);
-    }
-
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .context("binding ephemeral localhost port for qat daemon")?;
-    let port = listener
-        .local_addr()
-        .context("reading ephemeral localhost port for qat daemon")?
-        .port();
-    drop(listener);
-    Ok(port)
-}
-
 pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
-    let port = find_available_port()?;
-    let port_str = port.to_string();
-    let output = run_command_capture(
-        world,
-        &format!("bitloops daemon start (port {port})"),
-        build_bitloops_command(
+    stop_daemon_for_scenario(world).ok();
+
+    let stderr_log_path = daemon_stderr_log_path(world.run_dir());
+    let mut attempt_errors = Vec::new();
+    for port in daemon_candidate_ports(world.run_dir()) {
+        append_world_log(
             world,
-            &[
-                "daemon",
-                "start",
-                "--create-default-config",
-                "--no-telemetry",
-                "-d",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                &port_str,
-                "--http",
-            ],
-        )?,
-    )?;
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        bail!(
-            "failed to bootstrap and start daemon for QAT scenario (port {port})\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        );
+            &format!("Starting foreground daemon for scenario using port candidate {port}.\n"),
+        )?;
+
+        let mut child = spawn_daemon_process(world, &port, &stderr_log_path)?;
+        match wait_for_daemon_ready(world.run_dir(), &mut child, &stderr_log_path) {
+            Ok((runtime_state_path, runtime_state)) => {
+                append_world_log(
+                    world,
+                    &format!(
+                        "Daemon ready for scenario on {} (pid {}, requested port {}).\nRuntime state: {}\nStderr log: {}\n",
+                        runtime_state.url,
+                        runtime_state.pid,
+                        port,
+                        runtime_state_path.display(),
+                        stderr_log_path.display()
+                    ),
+                )?;
+                world.daemon_url = Some(runtime_state.url.clone());
+                world.daemon_runtime_state_path = Some(runtime_state_path.clone());
+                world.daemon_stderr_log_path = Some(stderr_log_path.clone());
+                world.daemon_process = Some(
+                    crate::qat_support::world::ScenarioDaemonProcess {
+                        child,
+                        requested_port: port,
+                        stderr_log_path,
+                        runtime_state_path,
+                    },
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                append_world_log(
+                    world,
+                    &format!(
+                        "Daemon startup attempt failed for port candidate {port}: {err:#}\n"
+                    ),
+                )?;
+                let _ = child.kill();
+                let _ = child.wait();
+                attempt_errors.push(format!("port {port}: {err:#}"));
+            }
+        }
     }
 
-    std::thread::sleep(StdDuration::from_millis(300));
-    world.daemon_url = Some(format!("http://127.0.0.1:{port}"));
-    append_world_log(
-        world,
-        &format!("Daemon started for scenario on port {port}.\n"),
-    )?;
-    Ok(())
+    bail!(
+        "failed to bootstrap and start daemon for QAT scenario\n{}",
+        attempt_errors.join("\n\n")
+    );
 }
 
-pub fn stop_daemon_for_scenario(world: &QatWorld) -> Result<()> {
+pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     if world.run_dir.is_none() || world.repo_dir.is_none() || world.terminal_log_path.is_none() {
         return Ok(());
     }
 
-    match run_command_capture(
-        world,
-        "bitloops daemon stop",
-        build_bitloops_command(world, &["daemon", "stop"])?,
-    ) {
-        Ok(output) if output.status.success() => {
-            append_world_log(world, "Daemon stopped for scenario.\n")?;
+    let had_daemon = world.daemon_process.is_some() || world.daemon_url.is_some();
+    let mut stop_error = None;
+
+    if had_daemon {
+        match run_command_capture(
+            world,
+            "bitloops daemon stop",
+            build_bitloops_command(world, &["daemon", "stop"])?,
+        ) {
+            Ok(output) if output.status.success() => {
+                append_world_log(world, "Daemon stopped for scenario via CLI.\n")?;
+            }
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                append_world_log(
+                    world,
+                    &format!(
+                        "Daemon stop returned non-zero.\nstdout:\n{stdout}\nstderr:\n{stderr}\n",
+                    ),
+                )?;
+                stop_error = Some(anyhow!(
+                    "bitloops daemon stop returned non-zero\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                ));
+            }
+            Err(err) => {
+                append_world_log(world, &format!("Daemon stop failed: {err:#}\n"))?;
+                stop_error = Some(err.context("running bitloops daemon stop"));
+            }
         }
-        Ok(output) => {
-            append_world_log(
-                world,
-                &format!(
-                    "Daemon stop returned non-zero (may already be stopped).\nstdout:\n{}\nstderr:\n{}\n",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                ),
-            )?;
+    }
+
+    if let Some(mut process) = world.daemon_process.take() {
+        match process.child.try_wait() {
+            Ok(Some(status)) => {
+                append_world_log(
+                    world,
+                    &format!("Foreground daemon child already exited with status {status}.\n"),
+                )?;
+            }
+            Ok(None) => {
+                append_world_log(
+                    world,
+                    &format!(
+                        "Foreground daemon child still running after stop; terminating pid {}.\n",
+                        process.child.id()
+                    ),
+                )?;
+                if let Err(err) = process.child.kill() {
+                    append_world_log(
+                        world,
+                        &format!("Failed to terminate foreground daemon child: {err}\n"),
+                    )?;
+                }
+                if let Err(err) = process.child.wait() {
+                    append_world_log(
+                        world,
+                        &format!("Failed waiting for foreground daemon child: {err}\n"),
+                    )?;
+                }
+            }
+            Err(err) => {
+                append_world_log(
+                    world,
+                    &format!("Failed to inspect foreground daemon child: {err}\n"),
+                )?;
+            }
         }
-        Err(err) => {
-            append_world_log(
-                world,
-                &format!("Daemon stop failed (may already be stopped): {err:#}\n"),
-            )?;
-        }
+    }
+
+    world.daemon_url = None;
+    world.daemon_runtime_state_path = None;
+    world.daemon_stderr_log_path = None;
+
+    if let Some(err) = stop_error {
+        return Err(err);
     }
 
     Ok(())
@@ -1049,52 +1098,30 @@ pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -
     ensure_success(&output, "bitloops devql sync --validate --status")
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct QatSyncStateSnapshot {
-    #[serde(default)]
-    tasks: Vec<QatSyncTaskSnapshot>,
-}
+fn resolve_qat_sync_state_path(
+    world: &QatWorld,
+) -> Result<(
+    std::path::PathBuf,
+    bitloops::host::runtime_store::PersistedSyncQueueState,
+)> {
+    let candidates = daemon_runtime_store_candidate_paths(world.run_dir());
 
-#[derive(Debug, serde::Deserialize)]
-struct QatSyncTaskSnapshot {
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    summary: Option<QatSyncTaskSummarySnapshot>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct QatSyncTaskSummarySnapshot {
-    #[serde(default)]
-    head_commit_sha: String,
-    #[serde(default)]
-    mode: String,
-    #[serde(default)]
-    paths_added: usize,
-    #[serde(default)]
-    paths_changed: usize,
-    #[serde(default)]
-    paths_removed: usize,
-    #[serde(default)]
-    paths_unchanged: usize,
-}
-
-fn resolve_qat_sync_state_path(world: &QatWorld) -> Result<std::path::PathBuf> {
-    let home_dir = world.run_dir().join("home");
-    let candidates = [
-        home_dir.join(".local/state/bitloops/daemon/sync.json"),
-        home_dir.join("xdg-state/bitloops/daemon/sync.json"),
-    ];
-
-    if let Some(path) = candidates.iter().find(|path| path.exists()) {
-        return Ok(path.clone());
+    for path in &candidates {
+        if !path.exists() {
+            continue;
+        }
+        let store = bitloops::host::runtime_store::DaemonSqliteRuntimeStore::open_at(path.clone())
+            .with_context(|| format!("opening daemon runtime store {}", path.display()))?;
+        if let Some(state) = store
+            .load_sync_queue_state()
+            .with_context(|| format!("loading sync queue state from {}", path.display()))?
+        {
+            return Ok((path.clone(), state));
+        }
     }
 
     bail!(
-        "could not find daemon sync state file; looked in: {}",
+        "could not find daemon sync queue state in runtime store; looked in: {}",
         candidates
             .iter()
             .map(|path| path.display().to_string())
@@ -1103,7 +1130,11 @@ fn resolve_qat_sync_state_path(world: &QatWorld) -> Result<std::path::PathBuf> {
     )
 }
 
-type CompletedHeadTasks = (String, std::path::PathBuf, Vec<(String, QatSyncTaskSummarySnapshot)>);
+type CompletedHeadTasks = (
+    String,
+    std::path::PathBuf,
+    Vec<(String, bitloops::host::devql::SyncSummary)>,
+);
 
 fn completed_tasks_for_current_head(
     world: &QatWorld,
@@ -1123,21 +1154,17 @@ fn completed_tasks_for_current_head(
         "expected non-empty HEAD SHA for sync history assertion"
     );
 
-    let sync_state_path = resolve_qat_sync_state_path(world)?;
-    let raw = fs::read_to_string(&sync_state_path)
-        .with_context(|| format!("reading {}", sync_state_path.display()))?;
-    let snapshot: QatSyncStateSnapshot = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing {}", sync_state_path.display()))?;
+    let (sync_state_path, snapshot) = resolve_qat_sync_state_path(world)?;
 
-    let head_tasks: Vec<(String, QatSyncTaskSummarySnapshot)> = snapshot
+    let head_tasks: Vec<(String, bitloops::host::devql::SyncSummary)> = snapshot
         .tasks
         .into_iter()
-        .filter(|task| task.status == "completed")
+        .filter(|task| task.status == bitloops::daemon::SyncTaskStatus::Completed)
         .filter_map(|task| {
-            let source = task.source.clone();
+            let source = task.source.to_string();
             task.summary.map(|summary| (source, summary))
         })
-        .filter(|(_, summary)| summary.head_commit_sha == head_sha)
+        .filter(|(_, summary)| summary.head_commit_sha.as_deref() == Some(head_sha.as_str()))
         .collect();
 
     ensure!(
@@ -1149,7 +1176,7 @@ fn completed_tasks_for_current_head(
     Ok((head_sha, sync_state_path, head_tasks))
 }
 
-fn format_task_diagnostics(head_tasks: &[(String, QatSyncTaskSummarySnapshot)]) -> String {
+fn format_task_diagnostics(head_tasks: &[(String, bitloops::host::devql::SyncSummary)]) -> String {
     head_tasks
         .iter()
         .map(|(source, summary)| {

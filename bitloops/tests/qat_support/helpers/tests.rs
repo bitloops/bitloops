@@ -1,9 +1,12 @@
 use super::*;
 use std::ffi::OsStr;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::qat_support::world::QatRunConfig;
+use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 
 #[test]
 #[ignore = "QAT: requires full QAT environment"]
@@ -173,4 +176,87 @@ fn build_git_command_prepends_qat_binary_dir_to_path() {
     let mut paths = std::env::split_paths(&path_value);
     let first = paths.next().expect("PATH should have at least one entry");
     assert_eq!(first, bin_dir);
+}
+
+#[test]
+#[ignore = "QAT: requires full QAT environment"]
+fn build_bitloops_command_applies_daemon_hardening_env() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let command =
+        build_bitloops_command(&world, &["daemon", "start"]).expect("build bitloops command");
+
+    assert_eq!(
+        command_env_value(&command, DISABLE_WATCHER_AUTOSTART_ENV),
+        Some("1".into())
+    );
+    assert_eq!(
+        command_env_value(&command, DISABLE_VERSION_CHECK_ENV),
+        Some("1".into())
+    );
+}
+
+#[test]
+#[ignore = "QAT: requires full QAT environment"]
+fn daemon_runtime_store_candidate_paths_cover_isolated_state_dirs() {
+    let run_dir = Path::new("/tmp/qat-run");
+    let paths = daemon_runtime_store_candidate_paths(run_dir);
+
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/tmp/qat-run/home/xdg-state/bitloops/daemon/runtime.sqlite"),
+            PathBuf::from("/tmp/qat-run/home/.local/state/bitloops/daemon/runtime.sqlite"),
+            PathBuf::from(
+                "/tmp/qat-run/home/Library/Application Support/bitloops/daemon/runtime.sqlite"
+            ),
+        ]
+    );
+}
+
+#[test]
+#[ignore = "QAT: requires full QAT environment"]
+fn daemon_start_args_use_foreground_http_mode() {
+    let args = daemon_start_args("43127");
+    assert_eq!(
+        args,
+        vec![
+            "daemon",
+            "start",
+            "--create-default-config",
+            "--no-telemetry",
+            "--http",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "43127",
+        ]
+    );
+    assert!(!args.iter().any(|arg| arg == "-d"));
+}
+
+fn command_env_value(command: &std::process::Command, key: &str) -> Option<std::ffi::OsString> {
+    command.get_envs().find_map(|(env_key, value)| {
+        if env_key == OsStr::new(key) {
+            value.map(|v| v.to_os_string())
+        } else {
+            None
+        }
+    })
 }

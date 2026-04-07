@@ -55,6 +55,7 @@ struct RunMetadata<'a> {
 }
 
 include!("core.rs");
+include!("daemon_harness.rs");
 include!("deps_and_testlens.rs");
 include!("semantic_clones.rs");
 include!("knowledge.rs");

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -19,6 +20,9 @@ pub struct QatWorld {
     pub terminal_log_path: Option<PathBuf>,
     pub metadata_path: Option<PathBuf>,
     pub daemon_url: Option<String>,
+    pub daemon_process: Option<ScenarioDaemonProcess>,
+    pub daemon_runtime_state_path: Option<PathBuf>,
+    pub daemon_stderr_log_path: Option<PathBuf>,
     pub last_command_stdout: Option<String>,
     pub last_command_exit_code: Option<i32>,
     pub last_query_result_count: Option<usize>,
@@ -30,6 +34,24 @@ pub struct QatWorld {
     pub agent_name: Option<String>,
 }
 
+pub struct ScenarioDaemonProcess {
+    pub child: Child,
+    pub requested_port: String,
+    pub stderr_log_path: PathBuf,
+    pub runtime_state_path: PathBuf,
+}
+
+impl std::fmt::Debug for ScenarioDaemonProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScenarioDaemonProcess")
+            .field("pid", &self.child.id())
+            .field("requested_port", &self.requested_port)
+            .field("stderr_log_path", &self.stderr_log_path)
+            .field("runtime_state_path", &self.runtime_state_path)
+            .finish()
+    }
+}
+
 impl QatWorld {
     pub fn reset(&mut self) {
         self.flow_name = None;
@@ -38,6 +60,9 @@ impl QatWorld {
         self.terminal_log_path = None;
         self.metadata_path = None;
         self.daemon_url = None;
+        self.daemon_process = None;
+        self.daemon_runtime_state_path = None;
+        self.daemon_stderr_log_path = None;
         self.last_command_stdout = None;
         self.last_command_exit_code = None;
         self.last_query_result_count = None;

@@ -700,6 +700,8 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env("ACCESSIBLE", "1")
         .env("BITLOOPS_QAT_ACTIVE", "1")
         .env("BITLOOPS_TEST_TTY", "0")
+        .env(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV, "1")
+        .env(bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV, "1")
         .env("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", "disabled")
         .env("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", "disabled")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
