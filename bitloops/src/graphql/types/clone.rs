@@ -92,7 +92,10 @@ impl CloneSummary {
                 .then_with(|| left.relation_kind.cmp(&right.relation_kind))
         });
 
-        Self { total_count, groups }
+        Self {
+            total_count,
+            groups,
+        }
     }
 }
 

@@ -89,7 +89,8 @@ pub(super) fn validate_graphql_compiler_support(
 
     let has_tests_stage = matches!(registered_stage, Some(RegisteredStageKind::Tests(_)));
     let has_coverage_stage = matches!(registered_stage, Some(RegisteredStageKind::Coverage));
-    let has_clone_summary_stage = matches!(registered_stage, Some(RegisteredStageKind::CloneSummary));
+    let has_clone_summary_stage =
+        matches!(registered_stage, Some(RegisteredStageKind::CloneSummary));
     let has_tests_summary_stage =
         matches!(registered_stage, Some(RegisteredStageKind::TestsSummary));
 

@@ -35,10 +35,7 @@ mod tests {
     }
 
     impl CapabilityRegistrar for CollectingRegistrar {
-        fn register_stage(
-            &mut self,
-            stage: StageRegistration,
-        ) -> Result<()> {
+        fn register_stage(&mut self, stage: StageRegistration) -> Result<()> {
             self.stages.push((stage.capability_id, stage.stage_name));
             Ok(())
         }
@@ -66,7 +63,10 @@ mod tests {
         register_semantic_clones_pack(&mut registrar)?;
         assert_eq!(
             registrar.stages,
-            vec![(SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_SUMMARY_STAGE_ID)]
+            vec![(
+                SEMANTIC_CLONES_CAPABILITY_ID,
+                SEMANTIC_CLONES_SUMMARY_STAGE_ID
+            )]
         );
         assert_eq!(
             registrar.ingesters,

@@ -9,8 +9,8 @@ use super::types::{
     Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, Branch,
     CheckpointConnection, CheckpointEdge, CloneConnection, CloneEdge, CloneSummary,
     ClonesFilterInput, CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
-    HealthStatus, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, SyncTaskObject,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, SyncTaskObject,
     TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
     TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };

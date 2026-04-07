@@ -230,7 +230,10 @@ fn render_clone_summary_payload(payload: &Value) -> Option<String> {
                     .or_else(|| group.get("relation_kind"))
                     .map(render_table_cell)
                     .unwrap_or_default(),
-                group.get("count").map(render_table_cell).unwrap_or_default(),
+                group
+                    .get("count")
+                    .map(render_table_cell)
+                    .unwrap_or_default(),
             ])
         })
         .collect::<Vec<_>>();

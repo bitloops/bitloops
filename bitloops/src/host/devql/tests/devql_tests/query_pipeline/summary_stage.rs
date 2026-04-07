@@ -4,8 +4,7 @@ use serde_json::json;
 #[test]
 fn parse_devql_clone_summary_stage_basic() {
     let parsed =
-        parse_devql_query(r#"repo("r")->artefacts(kind:"function")->clones()->summary()"#)
-            .unwrap();
+        parse_devql_query(r#"repo("r")->artefacts(kind:"function")->clones()->summary()"#).unwrap();
 
     assert!(parsed.has_artefacts_stage);
     assert!(parsed.has_clones_stage);
@@ -17,8 +16,8 @@ fn parse_devql_clone_summary_stage_basic() {
 async fn execute_devql_query_rejects_summary_without_clones() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
-    let parsed = parse_devql_query(r#"repo("temp2")->artefacts(kind:"function")->summary()"#)
-        .unwrap();
+    let parsed =
+        parse_devql_query(r#"repo("temp2")->artefacts(kind:"function")->summary()"#).unwrap();
 
     let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
         .await
@@ -68,7 +67,10 @@ async fn execute_registered_summary_stage_returns_grouped_counts() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["total_count"], 3);
-    assert_eq!(rows[0]["groups"][0]["relation_kind"], "similar_implementation");
+    assert_eq!(
+        rows[0]["groups"][0]["relation_kind"],
+        "similar_implementation"
+    );
     assert_eq!(rows[0]["groups"][0]["count"], 2);
     assert_eq!(rows[0]["groups"][1]["relation_kind"], "contextual_neighbor");
     assert_eq!(rows[0]["groups"][1]["count"], 1);
@@ -86,10 +88,7 @@ async fn execute_registered_summary_stage_returns_zero_summary_for_empty_clone_s
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["total_count"], 0);
-    assert_eq!(
-        rows[0]["groups"].as_array().expect("groups array").len(),
-        0
-    );
+    assert_eq!(rows[0]["groups"].as_array().expect("groups array").len(), 0);
 }
 
 #[tokio::test]

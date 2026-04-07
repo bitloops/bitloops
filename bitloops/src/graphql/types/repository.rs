@@ -9,9 +9,9 @@ use super::interaction::{InteractionEventObject, InteractionSessionObject, Inter
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
-    ConnectionPagination, DateTimeScalar, FileContext, KnowledgeItemConnection,
-    KnowledgeItemEdge, KnowledgeProvider, Project, TelemetryEventConnection,
-    TelemetryEventEdge, TemporalScope, paginate_items,
+    ConnectionPagination, DateTimeScalar, FileContext, KnowledgeItemConnection, KnowledgeItemEdge,
+    KnowledgeProvider, Project, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
