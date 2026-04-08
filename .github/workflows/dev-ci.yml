@@ -25,6 +25,7 @@ permissions:
 
 env:
   DUCKDB_DOWNLOAD_LIB: '1'
+  BITLOOPS_TEST_THREADS: '6'
 
 jobs:
   rust-file-size:

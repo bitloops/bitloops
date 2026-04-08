@@ -27,12 +27,23 @@ Run commands from the repository root.
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
+The checked-in default fast-lane concurrency is `6` test threads.
+CI is pinned to `BITLOOPS_TEST_THREADS=6`.
 `cargo dev-test-merge` runs the fast lane plus a curated set of slow smoke suites and is the blocking gate for pull requests into `develop`.
 `cargo dev-test-slow` runs all slow targets only.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 `dev-test-*` aliases run with terse test output (`.` style) by default.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
 `cargo qat` runs the onboarding and DevQL sync suites as a parallel bundle.
+
+### Fast-lane thread tuning
+
+- Override the local default with `BITLOOPS_TEST_THREADS=<n> cargo dev-test-fast`.
+- For a persistent per-machine override, export `BITLOOPS_TEST_THREADS` from your shell profile, for example `~/.zshrc`.
+- Recommended starting points:
+  - Apple Silicon laptops with more headroom: try `8` to `10`
+  - Older or lower-core laptops: try `4` to `6`
+  - CI stays pinned to `6` unless explicitly changed in workflow configuration
 
 ## macOS code-signing for local development
 
