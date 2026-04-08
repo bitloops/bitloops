@@ -65,6 +65,13 @@ fn temp_log_path() -> (TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
+fn test_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+}
+
 #[test]
 fn daemon_start_cli_parses_lifecycle_and_server_flags() {
     let parsed = Cli::try_parse_from([
@@ -738,8 +745,7 @@ fn run_logs_prints_default_last_two_hundred_lines() {
     write_log_lines(&log_path, &lines);
     let mut out = Vec::new();
 
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
+    test_runtime()
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs::default(),
             &mut out,
@@ -763,8 +769,7 @@ fn run_logs_honours_explicit_line_count() {
     write_log_lines(&log_path, &lines);
     let mut out = Vec::new();
 
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
+    test_runtime()
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: Some(3),
@@ -787,8 +792,7 @@ fn run_logs_prints_log_path() {
     let (_log_dir, log_path) = temp_log_path();
     let mut out = Vec::new();
 
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
+    test_runtime()
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: None,
@@ -810,8 +814,7 @@ fn run_logs_prints_log_path() {
 fn run_logs_reports_missing_file_with_expected_path() {
     let (_log_dir, log_path) = temp_log_path();
 
-    let err = tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
+    let err = test_runtime()
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs::default(),
             &mut Vec::new(),

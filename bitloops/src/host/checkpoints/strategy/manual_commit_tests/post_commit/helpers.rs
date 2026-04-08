@@ -168,7 +168,11 @@ fn init_devql_schema_with_store_backend(
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
     let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
         .expect("build devql cfg for post-commit test");
-    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime for devql init");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("create tokio runtime for devql init");
     runtime
         .block_on(crate::host::devql::run_init(&cfg))
         .expect("initialise DevQL schema for post-commit test");
