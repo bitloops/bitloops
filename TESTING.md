@@ -27,7 +27,7 @@ Run commands from the repository root.
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
-The checked-in default fast-lane concurrency is `6` test threads.
+The checked-in default fast-lane concurrency is `8` test threads.
 CI is pinned to `BITLOOPS_TEST_THREADS=6`.
 `cargo dev-test-merge` runs the fast lane plus a curated set of slow smoke suites and is the blocking gate for pull requests into `develop`.
 `cargo dev-test-slow` runs all slow targets only.
