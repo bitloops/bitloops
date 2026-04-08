@@ -52,9 +52,17 @@ impl Agent for CodexAgent {
     }
 
     fn hook_names(&self) -> Vec<String> {
+        use crate::host::checkpoints::lifecycle::adapters::{
+            CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START,
+            CODEX_HOOK_STOP, CODEX_HOOK_USER_PROMPT_SUBMIT,
+        };
+
         vec![
-            lifecycle::HOOK_NAME_SESSION_START.to_string(),
-            lifecycle::HOOK_NAME_STOP.to_string(),
+            CODEX_HOOK_SESSION_START.to_string(),
+            CODEX_HOOK_USER_PROMPT_SUBMIT.to_string(),
+            CODEX_HOOK_PRE_TOOL_USE.to_string(),
+            CODEX_HOOK_POST_TOOL_USE.to_string(),
+            CODEX_HOOK_STOP.to_string(),
         ]
     }
 

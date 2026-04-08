@@ -546,9 +546,7 @@ pub(super) fn then_devql_clones_fewer_or_equal(
                 let previous = world
                     .last_query_result_count
                     .ok_or_else(|| anyhow::anyhow!("no previous clone count captured"))?;
-                helpers::record_devql_clones_with_min_score(
-                    world, &repo_name, &symbol, min_score,
-                )?;
+                helpers::record_devql_clones_with_min_score(world, &repo_name, &symbol, min_score)?;
                 helpers::assert_last_query_fewer_or_equal(world, previous)
             })(),
         );

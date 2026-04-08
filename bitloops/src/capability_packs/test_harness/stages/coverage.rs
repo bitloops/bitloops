@@ -81,9 +81,12 @@ fn execute_coverage_stage<R: TestHarnessQueryRepository + ?Sized>(
             production_symbol_id,
             commit_sha.as_deref(),
         )?;
-        if line_records.is_empty() && branch_records.is_empty() && artefact_id != production_symbol_id
+        if line_records.is_empty()
+            && branch_records.is_empty()
+            && artefact_id != production_symbol_id
         {
-            line_records = store.load_stage_line_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
+            line_records =
+                store.load_stage_line_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
             branch_records =
                 store.load_stage_branch_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
         }

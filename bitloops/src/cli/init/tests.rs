@@ -282,6 +282,44 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
 }
 
 #[test]
+fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
+        || {
+            let mut out = Vec::new();
+            run_with_writer(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: true,
+                    agent: Some(AGENT_CODEX.to_string()),
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: true,
+                    sync: Some(false),
+                    ingest: Some(false),
+                    backfill: None,
+                },
+                &mut out,
+                None,
+            )
+            .expect("run init");
+
+            assert!(repo.path().join(".codex/hooks.json").exists());
+            let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
+                .expect("read codex config");
+            assert!(config.contains("codex_hooks = true"));
+            assert!(!repo.path().join(".claude/settings.json").exists());
+        },
+    );
+}
+
+#[test]
 fn detect_or_select_agent_no_detection_no_tty_falls_back_to_default() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

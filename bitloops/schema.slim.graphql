@@ -813,6 +813,16 @@ type TestHarnessCoveringTest {
 	discoverySource: String!
 	linkageSource: String!
 	linkageStatus: String!
+	classification: String
+	classificationSource: String
+	fanOut: Int
+	lastRun: TestHarnessLastRun
+}
+
+type TestHarnessLastRun {
+	status: String!
+	durationMs: Int
+	commitSha: String!
 }
 
 type TestHarnessTestsResult {

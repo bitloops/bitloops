@@ -343,8 +343,7 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
     let mut hydrated_inputs = Vec::with_capacity(target_artefacts.len());
     for (group_repo_id, blob_sha, path) in groups {
         let artefacts =
-            load_pre_stage_artefacts_for_blob(relational, &group_repo_id, &blob_sha, &path)
-                .await?;
+            load_pre_stage_artefacts_for_blob(relational, &group_repo_id, &blob_sha, &path).await?;
         let dependencies =
             load_pre_stage_dependencies_for_blob(relational, &group_repo_id, &blob_sha, &path)
                 .await?;
@@ -998,9 +997,8 @@ mod semantic_feature_persistence_tests {
             current.clone(),
         )]);
 
-        let remapped =
-            remap_semantic_input_to_current_artefact(historical, &current_by_key)
-                .expect("expected current artefact match");
+        let remapped = remap_semantic_input_to_current_artefact(historical, &current_by_key)
+            .expect("expected current artefact match");
 
         assert_eq!(remapped.artefact_id, current.artefact_id);
         assert_eq!(remapped.symbol_id, current.symbol_id);

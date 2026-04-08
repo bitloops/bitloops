@@ -161,13 +161,8 @@ fn combine_bundle_results_returns_onboarding_error_when_only_onboarding_fails() 
 
 #[test]
 fn combine_bundle_results_returns_sync_error_when_only_sync_fails() {
-    let err = combine_bundle_results(
-        Ok(()),
-        Err(anyhow::anyhow!("sync failed")),
-        Ok(()),
-        Ok(()),
-    )
-    .expect_err("sync failure should surface");
+    let err = combine_bundle_results(Ok(()), Err(anyhow::anyhow!("sync failed")), Ok(()), Ok(()))
+        .expect_err("sync failure should surface");
     assert!(
         format!("{err:#}").contains("sync failed"),
         "unexpected error: {err:#}"
@@ -330,7 +325,9 @@ async fn run_bundle_from_futures_runs_parallel_stage_then_smoke_then_devql() {
         "parallel stage should start devql-sync first, observed {observed:?}"
     );
     assert!(
-        timeout(Duration::from_millis(100), rx.recv()).await.is_err(),
+        timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err(),
         "smoke/devql should wait for the parallel stage to finish"
     );
 

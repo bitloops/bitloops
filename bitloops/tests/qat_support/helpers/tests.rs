@@ -346,7 +346,10 @@ fn count_chat_history_edges_for_agent_only_counts_matching_agent_rows() {
         }
     ]);
 
-    assert_eq!(count_chat_history_edges_for_agent(&payload, "claude-code"), 2);
+    assert_eq!(
+        count_chat_history_edges_for_agent(&payload, "claude-code"),
+        2
+    );
     assert_eq!(count_chat_history_edges_for_agent(&payload, "cursor"), 1);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "codex"), 0);
 }
@@ -429,7 +432,10 @@ fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
         }
     ]);
 
-    assert_eq!(extract_clone_nodes(&rows), rows.as_array().cloned().unwrap_or_default());
+    assert_eq!(
+        extract_clone_nodes(&rows),
+        rows.as_array().cloned().unwrap_or_default()
+    );
 }
 
 #[test]
@@ -588,10 +594,7 @@ fn extract_clone_nodes_keeps_flattened_clone_rows() {
     ]));
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0]["from"],
-        serde_json::json!("src/source.ts::source")
-    );
+    assert_eq!(rows[0]["from"], serde_json::json!("src/source.ts::source"));
     assert_eq!(rows[0]["to"], serde_json::json!("src/target.ts::target"));
 }
 

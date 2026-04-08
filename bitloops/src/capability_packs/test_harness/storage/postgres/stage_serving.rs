@@ -92,7 +92,10 @@ pub(super) async fn load_stage_covering_tests(
     ) {
         (Some(commit_sha), Some(mc), Some(ls)) => {
             client
-                .query(&sql, &[&repo_id, &production_symbol_id, &commit_sha, &mc, &ls])
+                .query(
+                    &sql,
+                    &[&repo_id, &production_symbol_id, &commit_sha, &mc, &ls],
+                )
                 .await
         }
         (Some(commit_sha), Some(mc), None) => {
@@ -142,7 +145,9 @@ pub(super) async fn load_stage_covering_tests(
                 discovery_source: get(&row, 7, "discovery_source")?,
                 linkage_source: get(&row, 8, "linkage_source")?,
                 linkage_status: get(&row, 9, "linkage_status")?,
-                classification: row.try_get::<_, Option<String>>(10).context("classification")?,
+                classification: row
+                    .try_get::<_, Option<String>>(10)
+                    .context("classification")?,
                 classification_source: row
                     .try_get::<_, Option<String>>(11)
                     .context("classification_source")?,

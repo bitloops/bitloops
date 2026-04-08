@@ -304,7 +304,7 @@ mod guardrail_tests {
             _commit_sha: &str,
             _test_symbol_id: &str,
         ) -> Result<Option<crate::models::LatestTestRunRecord>> {
-            unreachable!("unused in tests stage guardrails")
+            Ok(None)
         }
 
         fn load_coverage_summary(
