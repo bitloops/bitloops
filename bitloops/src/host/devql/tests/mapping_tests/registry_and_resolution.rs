@@ -144,8 +144,14 @@ public class User {}
     assert!(
         csharp_edges
             .iter()
-            .any(|edge| { matches!(edge.edge_kind, EdgeKind::Extends | EdgeKind::Implements) }),
-        "csharp built-in registry pack should emit inheritance edges"
+            .any(|edge| edge.edge_kind == EdgeKind::Extends),
+        "csharp built-in registry pack should emit extends edges"
+    );
+    assert!(
+        csharp_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Implements),
+        "csharp built-in registry pack should emit implements edges"
     );
 
     let rust_pack = registry

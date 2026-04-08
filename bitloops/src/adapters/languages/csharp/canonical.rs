@@ -18,11 +18,6 @@ pub(crate) static CSHARP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: LanguageKind::csharp(CSharpKind::Delegate),
-        projection: CanonicalKindProjection::Type,
-        condition: MappingCondition::Always,
-    },
-    CanonicalMapping {
         language_kind: LanguageKind::csharp(CSharpKind::Interface),
         projection: CanonicalKindProjection::Interface,
         condition: MappingCondition::Always,
@@ -36,11 +31,6 @@ pub(crate) static CSHARP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
         language_kind: LanguageKind::csharp(CSharpKind::Method),
         projection: CanonicalKindProjection::Method,
         condition: MappingCondition::WhenInsideParent,
-    },
-    CanonicalMapping {
-        language_kind: LanguageKind::csharp(CSharpKind::Method),
-        projection: CanonicalKindProjection::Function,
-        condition: MappingCondition::Always,
     },
     CanonicalMapping {
         language_kind: LanguageKind::csharp(CSharpKind::Constructor),

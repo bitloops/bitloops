@@ -782,12 +782,6 @@ fn csharp_canonical_mapping_covers_supported_kind_table() {
             Some("type"),
         ),
         (
-            LanguageKind::csharp(CSharpKind::Delegate),
-            false,
-            true,
-            Some("type"),
-        ),
-        (
             LanguageKind::csharp(CSharpKind::Interface),
             false,
             true,
@@ -799,12 +793,7 @@ fn csharp_canonical_mapping_covers_supported_kind_table() {
             true,
             Some("enum"),
         ),
-        (
-            LanguageKind::csharp(CSharpKind::Method),
-            false,
-            true,
-            Some("function"),
-        ),
+        (LanguageKind::csharp(CSharpKind::Method), false, true, None),
         (
             LanguageKind::csharp(CSharpKind::Constructor),
             false,

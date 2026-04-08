@@ -18,11 +18,13 @@ struct CSharpTraversalCtx<'a> {
     artefacts: &'a [LanguageArtefact],
     callable_name_to_fqn: &'a HashMap<String, String>,
     type_targets: &'a HashMap<String, String>,
+    interface_targets: &'a HashSet<String>,
     out: &'a mut Vec<DependencyEdge>,
     seen_imports: &'a mut HashSet<String>,
     seen_calls: &'a mut HashSet<String>,
     seen_refs: &'a mut HashSet<String>,
     seen_extends: &'a mut HashSet<String>,
+    seen_implements: &'a mut HashSet<String>,
 }
 
 pub(crate) fn extract_csharp_dependency_edges(
@@ -41,6 +43,7 @@ pub(crate) fn extract_csharp_dependency_edges(
 
     let mut callable_name_to_fqn = HashMap::new();
     let mut type_targets = HashMap::new();
+    let mut interface_targets = HashSet::new();
     for artefact in artefacts {
         let projected = artefact
             .canonical_kind
@@ -68,6 +71,9 @@ pub(crate) fn extract_csharp_dependency_edges(
                 .entry(artefact.name.clone())
                 .or_insert_with(|| artefact.symbol_fqn.clone());
         }
+        if projected == Some(CanonicalKindProjection::Interface) {
+            interface_targets.insert(artefact.name.clone());
+        }
     }
 
     let root = tree.root_node();
@@ -76,17 +82,20 @@ pub(crate) fn extract_csharp_dependency_edges(
     let mut seen_calls = HashSet::new();
     let mut seen_refs = HashSet::new();
     let mut seen_extends = HashSet::new();
+    let mut seen_implements = HashSet::new();
     let mut ctx = CSharpTraversalCtx {
         content,
         path,
         artefacts,
         callable_name_to_fqn: &callable_name_to_fqn,
         type_targets: &type_targets,
+        interface_targets: &interface_targets,
         out: &mut edges,
         seen_imports: &mut seen_imports,
         seen_calls: &mut seen_calls,
         seen_refs: &mut seen_refs,
         seen_extends: &mut seen_extends,
+        seen_implements: &mut seen_implements,
     };
     collect_csharp_edges_recursive(root, &mut ctx);
     Ok(edges)
@@ -210,26 +219,86 @@ fn collect_inheritance_edges(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
     let Some(owner) = smallest_enclosing_type(line_no, ctx.artefacts) else {
         return;
     };
+    let owner_is_interface = owner.canonical_kind.as_deref() == Some("interface");
     let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
+    for (index, child) in node.named_children(&mut cursor).enumerate() {
         let Some(name) = trimmed_node_text(child, ctx.content) else {
             continue;
         };
         let base_name = name.split('<').next().unwrap_or(&name).trim().to_string();
-        push_extends_edge(
-            &mut EdgeCollector {
-                out: ctx.out,
-                seen: ctx.seen_extends,
-            },
-            &owner.symbol_fqn,
-            &base_name,
-            line_no,
-            &SymbolLookup {
-                local_targets: ctx.type_targets,
-                imported_symbol_refs: None,
-            },
-        );
+        let target_is_interface = ctx.interface_targets.contains(&base_name);
+        if owner_is_interface || target_is_interface || index > 0 {
+            push_implements_edge(
+                ctx,
+                &owner.symbol_fqn,
+                &base_name,
+                line_no,
+                owner_is_interface,
+            );
+        } else {
+            push_extends_edge(
+                &mut EdgeCollector {
+                    out: ctx.out,
+                    seen: ctx.seen_extends,
+                },
+                &owner.symbol_fqn,
+                &base_name,
+                line_no,
+                &SymbolLookup {
+                    local_targets: ctx.type_targets,
+                    imported_symbol_refs: None,
+                },
+            );
+        }
     }
+}
+
+fn push_implements_edge(
+    ctx: &mut CSharpTraversalCtx<'_>,
+    owner_symbol_fqn: &str,
+    target_name: &str,
+    line_no: i32,
+    owner_is_interface: bool,
+) {
+    let to_target_symbol_fqn = ctx.type_targets.get(target_name).cloned();
+    let to_symbol_ref = if to_target_symbol_fqn.is_some() {
+        None
+    } else {
+        Some(target_name.to_string())
+    };
+    let key = format!(
+        "{}|{}|{}|{}|{}",
+        owner_symbol_fqn,
+        if owner_is_interface {
+            "extends"
+        } else {
+            "implements"
+        },
+        to_target_symbol_fqn.as_deref().unwrap_or(""),
+        to_symbol_ref.as_deref().unwrap_or(""),
+        line_no
+    );
+    let seen = if owner_is_interface {
+        &mut ctx.seen_extends
+    } else {
+        &mut ctx.seen_implements
+    };
+    if !seen.insert(key) {
+        return;
+    }
+    ctx.out.push(DependencyEdge {
+        edge_kind: if owner_is_interface {
+            EdgeKind::Extends
+        } else {
+            EdgeKind::Implements
+        },
+        from_symbol_fqn: owner_symbol_fqn.to_string(),
+        to_target_symbol_fqn,
+        to_symbol_ref,
+        start_line: Some(line_no),
+        end_line: Some(line_no),
+        metadata: EdgeMetadata::none(),
+    });
 }
 
 fn collect_type_reference_edge(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
@@ -329,10 +398,11 @@ mod tests {
 namespace MyApp.Services;
 
 public interface IRepository {}
+public interface IAuditable {}
 public class BaseService {}
 public class User {}
 
-public class UserService : BaseService, IRepository
+public class UserService : BaseService, IRepository, IAuditable
 {
     private readonly Helper _helper;
     private readonly List<User> _users;
@@ -373,6 +443,16 @@ public class Helper
         assert!(edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::Extends
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Implements
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/UserService.cs::IRepository")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Implements
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/UserService.cs::IAuditable")
         }));
         assert!(edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::References
@@ -459,6 +539,28 @@ public class UserService
             edge.edge_kind == EdgeKind::Calls
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
                 && edge.to_symbol_ref.as_deref() == Some("src/UserService.cs::member::cache::Save")
+        }));
+    }
+
+    #[test]
+    fn extract_csharp_dependency_edges_keep_interface_inheritance_as_extends() {
+        let content = r#"public interface IBase {}
+
+public interface IDerived : IBase {}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Extends
+                && edge.from_symbol_fqn == "src/UserService.cs::IDerived"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/UserService.cs::IBase")
+        }));
+        assert!(!edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Implements
+                && edge.from_symbol_fqn == "src/UserService.cs::IDerived"
         }));
     }
 }
