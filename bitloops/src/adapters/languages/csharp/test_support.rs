@@ -145,58 +145,91 @@ fn collect_csharp_test_suites(
 
 fn collect_csharp_test_methods(type_node: Node<'_>, source: &[u8]) -> Vec<DiscoveredTestScenario> {
     let mut scenarios = Vec::new();
+    let mut stack = Vec::new();
     let mut cursor = type_node.walk();
     for child in type_node.named_children(&mut cursor) {
-        if child.kind() != "method_declaration" || !has_test_attribute(child, source) {
+        stack.push(child);
+    }
+
+    while let Some(child) = stack.pop() {
+        if matches!(
+            child.kind(),
+            "class_declaration" | "record_declaration" | "struct_declaration"
+        ) {
             continue;
         }
-        let name = child
-            .child_by_field_name("name")
-            .and_then(|name| name.utf8_text(source).ok())
-            .map(str::to_string)
-            .unwrap_or_else(|| "test".to_string());
-        scenarios.push(DiscoveredTestScenario {
-            name,
-            start_line: child.start_position().row as i64 + 1,
-            end_line: child.end_position().row as i64 + 1,
-            reference_candidates: child
-                .child_by_field_name("body")
-                .map(|body| collect_csharp_called_symbols(body, source))
-                .unwrap_or_default()
-                .into_iter()
-                .map(ReferenceCandidate::SymbolName)
-                .collect(),
-            discovery_source: ScenarioDiscoverySource::Source,
-        });
+
+        if child.kind() == "method_declaration" && has_test_attribute(child, source) {
+            let name = child
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .map(str::to_string)
+                .unwrap_or_else(|| "test".to_string());
+            scenarios.push(DiscoveredTestScenario {
+                name,
+                start_line: child.start_position().row as i64 + 1,
+                end_line: child.end_position().row as i64 + 1,
+                reference_candidates: child
+                    .child_by_field_name("body")
+                    .map(|body| collect_csharp_called_symbols(body, source))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(ReferenceCandidate::SymbolName)
+                    .collect(),
+                discovery_source: ScenarioDiscoverySource::Source,
+            });
+        }
+
+        let mut inner_cursor = child.walk();
+        for nested in child.named_children(&mut inner_cursor) {
+            stack.push(nested);
+        }
     }
     scenarios.sort_by_key(|scenario| scenario.start_line);
     scenarios
 }
 
 fn has_test_attribute(method_node: Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = method_node.walk();
+    for child in method_node.named_children(&mut cursor) {
+        if child.kind() == "attribute_list" && attribute_list_contains_test_marker(child, source) {
+            return true;
+        }
+    }
+
     let mut current = method_node.prev_named_sibling();
     while let Some(node) = current {
         if node.kind() != "attribute_list" {
             break;
         }
-        let mut stack = vec![node];
-        while let Some(candidate) = stack.pop() {
-            if candidate.kind() == "attribute"
-                && let Some(name_node) = candidate.child_by_field_name("name")
-                && let Ok(name) = name_node.utf8_text(source)
-            {
-                let bare_name = name.rsplit('.').next().unwrap_or(name).trim();
-                if matches!(bare_name, "Fact" | "Test" | "TestMethod") {
-                    return true;
-                }
-            }
-            let mut cursor = candidate.walk();
-            for child in candidate.named_children(&mut cursor) {
-                stack.push(child);
-            }
+        if attribute_list_contains_test_marker(node, source) {
+            return true;
         }
         current = node.prev_named_sibling();
     }
+    false
+}
+
+fn attribute_list_contains_test_marker(attribute_list: Node<'_>, source: &[u8]) -> bool {
+    let mut stack = vec![attribute_list];
+
+    while let Some(candidate) = stack.pop() {
+        if candidate.kind() == "attribute"
+            && let Some(name_node) = candidate.child_by_field_name("name")
+            && let Ok(name) = name_node.utf8_text(source)
+        {
+            let bare_name = name.rsplit('.').next().unwrap_or(name).trim();
+            if matches!(bare_name, "Fact" | "Test" | "TestMethod") {
+                return true;
+            }
+        }
+
+        let mut cursor = candidate.walk();
+        for child in candidate.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+
     false
 }
 
@@ -206,10 +239,12 @@ fn collect_csharp_called_symbols(scope: Node<'_>, source: &[u8]) -> Vec<String> 
 
     while let Some(node) = stack.pop() {
         if node.kind() == "invocation_expression"
-            && let Some(function_node) = node.child_by_field_name("function")
+            && let Some(function_node) = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("expression"))
         {
             match function_node.kind() {
-                "identifier_name" => {
+                "identifier" | "identifier_name" | "generic_name" => {
                     if let Ok(name) = function_node.utf8_text(source) {
                         symbols.insert(name.to_string());
                     }
@@ -260,4 +295,90 @@ fn collect_csharp_import_paths(root: Node<'_>, source: &[u8]) -> Vec<String> {
     let mut result = paths.into_iter().collect::<Vec<_>>();
     result.sort();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CSharpTestMappingHelper, CSharpTestSupport};
+    use crate::host::language_adapter::{LanguageTestSupport, ReferenceCandidate};
+
+    #[test]
+    fn csharp_test_support_recognizes_test_paths() {
+        let support = CSharpTestSupport;
+
+        assert!(support.supports_path(std::path::Path::new(""), "tests/UserServiceTest.cs"));
+        assert!(support.supports_path(std::path::Path::new(""), "specs/UserServiceSpec.cs"));
+        assert!(support.supports_path(std::path::Path::new(""), "src/UserServiceTests/Unit.cs"));
+        assert!(!support.supports_path(std::path::Path::new(""), "src/UserService.cs"));
+    }
+
+    #[test]
+    fn csharp_test_support_discovers_xunit_nunit_and_mstest_source_scenarios() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("UserServiceTests.cs");
+        std::fs::write(
+            &file_path,
+            r#"using MyApp.Services;
+
+public class UserServiceTests
+{
+    [Xunit.Fact]
+    public void Loads_user()
+    {
+        helper();
+    }
+
+    [NUnit.Framework.Test]
+    public void Saves_user()
+    {
+        dependency.Run();
+    }
+
+    [Microsoft.VisualStudio.TestTools.UnitTesting.TestMethod]
+    public void Deletes_user()
+    {
+        helper();
+    }
+
+    private void helper() {}
+}
+"#,
+        )
+        .unwrap();
+
+        let discovered = CSharpTestMappingHelper::new()
+            .unwrap()
+            .discover_tests(&file_path, "tests/UserServiceTests.cs")
+            .unwrap();
+
+        assert_eq!(discovered.language, "csharp");
+        assert_eq!(discovered.suites.len(), 1);
+        assert_eq!(discovered.suites[0].name, "UserServiceTests");
+
+        let scenario_names = discovered.suites[0]
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            scenario_names,
+            vec!["Loads_user", "Saves_user", "Deletes_user"]
+        );
+
+        assert!(
+            discovered
+                .reference_candidates
+                .contains(&ReferenceCandidate::SourcePath(
+                    "MyApp/Services.cs".to_string()
+                ))
+        );
+        assert_eq!(
+            discovered.suites[0].scenarios[0].reference_candidates,
+            vec![ReferenceCandidate::SymbolName("helper".to_string())]
+        );
+        assert_eq!(
+            discovered.suites[0].scenarios[1].reference_candidates,
+            vec![ReferenceCandidate::SymbolName("Run".to_string())]
+        );
+    }
 }

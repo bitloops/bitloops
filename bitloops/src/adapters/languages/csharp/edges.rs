@@ -308,3 +308,122 @@ fn smallest_enclosing_type(
         .min_by_key(|artefact| artefact.end_line - artefact.start_line)
         .cloned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::extract_csharp_dependency_edges;
+    use crate::adapters::languages::csharp::extraction::extract_csharp_artefacts;
+    use crate::host::devql::EdgeKind;
+
+    #[test]
+    fn extract_csharp_dependency_edges_emit_import_call_extends_and_reference_edges() {
+        let content = r#"using System.Collections.Generic;
+
+namespace MyApp.Services;
+
+public interface IRepository {}
+public class BaseService {}
+public class User {}
+
+public class UserService : BaseService, IRepository
+{
+    private readonly Helper _helper;
+    private readonly List<User> _users;
+
+    public UserService(Helper helper)
+    {
+        _helper = helper;
+        _users = new List<User>();
+    }
+
+    public User GetUser()
+    {
+        return _helper.Load();
+    }
+}
+
+public class Helper
+{
+    public User Load()
+    {
+        return new User();
+    }
+}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Imports
+                && edge.to_symbol_ref.as_deref() == Some("System.Collections.Generic")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Calls
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService::GetUser"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Extends
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::References
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService::_users"
+        }));
+    }
+
+    #[test]
+    fn extract_csharp_dependency_edges_deduplicates_repeated_imports_in_one_file() {
+        let content = r#"using System.Collections.Generic;
+using System.Collections.Generic;
+
+public class UserService
+{
+    private readonly List<string> _names;
+}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        let import_edges = edges
+            .iter()
+            .filter(|edge| {
+                edge.edge_kind == EdgeKind::Imports
+                    && edge.to_symbol_ref.as_deref() == Some("System.Collections.Generic")
+            })
+            .count();
+
+        assert_eq!(import_edges, 1);
+    }
+
+    #[test]
+    fn extract_csharp_dependency_edges_resolve_local_method_calls_to_target_symbols() {
+        let content = r#"public class UserService
+{
+    public string Helper()
+    {
+        return "ok";
+    }
+
+    public string Run()
+    {
+        return Helper();
+    }
+}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Calls
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
+                && edge.to_target_symbol_fqn.as_deref()
+                    == Some("src/UserService.cs::UserService::Helper")
+        }));
+    }
+}

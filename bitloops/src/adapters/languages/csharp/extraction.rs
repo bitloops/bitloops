@@ -397,4 +397,92 @@ namespace MyApp.Services
                 && artefact.parent_symbol_fqn.is_some()
         }));
     }
+
+    #[test]
+    fn extract_csharp_artefacts_handles_file_scoped_namespaces_doc_comments_and_multi_field_decls()
+    {
+        let content = r#"using MyApp.Core;
+
+namespace MyApp.Services;
+
+/// <summary>
+/// Coordinates user operations.
+/// </summary>
+public record UserService
+{
+    private int _first, _second;
+
+    /// <summary>
+    /// Loads the current user.
+    /// </summary>
+    public User Load(UserId id)
+    {
+        return new User();
+    }
+}
+"#;
+
+        let artefacts = extract_csharp_artefacts(content, "src/UserService.cs").unwrap();
+
+        let namespace = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::csharp(CSharpKind::FileScopedNamespace)
+                    && artefact.name == "MyApp.Services"
+            })
+            .expect("missing file-scoped namespace artefact");
+        assert_eq!(
+            namespace.symbol_fqn,
+            "src/UserService.cs::ns::MyApp.Services"
+        );
+
+        let record = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::csharp(CSharpKind::Record)
+                    && artefact.name == "UserService"
+            })
+            .expect("missing record artefact");
+        assert_eq!(record.canonical_kind.as_deref(), Some("type"));
+        assert_eq!(
+            record.docstring.as_deref(),
+            Some("<summary>\nCoordinates user operations.\n</summary>")
+        );
+
+        let first_field = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::csharp(CSharpKind::Field)
+                    && artefact.name == "_first"
+            })
+            .expect("missing first field artefact");
+        let second_field = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::csharp(CSharpKind::Field)
+                    && artefact.name == "_second"
+            })
+            .expect("missing second field artefact");
+        assert_eq!(
+            first_field.parent_symbol_fqn.as_deref(),
+            Some("src/UserService.cs::UserService")
+        );
+        assert_eq!(
+            second_field.parent_symbol_fqn.as_deref(),
+            Some("src/UserService.cs::UserService")
+        );
+
+        let method = artefacts
+            .iter()
+            .find(|artefact| {
+                artefact.language_kind == LanguageKind::csharp(CSharpKind::Method)
+                    && artefact.name == "Load"
+            })
+            .expect("missing method artefact");
+        assert_eq!(method.canonical_kind.as_deref(), Some("method"));
+        assert_eq!(
+            method.docstring.as_deref(),
+            Some("<summary>\nLoads the current user.\n</summary>")
+        );
+    }
 }

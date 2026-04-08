@@ -32,6 +32,11 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
         "export const C = () => null;\n",
     )
     .expect("write jsx file");
+    std::fs::write(
+        repo.path().join("src/service.cs"),
+        "public class Service { public string Run() => \"ok\"; }\n",
+    )
+    .expect("write csharp file");
     std::fs::write(repo.path().join("README.md"), "# docs\n").expect("write markdown file");
 
     git_ok(repo.path(), &["add", "."]);
@@ -45,6 +50,7 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
             "src/index.ts".to_string(),
             "src/lib.rs".to_string(),
             "src/node.js".to_string(),
+            "src/service.cs".to_string(),
             "src/view.tsx".to_string(),
         ]
     );
@@ -64,6 +70,11 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
         "export function sum(a: number, b: number) { return a + b; }\n",
     )
     .expect("write ts file");
+    std::fs::write(
+        repo.path().join("src/service.cs"),
+        "using System;\n\npublic class Service {\n    public string Run() {\n        return DateTime.UtcNow.ToString();\n    }\n}\n",
+    )
+    .expect("write csharp file");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add baseline files"]);
 
@@ -85,7 +96,7 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
             |row| row.get(0),
         )
         .expect("count current_file_state rows");
-    assert_eq!(current_file_state_count, 2);
+    assert_eq!(current_file_state_count, 3);
 
     let current_count = count_rows(
         &conn,
@@ -95,6 +106,18 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
     assert!(
         current_count >= 2,
         "expected baseline to persist current-state rows"
+    );
+
+    let csharp_current_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2 AND language = 'csharp'",
+            rusqlite::params![cfg.repo.repo_id.as_str(), "src/service.cs"],
+            |row| row.get(0),
+        )
+        .expect("count csharp current-state rows");
+    assert!(
+        csharp_current_count >= 2,
+        "expected baseline to persist csharp file and symbol artefacts"
     );
 
     let baseline_sha: String = conn
