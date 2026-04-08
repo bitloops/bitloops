@@ -92,11 +92,25 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 10;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticClonesConfig {
     pub summary_mode: SemanticSummaryMode,
     pub embedding_mode: SemanticCloneEmbeddingMode,
     pub embedding_profile: Option<String>,
+    pub enrichment_workers: usize,
+}
+
+impl Default for SemanticClonesConfig {
+    fn default() -> Self {
+        Self {
+            summary_mode: SemanticSummaryMode::default(),
+            embedding_mode: SemanticCloneEmbeddingMode::default(),
+            embedding_profile: None,
+            enrichment_workers: DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

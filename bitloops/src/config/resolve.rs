@@ -399,11 +399,21 @@ where
                 "none" | "disabled" | "off"
             )
         });
+    let enrichment_workers = root
+        .and_then(|map| read_any_u64(map, &["enrichment_workers"]))
+        .or_else(|| {
+            read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS")
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| SemanticClonesConfig::default().enrichment_workers);
 
     SemanticClonesConfig {
         summary_mode,
         embedding_mode,
         embedding_profile,
+        enrichment_workers,
     }
 }
 

@@ -35,11 +35,12 @@ pub use resolve::{
     resolve_store_semantic_config_for_repo, resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, DashboardLocalDashboardConfig,
-    EmbeddingCapabilityConfig, EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig,
-    EventsBackendConfig, GithubProviderConfig, ProviderConfig, RelationalBackendConfig,
-    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig,
-    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
+    DashboardFileConfig, DashboardLocalDashboardConfig, EmbeddingCapabilityConfig,
+    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
+    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
+    SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
+    StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 
 #[cfg(test)]

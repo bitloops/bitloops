@@ -1,7 +1,8 @@
 use super::*;
 use crate::capability_packs::semantic_clones::{
     RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
-    determine_repo_embedding_sync_action, persist_active_embedding_setup,
+    determine_repo_embedding_sync_action, load_active_embedding_setup,
+    load_semantic_feature_inputs_for_current_repo, persist_active_embedding_setup,
     refresh_current_repo_symbol_embeddings_and_clone_edges,
 };
 use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
@@ -506,6 +507,49 @@ async fn execute_ingest_inner(
             Some(commit_sha),
             &counters,
         );
+    }
+
+    if let Some(enrichment) = enrichment.as_ref()
+        && embedding_outputs_enabled
+        && counters.artefacts_upserted == 0
+        && load_active_embedding_setup(&relational, &cfg.repo.repo_id)
+            .await?
+            .is_none()
+    {
+        let bootstrap_inputs = load_semantic_feature_inputs_for_current_repo(
+            &relational,
+            &cfg.repo_root,
+            &cfg.repo.repo_id,
+        )
+        .await?;
+        if !bootstrap_inputs.is_empty() {
+            let bootstrap_input_hashes = bootstrap_inputs
+                .iter()
+                .map(|input| {
+                    (
+                        input.artefact_id.clone(),
+                        semantic::build_semantic_feature_input_hash(
+                            input,
+                            summary_provider.as_ref(),
+                        ),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
+                cfg.daemon_config_root.clone(),
+                cfg.repo_root.clone(),
+                cfg.repo.repo_id.clone(),
+                active_branch_for_enqueue.clone(),
+            );
+            enrichment
+                .enqueue_symbol_embeddings(
+                    enqueue_target,
+                    bootstrap_inputs,
+                    bootstrap_input_hashes,
+                    semantic_clones.embedding_mode,
+                )
+                .await?;
+        }
     }
 
     counters.temporary_rows_promoted =

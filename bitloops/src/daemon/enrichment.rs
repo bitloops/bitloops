@@ -9,7 +9,10 @@ use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::features as semantic_features;
-use crate::config::SemanticCloneEmbeddingMode;
+use crate::config::{
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, SemanticCloneEmbeddingMode,
+    resolve_semantic_clones_config_for_repo,
+};
 use crate::host::devql::RepoIdentity;
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
@@ -22,6 +25,9 @@ mod queue;
 
 use execution::execute_job;
 use queue::{job_is_paused, next_pending_job_index, project_status};
+
+const ENRICHMENT_WORKER_COUNT_ENV: &str = "BITLOOPS_ENRICHMENT_WORKERS";
+const MAX_ENRICHMENT_WORKER_COUNT: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -193,7 +199,13 @@ impl EnrichmentCoordinator {
                 notify: Notify::new(),
             });
             coordinator.ensure_state_file();
-            coordinator.spawn_worker_if_possible();
+            let worker_count = configured_enrichment_worker_count();
+            if worker_count > 1 {
+                log::info!("starting {worker_count} enrichment workers");
+            }
+            for _ in 0..worker_count {
+                coordinator.spawn_worker_if_possible();
+            }
             coordinator
         }))
     }
@@ -684,6 +696,34 @@ fn default_state() -> EnrichmentQueueState {
     }
 }
 
+fn configured_enrichment_worker_count() -> usize {
+    if let Some(override_count) =
+        parse_enrichment_worker_count(std::env::var(ENRICHMENT_WORKER_COUNT_ENV).ok().as_deref())
+    {
+        return override_count.min(MAX_ENRICHMENT_WORKER_COUNT);
+    }
+
+    let configured = std::env::current_dir()
+        .ok()
+        .map(|cwd| resolve_semantic_clones_config_for_repo(&cwd).enrichment_workers)
+        .unwrap_or(DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS);
+    configured.max(1).min(MAX_ENRICHMENT_WORKER_COUNT)
+}
+
+#[cfg(test)]
+fn resolve_enrichment_worker_count(raw_value: Option<&str>) -> usize {
+    parse_enrichment_worker_count(raw_value)
+        .unwrap_or(DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS)
+        .max(1)
+        .min(MAX_ENRICHMENT_WORKER_COUNT)
+}
+
+fn parse_enrichment_worker_count(raw_value: Option<&str>) -> Option<usize> {
+    raw_value
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|count| *count > 0)
+}
+
 fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIdentity {
     let name = repo_root
         .file_name()
@@ -775,6 +815,22 @@ mod tests {
             }
             other => panic!("expected semantic summaries job, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn enrichment_worker_count_defaults_to_ten_for_missing_or_invalid_values() {
+        assert_eq!(resolve_enrichment_worker_count(None), 10);
+        assert_eq!(resolve_enrichment_worker_count(Some("")), 10);
+        assert_eq!(resolve_enrichment_worker_count(Some("0")), 10);
+        assert_eq!(resolve_enrichment_worker_count(Some("-1")), 10);
+        assert_eq!(resolve_enrichment_worker_count(Some("nope")), 10);
+    }
+
+    #[test]
+    fn enrichment_worker_count_respects_valid_values_and_caps_large_values() {
+        assert_eq!(resolve_enrichment_worker_count(Some("4")), 4);
+        assert_eq!(resolve_enrichment_worker_count(Some(" 8 ")), 8);
+        assert_eq!(resolve_enrichment_worker_count(Some("999")), 32);
     }
 
     fn sample_target(repo_id: &str) -> EnrichmentJobTarget {
