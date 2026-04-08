@@ -118,6 +118,7 @@ pub(super) async fn run_server(
             ready_subject: options.ready_subject.to_string(),
             print_ready_banner: options.print_banner,
             open_browser: options.open_browser,
+            bootstrap_devql_schema: false,
             shutdown_message: Some("Bitloops daemon stopped.".to_string()),
             on_ready: Some(ready_hook),
             on_shutdown: Some(on_shutdown),

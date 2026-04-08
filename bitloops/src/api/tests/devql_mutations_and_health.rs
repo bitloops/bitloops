@@ -699,6 +699,7 @@ async fn daemon_bootstrap_creates_devql_schema_tables() {
             ready_subject: "Test daemon".to_string(),
             print_ready_banner: false,
             open_browser: false,
+            bootstrap_devql_schema: true,
             shutdown_message: None,
             on_ready: None,
             on_shutdown: None,
