@@ -8,9 +8,7 @@ use crate::host::runtime_store::PersistedCapabilityEventQueueState;
 
 const MAX_TERMINAL_RUNS: usize = 64;
 
-pub(super) fn next_pending_run_index(
-    state: &PersistedCapabilityEventQueueState,
-) -> Option<usize> {
+pub(super) fn next_pending_run_index(state: &PersistedCapabilityEventQueueState) -> Option<usize> {
     let running_lanes = running_lane_keys(&state.runs);
     state
         .runs
@@ -23,8 +21,7 @@ pub(super) fn next_pending_run_index(
 }
 
 pub(super) fn running_lane_keys(runs: &[CapabilityEventRunRecord]) -> HashSet<&str> {
-    runs
-        .iter()
+    runs.iter()
         .filter(|run| run.status == CapabilityEventRunStatus::Running)
         .map(|run| run.lane_key.as_str())
         .collect()
@@ -102,22 +99,24 @@ pub(super) fn project_status(
     }
 }
 
-fn select_repo_run(runs: &[CapabilityEventRunRecord], repo_id: &str) -> Option<CapabilityEventRunRecord> {
-    runs
-        .iter()
+fn select_repo_run(
+    runs: &[CapabilityEventRunRecord],
+    repo_id: &str,
+) -> Option<CapabilityEventRunRecord> {
+    runs.iter()
         .filter(|run| run.repo_id == repo_id && run.status == CapabilityEventRunStatus::Running)
         .max_by_key(|run| run.updated_at_unix)
         .cloned()
         .or_else(|| {
-            runs
-                .iter()
-                .filter(|run| run.repo_id == repo_id && run.status == CapabilityEventRunStatus::Queued)
+            runs.iter()
+                .filter(|run| {
+                    run.repo_id == repo_id && run.status == CapabilityEventRunStatus::Queued
+                })
                 .min_by_key(|run| (run.submitted_at_unix, run.run_id.clone()))
                 .cloned()
         })
         .or_else(|| {
-            runs
-                .iter()
+            runs.iter()
                 .filter(|run| run.repo_id == repo_id)
                 .max_by_key(|run| run.updated_at_unix)
                 .cloned()

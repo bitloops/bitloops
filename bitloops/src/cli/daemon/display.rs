@@ -201,7 +201,10 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     ));
 }
 
-fn append_capability_event_lines(lines: &mut Vec<String>, status: &daemon::CapabilityEventQueueStatus) {
+fn append_capability_event_lines(
+    lines: &mut Vec<String>,
+    status: &daemon::CapabilityEventQueueStatus,
+) {
     lines.push("Capability event queue: available".to_string());
     lines.push(format!(
         "Capability event pending runs: {}",
@@ -225,11 +228,7 @@ fn append_capability_event_lines(lines: &mut Vec<String>, status: &daemon::Capab
     if let Some(run) = status.current_repo_run.as_ref() {
         lines.push(format!(
             "Current repo capability event run: {} ({}, capability={}, handler={}, event_kind={})",
-            run.run_id,
-            run.status,
-            run.capability_id,
-            run.handler_id,
-            run.event_kind
+            run.run_id, run.status, run.capability_id, run.handler_id, run.event_kind
         ));
         if let Some(error) = run.error.as_ref() {
             lines.push(format!("Current repo capability event error: {error}"));

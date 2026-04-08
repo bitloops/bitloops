@@ -21,7 +21,7 @@ use crate::host::capability_host::{
 };
 use crate::host::runtime_store::{DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState};
 
-use self::queue::{next_pending_run_index, prune_terminal_runs, project_status};
+use self::queue::{next_pending_run_index, project_status, prune_terminal_runs};
 use super::types::{
     CapabilityEventQueueStatus, CapabilityEventRunRecord, CapabilityEventRunStatus,
     unix_timestamp_now,
@@ -233,7 +233,8 @@ impl CapabilityEventCoordinator {
         let runtime_store = DaemonSqliteRuntimeStore::open()
             .expect("opening daemon runtime store for capability event queue");
         static INSTANCE: OnceLock<Mutex<Arc<CapabilityEventCoordinator>>> = OnceLock::new();
-        let slot = INSTANCE.get_or_init(|| Mutex::new(Self::new_shared_instance(runtime_store.clone())));
+        let slot =
+            INSTANCE.get_or_init(|| Mutex::new(Self::new_shared_instance(runtime_store.clone())));
         let coordinator = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         #[cfg(test)]
@@ -267,7 +268,9 @@ impl CapabilityEventCoordinator {
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
-            log::warn!("capability event worker activation requested without an active tokio runtime");
+            log::warn!(
+                "capability event worker activation requested without an active tokio runtime"
+            );
             return;
         };
         let coordinator = Arc::clone(self);
@@ -279,7 +282,10 @@ impl CapabilityEventCoordinator {
         });
     }
 
-    pub(crate) fn enqueue_run(&self, run: CapabilityEventRunRecord) -> Result<CapabilityEventEnqueueResult> {
+    pub(crate) fn enqueue_run(
+        &self,
+        run: CapabilityEventRunRecord,
+    ) -> Result<CapabilityEventEnqueueResult> {
         self.enqueue_runs(vec![run])
     }
 
@@ -475,11 +481,13 @@ impl CapabilityEventCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow::anyhow!("capability event coordinator lock poisoned"))?;
-        let result = self.runtime_store.mutate_capability_event_queue_state(|state| {
-            let output = mutate(state)?;
-            save_state(state)?;
-            Ok(output)
-        })?;
+        let result = self
+            .runtime_store
+            .mutate_capability_event_queue_state(|state| {
+                let output = mutate(state)?;
+                save_state(state)?;
+                Ok(output)
+            })?;
         drop(guard);
         self.notify.notify_waiters();
         Ok(result)
@@ -529,7 +537,10 @@ fn normalise_run_for_enqueue(run: &mut CapabilityEventRunRecord, now: u64) -> Re
     run.completed_at_unix = None;
     run.error = None;
     if run.event_payload_json.trim().is_empty() {
-        bail!("capability event run `{}` is missing event payload JSON", run.run_id);
+        bail!(
+            "capability event run `{}` is missing event payload JSON",
+            run.run_id
+        );
     }
     Ok(())
 }
@@ -542,12 +553,14 @@ fn build_lane_key(repo_id: &str, capability_id: &str, handler_id: &str) -> Strin
 fn build_host_event(run: &CapabilityEventRunRecord) -> Result<(HostEvent, std::path::PathBuf)> {
     match run.event_kind.as_str() {
         "sync_completed" => {
-            let payload = serde_json::from_str::<SyncCompletedPayloadEnvelope>(
-                &run.event_payload_json,
-            )
-            .with_context(|| {
-                format!("parsing sync_completed payload for capability event run `{}`", run.run_id)
-            })?;
+            let payload =
+                serde_json::from_str::<SyncCompletedPayloadEnvelope>(&run.event_payload_json)
+                    .with_context(|| {
+                        format!(
+                            "parsing sync_completed payload for capability event run `{}`",
+                            run.run_id
+                        )
+                    })?;
             let repo_root = payload.repo_root.clone();
             Ok((HostEvent::SyncCompleted(payload.into()), repo_root))
         }
@@ -589,7 +602,9 @@ fn describe_handlers(
         .iter()
         .map(|handler| {
             let capability_id = handler.capability_id().to_string();
-            let index = per_capability_index.entry(capability_id.clone()).or_insert(0);
+            let index = per_capability_index
+                .entry(capability_id.clone())
+                .or_insert(0);
             let handler_id = format!("{capability_id}#{index}");
             *index += 1;
             CapabilityEventHandlerDescriptor {
@@ -857,13 +872,19 @@ mod tests {
         assert_eq!(projected.state.failed_runs, 1);
         assert_eq!(projected.state.completed_recent_runs, 1);
         assert!(projected.persisted);
-        assert_eq!(projected.current_repo_run.as_ref().map(|run| run.run_id.as_str()), Some("run-a-3"));
+        assert_eq!(
+            projected
+                .current_repo_run
+                .as_ref()
+                .map(|run| run.run_id.as_str()),
+            Some("run-a-3")
+        );
     }
 
     #[test]
     fn capability_event_queue_state_persists_in_sqlite() {
         let state_dir = TempDir::new().expect("tempdir");
-        let _guard = crate::test_support::process_state::with_env_var(
+        crate::test_support::process_state::with_env_var(
             "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
             Some(state_dir.path().to_string_lossy().as_ref()),
             || {
@@ -890,7 +911,6 @@ mod tests {
                 assert_eq!(loaded.runs.len(), 1);
             },
         );
-        let _ = _guard;
     }
 
     #[test]
@@ -924,7 +944,13 @@ mod tests {
                     .snapshot(Some("repo-1"))
                     .expect("snapshot capability event status");
                 assert_eq!(snapshot.state.pending_runs, 1);
-                assert_eq!(snapshot.current_repo_run.as_ref().map(|run| run.run_id.as_str()), Some("run-1"));
+                assert_eq!(
+                    snapshot
+                        .current_repo_run
+                        .as_ref()
+                        .map(|run| run.run_id.as_str()),
+                    Some("run-1")
+                );
             },
         );
     }

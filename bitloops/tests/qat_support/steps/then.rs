@@ -475,9 +475,7 @@ pub(super) fn then_daemon_capability_event_status_test_harness_completed(
         let repo_name = ctx.matches[1].1.clone();
         run_step(
             "daemon capability-event status shows TestHarness sync handler completed",
-            helpers::wait_for_test_harness_capability_event_completion_for_repo(
-                world, &repo_name,
-            ),
+            helpers::wait_for_test_harness_capability_event_completion_for_repo(world, &repo_name),
         );
     })
 }

@@ -24,6 +24,8 @@ use tokio::sync::Mutex;
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
+#[path = "daemon/capability_events.rs"]
+mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
 #[path = "daemon/enrichment.rs"]
@@ -32,8 +34,6 @@ mod enrichment;
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
-#[path = "daemon/capability_events.rs"]
-mod capability_events;
 #[path = "daemon/logger.rs"]
 mod logger;
 #[path = "daemon/process.rs"]
@@ -59,10 +59,10 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
-pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
@@ -71,9 +71,9 @@ pub use self::types::{
     CapabilityEventRunStatus, DaemonHealthSummary, DaemonMode, DaemonProcessModeArg,
     DaemonRuntimeState, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
     EnrichmentQueueState, EnrichmentQueueStatus, InternalDaemonProcessArgs,
-    InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind,
-    SupervisorRuntimeState, SupervisorServiceMetadata, SyncQueueState, SyncQueueStatus,
-    SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+    InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
+    SupervisorServiceMetadata, SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord,
+    SyncTaskSource, SyncTaskStatus,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,

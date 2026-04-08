@@ -392,7 +392,10 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
             assert_eq!(loaded.last_action.as_deref(), Some("enqueue"));
             assert_eq!(loaded.runs.len(), 1);
             assert_eq!(loaded.runs[0].run_id, "event-run-1");
-            assert_eq!(loaded.runs[0].lane_key, "repo-1:test_harness:sync_completed");
+            assert_eq!(
+                loaded.runs[0].lane_key,
+                "repo-1:test_harness:sync_completed"
+            );
         },
     );
 }

@@ -1135,40 +1135,40 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
         if let Some(current_repo_run) = payload
             .get("capability_events")
             .and_then(|value| value.get("current_repo_run"))
-        {
-            if current_repo_run
-                .get("capability_id")
-                .and_then(serde_json::Value::as_str)
-                == Some("test_harness")
-            {
-                match current_repo_run
-                    .get("status")
+            .filter(|current_repo_run| {
+                current_repo_run
+                    .get("capability_id")
                     .and_then(serde_json::Value::as_str)
-                {
-                    Some("completed") => return Ok(()),
-                    Some("failed") => {
-                        let run_id = current_repo_run
-                            .get("run_id")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("<unknown>");
-                        let handler_id = current_repo_run
-                            .get("handler_id")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("<unknown>");
-                        let event_kind = current_repo_run
-                            .get("event_kind")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("<unknown>");
-                        let error = current_repo_run
-                            .get("error")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("<no error>");
-                        bail!(
-                            "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
-                        );
-                    }
-                    _ => {}
+                    == Some("test_harness")
+            })
+        {
+            match current_repo_run
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("completed") => return Ok(()),
+                Some("failed") => {
+                    let run_id = current_repo_run
+                        .get("run_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let handler_id = current_repo_run
+                        .get("handler_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let event_kind = current_repo_run
+                        .get("event_kind")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let error = current_repo_run
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<no error>");
+                    bail!(
+                        "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
+                    );
                 }
+                _ => {}
             }
         }
 

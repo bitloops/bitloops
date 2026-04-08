@@ -9,11 +9,11 @@ use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use crate::graphql::SubscriptionHub;
+use crate::host::capability_host::{SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff};
 use crate::host::devql::{
     DevqlConfig, RepoIdentity, SyncMode, SyncObserver, SyncProgressPhase, SyncProgressUpdate,
     SyncSummary,
 };
-use crate::host::capability_host::{SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff};
 
 use super::super::types::{
     SyncQueueStatus, SyncTaskRecord, SyncTaskSource, SyncTaskStatus, unix_timestamp_now,
@@ -877,16 +877,16 @@ mod tests {
             SyncFileDiff::default(),
             SyncArtefactDiff::default(),
         )
-            .expect("enqueue capability event runs");
+        .expect("enqueue capability event runs");
 
         assert!(enqueued >= 1, "expected at least one capability event run");
         let state = crate::host::runtime_store::DaemonSqliteRuntimeStore::open_at(
             capability_event_store_path,
         )
-            .expect("open runtime store")
-            .load_capability_event_queue_state()
-            .expect("load capability event queue state")
-            .expect("state should exist");
+        .expect("open runtime store")
+        .load_capability_event_queue_state()
+        .expect("load capability event queue state")
+        .expect("state should exist");
         assert!(
             state
                 .runs
@@ -921,15 +921,15 @@ mod tests {
             SyncFileDiff::default(),
             SyncArtefactDiff::default(),
         )
-            .expect("enqueue capability event runs");
+        .expect("enqueue capability event runs");
 
         assert_eq!(enqueued, 0);
         let state = crate::host::runtime_store::DaemonSqliteRuntimeStore::open_at(
             capability_event_store_path,
         )
-            .expect("open runtime store")
-            .load_capability_event_queue_state()
-            .expect("load capability event queue state");
+        .expect("open runtime store")
+        .load_capability_event_queue_state()
+        .expect("load capability event queue state");
         assert!(
             state.is_none(),
             "validate mode should not enqueue capability event runs"
