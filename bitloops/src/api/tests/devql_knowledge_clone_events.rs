@@ -516,6 +516,10 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
                         relationKind
                         score
                         metadata
+                        sourceStartLine
+                        sourceEndLine
+                        targetStartLine
+                        targetEndLine
                         sourceArtefact {
                           symbolFqn
                         }
@@ -542,6 +546,10 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
                               node {
                                 relationKind
                                 score
+                                sourceStartLine
+                                sourceEndLine
+                                targetStartLine
+                                targetEndLine
                                 targetArtefact {
                                   symbolFqn
                                 }
@@ -588,6 +596,22 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
         0.93
     );
     assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceStartLine"],
+        4
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceEndLine"],
+        6
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["targetStartLine"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["targetEndLine"],
+        3
+    );
+    assert_eq!(
         json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceArtefact"]["symbolFqn"],
         "packages/api/src/caller.ts::caller"
     );
@@ -612,6 +636,16 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
         json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"]
             [0]["count"],
         2
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
+            ["sourceStartLine"],
+        4
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
+            ["targetStartLine"],
+        1
     );
     assert_eq!(
         json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]

@@ -49,6 +49,46 @@ fn compile_project_asof_artefacts_pipeline() {
 }
 
 #[test]
+fn compile_artefacts_with_clone_spans() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->clones()->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(filter: { kind: FUNCTION }) {
+      edges {
+        node {
+          clones(first: 10) {
+            edges {
+              node {
+                relationKind
+                score
+                sourceArtefact {
+                  path
+                  symbolFqn
+                }
+                targetArtefact {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_clone_summary_stage_ignores_limit_and_targets_typed_field() {
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->artefacts(kind:"function")->clones(min_score:0.75)->summary()->limit(1)"#,
@@ -126,6 +166,181 @@ fn compile_clone_summary_stage_rejects_invalid_since_literal() {
     assert!(
         err.to_string()
             .contains("invalid datetime value `not-a-date`"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_under_artefacts() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",unresolved:true,kind:"calls")->limit(5)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    file(path: "src/main.rs") {
+      artefacts(filter: { kind: FUNCTION, lines: { start: 1, end: 20 } }) {
+        edges {
+          node {
+            id
+            path
+            symbolFqn
+            canonicalKind
+            languageKind
+            startLine
+            endLine
+            language
+            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: true }) {
+              totalCount
+              incomingCount
+              outgoingCount
+              kindCounts {
+                imports
+                calls
+                references
+                extends
+                implements
+                exports
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_defaults_to_resolved_when_unresolved_is_omitted() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",kind:"calls")->limit(5)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+    assert!(
+        graphql
+            .contains("depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: false })"),
+        "unexpected graphql: {graphql}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_requires_artefacts() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->summary(deps:true)"#).expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("summary deps requires artefacts");
+    assert!(
+        err.to_string()
+            .contains("summary(deps:true, ...) requires an artefacts() stage"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_rejects_invalid_arguments() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->summary(deps:true,unsupported:"x")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("unsupported summary arg must fail");
+    assert!(
+        err.to_string()
+            .contains("received unsupported argument `unsupported`"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_requires_deps_true() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->summary(deps:false)"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("deps must be true");
+    assert!(
+        err.to_string()
+            .contains("summary(deps:...) requires deps:true"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_rejects_invalid_direction_value() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->summary(deps:true,direction:"sideways")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("invalid direction value must fail");
+    assert!(
+        err.to_string()
+            .contains("summary(direction:...) must be one of: out, in, both"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_rejects_invalid_kind_value() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->summary(deps:true,kind:"bogus")"#)
+            .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("invalid kind value must fail");
+    assert!(
+        err.to_string()
+            .contains("summary(kind:...) must be one of: imports, calls, references, extends, implements, exports"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_rejects_invalid_unresolved_value() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->summary(deps:true,unresolved:"maybe")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("invalid unresolved value must fail");
+    assert!(
+        err.to_string()
+            .contains("summary(unresolved:...) must be boolean true/false"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_rejects_combination_with_deps_stage() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->deps()->summary(deps:true)"#)
+            .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("deps + deps summary should fail");
+    assert!(
+        err.to_string()
+            .contains("summary(deps:true, ...) cannot be combined with deps() stage"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_deps_summary_stage_rejects_combination_with_clones_stage() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->clones()->summary(deps:true)"#)
+            .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("clones + deps summary should fail");
+    assert!(
+        err.to_string()
+            .contains("summary(deps:true, ...) cannot be combined with clones() stage"),
         "unexpected error: {err:#}"
     );
 }
@@ -237,6 +452,10 @@ fn compile_artefact_clones_pipeline_keeps_raw_mode_opt_in() {
                 id
                 sourceArtefactId
                 targetArtefactId
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
                 relationKind
                 score
                 metadata

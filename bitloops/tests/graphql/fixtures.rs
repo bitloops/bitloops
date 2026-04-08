@@ -127,6 +127,10 @@ fn wait_until_ready(workdir: &Path, child: &mut Child) -> Result<(), String> {
             .map_err(|err| format!("open daemon runtime store for GraphQL fixture: {err:#}"))
     })?;
     let runtime_db_path = runtime_store.db_path().to_path_buf();
+    let expected_pid = child.id();
+    let expected_config_root = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -134,13 +138,26 @@ fn wait_until_ready(workdir: &Path, child: &mut Child) -> Result<(), String> {
     runtime.block_on(async move {
         let client = reqwest::Client::new();
         let started = std::time::Instant::now();
+        let mut last_runtime_state = None;
         while started.elapsed() < DAEMON_READY_TIMEOUT {
             if let Ok(Some(state)) = runtime_store.load_runtime_state() {
-                let url = format!("{}/devql/sdl", state.url.trim_end_matches('/'));
-                if let Ok(response) = client.get(&url).send().await
-                    && response.status().is_success()
-                {
-                    return Ok(());
+                let state_config_root = state
+                    .config_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| state.config_root.clone());
+                last_runtime_state = Some(format!(
+                    "pid={} config_root={} url={}",
+                    state.pid,
+                    state.config_root.display(),
+                    state.url
+                ));
+                if state.pid == expected_pid && state_config_root == expected_config_root {
+                    let url = format!("{}/devql/sdl", state.url.trim_end_matches('/'));
+                    if let Ok(response) = client.get(&url).send().await
+                        && response.status().is_success()
+                    {
+                        return Ok(());
+                    }
                 }
             }
 
@@ -176,8 +193,10 @@ fn wait_until_ready(workdir: &Path, child: &mut Child) -> Result<(), String> {
             ),
         };
         Err(format!(
-            "daemon server did not become ready using runtime DB {}\nchild status: {child_status}\nchild stderr:\n{child_stderr}",
-            runtime_db_path.display()
+            "daemon server did not become ready using runtime DB {}\nexpected pid: {expected_pid}\nexpected config root: {}\nlast runtime state: {}\nchild status: {child_status}\nchild stderr:\n{child_stderr}",
+            runtime_db_path.display(),
+            expected_config_root.display(),
+            last_runtime_state.unwrap_or_else(|| "<none>".to_string())
         ))
     })
 }

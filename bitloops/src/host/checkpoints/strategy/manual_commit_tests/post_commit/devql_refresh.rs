@@ -6,15 +6,6 @@ use super::helpers::{commit_file, init_devql_schema};
 #[test]
 pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_checkpoints() {
     let dir = tempfile::tempdir().unwrap();
-    let state_dir = tempfile::tempdir().unwrap();
-    let state_dir_str = state_dir.path().to_string_lossy().to_string();
-    let _guard = crate::test_support::process_state::enter_process_state(
-        Some(dir.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_dir_str.as_str()),
-        )],
-    );
     let head = setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -166,15 +157,6 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
 #[test]
 pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
     let dir = tempfile::tempdir().unwrap();
-    let state_dir = tempfile::tempdir().unwrap();
-    let state_dir_str = state_dir.path().to_string_lossy().to_string();
-    let _guard = crate::test_support::process_state::enter_process_state(
-        Some(dir.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_dir_str.as_str()),
-        )],
-    );
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -222,15 +204,6 @@ pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
 #[test]
 pub(crate) fn post_commit_catches_up_missing_historical_commit_segment_before_sync_refresh() {
     let dir = tempfile::tempdir().unwrap();
-    let state_dir = tempfile::tempdir().unwrap();
-    let state_dir_str = state_dir.path().to_string_lossy().to_string();
-    let _guard = crate::test_support::process_state::enter_process_state(
-        Some(dir.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_dir_str.as_str()),
-        )],
-    );
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -300,15 +273,6 @@ pub(crate) fn post_commit_limits_historical_catch_up_to_latest_fifty_commits() {
     use rusqlite::OptionalExtension;
 
     let dir = tempfile::tempdir().unwrap();
-    let state_dir = tempfile::tempdir().unwrap();
-    let state_dir_str = state_dir.path().to_string_lossy().to_string();
-    let _guard = crate::test_support::process_state::enter_process_state(
-        Some(dir.path()),
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_dir_str.as_str()),
-        )],
-    );
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
     fs::create_dir_all(dir.path().join("src")).unwrap();

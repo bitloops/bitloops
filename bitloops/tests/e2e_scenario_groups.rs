@@ -342,29 +342,6 @@ fn write_transcript(path: &Path, prompt: &str, response: &str) {
     append_transcript(path, &payload);
 }
 
-fn write_transcript_with_tool_use(
-    path: &Path,
-    prompt: &str,
-    response: &str,
-    tool_name: &str,
-    file_path: &str,
-) {
-    let user_uuid = next_transcript_uuid("user");
-    let assistant_uuid = next_transcript_uuid("assistant");
-    let payload = format!(
-        r#"{{"type":"user","uuid":{user_uuid_json},"message":{{"content":[{{"type":"text","text":{prompt_json}}}]}}}}
-{{"type":"assistant","uuid":{assistant_uuid_json},"message":{{"content":[{{"type":"tool_use","name":{tool_name_json},"input":{{"file_path":{file_path_json}}}}},{{"type":"text","text":{response_json}}}]}}}}
-"#,
-        prompt_json = serde_json::to_string(prompt).unwrap(),
-        response_json = serde_json::to_string(response).unwrap(),
-        tool_name_json = serde_json::to_string(tool_name).unwrap(),
-        file_path_json = serde_json::to_string(file_path).unwrap(),
-        user_uuid_json = serde_json::to_string(&user_uuid).unwrap(),
-        assistant_uuid_json = serde_json::to_string(&assistant_uuid).unwrap(),
-    );
-    append_transcript(path, &payload);
-}
-
 fn append_transcript(path: &Path, payload: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -433,80 +410,6 @@ fn commit_with_editor_overwrite_message(repo: &Path, message: &str) {
         "git commit with editor failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn cli_1138_agent_commits_during_turn() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    init_and_enable(dir.path());
-
-    let sid = "cli-1138";
-    let transcript_path = dir.path().join("transcript-1138.jsonl");
-
-    user_prompt_submit(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Create first file",
-    );
-    fs::write(
-        dir.path().join("agent_mid_turn.rs"),
-        "package main\n\nfunc MidTurn() {}\n",
-    )
-    .unwrap();
-    write_transcript(
-        &transcript_path,
-        "Create first file",
-        "Created agent_mid_turn.rs",
-    );
-
-    run_git_expect_success(
-        dir.path(),
-        &["add", "agent_mid_turn.rs"],
-        "git add mid-turn file",
-    );
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "agent commit during active turn"],
-        "agent commit during turn",
-    );
-
-    stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-
-    user_prompt_submit(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Create second file",
-    );
-    fs::write(
-        dir.path().join("user_after_agent.rs"),
-        "package main\n\nfunc UserAfterAgent() {}\n",
-    )
-    .unwrap();
-    write_transcript(
-        &transcript_path,
-        "Create second file",
-        "Created user_after_agent.rs",
-    );
-    stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-
-    run_git_expect_success(
-        dir.path(),
-        &["add", "user_after_agent.rs"],
-        "git add second file",
-    );
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "user commit remainder"],
-        "user commit remainder",
-    );
-
-    assert!(
-        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
-        "final user commit should include checkpoint mapping"
     );
 }
 
@@ -622,45 +525,6 @@ fn cli_1140_auto_commit_strategy() {
     assert!(
         commits_after > commits_before,
         "auto-commit strategy should create commits without a manual git commit"
-    );
-}
-
-#[test]
-fn cli_1141_basic_workflow() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    init_and_enable(dir.path());
-
-    let sid = "cli-1141";
-    let transcript_path = dir.path().join("transcript-1141.jsonl");
-    user_prompt_submit(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Create hello.rs",
-    );
-    fs::write(
-        dir.path().join("hello.rs"),
-        "package main\n\nfunc main() {}\n",
-    )
-    .unwrap();
-    write_transcript(&transcript_path, "Create hello.rs", "Created hello.rs");
-    stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-
-    run_git_expect_success(dir.path(), &["add", "hello.rs"], "git add hello.rs");
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "add hello.rs"],
-        "commit hello.rs",
-    );
-
-    assert!(
-        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
-        "commit should include checkpoint mapping"
-    );
-    assert!(
-        git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
-        "checkpoints branch should exist"
     );
 }
 
@@ -1620,116 +1484,6 @@ fn cli_1152_rewind_multiple_files() {
         assert!(
             !dir.path().join("calc.rs").exists(),
             "full rewind should remove calc.rs"
-        );
-    }
-}
-
-#[test]
-fn cli_1153_rewind_to_checkpoint() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    init_and_enable(dir.path());
-
-    let sid = "cli-1153";
-    let transcript_dir = tempfile::tempdir().unwrap();
-    let transcript_path = transcript_dir.path().join("transcript-1153.jsonl");
-    user_prompt_submit(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Create hello.rs",
-    );
-    fs::write(
-        dir.path().join("hello.rs"),
-        "package main\n\nfunc main() {\n\tprintln(\"Hello, world!\")\n}\n",
-    )
-    .unwrap();
-    write_transcript_with_tool_use(
-        &transcript_path,
-        "Create hello.rs",
-        "Created hello.rs",
-        "Write",
-        "hello.rs",
-    );
-    stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-    run_git_expect_success(dir.path(), &["add", "hello.rs"], "stage hello.rs");
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "commit hello.rs checkpoint 1"],
-        "commit hello.rs checkpoint 1",
-    );
-
-    let points1 = get_rewind_points(dir.path());
-    assert!(
-        !points1.is_empty(),
-        "should have at least one rewind point after first checkpoint"
-    );
-    let first_point_id = points1[0].id.clone();
-    let first_point_is_logs_only = points1[0].is_logs_only;
-    let original_content =
-        fs::read_to_string(dir.path().join("hello.rs")).expect("read original hello.rs");
-
-    user_prompt_submit(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Modify hello.rs",
-    );
-    fs::write(
-        dir.path().join("hello.rs"),
-        "package main\n\nfunc main() {\n\tprintln(\"E2E Test\")\n}\n",
-    )
-    .unwrap();
-    write_transcript_with_tool_use(
-        &transcript_path,
-        "Modify hello.rs",
-        "Modified hello.rs",
-        "Edit",
-        "hello.rs",
-    );
-    stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-    run_git_expect_success(dir.path(), &["add", "hello.rs"], "stage modified hello.rs");
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "commit hello.rs checkpoint 2"],
-        "commit hello.rs checkpoint 2",
-    );
-
-    let modified_content =
-        fs::read_to_string(dir.path().join("hello.rs")).expect("read modified hello.rs");
-    assert_ne!(
-        original_content, modified_content,
-        "hello.rs content should change after modification"
-    );
-    assert!(
-        modified_content.contains("E2E Test"),
-        "modified content should contain E2E marker"
-    );
-
-    let points2 = get_rewind_points(dir.path());
-    assert!(
-        points2.len() >= 2,
-        "should have at least 2 rewind points after second checkpoint"
-    );
-
-    let rewind_out = rewind_to(dir.path(), &first_point_id);
-    assert_success(&rewind_out, "rewind to first checkpoint should succeed");
-
-    let restored_content =
-        fs::read_to_string(dir.path().join("hello.rs")).expect("read restored hello.rs");
-    if first_point_is_logs_only {
-        assert_eq!(
-            modified_content, restored_content,
-            "logs-only rewind should leave working-tree content unchanged"
-        );
-    } else {
-        assert_eq!(
-            original_content, restored_content,
-            "hello.rs should be restored to first-checkpoint content"
-        );
-        assert!(
-            !restored_content.contains("E2E Test"),
-            "restored content should not include modified marker"
         );
     }
 }

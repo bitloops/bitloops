@@ -10,7 +10,38 @@ use super::hooks::{BITLOOPS_MARKER, get_plugin_path, render_plugin_template};
 
 impl HookSupport for OpenCodeAgent {
     fn install_hooks(&self, local_dev: bool, force: bool) -> Result<usize> {
-        let plugin_path = self.plugin_path()?;
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.install_hooks_at(&repo_root, local_dev, force)
+    }
+
+    fn uninstall_hooks(&self) -> Result<()> {
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.uninstall_hooks_at(&repo_root)
+    }
+
+    fn are_hooks_installed(&self) -> bool {
+        let repo_root = match crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        }) {
+            Ok(repo_root) => repo_root,
+            Err(_) => return false,
+        };
+        self.are_hooks_installed_at(&repo_root)
+    }
+}
+
+impl OpenCodeAgent {
+    pub(crate) fn install_hooks_at(
+        &self,
+        repo_root: &std::path::Path,
+        local_dev: bool,
+        force: bool,
+    ) -> Result<usize> {
+        let plugin_path = self.plugin_path_at(repo_root);
 
         if !force
             && plugin_path.exists()
@@ -31,8 +62,8 @@ impl HookSupport for OpenCodeAgent {
         Ok(1)
     }
 
-    fn uninstall_hooks(&self) -> Result<()> {
-        let plugin_path = self.plugin_path()?;
+    pub(crate) fn uninstall_hooks_at(&self, repo_root: &std::path::Path) -> Result<()> {
+        let plugin_path = self.plugin_path_at(repo_root);
         match fs::remove_file(plugin_path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -40,23 +71,16 @@ impl HookSupport for OpenCodeAgent {
         }
     }
 
-    fn are_hooks_installed(&self) -> bool {
-        let Ok(plugin_path) = self.plugin_path() else {
-            return false;
-        };
+    pub(crate) fn are_hooks_installed_at(&self, repo_root: &std::path::Path) -> bool {
+        let plugin_path = self.plugin_path_at(repo_root);
         let Ok(content) = fs::read_to_string(plugin_path) else {
             return false;
         };
         Self::ensure_plugin_marker(&content).is_ok()
     }
-}
 
-impl OpenCodeAgent {
-    pub fn plugin_path(&self) -> Result<PathBuf> {
-        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
-            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
-        })?;
-        Ok(get_plugin_path(&repo_root))
+    pub(crate) fn plugin_path_at(&self, repo_root: &std::path::Path) -> PathBuf {
+        get_plugin_path(repo_root)
     }
 
     pub fn ensure_plugin_marker(content: &str) -> Result<()> {

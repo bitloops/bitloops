@@ -85,21 +85,15 @@ impl Agent for CopilotCliAgent {
     }
 
     fn get_session_dir(&self, _repo_path: &str) -> Result<String> {
-        if let Ok(override_path) = std::env::var("BITLOOPS_TEST_COPILOT_SESSION_DIR")
-            && !override_path.is_empty()
-        {
-            return Ok(override_path);
-        }
-
-        let home_dir = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .ok_or_else(|| anyhow!("failed to get home directory"))?;
-
-        Ok(Path::new(&home_dir)
-            .join(".copilot")
-            .join("session-state")
-            .to_string_lossy()
-            .to_string())
+        Self::session_dir_from_override_or_home(
+            std::env::var("BITLOOPS_TEST_COPILOT_SESSION_DIR")
+                .ok()
+                .as_deref(),
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .as_deref()
+                .map(Path::new),
+        )
     }
 
     fn resolve_session_file(&self, session_dir: &str, agent_session_id: &str) -> String {
@@ -204,6 +198,24 @@ impl TokenCalculator for CopilotCliAgent {
 }
 
 impl CopilotCliAgent {
+    fn session_dir_from_override_or_home(
+        override_path: Option<&str>,
+        home_dir: Option<&Path>,
+    ) -> Result<String> {
+        if let Some(override_path) = override_path
+            && !override_path.is_empty()
+        {
+            return Ok(override_path.to_string());
+        }
+
+        let home_dir = home_dir.ok_or_else(|| anyhow!("failed to get home directory"))?;
+        Ok(home_dir
+            .join(".copilot")
+            .join("session-state")
+            .to_string_lossy()
+            .to_string())
+    }
+
     pub fn hooks_file_path(&self) -> Result<PathBuf> {
         let repo_root = crate::utils::paths::repo_root().or_else(|_| {
             std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
@@ -272,7 +284,6 @@ impl CopilotCliAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::process_state::with_env_var;
 
     #[test]
     fn identity_and_preview() {
@@ -285,15 +296,12 @@ mod tests {
 
     #[test]
     fn get_session_dir_uses_override() {
-        with_env_var(
-            "BITLOOPS_TEST_COPILOT_SESSION_DIR",
+        let dir = CopilotCliAgent::session_dir_from_override_or_home(
             Some("/tmp/copilot-override"),
-            || {
-                let agent = CopilotCliAgent;
-                let dir = agent.get_session_dir("").expect("session dir");
-                assert_eq!(dir, "/tmp/copilot-override");
-            },
-        );
+            Some(Path::new("/tmp/home")),
+        )
+        .expect("session dir");
+        assert_eq!(dir, "/tmp/copilot-override");
     }
 
     #[test]

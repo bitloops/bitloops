@@ -36,11 +36,11 @@ The Cargo `dev-*` aliases are the primary local interface for contributors and a
 
 ## Local checks (optional)
 
-There are no required git hooks. From the repository root you can run the same checks as CI (for PRs into `develop`):
+There are no required git hooks. From the repository root you can run the same checks as the blocking `develop` pull-request gate:
 
 ```bash
 bash scripts/check-dev.sh           # file-size, fmt, clippy
-bash scripts/check-dev.sh --test   # + full tests
+bash scripts/check-dev.sh --test   # + merge lane (fast + curated slow smokes)
 bash scripts/check-dev.sh --full   # + coverage baseline
 ```
 
@@ -56,13 +56,16 @@ cargo dev-check
 cargo dev-test-core
 cargo dev-test-fast
 
+# Develop PR gate lane
+cargo dev-test-merge
+
 # CLI lane (when command output/parsing changes)
 cargo dev-test-cli
 
-# Slow e2e/integration lane (feature-gated)
+# Slow e2e/integration lane (all feature-gated heavy suites only)
 cargo dev-test-slow
 
-# Full lane before handoff/merge
+# Full lane (post-merge `develop`, PRs to `main`, or explicit confidence run)
 cargo dev-test-full
 
 # Coverage (single run)
@@ -79,7 +82,7 @@ We use `cargo-llvm-cov` for coverage. Install it:
 cargo install cargo-llvm-cov
 ```
 
-The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI runs that check on pull requests to `develop` **informationally** (merge is not blocked by it). To enforce the 5% tolerance locally before merging, use `bash scripts/check-dev.sh --full`.
+The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI refreshes the baseline metadata on pushes to `develop`, and coverage stays separate from the blocking pull-request gates. To enforce the 5% tolerance locally before merging, use `bash scripts/check-dev.sh --full`.
 
 Shell helpers in `bitloops/scripts/` are kept for CI/back-compat purposes, but local workflows should use Cargo `dev-*` commands.
 
@@ -91,6 +94,7 @@ Shell helpers in `bitloops/scripts/` are kept for CI/back-compat purposes, but l
 | Build | `cargo dev-build` |
 | Run locally | `cargo run --manifest-path bitloops/Cargo.toml --no-default-features -- <command>` |
 | Fast tests | `cargo dev-test-fast` |
+| Merge smoke lane | `cargo dev-test-merge` |
 | Slow tests | `cargo dev-test-slow` |
 | Full tests | `cargo dev-test-full` |
 | Format code | `cargo fmt` |

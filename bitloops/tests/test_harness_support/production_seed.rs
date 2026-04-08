@@ -595,26 +595,18 @@ ON CONFLICT(repo_id, path) DO UPDATE SET
         tx.execute(
             r#"
 INSERT INTO artefacts (
-  artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-  language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-  end_byte, signature, modifiers, docstring, content_hash
+  artefact_id, symbol_id, repo_id, language, canonical_kind,
+  language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 )
 ON CONFLICT(artefact_id) DO UPDATE SET
   symbol_id = excluded.symbol_id,
   repo_id = excluded.repo_id,
-  blob_sha = excluded.blob_sha,
-  path = excluded.path,
   language = excluded.language,
   canonical_kind = excluded.canonical_kind,
   language_kind = excluded.language_kind,
   symbol_fqn = excluded.symbol_fqn,
-  parent_artefact_id = excluded.parent_artefact_id,
-  start_line = excluded.start_line,
-  end_line = excluded.end_line,
-  start_byte = excluded.start_byte,
-  end_byte = excluded.end_byte,
   signature = excluded.signature,
   modifiers = excluded.modifiers,
   docstring = excluded.docstring,
@@ -624,17 +616,10 @@ ON CONFLICT(artefact_id) DO UPDATE SET
                 artefact.artefact_id,
                 artefact.symbol_id,
                 artefact.repo_id,
-                artefact.blob_sha,
-                artefact.path,
                 artefact.language,
                 artefact.canonical_kind,
                 artefact.language_kind,
                 artefact.symbol_fqn,
-                artefact.parent_artefact_id,
-                artefact.start_line,
-                artefact.end_line,
-                artefact.start_byte,
-                artefact.end_byte,
                 artefact.signature,
                 artefact.modifiers,
                 artefact.docstring,
@@ -642,6 +627,41 @@ ON CONFLICT(artefact_id) DO UPDATE SET
             ],
         )
         .with_context(|| format!("failed upserting artefact {}", artefact.artefact_id))?;
+
+        tx.execute(
+            r#"
+INSERT INTO artefact_snapshots (
+  repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+  start_line, end_line, start_byte, end_byte
+) VALUES (
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+)
+ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+  path = excluded.path,
+  parent_artefact_id = excluded.parent_artefact_id,
+  start_line = excluded.start_line,
+  end_line = excluded.end_line,
+  start_byte = excluded.start_byte,
+  end_byte = excluded.end_byte
+"#,
+            params![
+                artefact.repo_id,
+                artefact.blob_sha,
+                artefact.path,
+                artefact.artefact_id,
+                artefact.parent_artefact_id,
+                artefact.start_line,
+                artefact.end_line,
+                artefact.start_byte,
+                artefact.end_byte,
+            ],
+        )
+        .with_context(|| {
+            format!(
+                "failed upserting artefact snapshot {}",
+                artefact.artefact_id
+            )
+        })?;
     }
 
     for artefact in &batch.current_artefacts {

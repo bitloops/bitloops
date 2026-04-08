@@ -48,6 +48,40 @@ async fn execute_devql_query_rejects_summary_with_additional_registered_stages()
 }
 
 #[tokio::test]
+async fn execute_devql_query_rejects_deps_summary_mode_in_non_graphql_executor() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->artefacts()->summary(deps:true)"#)
+        .expect("parse deps summary query");
+
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .expect_err("deps summary must be rejected by relational executor");
+
+    assert!(
+        err.to_string()
+            .contains("summary(deps:true, ...) is only supported by the GraphQL compiler path")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_deps_summary_mode_when_deps_flag_is_false() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->artefacts()->summary(deps:false)"#)
+        .expect("parse deps summary query");
+
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .expect_err("deps false should fail");
+
+    assert!(
+        err.to_string()
+            .contains("summary(deps:...) requires deps:true")
+    );
+}
+
+#[tokio::test]
 async fn execute_registered_summary_stage_returns_grouped_counts() {
     let cfg = test_cfg();
     let parsed = parse_devql_query(r#"repo("temp2")->artefacts()->clones()->summary()"#)

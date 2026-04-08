@@ -148,7 +148,7 @@ export function newName(): string {
             r#"
 SELECT COUNT(*)
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
@@ -206,7 +206,7 @@ impl RenderText for Widget {
             r#"
 SELECT COUNT(*)
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
@@ -230,7 +230,7 @@ fn assert_has_symbol(conn: &Connection, commit: &str, kind: &str, symbol: &str) 
             r#"
 SELECT COUNT(*)
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path

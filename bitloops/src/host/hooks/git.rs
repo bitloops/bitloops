@@ -272,6 +272,14 @@ mod tests {
     const TEST_CONFIG_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE";
     const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
 
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create tokio runtime")
+    }
+
     fn setup_git_repo(dir: &TempDir) {
         let run = |args: &[&str]| {
             let out = git_command()
@@ -389,7 +397,7 @@ mod tests {
                         .unwrap();
 
                     let sr = StrategyRegistry::builtin();
-                    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+                    let rt = test_runtime();
                     let result = rt.block_on(run(
                         GitHooksArgs {
                             verb: GitHookVerb::PostCommit,
@@ -416,7 +424,7 @@ mod tests {
 
         with_cwd(dir.path(), || {
             let sr = StrategyRegistry::builtin();
-            let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+            let rt = test_runtime();
             let result = rt.block_on(run(
                 GitHooksArgs {
                     verb: GitHookVerb::PostCommit,
@@ -444,7 +452,7 @@ mod tests {
             .unwrap();
 
             let sr = StrategyRegistry::builtin();
-            let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+            let rt = test_runtime();
             let result = rt.block_on(run(
                 GitHooksArgs {
                     verb: GitHookVerb::PrepareCommitMsg {
@@ -470,7 +478,7 @@ mod tests {
             with_logger_test_lock(|| {
                 // Non-existent nested path causes prepare-commit-msg handler to error.
                 let sr = StrategyRegistry::builtin();
-                let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+                let rt = test_runtime();
                 let result = rt.block_on(run(
                     GitHooksArgs {
                         verb: GitHookVerb::PrepareCommitMsg {

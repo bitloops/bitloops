@@ -193,6 +193,10 @@ pub(super) fn clone_result_selections(raw: bool) -> Result<Vec<GraphqlSelection>
                 "id".to_string(),
                 "source_artefact_id".to_string(),
                 "target_artefact_id".to_string(),
+                "source_start_line".to_string(),
+                "source_end_line".to_string(),
+                "target_start_line".to_string(),
+                "target_end_line".to_string(),
                 "relation_kind".to_string(),
                 "score".to_string(),
                 "metadata".to_string(),
@@ -255,6 +259,27 @@ pub(super) fn clone_summary_selections() -> Vec<GraphqlSelection> {
             vec![
                 GraphqlSelection::scalar("relationKind"),
                 GraphqlSelection::scalar("count"),
+            ],
+        )
+        .into(),
+    ]
+}
+
+pub(super) fn deps_summary_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("totalCount"),
+        GraphqlSelection::scalar("incomingCount"),
+        GraphqlSelection::scalar("outgoingCount"),
+        GraphqlField::new(
+            "kindCounts",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("imports"),
+                GraphqlSelection::scalar("calls"),
+                GraphqlSelection::scalar("references"),
+                GraphqlSelection::scalar("extends"),
+                GraphqlSelection::scalar("implements"),
+                GraphqlSelection::scalar("exports"),
             ],
         )
         .into(),
@@ -370,6 +395,10 @@ fn default_fields_for_leaf(leaf: SelectableLeaf) -> &'static [&'static str] {
             "id",
             "sourceArtefactId",
             "targetArtefactId",
+            "sourceStartLine",
+            "sourceEndLine",
+            "targetStartLine",
+            "targetEndLine",
             "relationKind",
             "score",
         ],
@@ -450,6 +479,10 @@ fn allowed_fields_for_leaf(leaf: SelectableLeaf) -> &'static [&'static str] {
             "id",
             "sourceArtefactId",
             "targetArtefactId",
+            "sourceStartLine",
+            "sourceEndLine",
+            "targetStartLine",
+            "targetEndLine",
             "relationKind",
             "score",
             "metadata",

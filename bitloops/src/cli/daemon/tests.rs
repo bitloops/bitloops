@@ -6,7 +6,6 @@ use crate::daemon::{
     SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
-use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::io::Cursor;
 use tempfile::TempDir;
@@ -57,6 +56,19 @@ fn write_log_content(path: &Path, content: &str) {
     let parent = path.parent().expect("daemon log parent");
     fs::create_dir_all(parent).expect("create daemon log dir");
     fs::write(path, content).expect("write daemon log");
+}
+
+fn temp_log_path() -> (TempDir, std::path::PathBuf) {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("logs").join("daemon.log");
+    (dir, path)
+}
+
+fn test_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
 }
 
 #[test]
@@ -214,92 +226,10 @@ fn daemon_logs_cli_rejects_lines_flag() {
 
 #[tokio::test]
 async fn run_start_requires_explicit_bootstrap_when_default_config_is_missing() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-        ],
-    );
-
-    let err = run_start(DaemonStartArgs {
-        config: None,
-        create_default_config: false,
-        bootstrap_local_stores: false,
-        detached: false,
-        until_stopped: false,
-        host: None,
-        port: crate::api::DEFAULT_DASHBOARD_PORT,
-        http: false,
-        recheck_local_dashboard_net: false,
-        bundle_dir: None,
-        telemetry: None,
-        no_telemetry: false,
-    })
-    .await
-    .expect_err("plain start should require explicit bootstrap");
-
-    assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
-}
-
-#[test]
-fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemetry() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-    );
     let mut out = Vec::new();
-    let mut input = Cursor::new(b"\n\n".to_vec());
+    let mut input = Cursor::new(Vec::<u8>::new());
 
-    let decision = resolve_start_preflight(
+    let err = resolve_start_preflight_for_tests(
         &DaemonStartArgs {
             config: None,
             create_default_config: false,
@@ -316,6 +246,38 @@ fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemet
         },
         &mut out,
         &mut input,
+        true,
+        false,
+    )
+    .expect_err("plain start should require explicit bootstrap");
+
+    assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
+}
+
+#[test]
+fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemetry() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new(b"\n\n".to_vec());
+
+    let decision = resolve_start_preflight_for_tests(
+        &DaemonStartArgs {
+            config: None,
+            create_default_config: false,
+            bootstrap_local_stores: false,
+            detached: false,
+            until_stopped: false,
+            host: None,
+            port: crate::api::DEFAULT_DASHBOARD_PORT,
+            http: false,
+            recheck_local_dashboard_net: false,
+            bundle_dir: None,
+            telemetry: None,
+            no_telemetry: false,
+        },
+        &mut out,
+        &mut input,
+        true,
+        true,
     )
     .expect("start preflight should prompt for bootstrap and telemetry");
 
@@ -331,40 +293,10 @@ fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemet
 
 #[test]
 fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-    );
     let mut out = Vec::new();
     let mut input = Cursor::new(b"n\n".to_vec());
 
-    let err = resolve_start_preflight(
+    let err = resolve_start_preflight_for_tests(
         &DaemonStartArgs {
             config: None,
             create_default_config: false,
@@ -381,6 +313,8 @@ fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
         },
         &mut out,
         &mut input,
+        true,
+        true,
     )
     .expect_err("declining bootstrap should fail with the missing-config error");
 
@@ -394,40 +328,10 @@ fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
 
 #[test]
 fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-    );
     let mut out = Vec::new();
     let mut input = Cursor::new(b"".to_vec());
 
-    let decision = resolve_start_preflight(
+    let decision = resolve_start_preflight_for_tests(
         &DaemonStartArgs {
             config: None,
             create_default_config: true,
@@ -444,6 +348,8 @@ fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
         },
         &mut out,
         &mut input,
+        true,
+        true,
     )
     .expect("explicit telemetry flag should suppress prompting");
 
@@ -481,15 +387,7 @@ fn daemon_enrichments_cli_parses_controls() {
 
 #[test]
 fn status_lines_show_global_supervisor_install_and_state() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let report = DaemonStatusReport {
         runtime: None,
@@ -538,10 +436,9 @@ fn status_lines_show_global_supervisor_install_and_state() {
         }),
         sync: None,
     };
-    let log_path = daemon::daemon_log_file_path();
 
     assert_eq!(
-        status_lines(&report),
+        super::display::status_lines_with_log_path(&report, &log_path),
         vec![
             "Bitloops daemon: stopped".to_string(),
             "Mode: always-on service".to_string(),
@@ -573,15 +470,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
 
 #[test]
 fn status_lines_show_log_file_for_running_daemon() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let report = DaemonStatusReport {
         runtime: Some(crate::daemon::DaemonRuntimeState {
@@ -609,24 +498,13 @@ fn status_lines_show_log_file_for_running_daemon() {
         sync: None,
     };
 
-    let lines = status_lines(&report);
-    assert!(lines.contains(&format!(
-        "Log file: {}",
-        daemon::daemon_log_file_path().display()
-    )));
+    let lines = super::display::status_lines_with_log_path(&report, &log_path);
+    assert!(lines.contains(&format!("Log file: {}", log_path.display())));
 }
 
 #[test]
 fn status_lines_show_log_file_when_daemon_is_stopped() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let report = DaemonStatusReport {
         runtime: None,
@@ -638,11 +516,11 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
     };
 
     assert_eq!(
-        status_lines(&report),
+        super::display::status_lines_with_log_path(&report, &log_path),
         vec![
             "Bitloops daemon: stopped".to_string(),
             "Mode: not running".to_string(),
-            format!("Log file: {}", daemon::daemon_log_file_path().display()),
+            format!("Log file: {}", log_path.display()),
         ]
     );
 }
@@ -651,15 +529,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
 fn send_session_end_for_all_sessions_clears_store_with_valid_json() {
     let state_root = TempDir::new().expect("temp dir");
     let repo_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+    let state_dir = state_root.path().join("bitloops");
 
     let mut store = crate::telemetry::sessions::SessionStore::default();
     let _ = store.get_or_create_session(repo_root.path());
@@ -667,7 +537,7 @@ fn send_session_end_for_all_sessions_clears_store_with_valid_json() {
         .save(&state_dir)
         .expect("save session store before stop");
 
-    send_session_end_for_all_sessions();
+    send_session_end_for_all_sessions_in(&state_dir);
 
     let cleared_path = state_dir.join("telemetry_sessions.json");
     let cleared_content = fs::read_to_string(&cleared_path).expect("read cleared session store");
@@ -753,25 +623,19 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
 
 #[test]
 fn run_logs_prints_default_last_two_hundred_lines() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     let lines = (1..=250)
         .map(|idx| format!("{{\"line\":{idx}}}"))
         .collect::<Vec<_>>();
     write_log_lines(&log_path, &lines);
     let mut out = Vec::new();
 
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
-        .block_on(run_logs_with_io(DaemonLogsArgs::default(), &mut out))
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs::default(),
+            &mut out,
+            log_path,
+        ))
         .expect("run daemon logs");
 
     let rendered = String::from_utf8(out).expect("utf8 output");
@@ -783,31 +647,22 @@ fn run_logs_prints_default_last_two_hundred_lines() {
 
 #[test]
 fn run_logs_honours_explicit_line_count() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     let lines = (1..=5)
         .map(|idx| format!("{{\"line\":{idx}}}"))
         .collect::<Vec<_>>();
     write_log_lines(&log_path, &lines);
     let mut out = Vec::new();
 
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
-        .block_on(run_logs_with_io(
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: Some(3),
                 follow: false,
                 path: false,
             },
             &mut out,
+            log_path,
         ))
         .expect("run daemon logs");
 
@@ -819,70 +674,45 @@ fn run_logs_honours_explicit_line_count() {
 
 #[test]
 fn run_logs_prints_log_path() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
     let mut out = Vec::new();
 
-    tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
-        .block_on(run_logs_with_io(
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: None,
                 follow: false,
                 path: true,
             },
             &mut out,
+            log_path.clone(),
         ))
         .expect("print daemon log path");
 
     assert_eq!(
         String::from_utf8(out).expect("utf8 output"),
-        format!("{}\n", daemon::daemon_log_file_path().display())
+        format!("{}\n", log_path.display())
     );
 }
 
 #[test]
 fn run_logs_reports_missing_file_with_expected_path() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
-    let err = tokio::runtime::Runtime::new()
-        .expect("tokio runtime")
-        .block_on(run_logs_with_io(DaemonLogsArgs::default(), &mut Vec::new()))
+    let err = test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs::default(),
+            &mut Vec::new(),
+            log_path.clone(),
+        ))
         .expect_err("daemon logs should fail when file is missing");
 
-    assert!(
-        err.to_string()
-            .contains(&daemon::daemon_log_file_path().display().to_string())
-    );
+    assert!(err.to_string().contains(&log_path.display().to_string()));
 }
 
 #[test]
 fn follow_log_file_streams_appended_lines() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     write_log_lines(&log_path, &["{\"line\":1}".to_string()]);
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -961,22 +791,13 @@ fn tail_log_file_returns_all_lines_when_tail_exceeds_file_length() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn run_logs_follow_stops_when_async_shutdown_resolves() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     write_log_lines(&log_path, &["{\"line\":1}".to_string()]);
     let mut out = SharedBuffer::default();
 
     tokio::time::timeout(
         Duration::from_millis(250),
-        run_logs_with_io_and_shutdown_and_poll_interval(
+        run_logs_with_io_and_shutdown_at_path(
             DaemonLogsArgs {
                 tail: Some(1),
                 follow: true,
@@ -987,6 +808,7 @@ async fn run_logs_follow_stops_when_async_shutdown_resolves() {
                 tokio::time::sleep(Duration::from_millis(30)).await;
             },
             Duration::from_millis(10),
+            log_path,
         ),
     )
     .await
