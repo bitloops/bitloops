@@ -28,7 +28,7 @@ const MERGE_SMOKE_TARGETS: &[&str] = &[
     "graphql_smoke",
 ];
 const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
-const DEFAULT_FAST_TEST_THREADS: u64 = 8;
+const DEFAULT_FAST_TEST_THREADS: u64 = 12;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -1182,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_lane_uses_eight_threads_by_default_and_allows_override() {
+    fn fast_lane_uses_twelve_threads_by_default_and_allows_override() {
         let _g = ENV_LOCK.lock().expect("env lock");
         unsafe {
             env::remove_var("BITLOOPS_TEST_THREADS");
