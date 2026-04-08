@@ -273,7 +273,7 @@ fn suite_feature_path(suite: &Suite) -> PathBuf {
     match suite {
         Suite::Smoke => root.join("smoke"),
         Suite::Devql => root.join("devql"),
-        Suite::DevqlIngest => root.join("devql").join("ingest_workspace.feature"),
+        Suite::DevqlIngest => root.join("devql-ingest").join("ingest_workspace.feature"),
         Suite::DevqlSync => root.join("devql-sync"),
         Suite::Onboarding => root.join("onboarding"),
         Suite::Quickstart => root.join("quickstart"),
@@ -338,7 +338,7 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("qat")
                 .join("features")
-                .join("devql")
+                .join("devql-ingest")
                 .join("ingest_workspace.feature")
         );
     }

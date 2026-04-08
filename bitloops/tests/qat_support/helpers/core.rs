@@ -1953,6 +1953,51 @@ fn file_state_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usi
     usize::try_from(count).context("converting file_state count to usize")
 }
 
+fn commit_has_changed_files(world: &QatWorld, commit_sha: &str) -> Result<bool> {
+    let has_parent = run_command_capture(
+        world,
+        "git rev-parse <sha>^",
+        build_git_command(world, &["rev-parse", &format!("{commit_sha}^")], &[]),
+    )?
+    .status
+    .success();
+
+    let command_label = if has_parent {
+        "git diff-tree --no-commit-id --name-only -r <sha>"
+    } else {
+        "git show --name-only --pretty=format: <sha>"
+    };
+
+    let command_args: Vec<String> = if has_parent {
+        vec![
+            "diff-tree".to_string(),
+            "--no-commit-id".to_string(),
+            "--name-only".to_string(),
+            "-r".to_string(),
+            commit_sha.to_string(),
+        ]
+    } else {
+        vec![
+            "show".to_string(),
+            "--name-only".to_string(),
+            "--pretty=format:".to_string(),
+            commit_sha.to_string(),
+        ]
+    };
+    let command_args_ref: Vec<&str> = command_args.iter().map(String::as_str).collect();
+    let output = run_command_capture(
+        world,
+        command_label,
+        build_git_command(world, &command_args_ref, &[]),
+    )?;
+    ensure_success(&output, command_label)?;
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .any(|line| !line.is_empty()))
+}
+
 fn current_branch_name(world: &QatWorld) -> Result<String> {
     let output = run_command_capture(
         world,
@@ -1965,11 +2010,16 @@ fn current_branch_name(world: &QatWorld) -> Result<String> {
     Ok(branch)
 }
 
+fn post_commit_devql_refresh_disabled_env() -> [(&'static str, OsString); 1] {
+    [("BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH", OsString::from("1"))]
+}
+
 fn write_and_commit_rust_file(
     world: &mut QatWorld,
     relative_path: &str,
     function_name: &str,
     body_value: usize,
+    env: &[(&str, OsString)],
     commit_message: &str,
 ) -> Result<String> {
     let path = world.repo_dir().join(relative_path);
@@ -1984,11 +2034,11 @@ fn write_and_commit_rust_file(
         ),
     )
     .with_context(|| format!("writing {}", path.display()))?;
-    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
+    run_git_success(world, &["add", "-A"], env, "git add -A")?;
     run_git_success(
         world,
         &["commit", "-m", commit_message],
-        &[],
+        env,
         "git commit ingest topology",
     )?;
     capture_head_sha(world)
@@ -2026,6 +2076,7 @@ pub fn create_ingest_commits_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     ensure!(count > 0, "commit batch size must be greater than zero");
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
     let mut shas = Vec::with_capacity(count);
     let mut paths = Vec::with_capacity(count);
     for index in 0..count {
@@ -2038,6 +2089,7 @@ pub fn create_ingest_commits_for_repo(
             &relative_path,
             &function_name,
             seq,
+            &disable_refresh_env,
             &commit_message,
         )?;
         shas.push(sha);
@@ -2052,6 +2104,7 @@ pub fn create_non_ff_merge_with_two_feature_commits_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
     let base_branch = current_branch_name(world)?;
     let feature_branch = "qat-non-ff-feature";
     run_git_success(
@@ -2067,6 +2120,7 @@ pub fn create_non_ff_merge_with_two_feature_commits_for_repo(
         &first_path,
         "non_ff_feature_one",
         1,
+        &disable_refresh_env,
         "feat: non-ff feature commit 1",
     )?;
     let second_path = "src/non_ff_feature_two.rs".to_string();
@@ -2075,6 +2129,7 @@ pub fn create_non_ff_merge_with_two_feature_commits_for_repo(
         &second_path,
         "non_ff_feature_two",
         2,
+        &disable_refresh_env,
         "feat: non-ff feature commit 2",
     )?;
 
@@ -2093,7 +2148,7 @@ pub fn create_non_ff_merge_with_two_feature_commits_for_repo(
             "-m",
             "merge: non-ff feature branch",
         ],
-        &[],
+        &disable_refresh_env,
         "git merge --no-ff",
     )?;
     let merge_sha = capture_head_sha(world)?;
@@ -2110,6 +2165,7 @@ pub fn create_ff_merge_with_two_feature_commits_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
     let base_branch = current_branch_name(world)?;
     let feature_branch = "qat-ff-feature";
     run_git_success(
@@ -2125,6 +2181,7 @@ pub fn create_ff_merge_with_two_feature_commits_for_repo(
         &first_path,
         "ff_feature_one",
         11,
+        &disable_refresh_env,
         "feat: ff feature commit 1",
     )?;
     let second_path = "src/ff_feature_two.rs".to_string();
@@ -2133,6 +2190,7 @@ pub fn create_ff_merge_with_two_feature_commits_for_repo(
         &second_path,
         "ff_feature_two",
         22,
+        &disable_refresh_env,
         "feat: ff feature commit 2",
     )?;
 
@@ -2145,7 +2203,7 @@ pub fn create_ff_merge_with_two_feature_commits_for_repo(
     run_git_success(
         world,
         &["merge", "--ff-only", feature_branch],
-        &[],
+        &disable_refresh_env,
         "git merge --ff-only",
     )?;
     let _ = capture_head_sha(world)?;
@@ -2159,6 +2217,7 @@ pub fn create_ff_merge_with_two_feature_commits_for_repo(
 
 pub fn cherry_pick_two_commits_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
     let base_branch = current_branch_name(world)?;
     let source_branch = "qat-cherry-source";
     run_git_success(
@@ -2174,6 +2233,7 @@ pub fn cherry_pick_two_commits_for_repo(world: &mut QatWorld, repo_name: &str) -
         &first_path,
         "cherry_source_one",
         101,
+        &disable_refresh_env,
         "feat: cherry source commit 1",
     )?;
     let second_path = "src/cherry_source_two.rs".to_string();
@@ -2182,6 +2242,7 @@ pub fn cherry_pick_two_commits_for_repo(world: &mut QatWorld, repo_name: &str) -
         &second_path,
         "cherry_source_two",
         202,
+        &disable_refresh_env,
         "feat: cherry source commit 2",
     )?;
 
@@ -2194,17 +2255,23 @@ pub fn cherry_pick_two_commits_for_repo(world: &mut QatWorld, repo_name: &str) -
     run_git_success(
         world,
         &["cherry-pick", source_sha_one.as_str()],
-        &[],
+        &disable_refresh_env,
         "git cherry-pick source commit 1",
     )?;
     let cherry_sha_one = capture_head_sha(world)?;
     run_git_success(
         world,
         &["cherry-pick", source_sha_two.as_str()],
-        &[],
+        &disable_refresh_env,
         "git cherry-pick source commit 2",
     )?;
     let cherry_sha_two = capture_head_sha(world)?;
+    run_git_success(
+        world,
+        &["branch", "-D", source_branch],
+        &[],
+        "git branch -D cherry-pick source",
+    )?;
 
     set_expected_commits_and_paths(
         world,
@@ -2244,12 +2311,13 @@ pub fn rewrite_last_commits_with_rebase_edit_for_repo(
         world.pre_rewrite_shas.len() == count,
         "pre-rewrite SHAs must be captured for exactly {count} commits before rebase rewrite"
     );
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
     let script = "echo '// qat rebase edit marker' >> src/main.rs && git add src/main.rs && git commit --amend --no-edit";
     let upstream = format!("HEAD~{count}");
     run_git_success(
         world,
         &["rebase", "-x", script, upstream.as_str()],
-        &[],
+        &disable_refresh_env,
         "git rebase -x amend",
     )?;
     let _ = capture_head_sha(world)?;
@@ -2269,6 +2337,7 @@ pub fn reset_and_rewrite_last_commits_for_repo(
         world.pre_rewrite_shas.len() == count,
         "pre-rewrite SHAs must be captured for exactly {count} commits before reset rewrite"
     );
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
     let target = format!("HEAD~{count}");
     run_git_success(
         world,
@@ -2288,6 +2357,7 @@ pub fn reset_and_rewrite_last_commits_for_repo(
             &relative_path,
             &function_name,
             500 + index,
+            &disable_refresh_env,
             &format!("feat: reset rewrite replacement {}", index + 1),
         )?;
         replacement_shas.push(sha);
@@ -2370,7 +2440,7 @@ pub fn assert_expected_shas_have_file_state_rows(world: &QatWorld, repo_name: &s
     );
     let mut missing = Vec::new();
     for sha in &world.expected_commit_shas {
-        if file_state_count_for_commit(world, sha)? == 0 {
+        if file_state_count_for_commit(world, sha)? == 0 && commit_has_changed_files(world, sha)? {
             missing.push(sha.clone());
         }
     }

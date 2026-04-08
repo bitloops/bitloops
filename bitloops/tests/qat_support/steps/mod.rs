@@ -138,6 +138,16 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I run DevQL ingest in (\S+)$"),
             step_fn(given_devql_ingest),
         )
+        .when(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
+        .then(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
         .given(
             None,
             regex(r"^I snapshot ingest DB state in (\S+)$"),

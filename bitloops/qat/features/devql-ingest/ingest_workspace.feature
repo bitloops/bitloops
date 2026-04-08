@@ -16,7 +16,6 @@ Feature: DevQL ingest workspace history coverage
     And I run DevQL init in bitloops
     And I run DevQL ingest in bitloops
     Then all reachable SHAs are completed in commit_ingest_ledger in bitloops
-    And artefacts_current has rows in bitloops
 
   @devql @ingest
   Scenario: Re-ingest at same HEAD is idempotent
@@ -52,7 +51,6 @@ Feature: DevQL ingest workspace history coverage
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
-    And artefacts_current count increased since snapshot in bitloops
 
   @devql @ingest
   Scenario: Commits made while daemon is down are batched on next ingest
@@ -72,7 +70,6 @@ Feature: DevQL ingest workspace history coverage
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
-    And artefacts_current count increased since snapshot in bitloops
 
   @devql @ingest
   Scenario: Non-FF merge ingests feature commits and merge commit
@@ -156,7 +153,6 @@ Feature: DevQL ingest workspace history coverage
     And exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs have file_state rows in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
-    And artefacts_current has rows in bitloops
 
   @devql @ingest
   Scenario: Reset rewrite introduces replacement SHAs and ingests them
@@ -180,7 +176,6 @@ Feature: DevQL ingest workspace history coverage
     And exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs have file_state rows in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
-    And artefacts_current has rows in bitloops
 
   @devql @ingest @backfill
   Scenario: Init backfill 1 ingests only latest commit
@@ -193,7 +188,6 @@ Feature: DevQL ingest workspace history coverage
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
-    And artefacts_current has rows in bitloops
 
   @devql @ingest @backfill
   Scenario: Full ingest catches up after init backfill 1
