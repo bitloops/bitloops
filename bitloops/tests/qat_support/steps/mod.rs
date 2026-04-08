@@ -175,6 +175,21 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I add semantic clone fixtures in (\S+)$"),
+            step_fn(given_add_semantic_clone_fixtures),
+        )
+        .given(
+            None,
+            regex(r"^I configure semantic clones with fake embeddings runtime in (\S+)$"),
+            step_fn(given_configure_semantic_clones_fake_runtime),
+        )
+        .given(
+            None,
+            regex(r"^DevQL pack health for semantic clones is ready in (\S+)$"),
+            step_fn(given_devql_semantic_clones_pack_health_ready),
+        )
+        .given(
+            None,
             regex(r"^I run DevQL semantic clones rebuild in (\S+)$"),
             step_fn(given_devql_semantic_clones_rebuild),
         )

@@ -27,7 +27,6 @@ pub struct QatWorld {
     pub last_command_exit_code: Option<i32>,
     pub last_query_result_count: Option<usize>,
     pub captured_commit_shas: Vec<String>,
-    pub semantic_clones_fallback_active: bool,
     pub knowledge_items_by_url: HashMap<String, String>,
     pub knowledge_versions_by_ref: HashMap<String, usize>,
     pub last_knowledge_add_had_commit_association: Option<bool>,
@@ -67,7 +66,6 @@ impl QatWorld {
         self.last_command_exit_code = None;
         self.last_query_result_count = None;
         self.captured_commit_shas = Vec::new();
-        self.semantic_clones_fallback_active = false;
         self.knowledge_items_by_url = HashMap::new();
         self.knowledge_versions_by_ref = HashMap::new();
         self.last_knowledge_add_had_commit_association = None;

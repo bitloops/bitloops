@@ -46,8 +46,6 @@ const DEFAULT_CLAUDE_AUTH_STATUS_COMMAND: &str = "claude auth status --json";
 const CLAUDE_AUTH_LOGIN_COMMAND_ENV: &str = "BITLOOPS_QAT_CLAUDE_AUTH_LOGIN_CMD";
 const DEFAULT_CLAUDE_AUTH_LOGIN_COMMAND: &str = "claude auth login --claudeai";
 const CLAUDE_FALLBACK_MARKER: &str = ".qat-claude-fallback";
-const SEMANTIC_CLONES_FALLBACK_MARKER: &str = ".qat-semantic-clones-fallback";
-const KNOWLEDGE_FALLBACK_MARKER: &str = ".qat-knowledge-fallback";
 
 fn qat_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -141,6 +139,7 @@ struct RunMetadata<'a> {
 
 include!("core.rs");
 include!("daemon_harness.rs");
+include!("capability_runtime.rs");
 include!("deps_and_testlens.rs");
 include!("semantic_clones.rs");
 include!("knowledge.rs");

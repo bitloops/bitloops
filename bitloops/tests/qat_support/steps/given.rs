@@ -458,6 +458,46 @@ pub(super) fn given_create_ts_similar_project(
     })
 }
 
+pub(super) fn given_add_semantic_clone_fixtures(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I add semantic clone fixtures",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::add_semantic_clone_fixtures(world.repo_dir())),
+        );
+    })
+}
+
+pub(super) fn given_configure_semantic_clones_fake_runtime(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I configure semantic clones with fake embeddings runtime",
+            helpers::configure_semantic_clones_with_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_devql_semantic_clones_pack_health_ready(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL pack health for semantic clones is ready",
+            helpers::assert_semantic_clones_pack_health_ready(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_devql_semantic_clones_rebuild(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

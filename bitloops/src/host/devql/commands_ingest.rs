@@ -521,9 +521,12 @@ async fn execute_ingest_inner(
                     &relational,
                     &cfg.repo_root,
                     &cfg.repo.repo_id,
+                    Arc::clone(&summary_provider),
                     Arc::clone(embedding_provider),
                 )
                 .await?;
+                counters.semantic_feature_rows_upserted += refresh.semantic_feature_stats.upserted;
+                counters.semantic_feature_rows_skipped += refresh.semantic_feature_stats.skipped;
                 counters.symbol_embedding_rows_upserted += refresh.embedding_stats.upserted;
                 counters.symbol_embedding_rows_skipped += refresh.embedding_stats.skipped;
                 counters.symbol_clone_edges_upserted += refresh.clone_build.edges.len();
