@@ -75,13 +75,18 @@ describe("service", () => {
         .expect("failed querying file count");
     assert_eq!(file_count, 2, "expected only src files, not test files");
 
-    assert_has_symbol(&conn, "c1", "function", "validateEmail");
-    assert_has_symbol(&conn, "c1", "class", "UserService");
-    assert_has_symbol(&conn, "c1", "method", "UserService.createUser");
-    assert_has_symbol(&conn, "c1", "interface", "User");
-    assert_has_symbol(&conn, "c1", "type", "UserId");
-    assert_has_symbol(&conn, "c1", "constant", "MAX_RETRIES");
-    assert_has_symbol(&conn, "c1", "function", "normalize");
+    assert_has_symbol(&conn, "c1", "function", "src/service.ts::validateEmail");
+    assert_has_symbol(&conn, "c1", "<null>", "src/service.ts::UserService");
+    assert_has_symbol(
+        &conn,
+        "c1",
+        "method",
+        "src/service.ts::UserService::createUser",
+    );
+    assert_has_symbol(&conn, "c1", "interface", "src/service.ts::User");
+    assert_has_symbol(&conn, "c1", "type", "src/service.ts::UserId");
+    assert_has_symbol(&conn, "c1", "variable", "src/service.ts::MAX_RETRIES");
+    assert_has_symbol(&conn, "c1", "function", "src/lib.rs::normalize");
 
     let test_path_rows: i64 = conn
         .query_row(
@@ -136,19 +141,19 @@ export function newName(): string {
         .expect("second ingest should succeed");
 
     let conn = Connection::open(db_path).expect("failed to open db");
-    assert_has_symbol(&conn, "c1", "function", "newName");
+    assert_has_symbol(&conn, "c1", "function", "src/service.ts::newName");
 
     let old_count: i64 = conn
         .query_row(
             r#"
 SELECT COUNT(*)
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
 WHERE fs.commit_sha = 'c1'
-  AND a.symbol_fqn = 'oldName'
+  AND a.symbol_fqn = 'src/service.ts::oldName'
 "#,
             [],
             |row| row.get(0),
@@ -201,7 +206,7 @@ impl RenderText for Widget {
             r#"
 SELECT COUNT(*)
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
@@ -225,7 +230,7 @@ fn assert_has_symbol(conn: &Connection, commit: &str, kind: &str, symbol: &str) 
             r#"
 SELECT COUNT(*)
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path

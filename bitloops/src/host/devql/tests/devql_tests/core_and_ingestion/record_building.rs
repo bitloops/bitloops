@@ -113,7 +113,7 @@ fn build_symbol_records_derive_content_hash_from_symbol_content_not_blob() {
     let second = build_symbol_records(&cfg, path, "blob-b", &file_b, &items, content);
 
     assert_eq!(first[0].content_hash, second[0].content_hash);
-    assert_ne!(first[0].artefact_id, second[0].artefact_id);
+    assert_eq!(first[0].artefact_id, second[0].artefact_id);
 }
 
 #[test]

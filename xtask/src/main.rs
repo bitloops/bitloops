@@ -8,15 +8,26 @@ use serde_json::Value;
 
 const BITLOOPS_MANIFEST: &str = "bitloops/Cargo.toml";
 const SLOW_TEST_TARGETS: &[&str] = &[
+    "agent_cli_smoke",
     "claude_git_hooks_integration",
+    "checkpoint_rewind_smoke",
     "copilot_integration",
     "cursor_e2e_scenarios",
     "dashboard_bundle_lifecycle_e2e",
     "e2e_scenario_groups",
     "graphql",
     "performance",
+    "testlens_gherkin",
+    "testlens_sqlite_acceptance",
+];
+const MERGE_SMOKE_TARGETS: &[&str] = &[
+    "agent_cli_smoke",
+    "checkpoint_rewind_smoke",
+    "dashboard_bundle_lifecycle_e2e",
+    "graphql_smoke",
 ];
 const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
+const DEFAULT_FAST_TEST_THREADS: u64 = 8;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -55,7 +66,7 @@ fn print_usage() {
     eprintln!("  file-size [root]");
     eprintln!("  dev-loop");
     eprintln!("  install");
-    eprintln!("  test <lib|core|cli|fast|slow|full>");
+    eprintln!("  test <lib|core|cli|fast|smoke|merge|slow|full>");
     eprintln!("  coverage run-lcov [--lcov <path>]");
     eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
@@ -118,29 +129,42 @@ fn run_dev_install() -> Result<(), String> {
 
 fn run_test_lane(lane: &str) -> Result<(), String> {
     let workspace_root = workspace_root()?;
-    let lane_args = test_lane_args(lane)?;
+    let lane_commands = test_lane_command_groups(lane)?;
+    let test_threads = test_threads_for_lane(lane)?;
 
-    let mut compile_args = lane_args.clone();
-    compile_args.push("--no-run".to_string());
-    compile_args.push("--message-format=json-render-diagnostics".to_string());
-
-    let compiled_binaries = collect_test_binaries(&workspace_root, &compile_args)?;
     if should_sign() {
+        let mut compiled_binaries = BTreeSet::new();
+        for lane_args in &lane_commands {
+            let mut compile_args = lane_args.clone();
+            compile_args.push("--no-run".to_string());
+            compile_args.push("--message-format=json-render-diagnostics".to_string());
+
+            for binary in collect_test_binaries(&workspace_root, &compile_args)? {
+                compiled_binaries.insert(binary);
+            }
+        }
         for binary in compiled_binaries {
             codesign_binary(&binary)?;
         }
     }
 
-    let mut run_args = lane_args;
-    run_args.push("--".to_string());
-    run_args.push("--format=terse".to_string());
-    let mut command = vec!["cargo".to_string()];
-    command.extend(run_args.iter().cloned());
-    run_command_owned(
-        &workspace_root,
-        &format!("cargo {}", run_args.join(" ")),
-        &command,
-    )
+    for lane_args in lane_commands {
+        let mut run_args = lane_args;
+        run_args.push("--".to_string());
+        run_args.push("--format=terse".to_string());
+        if let Some(test_threads) = test_threads {
+            run_args.push(format!("--test-threads={test_threads}"));
+        }
+        let mut command = vec!["cargo".to_string()];
+        command.extend(run_args.iter().cloned());
+        run_command_owned(
+            &workspace_root,
+            &format!("cargo {}", run_args.join(" ")),
+            &command,
+        )?;
+    }
+
+    Ok(())
 }
 
 fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), String> {
@@ -486,14 +510,29 @@ fn print_coverage_comparison(
     );
 }
 
-fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
-    let mut args = vec![
+fn base_test_lane_args() -> Vec<String> {
+    vec![
         "test".to_string(),
         "--manifest-path".to_string(),
         BITLOOPS_MANIFEST.to_string(),
         "--no-fail-fast".to_string(),
         "--no-default-features".to_string(),
-    ];
+    ]
+}
+
+fn slow_test_lane_args(targets: &[&str]) -> Vec<String> {
+    let mut args = base_test_lane_args();
+    args.push("--features".to_string());
+    args.push("slow-tests".to_string());
+    for target in targets {
+        args.push("--test".to_string());
+        args.push((*target).to_string());
+    }
+    args
+}
+
+fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
+    let mut args = base_test_lane_args();
 
     match lane {
         "lib" | "core" => {
@@ -505,12 +544,10 @@ fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
         }
         "fast" => {}
         "slow" => {
-            args.push("--features".to_string());
-            args.push("slow-tests".to_string());
-            for target in SLOW_TEST_TARGETS {
-                args.push("--test".to_string());
-                args.push((*target).to_string());
-            }
+            return Ok(slow_test_lane_args(SLOW_TEST_TARGETS));
+        }
+        "smoke" => {
+            return Ok(slow_test_lane_args(MERGE_SMOKE_TARGETS));
         }
         "full" => {
             args.push("--features".to_string());
@@ -518,12 +555,43 @@ fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
         }
         _ => {
             return Err(format!(
-                "unknown test lane `{lane}` (expected: lib|core|cli|fast|slow|full)"
+                "unknown test lane `{lane}` (expected: lib|core|cli|fast|smoke|merge|slow|full)"
             ));
         }
     }
 
     Ok(args)
+}
+
+fn test_lane_command_groups(lane: &str) -> Result<Vec<Vec<String>>, String> {
+    match lane {
+        "merge" => Ok(vec![test_lane_args("fast")?, test_lane_args("smoke")?]),
+        _ => Ok(vec![test_lane_args(lane)?]),
+    }
+}
+
+fn test_threads_for_lane(lane: &str) -> Result<Option<u64>, String> {
+    if lane != "fast" {
+        return Ok(None);
+    }
+
+    match env::var("BITLOOPS_TEST_THREADS") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(Some(DEFAULT_FAST_TEST_THREADS));
+            }
+
+            let parsed = trimmed
+                .parse::<u64>()
+                .map_err(|_| "BITLOOPS_TEST_THREADS must be an integer".to_string())?;
+            if parsed == 0 {
+                return Err("BITLOOPS_TEST_THREADS must be greater than zero".to_string());
+            }
+            Ok(Some(parsed))
+        }
+        Err(_) => Ok(Some(DEFAULT_FAST_TEST_THREADS)),
+    }
 }
 
 fn collect_test_binaries(cwd: &Path, args: &[String]) -> Result<Vec<PathBuf>, String> {
@@ -923,14 +991,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BITLOOPS_MANIFEST, DEFAULT_LCOV_PATH, SLOW_TEST_TARGETS, collect_rs_files, count_lines,
-        env_u64, is_regression, is_test_file, llvm_cov_lcov_cargo_args,
-        llvm_cov_lcov_display_command, llvm_cov_report_html_cargo_args,
+        BITLOOPS_MANIFEST, DEFAULT_FAST_TEST_THREADS, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS,
+        SLOW_TEST_TARGETS, collect_rs_files, count_lines, env_u64, is_regression, is_test_file,
+        llvm_cov_lcov_cargo_args, llvm_cov_lcov_display_command, llvm_cov_report_html_cargo_args,
         llvm_cov_report_html_display_command, otool_list_output_links_libduckdb,
         otool_load_output_contains_rpath, parse_compare_options, parse_coverage_all_paths,
         parse_f64_flag, parse_lcov_metrics, parse_lcov_path, parse_test_binary_json_line,
         parse_u64_value, percentage, prepend_cargo, read_lcov_metrics, resolve_workspace_path,
-        run_file_size_check, test_lane_args, unknown_coverage_subcommand_error, workspace_root,
+        run_file_size_check, test_lane_args, test_lane_command_groups, test_threads_for_lane,
+        unknown_coverage_subcommand_error, workspace_root,
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -1112,6 +1181,38 @@ mod tests {
     }
 
     #[test]
+    fn fast_lane_uses_eight_threads_by_default_and_allows_override() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        unsafe {
+            env::remove_var("BITLOOPS_TEST_THREADS");
+        }
+
+        assert_eq!(
+            test_threads_for_lane("fast").unwrap(),
+            Some(DEFAULT_FAST_TEST_THREADS)
+        );
+        assert_eq!(test_threads_for_lane("smoke").unwrap(), None);
+
+        unsafe {
+            env::set_var("BITLOOPS_TEST_THREADS", "12");
+        }
+        assert_eq!(test_threads_for_lane("fast").unwrap(), Some(12));
+
+        unsafe {
+            env::set_var("BITLOOPS_TEST_THREADS", "0");
+        }
+        assert!(
+            test_threads_for_lane("fast")
+                .unwrap_err()
+                .contains("greater than zero")
+        );
+
+        unsafe {
+            env::remove_var("BITLOOPS_TEST_THREADS");
+        }
+    }
+
+    #[test]
     fn test_lane_args_builds_expected_fragments() {
         let base = || {
             vec![
@@ -1136,6 +1237,19 @@ mod tests {
 
         assert_eq!(test_lane_args("fast").unwrap(), base());
 
+        let smoke = test_lane_args("smoke").unwrap();
+        assert!(smoke.contains(&"slow-tests".to_string()));
+        assert_eq!(
+            smoke.iter().filter(|s| *s == "--test").count(),
+            MERGE_SMOKE_TARGETS.len()
+        );
+        for target in MERGE_SMOKE_TARGETS {
+            assert!(
+                smoke.contains(&(*target).to_string()),
+                "smoke lane should include smoke target {target}"
+            );
+        }
+
         let args = test_lane_args("slow").unwrap();
         assert!(args.contains(&"slow-tests".to_string()));
         assert_eq!(
@@ -1150,11 +1264,79 @@ mod tests {
         assert!(args.contains(&"slow-tests".to_string()));
         assert!(!args.contains(&"--test".to_string()));
 
+        let merge = test_lane_command_groups("merge").unwrap();
+        assert_eq!(
+            merge.len(),
+            2,
+            "merge lane should run fast + slow smoke groups"
+        );
+        assert_eq!(
+            merge[0],
+            base(),
+            "merge lane should start with fast lane args"
+        );
+        assert_eq!(merge[1], smoke, "merge lane should append smoke-only args");
+
         assert!(
             test_lane_args("nope")
                 .unwrap_err()
                 .contains("unknown test lane")
         );
+    }
+
+    #[test]
+    fn slow_lane_excludes_qat_acceptance() {
+        assert!(
+            !SLOW_TEST_TARGETS.contains(&"qat_acceptance"),
+            "qat acceptance should remain outside the generic slow lane"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_and_qat_aliases_use_dedicated_qat_tests_feature() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+
+        let manifest_path = workspace_root.join("bitloops").join("Cargo.toml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", manifest_path.display()));
+        assert!(
+            manifest.contains("qat-tests = []"),
+            "bitloops manifest should declare a dedicated qat-tests feature"
+        );
+        assert!(
+            manifest.contains(
+                "name = \"qat_acceptance\"\npath = \"tests/qat_acceptance.rs\"\nrequired-features = [\"qat-tests\"]"
+            ),
+            "qat_acceptance target should require only the qat-tests feature"
+        );
+
+        let config_path = workspace_root.join(".cargo").join("config.toml");
+        let config = fs::read_to_string(&config_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", config_path.display()));
+
+        for alias in [
+            "qat = ",
+            "qat-smoke = ",
+            "qat-devql-sync = ",
+            "qat-onboarding = ",
+        ] {
+            let line = config
+                .lines()
+                .find(|line| line.starts_with(alias))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing cargo alias `{}` in {}",
+                        alias,
+                        config_path.display()
+                    )
+                });
+            assert!(
+                line.contains("--features qat-tests"),
+                "cargo alias should enable the dedicated qat-tests feature: {line}"
+            );
+        }
     }
 
     #[test]

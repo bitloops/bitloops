@@ -21,7 +21,7 @@ pub mod test_harness;
 pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
-pub use clone::{ClonesFilterInput, SemanticClone};
+pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
@@ -30,7 +30,9 @@ pub use connection::{
     KnowledgeRelationConnection, KnowledgeRelationEdge, KnowledgeVersionConnection,
     KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge, paginate_items,
 };
-pub use dependency_edge::{DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind};
+pub use dependency_edge::{
+    DependencyEdge, DepsDirection, DepsFilterInput, DepsSummary, DepsSummaryFilterInput, EdgeKind,
+};
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
 pub use ingestion::IngestionProgressEvent;

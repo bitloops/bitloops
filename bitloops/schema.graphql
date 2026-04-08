@@ -40,6 +40,7 @@ type Artefact {
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	depsSummary(filter: DepsSummaryFilterInput): DepsSummary!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
@@ -203,6 +204,10 @@ type Clone {
 	id: ID!
 	sourceArtefactId: ID!
 	targetArtefactId: ID!
+	sourceStartLine: Int
+	sourceEndLine: Int
+	targetStartLine: Int
+	targetEndLine: Int
 	relationKind: String!
 	score: Float!
 	metadata: JSON
@@ -214,11 +219,22 @@ type CloneConnection {
 	edges: [CloneEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+	summary: CloneSummary!
 }
 
 type CloneEdge {
 	node: Clone!
 	cursor: String!
+}
+
+type CloneSummary {
+	totalCount: Int!
+	groups: [CloneSummaryGroup!]!
+}
+
+type CloneSummaryGroup {
+	relationKind: String!
+	count: Int!
 }
 
 input ClonesFilterInput {
@@ -288,6 +304,28 @@ input DepsFilterInput {
 	includeUnresolved: Boolean! = false
 }
 
+type DepsSummary {
+	totalCount: Int!
+	incomingCount: Int!
+	outgoingCount: Int!
+	kindCounts: DepsSummaryKindCounts!
+}
+
+input DepsSummaryFilterInput {
+	kind: EdgeKind
+	direction: DepsDirection
+	unresolved: Boolean! = false
+}
+
+type DepsSummaryKindCounts {
+	imports: Int!
+	calls: Int!
+	references: Int!
+	extends: Int!
+	implements: Int!
+	exports: Int!
+}
+
 enum EdgeKind {
 	IMPORTS
 	CALLS
@@ -316,6 +354,7 @@ type FileContext {
 	blobSha: String
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 }
 
 type HealthBackendStatus {
@@ -332,16 +371,15 @@ type HealthStatus {
 }
 
 input IngestInput {
-	maxCheckpoints: Int! = 500
+	backfill: Int = null
 }
 
 type IngestResult {
 	success: Boolean!
-	checkpointsProcessed: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 	semanticFeatureRowsUpserted: Int!
 	semanticFeatureRowsSkipped: Int!
 	symbolEmbeddingRowsUpserted: Int!
@@ -360,14 +398,13 @@ enum IngestionPhase {
 
 type IngestionProgressEvent {
 	phase: IngestionPhase!
-	checkpointsTotal: Int!
-	checkpointsProcessed: Int!
+	commitsTotal: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	currentCheckpointId: String
 	currentCommitSha: String
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 }
 
 type InitSchemaResult {
@@ -541,9 +578,8 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest(input: IngestInput!): IngestResult!
+	ingest(input: IngestInput): IngestResult!
 	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
-	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
@@ -567,6 +603,7 @@ type Project {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
@@ -609,6 +646,7 @@ type Repository {
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
 	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!

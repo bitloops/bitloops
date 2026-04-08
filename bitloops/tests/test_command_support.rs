@@ -27,6 +27,7 @@ pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
     apply_repo_app_paths(cmd, &paths);
 }
 
+#[allow(dead_code)]
 pub fn write_test_daemon_config(repo: &Path) {
     let daemon_state_root = repo
         .parent()
@@ -67,6 +68,7 @@ local_path = {blob_path:?}
     .expect("write repo daemon config");
 }
 
+#[allow(dead_code)]
 pub fn ensure_repo_daemon_stores(repo: &Path) {
     write_test_daemon_config(repo);
 

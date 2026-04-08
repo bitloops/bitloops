@@ -12,14 +12,13 @@ pub enum IngestionPhase {
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct IngestionProgressEvent {
     pub phase: IngestionPhase,
-    pub checkpoints_total: i32,
-    pub checkpoints_processed: i32,
+    pub commits_total: i32,
+    pub commits_processed: i32,
+    pub checkpoint_companions_processed: i32,
     pub current_checkpoint_id: Option<String>,
     pub current_commit_sha: Option<String>,
     pub events_inserted: i32,
     pub artefacts_upserted: i32,
-    pub checkpoints_without_commit: i32,
-    pub temporary_rows_promoted: i32,
 }
 
 impl From<crate::host::devql::IngestionProgressUpdate> for IngestionProgressEvent {
@@ -38,14 +37,15 @@ impl From<crate::host::devql::IngestionProgressUpdate> for IngestionProgressEven
                 crate::host::devql::IngestionProgressPhase::Complete => IngestionPhase::Complete,
                 crate::host::devql::IngestionProgressPhase::Failed => IngestionPhase::Failed,
             },
-            checkpoints_total: to_graphql_count(value.checkpoints_total),
-            checkpoints_processed: to_graphql_count(value.checkpoints_processed),
+            commits_total: to_graphql_count(value.commits_total),
+            commits_processed: to_graphql_count(value.commits_processed),
+            checkpoint_companions_processed: to_graphql_count(
+                value.counters.checkpoint_companions_processed,
+            ),
             current_checkpoint_id: value.current_checkpoint_id,
             current_commit_sha: value.current_commit_sha,
             events_inserted: to_graphql_count(value.counters.events_inserted),
             artefacts_upserted: to_graphql_count(value.counters.artefacts_upserted),
-            checkpoints_without_commit: to_graphql_count(value.counters.checkpoints_without_commit),
-            temporary_rows_promoted: to_graphql_count(value.counters.temporary_rows_promoted),
         }
     }
 }

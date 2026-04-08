@@ -56,11 +56,11 @@ cargo dev-build-bundled
 
 ## Local checks (optional)
 
-There are no repo-enforced git hooks. To match what runs on pull requests to `develop`, run from the repo root:
+There are no repo-enforced git hooks. To match the blocking `develop` pull-request gate, run from the repo root:
 
 ```bash
-bash scripts/check-dev.sh           # file-size, fmt --check, clippy
-bash scripts/check-dev.sh --test   # also ./scripts/test-summary.sh (full suite + combined summaries)
+bash scripts/check-dev.sh           # file-size, fmt, clippy
+bash scripts/check-dev.sh --test   # also cargo dev-test-merge (fast + curated slow smokes)
 bash scripts/check-dev.sh --full   # also coverage baseline check
 ```
 
@@ -81,10 +81,13 @@ cargo dev-test-cli
 # Fast default test lane (no slow e2e/integration suites; binaries are pre-signed on macOS)
 cargo dev-test-fast
 
-# Slow lane only (feature-gated heavy suites)
+# Merge gate lane (fast + curated slow smokes)
+cargo dev-test-merge
+
+# Slow lane only (all feature-gated heavy suites, no fast lane)
 cargo dev-test-slow
 
-# Full lane before handoff/merge (fast + slow)
+# Full lane (fast + slow)
 cargo dev-test-full
 
 # Tests with coverage (single llvm-cov run) + coverage summary tables
@@ -115,6 +118,7 @@ Test type notes:
 - `core` tests are Rust library tests (`--lib`).
 - `cli` tests are Rust binary tests for `bitloops` (`--bin bitloops`).
 - `integration` tests are explicit test targets in `Cargo.toml`.
+- `merge` runs the fast lane plus a curated smoke subset of slow suites.
 - slow end-to-end/integration suites are gated behind `--features slow-tests`.
 
 Coverage outputs:
@@ -124,7 +128,8 @@ Coverage outputs:
 
 Coverage gate policy:
 
-- On pull requests to `develop`, CI enforces coverage for **non-draft** PRs.
+- Coverage baseline metadata is refreshed on pushes to `develop`.
+- Coverage is separate from the blocking `develop` pull-request gate.
 - Metrics: lines and functions.
 - Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
 - Baseline source: GitHub repository variables (`BITLOOPS_COV_BASELINE_LINES_PCT`, `BITLOOPS_COV_BASELINE_FUNCTIONS_PCT`) refreshed on push to `develop`.

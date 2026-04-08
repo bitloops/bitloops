@@ -12,6 +12,8 @@ duckdb-bundled = ["duckdb/bundled"]
 postgres-tests = []
 # Opt-in end-to-end and heavy integration suites.
 slow-tests = []
+# Opt-in QAT acceptance suites, exposed through the `cargo qat*` aliases.
+qat-tests = []
 
 [lib]
 path = "src/lib.rs"
@@ -31,10 +33,17 @@ path = "tests/production_seed.rs"
 [[test]]
 name = "testlens_gherkin"
 path = "tests/testlens_gherkin.rs"
+required-features = ["slow-tests"]
 
 [[test]]
 name = "testlens_sqlite_acceptance"
 path = "tests/testlens_sqlite_acceptance.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "agent_cli_smoke"
+path = "tests/agent_cli_smoke.rs"
+required-features = ["slow-tests"]
 
 [[test]]
 name = "claude_git_hooks_integration"
@@ -44,6 +53,11 @@ required-features = ["slow-tests"]
 [[test]]
 name = "copilot_integration"
 path = "tests/copilot_integration.rs"
+required-features = ["slow-tests"]
+
+[[test]]
+name = "checkpoint_rewind_smoke"
+path = "tests/checkpoint_rewind_smoke.rs"
 required-features = ["slow-tests"]
 
 [[test]]
@@ -67,6 +81,11 @@ path = "tests/graphql.rs"
 required-features = ["slow-tests"]
 
 [[test]]
+name = "graphql_smoke"
+path = "tests/graphql_smoke.rs"
+required-features = ["slow-tests"]
+
+[[test]]
 name = "performance"
 path = "tests/performance.rs"
 required-features = ["slow-tests"]
@@ -74,6 +93,11 @@ required-features = ["slow-tests"]
 [[test]]
 name = "qat_acceptance"
 path = "tests/qat_acceptance.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_bundle"
+path = "tests/qat_bundle.rs"
 
 [dependencies]
 anyhow = "1"

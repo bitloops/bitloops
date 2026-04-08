@@ -11,6 +11,7 @@ use bitloops_embeddings_protocol::{EmbeddingInput, EmbeddingInputType, ProviderD
 use crate::config::EmbeddingProfileConfig;
 
 const DEFAULT_LOCAL_MODEL: &str = "jinaai/jina-embeddings-v2-base-code";
+const LOCAL_DIMENSION_PROBE_TEXT: &str = "bitloops local embedding dimension probe";
 
 pub trait EmbeddingRuntimeProvider: Send + Sync {
     fn provider_name(&self) -> &str;
@@ -80,13 +81,15 @@ fn build_local_provider(
     let init_options = InitOptions::new(resolved_model)
         .with_cache_dir(cache_dir.clone())
         .with_show_download_progress(false);
-    let embedder = guard_runtime_panic(
+    let mut embedder = guard_runtime_panic(
         || TextEmbedding::try_new(init_options),
         "loading local embedding runtime",
     )?;
+    let output_dimension = probe_local_output_dimension(&mut embedder)?;
 
     Ok(Box::new(LocalEmbeddingProvider {
         model: resolved_model_name(model),
+        output_dimension,
         embedder: Mutex::new(embedder),
         cache_dir,
     }))
@@ -94,6 +97,7 @@ fn build_local_provider(
 
 struct LocalEmbeddingProvider {
     model: String,
+    output_dimension: usize,
     embedder: Mutex<TextEmbedding>,
     cache_dir: PathBuf,
 }
@@ -108,7 +112,7 @@ impl EmbeddingRuntimeProvider for LocalEmbeddingProvider {
     }
 
     fn output_dimension(&self) -> Option<usize> {
-        None
+        Some(self.output_dimension)
     }
 
     fn cache_dir(&self) -> Option<&Path> {
@@ -116,7 +120,10 @@ impl EmbeddingRuntimeProvider for LocalEmbeddingProvider {
     }
 
     fn cache_key(&self) -> String {
-        format!("provider=local_fastembed::model={}", self.model)
+        format!(
+            "provider=local_fastembed::model={}::dimension={}",
+            self.model, self.output_dimension
+        )
     }
 
     fn embed(&self, input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
@@ -167,6 +174,24 @@ fn default_local_embedding_cache_dir(repo_root: &Path) -> PathBuf {
     repo_root.join(".bitloops/embeddings/models")
 }
 
+fn probe_local_output_dimension(embedder: &mut TextEmbedding) -> Result<usize> {
+    let outputs = guard_runtime_panic(
+        || embedder.embed(vec![LOCAL_DIMENSION_PROBE_TEXT.to_string()], None),
+        "probing local embedding output dimension",
+    )?;
+    let output = outputs.into_iter().next().ok_or_else(|| {
+        anyhow!("local embedding runtime returned no vectors during dimension probe")
+    })?;
+    embedding_dimension(&output, "local embedding output dimension probe")
+}
+
+fn embedding_dimension(values: &[f32], context: &str) -> Result<usize> {
+    if values.is_empty() {
+        bail!("{context} returned an empty vector");
+    }
+    Ok(values.len())
+}
+
 fn build_http_provider(
     provider: &str,
     model: &str,
@@ -185,7 +210,7 @@ fn build_http_provider(
         model: model.to_string(),
         api_key: api_key.cloned(),
         endpoint,
-        output_dimension: default_output_dimension(provider),
+        output_dimension: default_output_dimension(provider, model),
         client,
     }))
 }
@@ -290,9 +315,18 @@ fn resolve_http_endpoint(provider: &str, base_url: Option<&str>) -> Result<Strin
     }
 }
 
-fn default_output_dimension(provider: &str) -> Option<usize> {
+fn default_output_dimension(provider: &str, model: &str) -> Option<usize> {
     match provider {
+        "openai" => default_openai_output_dimension(model),
         "voyage" => Some(1024),
+        _ => None,
+    }
+}
+
+fn default_openai_output_dimension(model: &str) -> Option<usize> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "text-embedding-3-large" => Some(3072),
+        "text-embedding-3-small" | "text-embedding-ada-002" => Some(1536),
         _ => None,
     }
 }
@@ -423,10 +457,48 @@ mod tests {
     }
 
     #[test]
+    fn default_output_dimension_infers_known_openai_models() {
+        assert_eq!(
+            default_output_dimension("openai", "text-embedding-3-large"),
+            Some(3072)
+        );
+        assert_eq!(
+            default_output_dimension("openai", "text-embedding-3-small"),
+            Some(1536)
+        );
+        assert_eq!(
+            default_output_dimension("openai", "text-embedding-ada-002"),
+            Some(1536)
+        );
+    }
+
+    #[test]
+    fn default_output_dimension_keeps_unknown_openai_models_unset() {
+        assert_eq!(
+            default_output_dimension("openai", "custom-openai-model"),
+            None
+        );
+    }
+
+    #[test]
     fn guard_runtime_panic_preserves_regular_errors() {
         let err = guard_runtime_panic(|| -> Result<()> { Err(anyhow!("embed failed")) }, "test")
             .expect_err("expected error");
         assert!(format!("{err:#}").contains("embed failed"));
+    }
+
+    #[test]
+    fn embedding_dimension_returns_vector_length() {
+        assert_eq!(
+            embedding_dimension(&[0.1_f32, 0.2_f32, 0.3_f32], "test").expect("dimension"),
+            3
+        );
+    }
+
+    #[test]
+    fn embedding_dimension_rejects_empty_vectors() {
+        let err = embedding_dimension(&[], "test").expect_err("empty vector should fail");
+        assert!(err.to_string().contains("empty vector"));
     }
 
     struct FakeProvider {

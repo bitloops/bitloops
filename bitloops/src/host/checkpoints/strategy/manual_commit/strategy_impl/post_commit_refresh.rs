@@ -1,18 +1,48 @@
 use super::*;
 
+const DEFAULT_POST_COMMIT_HISTORY_BACKFILL: usize = 50;
+const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
+
+fn should_skip_post_commit_devql_refresh() -> bool {
+    std::env::var(DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV).is_ok_and(|value| {
+        let trimmed = value.trim();
+        !trimmed.is_empty() && trimmed != "0"
+    })
+}
+
 pub(crate) fn run_devql_post_commit_refresh(
     repo_root: &Path,
     commit_sha: &str,
     committed_files: &std::collections::HashSet<String>,
 ) -> Result<()> {
+    if should_skip_post_commit_devql_refresh() {
+        return Ok(());
+    }
+
     let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
     changed_files.sort();
 
     run_post_commit_future(repo_root, async {
+        #[cfg(not(test))]
+        if let Err(err) =
+            crate::daemon::require_current_repo_runtime(repo_root, "post-commit DevQL refresh")
+        {
+            eprintln!("[bitloops] Warning: {err:#}");
+            return Ok(());
+        }
         let repo = crate::host::devql::resolve_repo_identity(repo_root)
             .context("resolving repository identity for post-commit DevQL refresh")?;
         let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
             .context("building DevQL config for post-commit refresh")?;
+        crate::host::devql::execute_ingest_with_backfill_window(
+            &cfg,
+            false,
+            DEFAULT_POST_COMMIT_HISTORY_BACKFILL,
+            None,
+            None,
+        )
+        .await
+        .context("catching up DevQL historical commit ingest for post-commit")?;
         let stats =
             crate::host::devql::run_post_commit_artefact_refresh(&cfg, commit_sha, &changed_files)
                 .await
@@ -37,6 +67,10 @@ pub(crate) fn run_devql_post_commit_checkpoint_projection_refresh(
     commit_sha: &str,
     checkpoint_id: &str,
 ) -> Result<()> {
+    if should_skip_post_commit_devql_refresh() {
+        return Ok(());
+    }
+
     run_post_commit_future(repo_root, async {
         let repo = crate::host::devql::resolve_repo_identity(repo_root).context(
             "resolving repository identity for post-commit checkpoint projection refresh",

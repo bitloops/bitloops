@@ -3,6 +3,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup;
+
 const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v2";
 const MAX_CLONE_EDGES_PER_SOURCE: usize = 20;
 const MIN_SIMILAR_IMPLEMENTATION_SCORE: f32 = 0.55;
@@ -168,9 +170,7 @@ pub struct SymbolCloneCandidateInput {
     pub normalized_body_tokens: Vec<String>,
     pub parent_kind: Option<String>,
     pub context_tokens: Vec<String>,
-    pub embedding_provider: String,
-    pub embedding_model: String,
-    pub embedding_dimension: usize,
+    pub embedding_setup: EmbeddingSetup,
     pub embedding: Vec<f32>,
     pub call_targets: Vec<String>,
     pub dependency_targets: Vec<String>,
@@ -426,9 +426,13 @@ fn candidate_group_key(candidate: &SymbolCloneCandidateInput) -> CandidateGroupK
     CandidateGroupKey {
         repo_id: candidate.repo_id.clone(),
         effective_kind: candidate.canonical_kind.trim().to_ascii_lowercase(),
-        embedding_provider: candidate.embedding_provider.trim().to_ascii_lowercase(),
-        embedding_model: candidate.embedding_model.trim().to_ascii_lowercase(),
-        embedding_dimension: candidate.embedding_dimension,
+        embedding_provider: candidate
+            .embedding_setup
+            .provider
+            .trim()
+            .to_ascii_lowercase(),
+        embedding_model: candidate.embedding_setup.model.trim().to_ascii_lowercase(),
+        embedding_dimension: candidate.embedding_setup.dimension,
     }
 }
 
@@ -557,9 +561,11 @@ mod tests {
             ],
             parent_kind: Some("module".to_string()),
             context_tokens: vec!["services".to_string(), "orders".to_string()],
-            embedding_provider: "local_fastembed".to_string(),
-            embedding_model: "jinaai/jina-embeddings-v2-base-code".to_string(),
-            embedding_dimension: 3,
+            embedding_setup: EmbeddingSetup::new(
+                "local_fastembed",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            ),
             embedding: vec![0.9, 0.1, 0.0],
             call_targets: vec!["db.fetchOrder".to_string()],
             dependency_targets: vec!["references:order_repository::entity".to_string()],
@@ -869,18 +875,32 @@ mod tests {
     }
 
     #[test]
-    fn semantic_similarity_requires_matching_provider_model_and_dimension() {
+    fn semantic_similarity_requires_matching_provider_and_model() {
         let source = sample_input("source", "fetch_order");
         let mut target = sample_input("target", "fetch_order_copy");
-        target.embedding_provider = "voyage".to_string();
+        target.embedding_setup =
+            EmbeddingSetup::new("voyage", "voyage-code-3", target.embedding_setup.dimension);
         assert_eq!(semantic_similarity(&source, &target), 0.0);
 
         let mut target = sample_input("target2", "fetch_order_copy_2");
-        target.embedding_model = "other-model".to_string();
+        target.embedding_setup = EmbeddingSetup::new(
+            target.embedding_setup.provider.clone(),
+            "other-model",
+            target.embedding_setup.dimension,
+        );
         assert_eq!(semantic_similarity(&source, &target), 0.0);
+    }
 
-        let mut target = sample_input("target3", "fetch_order_copy_3");
-        target.embedding_dimension = 6;
+    #[test]
+    fn semantic_similarity_requires_matching_dimension() {
+        let source = sample_input("source", "fetch_order");
+        let mut target = sample_input("target", "fetch_order_copy");
+        target.embedding_setup = EmbeddingSetup::new(
+            target.embedding_setup.provider.clone(),
+            target.embedding_setup.model.clone(),
+            6,
+        );
+
         assert_eq!(semantic_similarity(&source, &target), 0.0);
     }
 

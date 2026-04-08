@@ -18,6 +18,8 @@ dev-test-lib = "run --manifest-path ../Cargo.toml --quiet --package xtask -- tes
 dev-test-core = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test core"
 dev-test-cli = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test cli"
 dev-test-fast = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test fast"
+dev-test-smoke = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test smoke"
+dev-test-merge = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test merge"
 dev-test-slow = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test slow"
 dev-test-full = "run --manifest-path ../Cargo.toml --quiet --package xtask -- test full"
 dev-coverage = "run --manifest-path ../Cargo.toml --quiet --package xtask -- coverage run-lcov --lcov bitloops/target/llvm-cov.info"
@@ -39,5 +41,7 @@ test-coverage = "llvm-cov --workspace --all-targets --features slow-tests --no-d
 test-coverage-lcov = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path target/llvm-cov.info"
 
 # QAT aliases
+qat = "test --test qat_acceptance -- --exact qat --ignored"
+qat-smoke = "test --test qat_acceptance qat_smoke -- --ignored"
 qat-devql-sync = "test --test qat_acceptance qat_devql_sync -- --ignored"
 qat-onboarding = "test --test qat_acceptance qat_onboarding -- --ignored"

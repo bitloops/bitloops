@@ -6,10 +6,9 @@ use tempfile::TempDir;
 use crate::adapters::agents::open_code::hooks::BITLOOPS_MARKER;
 use crate::adapters::agents::open_code::transcript::{extract_modified_files, parse_messages};
 use crate::adapters::agents::{
-    AGENT_NAME_OPEN_CODE, AGENT_TYPE_OPEN_CODE, Agent, AgentSession, HookInput, HookSupport,
-    HookType,
+    AGENT_NAME_OPEN_CODE, AGENT_TYPE_OPEN_CODE, Agent, AgentSession, HookInput, HookType,
 };
-use crate::test_support::process_state::{with_cwd, with_env_var};
+use crate::test_support::process_state::with_env_var;
 
 use super::*;
 
@@ -102,44 +101,38 @@ fn TestMetadataPresenceAndSessionPathHelpers() {
 #[allow(non_snake_case)]
 fn TestDetectPresenceAndPluginHelpers() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
-        assert!(
-            !agent
-                .detect_presence()
-                .expect("detect presence should work"),
-            "fresh repo should not look like OpenCode"
-        );
+    let agent = OpenCodeAgent;
+    assert!(
+        !agent.detect_presence_at(dir.path()),
+        "fresh repo should not look like OpenCode"
+    );
 
-        fs::write(dir.path().join("opencode.json"), "{}").expect("write opencode.json");
-        assert!(
-            agent
-                .detect_presence()
-                .expect("detect presence should work"),
-            "opencode.json should be enough to detect presence"
-        );
+    fs::write(dir.path().join("opencode.json"), "{}").expect("write opencode.json");
+    assert!(
+        agent.detect_presence_at(dir.path()),
+        "opencode.json should be enough to detect presence"
+    );
 
-        let plugin_path = agent.plugin_path().expect("plugin path should resolve");
-        assert!(
-            plugin_path.ends_with(
-                Path::new(".opencode")
-                    .join("plugins")
-                    .join("bitloops.ts")
-                    .as_path()
-            ),
-            "unexpected plugin path: {}",
-            plugin_path.display()
-        );
+    let plugin_path = agent.plugin_path_at(dir.path());
+    assert!(
+        plugin_path.ends_with(
+            Path::new(".opencode")
+                .join("plugins")
+                .join("bitloops.ts")
+                .as_path()
+        ),
+        "unexpected plugin path: {}",
+        plugin_path.display()
+    );
 
-        let rendered = agent
-            .render_plugin(false)
-            .expect("rendered production plugin should succeed");
-        assert!(rendered.contains(BITLOOPS_MARKER));
-        assert!(OpenCodeAgent::ensure_plugin_marker(&rendered).is_ok());
-        let err = OpenCodeAgent::ensure_plugin_marker("export default {}")
-            .expect_err("missing marker should fail");
-        assert!(err.to_string().contains("does not contain Bitloops marker"));
-    });
+    let rendered = agent
+        .render_plugin(false)
+        .expect("rendered production plugin should succeed");
+    assert!(rendered.contains(BITLOOPS_MARKER));
+    assert!(OpenCodeAgent::ensure_plugin_marker(&rendered).is_ok());
+    let err = OpenCodeAgent::ensure_plugin_marker("export default {}")
+        .expect_err("missing marker should fail");
+    assert!(err.to_string().contains("does not contain Bitloops marker"));
 }
 
 #[test]
@@ -296,164 +289,154 @@ fn TestImportSessionIntoOpencodeRejectsEmptyInputs() {
 #[allow(non_snake_case)]
 fn TestInstallHooks_FreshInstall() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        let count = agent.install_hooks(false, false).expect("unexpected error");
-        assert_eq!(count, 1, "expected one hook install");
+    let count = agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("unexpected error");
+    assert_eq!(count, 1, "expected one hook install");
 
-        let plugin_path = dir
-            .path()
-            .join(".opencode")
-            .join("plugins")
-            .join("bitloops.ts");
-        let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
-        assert!(
-            content.contains(r#"const BITLOOPS_CMD = "bitloops""#),
-            "plugin file does not contain production command constant"
-        );
-        assert!(
-            content.contains("hooks opencode"),
-            "plugin file does not contain 'hooks opencode'"
-        );
-        assert!(
-            content.contains("BitloopsPlugin"),
-            "plugin file does not contain BitloopsPlugin export"
-        );
-        assert!(
-            !content.contains("cargo run --"),
-            "plugin file should not contain cargo run in production mode"
-        );
-    });
+    let plugin_path = dir
+        .path()
+        .join(".opencode")
+        .join("plugins")
+        .join("bitloops.ts");
+    let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
+    assert!(
+        content.contains(r#"const BITLOOPS_CMD = "bitloops""#),
+        "plugin file does not contain production command constant"
+    );
+    assert!(
+        content.contains("hooks opencode"),
+        "plugin file does not contain 'hooks opencode'"
+    );
+    assert!(
+        content.contains("BitloopsPlugin"),
+        "plugin file does not contain BitloopsPlugin export"
+    );
+    assert!(
+        !content.contains("cargo run --"),
+        "plugin file should not contain cargo run in production mode"
+    );
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestInstallHooks_Idempotent() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        let count1 = agent
-            .install_hooks(false, false)
-            .expect("first install failed");
-        assert_eq!(count1, 1, "first install should create one hook");
+    let count1 = agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("first install failed");
+    assert_eq!(count1, 1, "first install should create one hook");
 
-        let count2 = agent
-            .install_hooks(false, false)
-            .expect("second install failed");
-        assert_eq!(count2, 0, "second install should be idempotent");
-    });
+    let count2 = agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("second install failed");
+    assert_eq!(count2, 0, "second install should be idempotent");
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestInstallHooks_LocalDev() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        let count = agent.install_hooks(true, false).expect("unexpected error");
-        assert_eq!(count, 1, "expected one hook install");
+    let count = agent
+        .install_hooks_at(dir.path(), true, false)
+        .expect("unexpected error");
+    assert_eq!(count, 1, "expected one hook install");
 
-        let plugin_path = dir
-            .path()
-            .join(".opencode")
-            .join("plugins")
-            .join("bitloops.ts");
-        let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
-        assert!(
-            content.contains("cargo run --"),
-            "local dev mode plugin should contain cargo run command"
-        );
-    });
+    let plugin_path = dir
+        .path()
+        .join(".opencode")
+        .join("plugins")
+        .join("bitloops.ts");
+    let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
+    assert!(
+        content.contains("cargo run --"),
+        "local dev mode plugin should contain cargo run command"
+    );
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestInstallHooks_ForceReinstall() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        agent
-            .install_hooks(false, false)
-            .expect("first install failed");
+    agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("first install failed");
 
-        let count = agent
-            .install_hooks(false, true)
-            .expect("force reinstall failed");
-        assert_eq!(count, 1, "force reinstall should write plugin again");
-    });
+    let count = agent
+        .install_hooks_at(dir.path(), false, true)
+        .expect("force reinstall failed");
+    assert_eq!(count, 1, "force reinstall should write plugin again");
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestUninstallHooks() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        agent
-            .install_hooks(false, false)
-            .expect("install should succeed before uninstall");
-        agent
-            .uninstall_hooks()
-            .expect("uninstall should remove plugin");
+    agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("install should succeed before uninstall");
+    agent
+        .uninstall_hooks_at(dir.path())
+        .expect("uninstall should remove plugin");
 
-        let plugin_path = dir
-            .path()
-            .join(".opencode")
-            .join("plugins")
-            .join("bitloops.ts");
-        assert!(
-            !plugin_path.exists(),
-            "plugin file should not exist after uninstall"
-        );
-    });
+    let plugin_path = dir
+        .path()
+        .join(".opencode")
+        .join("plugins")
+        .join("bitloops.ts");
+    assert!(
+        !plugin_path.exists(),
+        "plugin file should not exist after uninstall"
+    );
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestUninstallHooks_NoFile() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        agent
-            .uninstall_hooks()
-            .expect("uninstall should be non-fatal when plugin does not exist");
-    });
+    agent
+        .uninstall_hooks_at(dir.path())
+        .expect("uninstall should be non-fatal when plugin does not exist");
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestAreHooksInstalled() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = OpenCodeAgent;
+    let agent = OpenCodeAgent;
 
-        assert!(
-            !agent.are_hooks_installed(),
-            "hooks should not be installed initially"
-        );
+    assert!(
+        !agent.are_hooks_installed_at(dir.path()),
+        "hooks should not be installed initially"
+    );
 
-        agent
-            .install_hooks(false, false)
-            .expect("install hooks should succeed");
-        assert!(
-            agent.are_hooks_installed(),
-            "hooks should be installed after InstallHooks"
-        );
+    agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("install hooks should succeed");
+    assert!(
+        agent.are_hooks_installed_at(dir.path()),
+        "hooks should be installed after InstallHooks"
+    );
 
-        agent
-            .uninstall_hooks()
-            .expect("uninstall hooks should succeed");
-        assert!(
-            !agent.are_hooks_installed(),
-            "hooks should not be installed after UninstallHooks"
-        );
-    });
+    agent
+        .uninstall_hooks_at(dir.path())
+        .expect("uninstall hooks should succeed");
+    assert!(
+        !agent.are_hooks_installed_at(dir.path()),
+        "hooks should not be installed after UninstallHooks"
+    );
 }
 
 #[test]

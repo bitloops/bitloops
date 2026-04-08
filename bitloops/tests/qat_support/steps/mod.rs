@@ -93,6 +93,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I make a first change using (\S+) to (\S+)$"),
+            step_fn(given_first_agent_change),
+        )
+        .given(
+            None,
             regex(r#"^I ask Claude Code to "([^"]+)" in (\S+)$"#),
             step_fn(given_claude_code_prompt),
         )
@@ -100,6 +105,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I make a second change using Claude Code to (\S+)$"),
             step_fn(given_second_claude_change),
+        )
+        .given(
+            None,
+            regex(r"^I make a second change using (\S+) to (\S+)$"),
+            step_fn(given_second_agent_change),
         )
         .given(
             None,
@@ -143,17 +153,19 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run TestLens ingest-tests for latest commit in (\S+)$"),
+            regex(r"^I run (?:TestHarness|TestLens) ingest-tests for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_tests),
         )
         .given(
             None,
-            regex(r"^I run TestLens ingest-coverage for latest commit in (\S+)$"),
+            regex(r"^I run (?:TestHarness|TestLens) ingest-coverage for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_coverage),
         )
         .given(
             None,
-            regex(r"^I run TestLens ingest-results with a failing test for latest commit in (\S+)$"),
+            regex(
+                r"^I run (?:TestHarness|TestLens) ingest-results with a failing test for latest commit in (\S+)$",
+            ),
             step_fn(given_testlens_ingest_results_failing),
         )
         .given(
@@ -205,6 +217,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I delete a source file in (\S+)$"),
             step_fn(given_delete_a_source_file),
+        )
+        .given(
+            None,
+            regex(r"^I delete a test file in (\S+)$"),
+            step_fn(given_delete_test_file),
         )
         .given(
             None,
@@ -338,6 +355,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^(cursor|gemini|copilot|codex|opencode|open-code) session exists in (\S+)$"),
+            step_fn(then_agent_session_exists),
+        )
+        .then(
+            None,
             regex(r"^checkpoint mapping exists in (\S+)$"),
             step_fn(then_checkpoint_mapping_exists),
         )
@@ -383,32 +405,40 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r#"^TestLens query for \"([^\"]+)\" at latest commit with view \"([^\"]+)\" returns results in (\S+)$"#),
+            regex(
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
+            ),
             step_fn(then_testlens_query_returns_results),
         )
         .then(
             None,
-            regex(r"^TestLens summary shows non-zero test count in (\S+)$"),
+            regex(r"^(?:TestHarness|TestLens) summary shows non-zero test count in (\S+)$"),
             step_fn(then_testlens_summary_nonzero),
         )
         .then(
             None,
-            regex(r"^TestLens tests include at least 1 test with a classification in (\S+)$"),
+            regex(
+                r"^(?:TestHarness|TestLens) tests include at least 1 test with a classification in (\S+)$",
+            ),
             step_fn(then_testlens_tests_have_classification),
         )
         .then(
             None,
-            regex(r"^TestLens coverage shows line coverage percentage in (\S+)$"),
+            regex(r"^(?:TestHarness|TestLens) coverage shows line coverage percentage in (\S+)$"),
             step_fn(then_testlens_coverage_has_line_pct),
         )
         .then(
             None,
-            regex(r#"^TestLens query for \"([^\"]+)\" at latest commit with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#),
+            regex(
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
+            ),
             step_fn(then_testlens_query_empty_or_zero),
         )
         .then(
             None,
-            regex(r#"^TestLens query for \"([^\"]+)\" at latest commit with view \"([^\"]+)\" includes a failing test in (\S+)$"#),
+            regex(
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
+            ),
             step_fn(then_testlens_includes_failing_test),
         )
         .then(
@@ -485,6 +515,26 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL sync validation shows expected greater than (\d+) in (\S+)$"),
             step_fn(then_sync_validation_expected_greater_than),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync history shows added greater than 0 for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_added_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync history shows changed greater than 0 for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_changed_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync history shows removed greater than 0 for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_removed_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync history shows artefacts indexed for current HEAD in (\S+)$"),
+            step_fn(then_sync_history_artefacts_for_current_head),
         )
         .then(
             None,

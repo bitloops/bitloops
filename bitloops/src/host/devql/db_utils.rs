@@ -400,9 +400,9 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
         }
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
         configure_sqlite_connection(&conn, "querying SQLite rows")?;
         let mut stmt = conn.prepare(&query).context("preparing SQLite query")?;
         let column_names = stmt
@@ -635,7 +635,10 @@ mod tests {
         .context("creating sample table")?;
         drop(conn);
 
-        let runtime = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
         let statements = vec![
             "INSERT INTO sample (value) VALUES ('one');".to_string(),
             "INSERT INTO missing_table (value) VALUES ('boom');".to_string(),
@@ -670,7 +673,10 @@ mod tests {
             .context("creating sample table")?;
         drop(conn);
 
-        let runtime = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
         runtime
             .block_on(sqlite_exec_batch_transactional_path(
                 &sqlite_path,

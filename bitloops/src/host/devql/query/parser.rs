@@ -55,6 +55,7 @@ pub(super) struct CloneFilter {
     pub(super) relation_kind: Option<String>,
     pub(super) min_score: Option<f32>,
     pub(super) neighbors: Option<i64>,
+    pub(super) raw: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -201,6 +202,9 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                         .parse::<i64>()
                         .map_err(|_| anyhow!("invalid clones neighbors value: {neighbors}"))?,
                 );
+            }
+            if let Some(raw) = args.get("raw") {
+                parsed.clones.raw = parse_bool_literal("clones raw", raw)?;
             }
             continue;
         }
@@ -405,6 +409,14 @@ pub(super) fn parse_lines_range(lines: &str) -> Result<(i32, i32)> {
         bail!("invalid lines range: {lines}")
     }
     Ok((start, end))
+}
+
+pub(super) fn parse_bool_literal(field_name: &str, value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" => Ok(true),
+        "0" | "false" | "no" => Ok(false),
+        _ => bail!("invalid boolean value for {field_name}: {value}"),
+    }
 }
 
 pub(super) fn parse_registered_stage(stage: &str) -> Result<Option<RegisteredStageCall>> {

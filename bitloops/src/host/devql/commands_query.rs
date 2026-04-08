@@ -8,10 +8,13 @@ pub async fn run_query(
     raw_graphql: bool,
 ) -> Result<()> {
     let use_raw_graphql = use_raw_graphql_mode(query, raw_graphql);
+    let parsed = (!use_raw_graphql)
+        .then(|| parse_devql_query(query))
+        .transpose()?;
     let document = compile_query_document(query, raw_graphql)?;
     let data =
         crate::graphql::execute_in_process(cfg.repo_root.clone(), &document, json!({})).await?;
-    let output = format_query_output(&data, compact, use_raw_graphql)?;
+    let output = format_query_output(&data, compact, use_raw_graphql, parsed.as_ref())?;
     println!("{output}");
 
     Ok(())
@@ -91,6 +94,7 @@ pub(crate) fn format_query_output(
     data: &Value,
     compact: bool,
     raw_graphql: bool,
+    parsed: Option<&ParsedDevqlQuery>,
 ) -> Result<String> {
     if raw_graphql {
         return if compact {
@@ -100,7 +104,7 @@ pub(crate) fn format_query_output(
         };
     }
 
-    let payload = extract_cli_payload(data);
+    let payload = transform_cli_payload(extract_cli_payload(data), parsed);
     if compact {
         return Ok(serde_json::to_string(&payload)?);
     }
@@ -140,7 +144,109 @@ fn extract_connection_nodes(map: &serde_json::Map<String, Value>) -> Option<Vec<
         .collect()
 }
 
+fn transform_cli_payload(payload: Value, parsed: Option<&ParsedDevqlQuery>) -> Value {
+    let Some(parsed) = parsed else {
+        return payload;
+    };
+
+    if parsed.has_clones_stage {
+        return flatten_clone_payload(payload, parsed.clones.raw);
+    }
+
+    payload
+}
+
+fn flatten_clone_payload(payload: Value, raw: bool) -> Value {
+    let Value::Array(rows) = payload else {
+        return payload;
+    };
+
+    let flattened = rows
+        .into_iter()
+        .flat_map(|row| {
+            if let Some(nodes) = extract_nested_clone_nodes(&row) {
+                nodes
+                    .into_iter()
+                    .map(|node| if raw { node } else { present_clone_row(node) })
+                    .collect::<Vec<_>>()
+            } else if raw {
+                vec![row]
+            } else {
+                vec![present_clone_row(row)]
+            }
+        })
+        .collect();
+
+    Value::Array(flattened)
+}
+
+fn extract_nested_clone_nodes(row: &Value) -> Option<Vec<Value>> {
+    let clones = row.as_object()?.get("clones")?.as_object()?;
+    extract_connection_nodes(clones)
+}
+
+fn present_clone_row(row: Value) -> Value {
+    let Some(row_obj) = row.as_object() else {
+        return row;
+    };
+
+    let from = clone_artefact_label(row_obj.get("sourceArtefact"))
+        .or_else(|| clone_string_field(row_obj.get("sourceArtefactId")));
+    let to = clone_artefact_label(row_obj.get("targetArtefact"))
+        .or_else(|| clone_string_field(row_obj.get("targetArtefactId")));
+    let relation_kind = row_obj.get("relationKind").cloned();
+    let score = row_obj.get("score").cloned();
+
+    if from.is_none() && to.is_none() && relation_kind.is_none() && score.is_none() {
+        return row;
+    }
+
+    let mut presented = serde_json::Map::new();
+    if let Some(from) = from {
+        presented.insert("from".to_string(), Value::String(from));
+    }
+    if let Some(to) = to {
+        presented.insert("to".to_string(), Value::String(to));
+    }
+    if let Some(relation_kind) = relation_kind {
+        presented.insert("relationKind".to_string(), relation_kind);
+    }
+    if let Some(score) = score {
+        presented.insert("score".to_string(), score);
+    }
+
+    Value::Object(presented)
+}
+
+fn clone_artefact_label(value: Option<&Value>) -> Option<String> {
+    let artefact = value?.as_object()?;
+
+    artefact
+        .get("symbolFqn")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            artefact
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn clone_string_field(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
 fn render_cli_payload(payload: &Value) -> Result<String> {
+    if let Some(rendered) = render_clone_summary_payload(payload) {
+        return Ok(rendered);
+    }
+
     match payload {
         Value::Array(rows) => render_array_rows(rows),
         Value::Object(row) => render_object_rows(&[row]),
@@ -152,6 +258,12 @@ fn render_cli_payload(payload: &Value) -> Result<String> {
 fn render_array_rows(rows: &[Value]) -> Result<String> {
     if rows.is_empty() {
         return Ok("No results.".to_string());
+    }
+
+    if rows.len() == 1
+        && let Some(rendered) = render_clone_summary_payload(&rows[0])
+    {
+        return Ok(rendered);
     }
 
     if rows.iter().all(is_scalar_like) {
@@ -194,6 +306,47 @@ fn render_object_rows(rows: &[&serde_json::Map<String, Value>]) -> Result<String
         .map(|column| cli_header(column))
         .collect::<Vec<_>>();
     Ok(render_table(&headers, &values))
+}
+
+fn render_clone_summary_payload(payload: &Value) -> Option<String> {
+    let Value::Object(map) = payload else {
+        return None;
+    };
+
+    let total_count = map
+        .get("totalCount")
+        .or_else(|| map.get("total_count"))
+        .and_then(Value::as_i64)?;
+    let groups = map.get("groups")?.as_array()?;
+    if groups.is_empty() {
+        return Some(format!("total_count: {total_count}"));
+    }
+
+    let rows = groups
+        .iter()
+        .filter_map(|group| {
+            let group = group.as_object()?;
+            Some(vec![
+                group
+                    .get("relationKind")
+                    .or_else(|| group.get("relation_kind"))
+                    .map(render_table_cell)
+                    .unwrap_or_default(),
+                group
+                    .get("count")
+                    .map(render_table_cell)
+                    .unwrap_or_default(),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return Some(format!("total_count: {total_count}"));
+    }
+
+    Some(format!(
+        "total_count: {total_count}\n{}",
+        render_table(&["relation_kind".to_string(), "count".to_string()], &rows)
+    ))
 }
 
 fn collect_table_columns(rows: &[&serde_json::Map<String, Value>]) -> Vec<String> {
@@ -358,194 +511,5 @@ fn cli_header(name: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compile_query_document_compiles_devql_pipeline() {
-        let document =
-            compile_query_document(r#"repo("bitloops-cli")->artefacts()->limit(2)"#, false)
-                .expect("dsl query should compile");
-
-        assert!(document.contains("repo(name: \"bitloops-cli\")"));
-        assert!(document.contains("artefacts(first: 2)"));
-    }
-
-    #[test]
-    fn compile_query_document_preserves_raw_graphql() {
-        let document = compile_query_document(" { repo(name: \"bitloops-cli\") { name } } ", true)
-            .expect("raw graphql should pass through");
-
-        assert_eq!(document, "{ repo(name: \"bitloops-cli\") { name } }");
-    }
-
-    #[test]
-    fn compile_query_document_defaults_to_raw_graphql_without_pipeline_operator() {
-        let document = compile_query_document("{ repo(name: \"bitloops-cli\") { name } }", false)
-            .expect("graphql should be the default mode");
-
-        assert_eq!(document, "{ repo(name: \"bitloops-cli\") { name } }");
-    }
-
-    #[test]
-    fn use_raw_graphql_mode_treats_pipeline_operator_as_dsl_only() {
-        assert!(!use_raw_graphql_mode(
-            r#"repo("bitloops-cli")->artefacts()->limit(2)"#,
-            false
-        ));
-        assert!(use_raw_graphql_mode(
-            r#"{ repo(name: "bitloops-cli") { name } }"#,
-            false
-        ));
-        assert!(use_raw_graphql_mode(
-            r#"repo("bitloops-cli")->artefacts()->limit(2)"#,
-            true
-        ));
-    }
-
-    #[test]
-    fn extract_cli_payload_unwraps_connection_nodes_through_scopes() {
-        let payload = extract_cli_payload(&json!({
-            "repo": {
-                "project": {
-                    "artefacts": {
-                        "edges": [
-                            { "node": { "path": "src/main.rs", "symbolFqn": "main" } },
-                            { "node": { "path": "src/lib.rs", "symbolFqn": "answer" } }
-                        ]
-                    }
-                }
-            }
-        }));
-
-        assert_eq!(
-            payload,
-            json!([
-                { "path": "src/main.rs", "symbolFqn": "main" },
-                { "path": "src/lib.rs", "symbolFqn": "answer" }
-            ])
-        );
-    }
-
-    #[test]
-    fn extract_cli_payload_preserves_typed_project_stage_lists() {
-        let payload = extract_cli_payload(&json!({
-            "repo": {
-                "project": {
-                    "coverage": [
-                        {
-                            "artefact": {
-                                "name": "run_cli"
-                            },
-                            "summary": {
-                                "uncoveredLineCount": 2
-                            }
-                        }
-                    ]
-                }
-            }
-        }));
-
-        assert_eq!(
-            payload,
-            json!([
-                {
-                    "artefact": {
-                        "name": "run_cli"
-                    },
-                    "summary": {
-                        "uncoveredLineCount": 2
-                    }
-                }
-            ])
-        );
-    }
-
-    #[test]
-    fn format_query_output_renders_table_for_dsl_results() {
-        let rendered = format_query_output(
-            &json!({
-                "repo": {
-                    "artefacts": {
-                        "edges": [
-                            {
-                                "node": {
-                                    "path": "src/main.rs",
-                                    "symbolFqn": "main",
-                                    "chatHistory": {
-                                        "edges": [
-                                            { "node": { "sessionId": "s1" } },
-                                            { "node": { "sessionId": "s2" } }
-                                        ]
-                                    }
-                                }
-                            }
-                        ]
-                    }
-                }
-            }),
-            false,
-            false,
-        )
-        .expect("dsl results should render");
-
-        assert!(rendered.contains("| path"));
-        assert!(rendered.contains("| symbol_fqn"));
-        assert!(rendered.contains("| chat_history"));
-        assert!(rendered.contains("src/main.rs"));
-        assert!(rendered.contains("[2 entries]"));
-    }
-
-    #[test]
-    fn format_query_output_emits_compact_json_for_dsl_results() {
-        let rendered = format_query_output(
-            &json!({
-                "repo": {
-                    "artefacts": {
-                        "edges": [
-                            {
-                                "node": {
-                                    "path": "src/main.rs",
-                                    "symbolFqn": "main"
-                                }
-                            }
-                        ]
-                    }
-                }
-            }),
-            true,
-            false,
-        )
-        .expect("compact output should render");
-
-        assert_eq!(rendered, r#"[{"path":"src/main.rs","symbolFqn":"main"}]"#);
-    }
-
-    #[test]
-    fn format_query_output_keeps_raw_graphql_shape() {
-        let rendered = format_query_output(
-            &json!({
-                "repo": {
-                    "artefacts": {
-                        "edges": [
-                            {
-                                "node": {
-                                    "path": "src/main.rs"
-                                }
-                            }
-                        ],
-                        "pageInfo": {
-                            "hasNextPage": false
-                        }
-                    }
-                }
-            }),
-            false,
-            true,
-        )
-        .expect("raw graphql should render as json");
-
-        assert!(rendered.contains("\"pageInfo\""));
-        assert!(rendered.contains("\"hasNextPage\": false"));
-    }
-}
+#[path = "commands_query/tests.rs"]
+mod tests;

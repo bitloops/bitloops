@@ -29,19 +29,19 @@ Feature: Quickstart end-to-end flow
 #    And   DevQL checkpoints query returns results for "claude" in bitloops
 #
 #  @quickstart-testlens
-#  Scenario: TestLens ingests tests and links them to artefacts
+#  Scenario: TestHarness ingests tests and links them to artefacts
 #    Given I simulate a claude checkpoint in bitloops
 #    And   I run DevQL init in bitloops
 #    And   I run DevQL ingest in bitloops
-#    And   I run TestLens ingest-tests at HEAD in bitloops
-#    Then  TestLens query for "test_add" at latest commit with view "tests" returns results in bitloops
+#    And   I run TestHarness ingest-tests at HEAD in bitloops
+#    Then  TestHarness query for "test_add" at current workspace state with view "tests" returns results in bitloops
 #
 #  @quickstart-coverage
 #  Scenario: Coverage ingestion produces line coverage data
 #    Given I simulate a claude checkpoint in bitloops
 #    And   I run DevQL init in bitloops
 #    And   I run DevQL ingest in bitloops
-#    And   I run TestLens ingest-tests at HEAD in bitloops
-#    And   I run TestLens ingest-coverage at HEAD in bitloops
+#    And   I run TestHarness ingest-tests at HEAD in bitloops
+#    And   I run TestHarness ingest-coverage at HEAD in bitloops
 #    Then  coverage_captures count is at least 1 in bitloops
 #    And   coverage_hits count is at least 1 in bitloops

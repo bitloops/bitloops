@@ -26,6 +26,35 @@ fn should_use_test_app_dirs(repo_root: &Path) -> bool {
 }
 
 #[cfg(test)]
+fn test_runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
+    if let Some(path) =
+        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
+    {
+        return Some(PathBuf::from(path).join("bitloops").join("daemon"));
+    }
+
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return None;
+    }
+
+    Some(repo_root.join(".bitloops-test-state").join("daemon"))
+}
+
+#[cfg(test)]
+fn test_global_runtime_state_dir() -> PathBuf {
+    if let Some(path) =
+        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
+    {
+        return PathBuf::from(path).join("bitloops").join("daemon");
+    }
+
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("daemon")
+}
+
+#[cfg(test)]
 pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
     if should_use_test_app_dirs(repo_root) {
         return bitloops_data_dir()
@@ -116,6 +145,17 @@ pub fn default_embedding_model_cache_dir(_repo_root: &Path) -> PathBuf {
         .join("models")
 }
 
+#[cfg(test)]
+pub fn default_runtime_state_dir(repo_root: &Path) -> PathBuf {
+    if let Some(path) = test_runtime_state_dir(repo_root) {
+        return path;
+    }
+    bitloops_state_dir()
+        .unwrap_or_else(|_| platform_path_fallback("state"))
+        .join("daemon")
+}
+
+#[cfg(not(test))]
 pub fn default_runtime_state_dir(_repo_root: &Path) -> PathBuf {
     bitloops_state_dir()
         .unwrap_or_else(|_| platform_path_fallback("state"))
@@ -131,6 +171,12 @@ pub fn default_repo_runtime_db_path(repo_root: &Path) -> PathBuf {
 }
 
 pub fn default_global_runtime_db_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        test_global_runtime_state_dir().join(RUNTIME_DB_FILE_NAME)
+    }
+
+    #[cfg(not(test))]
     default_runtime_state_dir(Path::new(".")).join(RUNTIME_DB_FILE_NAME)
 }
 

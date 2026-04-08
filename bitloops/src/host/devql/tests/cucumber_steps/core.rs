@@ -19,7 +19,7 @@ use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::host::devql::*;
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ProductionArtefact, ScopeKind,
-    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
 };
 use crate::telemetry::logging;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
@@ -32,8 +32,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use tempfile::TempDir;
 use tree_sitter::Parser;
@@ -151,6 +151,41 @@ impl semantic::SemanticSummaryProvider for FixtureSummaryMapProvider {
             .get(&input.symbol_fqn)
             .cloned()
     }
+}
+
+#[derive(Debug)]
+struct PreparedRealCloneFixtureDb {
+    _workspace: TempDir,
+    sqlite_path: PathBuf,
+}
+
+fn real_clone_fixture_db_cache() -> &'static Mutex<HashMap<String, Arc<PreparedRealCloneFixtureDb>>>
+{
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<PreparedRealCloneFixtureDb>>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn prepare_real_clone_fixture_db(
+    fixture_name: &str,
+) -> Result<Arc<PreparedRealCloneFixtureDb>> {
+    if let Some(cached) = real_clone_fixture_db_cache()
+        .lock()
+        .expect("real clone fixture cache lock")
+        .get(fixture_name)
+        .cloned()
+    {
+        return Ok(cached);
+    }
+
+    let prepared = Arc::new(build_prepared_real_clone_fixture_db(fixture_name).await?);
+    let mut cache = real_clone_fixture_db_cache()
+        .lock()
+        .expect("real clone fixture cache lock");
+    Ok(cache
+        .entry(fixture_name.to_string())
+        .or_insert_with(|| Arc::clone(&prepared))
+        .clone())
 }
 
 #[derive(Debug, Clone)]
@@ -867,32 +902,42 @@ fn insert_pre_stage_artefact(
 
     conn.execute(
         "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-            end_byte, signature, modifiers, docstring, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             row.artefact_id.as_str(),
             row.symbol_id.as_deref(),
             row.repo_id.as_str(),
-            row.blob_sha.as_str(),
-            row.path.as_str(),
             row.language.as_str(),
             row.canonical_kind.as_str(),
             row.language_kind.as_str(),
             row.symbol_fqn.as_str(),
-            row.parent_artefact_id.as_deref(),
-            row.start_line.unwrap_or(1) as i64,
-            row.end_line.unwrap_or(1) as i64,
-            row.start_byte.unwrap_or(0) as i64,
-            row.end_byte.unwrap_or(0) as i64,
             row.signature.as_deref(),
             serde_json::to_string(&row.modifiers).context("serialize modifiers")?,
             row.docstring.as_deref(),
             row.content_hash.as_deref(),
         ],
     )
-    .context("insert historical pre-stage artefact")?;
+    .context("insert historical pre-stage artefact metadata")?;
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            row.repo_id.as_str(),
+            row.blob_sha.as_str(),
+            row.path.as_str(),
+            row.artefact_id.as_str(),
+            row.parent_artefact_id.as_deref(),
+            row.start_line.unwrap_or(1) as i64,
+            row.end_line.unwrap_or(1) as i64,
+            row.start_byte.unwrap_or(0) as i64,
+            row.end_byte.unwrap_or(0) as i64,
+        ],
+    )
+    .context("insert historical pre-stage artefact snapshot")?;
 
     Ok(())
 }
@@ -1033,29 +1078,35 @@ fn seed_real_clone_fixture(
                     format!("{}::history::{churn_index}", symbol.artefact_id);
                 conn.execute(
                     "INSERT INTO artefacts (
-                        artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                        language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                        start_byte, end_byte, signature, modifiers, docstring, content_hash
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12, ?13, ?14, '[]', NULL, ?15)",
+                        artefact_id, symbol_id, repo_id, language, canonical_kind,
+                        language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', NULL, ?9)",
                     rusqlite::params![
                         historical_artefact_id.as_str(),
                         symbol.symbol_id.as_str(),
                         repo_id,
-                        format!("history-blob-{}-{churn_index}", symbol.symbol_id),
-                        symbol.path.as_str(),
                         "typescript",
                         symbol.canonical_kind.as_str(),
                         clone_language_kind(&symbol.canonical_kind),
                         symbol.symbol_fqn.as_str(),
-                        1i64,
-                        1i64,
-                        0i64,
-                        1i64,
                         symbol.signature.as_deref(),
                         format!("history-hash-{}-{churn_index}", symbol.symbol_id),
                     ],
                 )
-                .context("insert churn artefact row")?;
+                .context("insert churn artefact metadata row")?;
+                conn.execute(
+                    "INSERT INTO artefact_snapshots (
+                        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                        start_line, end_line, start_byte, end_byte
+                    ) VALUES (?1, ?2, ?3, ?4, NULL, 1, 1, 0, 1)",
+                    rusqlite::params![
+                        repo_id,
+                        format!("history-blob-{}-{churn_index}", symbol.symbol_id),
+                        symbol.path.as_str(),
+                        historical_artefact_id.as_str(),
+                    ],
+                )
+                .context("insert churn artefact snapshot row")?;
             }
 
             insert_real_clone_edges(conn, repo_id, &blob_sha, symbol, &path)?;
@@ -1067,13 +1118,12 @@ fn seed_real_clone_fixture(
     Ok(files)
 }
 
-async fn execute_clone_query_for_real_fixture(
+async fn build_prepared_real_clone_fixture_db(
     fixture_name: &str,
-    query: &str,
-) -> Result<Vec<Value>> {
+) -> Result<PreparedRealCloneFixtureDb> {
     let fixture = build_real_clone_fixture(fixture_name)?;
-    let temp = TempDir::new().context("create semantic clone real-path temp dir")?;
-    let sqlite_path = temp.path().join("semantic-clones-real.sqlite");
+    let workspace = TempDir::new().context("create semantic clone real-path temp dir")?;
+    let sqlite_path = workspace.path().join("semantic-clones-real.sqlite");
     init_sqlite_schema(&sqlite_path)
         .await
         .context("initialise sqlite schema for real semantic clone fixture")?;
@@ -1100,6 +1150,11 @@ async fn execute_clone_query_for_real_fixture(
             rusqlite::Connection::open(&sqlite_path).context("open real semantic clone sqlite")?;
         seed_real_clone_fixture(&conn, &repo_id, &fixture)?
     };
+    let fixture_artefact_ids = fixture
+        .symbols
+        .iter()
+        .map(|symbol| symbol.artefact_id.as_str())
+        .collect::<HashSet<_>>();
 
     let mut all_semantic_inputs = Vec::new();
     for file in &materialized_files {
@@ -1111,11 +1166,6 @@ async fn execute_clone_query_for_real_fixture(
             load_pre_stage_dependencies_for_blob(&relational, &repo_id, &file.blob_sha, &file.path)
                 .await
                 .with_context(|| format!("load pre-stage dependencies for {}", file.path))?;
-        let fixture_artefact_ids = fixture
-            .symbols
-            .iter()
-            .map(|symbol| symbol.artefact_id.as_str())
-            .collect::<HashSet<_>>();
         let semantic_inputs =
             semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
                 &pre_stage_artefacts,
@@ -1163,6 +1213,34 @@ async fn execute_clone_query_for_real_fixture(
         .await
         .context("rebuild semantic clone edges for real-path fixture")?;
 
+    // Force WAL contents back into the main SQLite file so later copies are self-contained.
+    rusqlite::Connection::open(&sqlite_path)
+        .context("open real semantic clone sqlite for checkpoint")?
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .context("checkpoint real semantic clone sqlite")?;
+
+    Ok(PreparedRealCloneFixtureDb {
+        _workspace: workspace,
+        sqlite_path,
+    })
+}
+
+async fn execute_clone_query_for_real_fixture(
+    fixture_name: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
+    let prepared = prepare_real_clone_fixture_db(fixture_name).await?;
+    let temp = TempDir::new().context("create semantic clone query temp dir")?;
+    let sqlite_path = temp.path().join("semantic-clones-real.sqlite");
+    fs::copy(&prepared.sqlite_path, &sqlite_path).with_context(|| {
+        format!(
+            "copy prepared semantic clone fixture db from {} to {}",
+            prepared.sqlite_path.display(),
+            sqlite_path.display()
+        )
+    })?;
+    let relational = RelationalStorage::local_only(sqlite_path);
+    let cfg = DevqlBddWorld::test_cfg();
     let parsed = parse_devql_query(query).context("parse clone query")?;
     execute_devql_query(&cfg, &parsed, &empty_events_cfg(), Some(&relational))
         .await
@@ -1366,16 +1444,13 @@ fn replace_incremental_snapshot(
 
         conn.execute(
             "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-                end_byte, signature, modifiers, docstring, content_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, NULL, 1, 3, 0, 1, ?9, ?10, NULL, ?11)",
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
+            ) VALUES (?1, ?2, ?3, 'typescript', ?4, ?5, ?6, ?7, ?8, NULL, ?9)",
             rusqlite::params![
                 symbol.artefact_id.as_str(),
                 symbol.symbol_id.as_str(),
                 repo_id,
-                symbol.blob_sha.as_str(),
-                symbol.path.as_str(),
                 symbol.canonical_kind.as_str(),
                 language_kind,
                 symbol.symbol_fqn.as_str(),
@@ -1384,7 +1459,27 @@ fn replace_incremental_snapshot(
                 symbol.content_hash.as_str(),
             ],
         )
-        .context("insert incremental historical artefact")?;
+        .context("insert incremental historical artefact metadata")?;
+        conn.execute(
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte
+            ) VALUES (?1, ?2, ?3, ?4, NULL, 1, 3, 0, 1)
+            ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+              path = excluded.path,
+              parent_artefact_id = excluded.parent_artefact_id,
+              start_line = excluded.start_line,
+              end_line = excluded.end_line,
+              start_byte = excluded.start_byte,
+              end_byte = excluded.end_byte",
+            rusqlite::params![
+                repo_id,
+                symbol.blob_sha.as_str(),
+                symbol.path.as_str(),
+                symbol.artefact_id.as_str(),
+            ],
+        )
+        .context("insert incremental historical artefact snapshot")?;
 
         conn.execute(
             "INSERT INTO artefacts_current (
@@ -3378,21 +3473,6 @@ fn edge_targets_artefact(edge: &TestArtefactEdgeCurrentRecord, artefact_name: &s
             .is_some_and(|symbol_id| symbol_id.contains(artefact_name))
 }
 
-fn discovery_run_record(repo_id: &str, commit_sha: &str) -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: format!("discovery:{commit_sha}:bdd"),
-        repo_id: repo_id.to_string(),
-        sync_mode: "full".to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-24T00:00:00Z".to_string(),
-        finished_at: Some("2026-03-24T00:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("hybrid_full".to_string()),
-        notes_json: None,
-        stats_json: None,
-    }
-}
-
 fn coverage_capture_record(
     repo_id: &str,
     commit_sha: &str,
@@ -3509,29 +3589,36 @@ fn seed_target_production_artefact(
 
             conn.execute(
                 "INSERT INTO artefacts (
-                    artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                    language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte,
-                    modifiers, content_hash
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    artefact_id, symbol_id, repo_id, language, canonical_kind,
+                    language_kind, symbol_fqn, signature, modifiers, content_hash
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     historical_artefact_id.as_str(),
                     symbol_id.as_str(),
                     repo_id,
-                    blob_sha.as_str(),
-                    path,
                     "rust",
                     "function",
                     "function_item",
                     symbol_fqn.as_str(),
-                    1i64,
-                    3i64,
-                    0i64,
-                    64i64,
+                    "fn create_user()",
                     "[]",
                     "hash-historical",
                 ],
             )
-            .context("insert historical artefact row")?;
+            .context("insert historical artefact metadata row")?;
+            conn.execute(
+                "INSERT INTO artefact_snapshots (
+                    repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                    start_line, end_line, start_byte, end_byte
+                ) VALUES (?1, ?2, ?3, ?4, NULL, 1, 3, 0, 64)",
+                rusqlite::params![
+                    repo_id,
+                    blob_sha.as_str(),
+                    path,
+                    historical_artefact_id.as_str()
+                ],
+            )
+            .context("insert historical artefact snapshot row")?;
 
             return Ok(SeededArtefact {
                 path: path.clone(),
@@ -3653,13 +3740,7 @@ async fn execute_registered_stage_query(
     let mut test_artefacts = rewritten_suites;
     test_artefacts.extend(rewritten_scenarios.clone());
     repository
-        .replace_test_discovery(
-            commit_sha.trim(),
-            &test_artefacts,
-            &rewritten_edges,
-            &discovery_run_record(&cfg.repo.repo_id, commit_sha.trim()),
-            &[],
-        )
+        .replace_test_discovery(commit_sha.trim(), &test_artefacts, &rewritten_edges)
         .context("seed test discovery rows")?;
 
     if stage_name == "coverage"

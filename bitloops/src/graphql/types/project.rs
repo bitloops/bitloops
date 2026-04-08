@@ -9,10 +9,11 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
-    CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput, ConnectionPagination,
-    DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput,
-    FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
-    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
+    ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
+    DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
+    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -265,12 +266,48 @@ impl Project {
                     self.path
                 ))
             })?;
+        let summary = CloneSummary::from_clones(&clones);
         let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
+            summary,
         ))
+    }
+
+    #[graphql(name = "cloneSummary")]
+    async fn clone_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(name = "cloneFilter")] clone_filter: Option<ClonesFilterInput>,
+    ) -> Result<CloneSummary> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        if let Some(clone_filter) = clone_filter.as_ref() {
+            clone_filter.validate()?;
+        }
+        if self
+            .scope
+            .temporal_scope()
+            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
+        {
+            return Err(bad_user_input_error(
+                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+            ));
+        }
+
+        super::clone::resolve_clone_summary(
+            ctx.data_unchecked::<DevqlGraphqlContext>(),
+            None,
+            filter.as_ref(),
+            clone_filter.as_ref(),
+            &self.scope,
+        )
+        .await
+        .map_err(|err| backend_error(format!("failed to query project clone summary: {err:#}")))
     }
 
     async fn tests(

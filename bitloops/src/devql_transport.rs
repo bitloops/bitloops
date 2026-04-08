@@ -33,6 +33,29 @@ pub(crate) struct SlimCliRepoScope {
     pub(crate) config_fingerprint: String,
 }
 
+#[derive(Debug)]
+enum DevqlScopeDiscoveryError {
+    RepoRootUnavailable { stderr: Option<String> },
+}
+
+impl std::fmt::Display for DevqlScopeDiscoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RepoRootUnavailable {
+                stderr: Some(stderr),
+            } => write!(
+                f,
+                "failed to resolve git repository root for DevQL scope: {stderr}"
+            ),
+            Self::RepoRootUnavailable { stderr: None } => {
+                write!(f, "failed to resolve git repository root for DevQL scope")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DevqlScopeDiscoveryError {}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RepoPathRegistry {
     pub(crate) version: u8,
@@ -75,6 +98,13 @@ pub(crate) fn discover_slim_cli_repo_scope(cwd: Option<&Path>) -> Result<SlimCli
         git_dir_relative_path,
         config_fingerprint,
     })
+}
+
+pub(crate) fn is_repo_root_discovery_error(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<DevqlScopeDiscoveryError>(),
+        Some(DevqlScopeDiscoveryError::RepoRootUnavailable { .. })
+    )
 }
 
 pub(crate) fn attach_slim_cli_scope_headers(
@@ -235,10 +265,10 @@ fn resolve_repo_root_from_cwd(cwd: &Path) -> Result<PathBuf> {
         .context("resolving git repository root for DevQL scope")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            bail!("failed to resolve git repository root for DevQL scope");
+        return Err(DevqlScopeDiscoveryError::RepoRootUnavailable {
+            stderr: (!stderr.is_empty()).then_some(stderr),
         }
-        bail!("failed to resolve git repository root for DevQL scope: {stderr}");
+        .into());
     }
     let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if root.is_empty() {

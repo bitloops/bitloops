@@ -3,8 +3,8 @@ use async_graphql::{Result, SimpleObject};
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
 use super::{
-    Artefact, ChatEntry, Checkpoint, Commit, DependencyEdge, KnowledgeItem, KnowledgeRelation,
-    KnowledgeVersion, SemanticClone, TelemetryEvent,
+    Artefact, ChatEntry, Checkpoint, CloneSummary, Commit, DependencyEdge, KnowledgeItem,
+    KnowledgeRelation, KnowledgeVersion, SemanticClone, TelemetryEvent,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -129,14 +129,21 @@ pub struct CloneConnection {
     pub edges: Vec<CloneEdge>,
     pub page_info: PageInfo,
     pub total_count: i32,
+    pub summary: CloneSummary,
 }
 
 impl CloneConnection {
-    pub fn new(edges: Vec<CloneEdge>, page_info: PageInfo, total_count: usize) -> Self {
+    pub fn new(
+        edges: Vec<CloneEdge>,
+        page_info: PageInfo,
+        total_count: usize,
+        summary: CloneSummary,
+    ) -> Self {
         Self {
             edges,
             page_info,
             total_count: total_count.try_into().unwrap_or(i32::MAX),
+            summary,
         }
     }
 }

@@ -804,27 +804,29 @@ fn cursor_after_shell_execution_triggers_stop_for_shell_fallback() {
     let backend = LocalFileBackend::new(dir.path());
     let strat = RecordingStrategy::default();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::BeforeShellExecution,
-        r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
-        &backend,
-        &strat,
-        dir.path(),
-        "before-shell-execution",
-    )
-    .unwrap();
+    with_process_state(Some(dir.path()), &[], || {
+        dispatch_cursor_hook(
+            &CursorHookVerb::BeforeShellExecution,
+            r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "before-shell-execution",
+        )
+        .unwrap();
 
-    fs::write(dir.path().join("tracked.txt"), "cursor-shell-change\n").unwrap();
+        fs::write(dir.path().join("tracked.txt"), "cursor-shell-change\n").unwrap();
 
-    dispatch_cursor_hook(
-        &CursorHookVerb::AfterShellExecution,
-        r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
-        &backend,
-        &strat,
-        dir.path(),
-        "after-shell-execution",
-    )
-    .unwrap();
+        dispatch_cursor_hook(
+            &CursorHookVerb::AfterShellExecution,
+            r#"{"conversation_id":"cursor-shell-stop","transcript_path":"","command":"npm test"}"#,
+            &backend,
+            &strat,
+            dir.path(),
+            "after-shell-execution",
+        )
+        .unwrap();
+    });
 
     let calls = strat
         .step_calls
@@ -1499,50 +1501,52 @@ fn stop_with_empty_session_id_falls_back_to_unknown_session() {
 fn stop_with_empty_session_id_does_not_conflate_existing_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
-    let strat = RecordingStrategy::default();
+    with_process_state(Some(dir.path()), &[], || {
+        let backend = LocalFileBackend::new(dir.path());
+        let strat = RecordingStrategy::default();
 
-    backend
-        .save_session(&SessionState {
-            session_id: "real-session".to_string(),
-            phase: SessionPhase::Active,
-            ..Default::default()
-        })
+        backend
+            .save_session(&SessionState {
+                session_id: "real-session".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .save_pre_prompt(&PrePromptState {
+                session_id: "real-session".to_string(),
+                prompt: "real prompt".to_string(),
+                transcript_path: String::new(),
+                ..Default::default()
+            })
+            .unwrap();
+        fs::write(dir.path().join("tracked.txt"), "unknown-fallback\n").unwrap();
+
+        handle_stop(
+            SessionInfoInput {
+                session_id: String::new(),
+                transcript_path: String::new(),
+            },
+            &backend,
+            &strat,
+            Some(dir.path()),
+        )
         .unwrap();
-    backend
-        .save_pre_prompt(&PrePromptState {
-            session_id: "real-session".to_string(),
-            prompt: "real prompt".to_string(),
-            transcript_path: String::new(),
-            ..Default::default()
-        })
-        .unwrap();
-    fs::write(dir.path().join("tracked.txt"), "unknown-fallback\n").unwrap();
 
-    handle_stop(
-        SessionInfoInput {
-            session_id: String::new(),
-            transcript_path: String::new(),
-        },
-        &backend,
-        &strat,
-        Some(dir.path()),
-    )
-    .unwrap();
+        let calls = strat
+            .step_calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(calls.len(), 1, "expected one save_step call");
+        assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
 
-    let calls = strat
-        .step_calls
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert_eq!(calls.len(), 1, "expected one save_step call");
-    assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
-
-    let real_state = backend.load_session("real-session").unwrap().unwrap();
-    assert_eq!(real_state.phase, SessionPhase::Active);
-    assert!(
-        backend.load_pre_prompt("real-session").unwrap().is_some(),
-        "fallback stop should not consume another session's pre-prompt state"
-    );
+        let real_state = backend.load_session("real-session").unwrap().unwrap();
+        assert_eq!(real_state.phase, SessionPhase::Active);
+        assert!(
+            backend.load_pre_prompt("real-session").unwrap().is_some(),
+            "fallback stop should not consume another session's pre-prompt state"
+        );
+    });
 }
 
 #[test]
@@ -1775,21 +1779,23 @@ fn post_task_saves_task_step_when_changes_exist() {
         .unwrap();
     fs::write(dir.path().join("tracked.txt"), "three\n").unwrap();
 
-    handle_post_task(
-        PostTaskInput {
-            session_id: "post-task".to_string(),
-            transcript_path: "/tmp/transcript.jsonl".to_string(),
-            tool_use_id: "tool-post".to_string(),
-            tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
-            tool_response: TaskToolResponse {
-                agent_id: "agent-1".to_string(),
+    with_process_state(Some(dir.path()), &[], || {
+        handle_post_task(
+            PostTaskInput {
+                session_id: "post-task".to_string(),
+                transcript_path: "/tmp/transcript.jsonl".to_string(),
+                tool_use_id: "tool-post".to_string(),
+                tool_input: Some(json!({"subagent_type":"research","description":"inspect"})),
+                tool_response: TaskToolResponse {
+                    agent_id: "agent-1".to_string(),
+                },
             },
-        },
-        &backend,
-        &strat,
-        Some(dir.path()),
-    )
-    .unwrap();
+            &backend,
+            &strat,
+            Some(dir.path()),
+        )
+        .unwrap();
+    });
 
     assert!(backend.load_pre_task_marker("tool-post").unwrap().is_none());
     let calls = strat

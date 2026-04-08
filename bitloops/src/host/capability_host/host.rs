@@ -555,6 +555,13 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
 
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
     static TEST_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
         id: "knowledge",
         display_name: "Knowledge",
@@ -797,8 +804,7 @@ mod tests {
         assert_eq!(host.schema_modules().len(), 1);
         assert_eq!(host.query_examples().len(), 1);
 
-        let stage = tokio::runtime::Runtime::new()
-            .expect("runtime")
+        let stage = test_runtime()
             .block_on(async {
                 host.invoke_stage("knowledge", "knowledge.stage", json!({ "limit": 4 }))
                     .await
@@ -808,8 +814,7 @@ mod tests {
         assert!(stage.payload["repo_root"].is_string());
         assert!(stage.render_human().contains("\"limit\": 4"));
 
-        let ingest = tokio::runtime::Runtime::new()
-            .expect("runtime")
+        let ingest = test_runtime()
             .block_on(async {
                 host.invoke_ingester(
                     "knowledge",
