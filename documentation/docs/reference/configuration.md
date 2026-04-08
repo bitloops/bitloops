@@ -24,9 +24,11 @@ Bitloops stores daemon configuration at:
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+- `bitloops init --install-default-daemon` also auto-applies the default local embeddings setup when embeddings are not configured yet.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
 - `bitloops start --config /path/to/config.toml --bootstrap-local-stores` keeps that explicit config path and creates the matching local SQLite, DuckDB, and blob-store artefacts before startup.
 - `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
+- `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile.
 
 The daemon config owns:
 
@@ -75,16 +77,15 @@ base_url = "https://api.openai.com/v1"
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local-code"
+embedding_profile = "local"
 
 [embeddings.runtime]
 command = "bitloops-embeddings"
 startup_timeout_secs = 10
 request_timeout_secs = 60
 
-[embeddings.profiles.local-code]
+[embeddings.profiles.local]
 kind = "local_fastembed"
-model = "jinaai/jina-embeddings-v2-base-code"
 
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
@@ -134,6 +135,41 @@ Bitloops also keeps repo-scoped workflow runtime state in a dedicated local runt
 
 If you want to remove these platform directories again, use `bitloops uninstall` with explicit targets or `bitloops uninstall --full`.
 
+### Effective Daemon Config For Repo Commands
+
+Repo-scoped commands that need daemon settings resolve the effective daemon config in this order:
+
+1. `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`
+2. The nearest `config.toml` found by walking upwards from the current repo
+3. The default global daemon config
+
+`bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` all use that same precedence when deciding which daemon config to read, mutate, and bootstrap against.
+
+That means:
+
+- a repo-local `config.toml` is updated when it is the effective config
+- the default global config is only updated when no nearer config applies
+- the override environment variable is honoured consistently by both config mutation and runtime bootstrap
+
+### Default Embeddings Enablement
+
+When Bitloops auto-enables embeddings through `bitloops enable --install-embeddings`, interactive `bitloops enable`, or `bitloops init --install-default-daemon`, it creates the minimum daemon config needed for the default local profile only when no active profile is already configured:
+
+```toml
+[semantic_clones]
+embedding_profile = "local"
+
+[embeddings.profiles.local]
+kind = "local_fastembed"
+```
+
+Notes:
+
+- `local` is the default auto-created profile name.
+- `local_fastembed` is the default auto-created profile kind.
+- Existing active embedding profiles are preserved. Bitloops does not overwrite an already configured non-local active profile.
+- The same runtime warm/bootstrap path used by `bitloops embeddings pull` is reused for local-profile setup.
+
 ## RuntimeStore And RelationalStore
 
 Bitloops now uses two internal storage boundaries:
@@ -159,6 +195,8 @@ Configured relational, events, and blob stores still come from the daemon config
 `bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.
 
 Interactive `bitloops init` can also ask whether you want to queue an initial DevQL current-state sync after hook setup. Use `--sync=true` or `--sync=false` when you want to make that choice explicit; non-interactive runs require one of those flags.
+
+When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup before any init-triggered sync if embeddings are not already configured.
 
 Use DevQL commands separately for ingestion and for any later explicit sync or validation runs. `bitloops init` does not perform DevQL ingest.
 

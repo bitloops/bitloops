@@ -31,18 +31,23 @@ bitloops init
 bitloops init --sync=true
 bitloops init --sync=false
 bitloops init --install-default-daemon
+bitloops init --install-default-daemon --sync=true
 ```
 
 Notes:
 
 - Run `bitloops start` first when the daemon is already configured.
 - Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
+- When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup before any init-triggered sync runs.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
 - `init` installs git hooks plus the selected agent hooks.
 - `init` replaces `[agents].supported` with the current selection on rerun.
+- Plain `init` does not change embeddings config.
+- If embeddings are already configured, `init --install-default-daemon` leaves the active profile in place. Active local profiles may still be warmed; hosted or other non-local profiles are treated as already enabled.
 - `init` can queue an initial DevQL current-state sync after hook setup.
+- With `--install-default-daemon`, embeddings setup runs before any init-triggered sync so that sync can include embeddings immediately.
 - `--sync=true` queues that sync and follows it to completion.
 - `--sync=false` skips the initial sync explicitly.
 - If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
@@ -53,6 +58,7 @@ Notes:
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
 - `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
 - In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag.
+- If `init` newly adds embeddings config and the runtime bootstrap fails, Bitloops reverts only those embeddings-related daemon-config changes, keeps the rest of init intact, and exits non-zero.
 
 ### `bitloops enable`
 
@@ -60,6 +66,9 @@ Enables capture in the nearest discovered project policy.
 
 ```bash
 bitloops enable
+bitloops enable --install-embeddings
+bitloops daemon enable
+bitloops daemon enable --install-embeddings
 ```
 
 Notes:
@@ -67,10 +76,16 @@ Notes:
 - `enable` edits the nearest discovered `.bitloops.local.toml` or `.bitloops.toml` in place.
 - `enable` only toggles `[capture].enabled = true`.
 - Installed hooks stay in place and resume capturing without reinstallation.
+- `bitloops daemon enable` is an alias to the same implementation and keeps the same telemetry and repo-policy behaviour.
+- `--install-embeddings` is an explicit non-interactive opt-in to configure embeddings in the effective daemon config and then run the existing runtime warm/bootstrap path.
+- In an interactive terminal, when `--install-embeddings` is absent and embeddings are not already configured, `enable` asks whether to install embeddings and includes them in sync. The prompt defaults to `Yes` with `[Y/n]`; blank input, `y`, and `yes` all opt in.
+- If an active embedding profile already exists, `enable` skips daemon-config mutation. Active `local_fastembed` profiles still use the existing warm/bootstrap path; hosted or other non-local profiles are treated as already enabled and do not trigger local runtime bootstrap.
+- Embeddings setup targets the effective daemon config in this order: `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, the nearest repo `config.toml`, then the default global config.
 - If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
 - `enable` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - `enable` only prompts for telemetry when the daemon config already existed and consent is unresolved.
 - In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag and Bitloops fails before editing project policy.
+- If `enable` newly adds embeddings config and the runtime bootstrap fails, Bitloops reverts only those embeddings-related daemon-config changes, leaves capture enabled, and exits non-zero.
 
 ### `bitloops disable`
 

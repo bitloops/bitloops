@@ -90,18 +90,19 @@ base_url = "https://api.openai.com/v1"
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local-code"
+embedding_profile = "local"
 
 [embeddings.runtime]
 command = "bitloops-embeddings"
 startup_timeout_secs = 10
 request_timeout_secs = 60
 
-[embeddings.profiles.local-code]
+[embeddings.profiles.local]
 kind = "local_fastembed"
-model = "jinaai/jina-embeddings-v2-base-code"
 cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
 ```
+
+`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create that default local profile for you. Edit the daemon config manually only when you need a different profile name, model, or hosted provider.
 
 Embedding model downloads are cache, not durable relational or event store data.
 
