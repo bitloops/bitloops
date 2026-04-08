@@ -228,6 +228,20 @@ pub(super) fn given_first_claude_change(
     })
 }
 
+pub(super) fn given_first_agent_change(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I make a first change using an agent",
+            helpers::run_first_change_using_agent_for_repo(world, &repo_name, &agent_name),
+        );
+    })
+}
+
 pub(super) fn given_claude_code_prompt(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -251,6 +265,20 @@ pub(super) fn given_second_claude_change(
         run_step(
             "I make a second change using Claude Code",
             helpers::run_second_change_using_claude_code_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_second_agent_change(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I make a second change using an agent",
+            helpers::run_second_change_using_agent_for_repo(world, &repo_name, &agent_name),
         );
     })
 }
