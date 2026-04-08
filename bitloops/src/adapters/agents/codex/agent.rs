@@ -15,6 +15,12 @@ use super::lifecycle;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CodexAgent;
 
+impl CodexAgent {
+    pub(crate) fn detect_presence_at(&self, repo_root: &Path) -> bool {
+        repo_root.join(".codex").is_dir() || repo_root.join(".codex/hooks.json").exists()
+    }
+}
+
 impl Agent for CodexAgent {
     fn name(&self) -> String {
         AGENT_NAME_CODEX.to_string()
@@ -34,7 +40,7 @@ impl Agent for CodexAgent {
 
     fn detect_presence(&self) -> Result<bool> {
         let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        Ok(repo_root.join(".codex").is_dir() || repo_root.join(".codex/hooks.json").exists())
+        Ok(self.detect_presence_at(&repo_root))
     }
 
     fn get_session_id(&self, input: &HookInput) -> String {
