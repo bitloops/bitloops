@@ -958,7 +958,11 @@ pub(super) fn then_ingest_summary_field_exact(
             &format!("DevQL ingest summary `{field}` == {expected}"),
             (|| -> anyhow::Result<()> {
                 let stdout = world.last_command_stdout.as_deref().unwrap_or("");
-                let value = helpers::parse_ingest_summary_field(stdout, &field).unwrap_or(0);
+                let value = helpers::parse_ingest_summary_field(stdout, &field).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing ingest summary field `{field}` while expecting value {expected}\nstdout: {stdout}"
+                    )
+                })?;
                 anyhow::ensure!(
                     value == expected,
                     "expected ingest summary `{field}` == {expected}, got {value}\nstdout: {stdout}"
