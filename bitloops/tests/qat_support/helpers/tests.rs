@@ -164,6 +164,41 @@ fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
 }
 
 #[test]
+fn build_init_bitloops_args_with_backfill_enables_ingest_and_sets_window() {
+    let args = build_init_bitloops_args_with_options(
+        "claude-code",
+        false,
+        Some(false),
+        Some(false),
+        Some(2),
+    );
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=false",
+            "--ingest=true",
+            "--backfill=2",
+        ]
+    );
+}
+
+#[test]
+fn parse_ingest_summary_field_reads_key_value_pairs() {
+    let stdout = "DevQL ingest complete: commits_processed=0, checkpoint_companions_processed=0, events_inserted=0, artefacts_upserted=0";
+    assert_eq!(
+        parse_ingest_summary_field(stdout, "commits_processed"),
+        Some(0)
+    );
+    assert_eq!(
+        parse_ingest_summary_field(stdout, "artefacts_upserted"),
+        Some(0)
+    );
+}
+
+#[test]
 fn build_git_command_prepends_qat_binary_dir_to_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");

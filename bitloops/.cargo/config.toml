@@ -43,5 +43,6 @@ test-coverage-lcov = "llvm-cov --workspace --all-targets --features slow-tests -
 # QAT aliases
 qat = "test --test qat_acceptance -- --exact qat --ignored"
 qat-smoke = "test --test qat_acceptance qat_smoke -- --ignored"
+qat-devql-ingest = "test --test qat_acceptance qat_devql_ingest -- --ignored"
 qat-devql-sync = "test --test qat_acceptance qat_devql_sync -- --ignored"
 qat-onboarding = "test --test qat_acceptance qat_onboarding -- --ignored"
