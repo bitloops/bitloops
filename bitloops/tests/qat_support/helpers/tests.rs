@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
@@ -386,6 +387,18 @@ fn semantic_clone_store_evidence_accepts_persisted_edges_when_cli_metric_is_zero
 }
 
 #[test]
+fn semantic_clone_store_evidence_requires_persisted_rows_even_when_cli_metric_is_positive() {
+    assert!(!semantic_clone_store_evidence_proves_rebuild(
+        Some(3),
+        SemanticCloneStoreEvidence {
+            current_artefacts: 0,
+            embeddings: 0,
+            clone_edges: 0,
+        }
+    ));
+}
+
+#[test]
 fn semantic_clone_store_evidence_rejects_missing_embeddings_or_edges() {
     assert!(!semantic_clone_store_evidence_proves_rebuild(
         Some(0),
@@ -417,6 +430,58 @@ fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
     ]);
 
     assert_eq!(extract_clone_nodes(&rows), rows.as_array().cloned().unwrap_or_default());
+}
+
+#[test]
+fn wait_for_semantic_clone_condition_retries_until_ready() {
+    let mut attempts = 0_usize;
+
+    let value = wait_for_semantic_clone_condition(
+        StdDuration::from_millis(25),
+        StdDuration::from_millis(1),
+        "clone rows to become visible",
+        || {
+            attempts += 1;
+            Ok(attempts)
+        },
+        |attempt| *attempt >= 3,
+        |attempt| format!("attempt={attempt}"),
+    )
+    .expect("eventual wait should succeed");
+
+    assert_eq!(value, 3);
+    assert_eq!(attempts, 3);
+}
+
+#[test]
+fn wait_for_semantic_clone_condition_times_out_with_last_observation() {
+    let err = wait_for_semantic_clone_condition(
+        StdDuration::from_millis(5),
+        StdDuration::from_millis(1),
+        "clone rows to become visible",
+        || Ok(0_usize),
+        |count| *count > 0,
+        |count| format!("rows={count}"),
+    )
+    .expect_err("eventual wait should time out");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("clone rows to become visible"));
+    assert!(message.contains("last observation=value: rows=0"));
+}
+
+#[test]
+fn clone_query_wait_condition_any_response_accepts_empty_rows() {
+    let rows: Vec<serde_json::Value> = Vec::new();
+
+    assert!(clone_query_meets_wait_condition(
+        rows.as_slice(),
+        &CloneQueryWaitCondition::AnyResponse
+    ));
+    assert!(!clone_query_meets_wait_condition(
+        rows.as_slice(),
+        &CloneQueryWaitCondition::NonEmptyResults
+    ));
 }
 
 #[test]

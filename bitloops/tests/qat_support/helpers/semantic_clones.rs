@@ -12,11 +12,10 @@ struct SemanticCloneStoreSnapshot {
 }
 
 fn semantic_clone_store_evidence_proves_rebuild(
-    clone_edges_metric: Option<u64>,
+    _clone_edges_metric: Option<u64>,
     evidence: SemanticCloneStoreEvidence,
 ) -> bool {
-    clone_edges_metric.is_some_and(|count| count > 0)
-        || (evidence.current_artefacts > 0 && evidence.embeddings > 0 && evidence.clone_edges > 0)
+    evidence.current_artefacts > 0 && evidence.embeddings > 0 && evidence.clone_edges > 0
 }
 
 fn load_semantic_clone_store_snapshot(
@@ -130,6 +129,100 @@ fn load_semantic_clone_store_evidence_from_path(
     }))
 }
 
+fn describe_semantic_clone_store_snapshot(snapshot: &SemanticCloneStoreSnapshot) -> String {
+    format!(
+        "db={}, current_artefacts={}, embeddings={}, clone_edges={}",
+        snapshot.path.display(),
+        snapshot.evidence.current_artefacts,
+        snapshot.evidence.embeddings,
+        snapshot.evidence.clone_edges
+    )
+}
+
+fn semantic_clone_eventual_timeout() -> StdDuration {
+    parse_timeout_seconds(
+        std::env::var(SEMANTIC_CLONES_EVENTUAL_TIMEOUT_ENV)
+            .ok()
+            .as_deref(),
+        DEFAULT_SEMANTIC_CLONES_EVENTUAL_TIMEOUT_SECS,
+    )
+}
+
+fn semantic_clone_eventual_poll_interval() -> StdDuration {
+    StdDuration::from_millis(SEMANTIC_CLONES_EVENTUAL_POLL_INTERVAL_MILLIS)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloneQueryWaitCondition {
+    AnyResponse,
+    NonEmptyResults,
+}
+
+fn clone_query_meets_wait_condition(
+    rows: &[serde_json::Value],
+    condition: &CloneQueryWaitCondition,
+) -> bool {
+    match condition {
+        CloneQueryWaitCondition::AnyResponse => true,
+        CloneQueryWaitCondition::NonEmptyResults => !rows.is_empty(),
+    }
+}
+
+fn wait_for_semantic_clone_condition<T, Observe, Ready, Describe>(
+    timeout: StdDuration,
+    poll_interval: StdDuration,
+    expected: &str,
+    mut observe: Observe,
+    is_ready: Ready,
+    describe: Describe,
+) -> Result<T>
+where
+    Observe: FnMut() -> Result<T>,
+    Ready: Fn(&T) -> bool,
+    Describe: Fn(&T) -> String,
+{
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+    let mut last_observation: String;
+
+    loop {
+        attempts += 1;
+        match observe() {
+            Ok(value) => {
+                let summary = describe(&value);
+                if is_ready(&value) {
+                    return Ok(value);
+                }
+                last_observation = format!("value: {summary}");
+            }
+            Err(err) => {
+                last_observation = format!("error: {err:#}");
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out after {}s waiting for semantic clone {expected}; attempts={attempts}; last observation={}",
+                timeout.as_secs(),
+                last_observation
+            );
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
+fn wait_for_semantic_clone_store_snapshot(world: &QatWorld) -> Result<SemanticCloneStoreSnapshot> {
+    wait_for_semantic_clone_condition(
+        semantic_clone_eventual_timeout(),
+        semantic_clone_eventual_poll_interval(),
+        "persisted semantic clone evidence",
+        || load_semantic_clone_store_snapshot(world),
+        |snapshot| semantic_clone_store_evidence_proves_rebuild(None, snapshot.evidence),
+        describe_semantic_clone_store_snapshot,
+    )
+}
+
 fn write_semantic_clone_fixture_files(repo_dir: &Path, write_project_files: bool) -> Result<()> {
     let src = repo_dir.join("src");
     fs::create_dir_all(&src).with_context(|| format!("creating {}", src.display()))?;
@@ -191,13 +284,17 @@ pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) 
             )
         })?;
     let clone_edges = extract_ingest_metric(&stdout, "symbol_clone_edges_upserted=");
-    let store_snapshot = load_semantic_clone_store_snapshot(world)?;
+    let store_snapshot = wait_for_semantic_clone_store_snapshot(world).with_context(|| {
+        format!(
+            "bitloops devql ingest reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
+        )
+    })?;
     let store_evidence = store_snapshot.evidence;
     if clone_edges.is_none() {
         append_world_log(
             world,
             &format!(
-                "Semantic clone ingest stdout omitted symbol_clone_edges_upserted; using store evidence from {} with current_artefacts={}, embeddings={}, clone_edges={}.\n",
+                "Semantic clone ingest stdout omitted symbol_clone_edges_upserted; waited for persisted evidence in {} with current_artefacts={}, embeddings={}, clone_edges={}.\n",
                 store_snapshot.path.display(),
                 store_evidence.current_artefacts,
                 store_evidence.embeddings,
@@ -210,7 +307,7 @@ pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) 
         append_world_log(
             world,
             &format!(
-                "Semantic clone ingest reported zero clone edges, but store evidence from {} shows current_artefacts={}, embeddings={}, clone_edges={}; treating persisted evidence as authoritative.\n",
+                "Semantic clone ingest reported zero clone edges; waited for persisted evidence in {} with current_artefacts={}, embeddings={}, clone_edges={}.\n",
                 store_snapshot.path.display(),
                 store_evidence.current_artefacts,
                 store_evidence.embeddings,
@@ -289,13 +386,89 @@ fn run_devql_clones_query(
     Ok(clone_rows)
 }
 
+fn describe_clone_rows(rows: &[serde_json::Value]) -> String {
+    serde_json::to_string(rows).unwrap_or_else(|_| "<failed to serialize clone rows>".to_string())
+}
+
+fn max_clone_score(rows: &[serde_json::Value]) -> f64 {
+    rows.iter()
+        .filter_map(|row| row.get("score").and_then(serde_json::Value::as_f64))
+        .fold(0.0_f64, f64::max)
+}
+
+fn clone_rows_have_explanation(rows: &[serde_json::Value]) -> bool {
+    rows.iter().any(|row| {
+        row.get("explanation_json")
+            .or_else(|| row.get("metadata"))
+            .and_then(|metadata| metadata.get("explanation").or(Some(metadata)))
+            .is_some_and(|metadata| match metadata {
+                serde_json::Value::Null => false,
+                serde_json::Value::Object(map) => !map.is_empty(),
+                serde_json::Value::Array(items) => !items.is_empty(),
+                serde_json::Value::String(text) => !text.trim().is_empty(),
+                _ => true,
+            })
+    })
+}
+
+fn run_devql_clones_query_eventually<Condition>(
+    world: &mut QatWorld,
+    repo_name: &str,
+    symbol_alias: &str,
+    min_score: Option<f64>,
+    raw: bool,
+    expected: &str,
+    condition: Condition,
+) -> Result<Vec<serde_json::Value>>
+where
+    Condition: Fn(&[serde_json::Value]) -> bool,
+{
+    wait_for_semantic_clone_condition(
+        semantic_clone_eventual_timeout(),
+        semantic_clone_eventual_poll_interval(),
+        expected,
+        || run_devql_clones_query(world, repo_name, symbol_alias, min_score, raw),
+        |rows| condition(rows.as_slice()),
+        |rows| describe_clone_rows(rows.as_slice()),
+    )
+}
+
+fn run_devql_clones_query_eventually_with_wait_condition(
+    world: &mut QatWorld,
+    repo_name: &str,
+    symbol_alias: &str,
+    min_score: Option<f64>,
+    raw: bool,
+    expected: &str,
+    wait_condition: CloneQueryWaitCondition,
+) -> Result<Vec<serde_json::Value>> {
+    run_devql_clones_query_eventually(
+        world,
+        repo_name,
+        symbol_alias,
+        min_score,
+        raw,
+        expected,
+        |rows| clone_query_meets_wait_condition(rows, &wait_condition),
+    )
+}
+
 pub fn assert_devql_clones_query(
     world: &mut QatWorld,
     repo_name: &str,
     symbol_alias: &str,
     min_count: usize,
 ) -> Result<()> {
-    let count = run_devql_clones_query(world, repo_name, symbol_alias, None, false)?.len();
+    let rows = run_devql_clones_query_eventually(
+        world,
+        repo_name,
+        symbol_alias,
+        None,
+        false,
+        &format!("at least {min_count} clone rows for `{symbol_alias}`"),
+        |rows| rows.len() >= min_count,
+    )?;
+    let count = rows.len();
     ensure!(
         count >= min_count,
         "expected at least {min_count} clones for `{symbol_alias}`, got {count}"
@@ -309,8 +482,16 @@ pub fn assert_devql_clones_with_min_score(
     symbol_alias: &str,
     min_score: f64,
 ) -> Result<()> {
-    let count = run_devql_clones_query(world, repo_name, symbol_alias, Some(min_score), false)?
-        .len();
+    let rows = run_devql_clones_query_eventually_with_wait_condition(
+        world,
+        repo_name,
+        symbol_alias,
+        Some(min_score),
+        false,
+        &format!("clone rows with min_score={min_score} for `{symbol_alias}`"),
+        CloneQueryWaitCondition::NonEmptyResults,
+    )?;
+    let count = rows.len();
     ensure!(
         count >= 1,
         "expected at least one clone result with min_score={min_score}, got {count}"
@@ -324,7 +505,15 @@ pub fn record_devql_clones_with_min_score(
     symbol_alias: &str,
     min_score: f64,
 ) -> Result<()> {
-    let _ = run_devql_clones_query(world, repo_name, symbol_alias, Some(min_score), false)?;
+    let _ = run_devql_clones_query_eventually_with_wait_condition(
+        world,
+        repo_name,
+        symbol_alias,
+        Some(min_score),
+        false,
+        &format!("clone rows with min_score={min_score} for `{symbol_alias}`"),
+        CloneQueryWaitCondition::AnyResponse,
+    )?;
     Ok(())
 }
 
@@ -367,15 +556,16 @@ pub fn assert_devql_clones_top_score_above(
     symbol_alias: &str,
     threshold: f64,
 ) -> Result<()> {
-    assert_devql_clones_query(world, repo_name, symbol_alias, 1)?;
-    let value = parse_last_command_stdout_json(world)?;
-    let rows = value
-        .as_array()
-        .ok_or_else(|| anyhow!("expected clones query to return JSON array"))?;
-    let max_score = rows
-        .iter()
-        .filter_map(|row| row.get("score").and_then(serde_json::Value::as_f64))
-        .fold(0.0_f64, f64::max);
+    let rows = run_devql_clones_query_eventually(
+        world,
+        repo_name,
+        symbol_alias,
+        None,
+        false,
+        &format!("a top clone score above {threshold} for `{symbol_alias}`"),
+        |rows| max_clone_score(rows) > threshold,
+    )?;
+    let max_score = max_clone_score(&rows);
     ensure!(
         max_score > threshold,
         "expected top clone score > {threshold}, got {max_score}"
@@ -388,24 +578,17 @@ pub fn assert_devql_clones_have_explanation(
     repo_name: &str,
     symbol_alias: &str,
 ) -> Result<()> {
-    let rows = run_devql_clones_query(world, repo_name, symbol_alias, None, true)?;
+    let rows = run_devql_clones_query_eventually(
+        world,
+        repo_name,
+        symbol_alias,
+        None,
+        true,
+        &format!("clone explanation payload for `{symbol_alias}`"),
+        clone_rows_have_explanation,
+    )?;
     ensure!(!rows.is_empty(), "expected at least one clone row");
-    let has_explanation = rows.iter().any(|row| {
-        row.get("explanation_json")
-            .or_else(|| row.get("metadata"))
-            .and_then(|metadata| {
-                metadata
-                    .get("explanation")
-                    .or(Some(metadata))
-            })
-            .is_some_and(|metadata| match metadata {
-                serde_json::Value::Null => false,
-                serde_json::Value::Object(map) => !map.is_empty(),
-                serde_json::Value::Array(items) => !items.is_empty(),
-                serde_json::Value::String(text) => !text.trim().is_empty(),
-                _ => true,
-            })
-    });
+    let has_explanation = clone_rows_have_explanation(&rows);
     ensure!(
         has_explanation,
         "expected at least one clone row with explanation payload"
