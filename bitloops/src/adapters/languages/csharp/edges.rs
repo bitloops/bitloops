@@ -453,14 +453,12 @@ public class UserService
         assert!(edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::Calls
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
-                && edge.to_symbol_ref.as_deref()
-                    == Some("src/UserService.cs::member::repo::Save")
+                && edge.to_symbol_ref.as_deref() == Some("src/UserService.cs::member::repo::Save")
         }));
         assert!(edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::Calls
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
-                && edge.to_symbol_ref.as_deref()
-                    == Some("src/UserService.cs::member::cache::Save")
+                && edge.to_symbol_ref.as_deref() == Some("src/UserService.cs::member::cache::Save")
         }));
     }
 }
