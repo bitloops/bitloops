@@ -1,6 +1,5 @@
 use super::*;
 use crate::adapters::agents::Agent;
-use crate::test_support::process_state::with_cwd;
 
 fn init_repo(path: &std::path::Path) {
     let output = std::process::Command::new("git")
@@ -24,12 +23,10 @@ fn identity_and_preview() {
 fn detect_presence_checks_dot_codex_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
-    with_cwd(dir.path(), || {
-        let agent = CodexAgent;
-        assert!(!agent.detect_presence().expect("detect"));
-        std::fs::create_dir_all(dir.path().join(".codex")).expect("create .codex");
-        assert!(agent.detect_presence().expect("detect"));
-    });
+    let agent = CodexAgent;
+    assert!(!agent.detect_presence_at(dir.path()));
+    std::fs::create_dir_all(dir.path().join(".codex")).expect("create .codex");
+    assert!(agent.detect_presence_at(dir.path()));
 }
 
 #[test]

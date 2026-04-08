@@ -87,6 +87,13 @@ fn with_temp_app_dirs_and_env<T>(
     with_process_state(Some(repo_root), &env_refs, f)
 }
 
+fn test_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
 #[test]
 fn init_args_supports_agent_flag() {
     let parsed =
@@ -485,7 +492,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                     let mut out = Vec::new();
                     let mut input = Cursor::new("\n");
                     let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
-                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    let runtime = test_runtime();
                     runtime
                         .block_on(run_with_io_async(
                             InitArgs {
@@ -543,7 +550,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                 || {
                     let mut out = Vec::new();
                     let mut input = Cursor::new("");
-                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    let runtime = test_runtime();
                     let err = runtime
                         .block_on(run_with_io_async(
                             InitArgs {
@@ -584,7 +591,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
         || {
             let mut out = Vec::new();
             let mut input = Cursor::new("");
-            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            let runtime = test_runtime();
             let err = runtime
                 .block_on(run_with_io_async(
                     InitArgs {
@@ -638,7 +645,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                 || {
                     let mut out = Vec::new();
                     let mut input = Cursor::new("");
-                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    let runtime = test_runtime();
                     runtime
                         .block_on(run_with_io_async(
                             InitArgs {
@@ -682,7 +689,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
         || {
             let mut out = Vec::new();
             let mut input = Cursor::new("");
-            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            let runtime = test_runtime();
             let err = runtime
                 .block_on(run_with_io_async(
                     InitArgs {
@@ -792,7 +799,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                 || {
                                     let mut out = Vec::new();
                                     let mut input = Cursor::new("");
-                                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                                    let runtime = test_runtime();
                                     runtime
                                         .block_on(run_with_io_async(
                                             InitArgs {
@@ -908,7 +915,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                 || {
                                     let mut out = Vec::new();
                                     let mut input = Cursor::new("");
-                                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                                    let runtime = test_runtime();
                                     runtime
                                         .block_on(run_with_io_async(
                                             InitArgs {

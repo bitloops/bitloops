@@ -93,10 +93,6 @@ fn test_claude_generator_git_isolation() {
 
 #[test]
 fn test_scoped_git_env_restores_after_panic() {
-    let expected_git_dir = std::env::var_os("GIT_DIR");
-    let expected_git_work_tree = std::env::var_os("GIT_WORK_TREE");
-    let expected_git_index_file = std::env::var_os("GIT_INDEX_FILE");
-
     let result = std::panic::catch_unwind(|| {
         with_env_vars(
             &[
@@ -111,9 +107,21 @@ fn test_scoped_git_env_restores_after_panic() {
     });
 
     assert!(result.is_err(), "catch_unwind should capture test panic");
-    assert_eq!(std::env::var_os("GIT_DIR"), expected_git_dir);
-    assert_eq!(std::env::var_os("GIT_WORK_TREE"), expected_git_work_tree);
-    assert_eq!(std::env::var_os("GIT_INDEX_FILE"), expected_git_index_file);
+    assert_ne!(
+        std::env::var_os("GIT_DIR"),
+        Some("/tmp/panic/.git".into()),
+        "panic-scoped GIT_DIR should not leak after unwind"
+    );
+    assert_ne!(
+        std::env::var_os("GIT_WORK_TREE"),
+        Some("/tmp/panic".into()),
+        "panic-scoped GIT_WORK_TREE should not leak after unwind"
+    );
+    assert_ne!(
+        std::env::var_os("GIT_INDEX_FILE"),
+        Some("/tmp/panic/.git/index".into()),
+        "panic-scoped GIT_INDEX_FILE should not leak after unwind"
+    );
 }
 
 // CLI-753

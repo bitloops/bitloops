@@ -12,10 +12,12 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::config::resolve_repo_runtime_db_path_for_repo;
+use bitloops::host::capability_host::DevqlCapabilityHost;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use bitloops::utils::paths;
 use rusqlite::{Connection, params};
 use serde::Deserialize;
+use serde_json::json;
 use tempfile::TempDir;
 
 #[derive(Debug)]
@@ -74,13 +76,12 @@ impl Workspace {
         let repo_dir = temp_dir.path().join(name);
         fs::create_dir_all(&repo_dir).expect("create repo dir");
         init_git_repo(&repo_dir);
-        let db_path = with_repo_app_env(&repo_dir, || {
-            bitloops::utils::platform_dirs::bitloops_data_dir()
-                .expect("resolve isolated Bitloops data dir for test workspace")
-                .join("stores")
-                .join("relational")
-                .join(paths::RELATIONAL_DB_FILE_NAME)
-        });
+        let db_path = app_paths_for_repo(&repo_dir)
+            .xdg_data
+            .join("bitloops")
+            .join("stores")
+            .join("relational")
+            .join(paths::RELATIONAL_DB_FILE_NAME);
 
         Self {
             _temp_dir: temp_dir,
@@ -136,46 +137,113 @@ pub fn prepare_graphql_workspace(workspace: &Workspace) {
     )
     .expect("write GraphQL workspace store config");
 
-    bootstrap_codex_workspace(workspace);
+    bootstrap_minimal_workspace(workspace);
 
-    with_repo_app_env(workspace.repo_dir(), || {
-        let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
-            .expect("resolve repo identity for GraphQL workspace");
-        let cfg =
-            bitloops::host::devql::DevqlConfig::from_env(workspace.repo_dir().to_path_buf(), repo)
-                .expect("build DevQL config for GraphQL workspace");
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build tokio runtime for GraphQL workspace")
-            .block_on(bitloops::host::devql::run_init(&cfg))
-            .expect("initialise DevQL schema for GraphQL workspace");
+    run_devql_init(workspace);
+    bitloops::capability_packs::test_harness::storage::init_test_domain_database(
+        workspace.db_path(),
+    )
+    .expect("initialise test-harness schema for GraphQL workspace");
+}
 
-        bitloops::capability_packs::test_harness::storage::init_test_domain_database(
-            workspace.db_path(),
-        )
-        .expect("initialise test-harness schema for GraphQL workspace");
+pub fn bootstrap_minimal_workspace(workspace: &Workspace) {
+    let repo_root = workspace.repo_dir();
+    with_repo_app_env(repo_root, || {
+        bootstrap_workspace_stores(repo_root);
     });
 }
 
-pub fn bootstrap_codex_workspace(workspace: &Workspace) {
+pub fn bootstrap_agent_workspace(workspace: &Workspace, agent: &str) {
     let repo_root = workspace.repo_dir();
     with_repo_app_env(repo_root, || {
-        write_test_daemon_config(repo_root);
-        ensure_relational_store_file(repo_root);
+        bootstrap_workspace_stores(repo_root);
         let policy_path = repo_root.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
         bitloops::config::settings::write_project_bootstrap_settings(
             &policy_path,
             bitloops::config::settings::DEFAULT_STRATEGY,
-            &[String::from("codex")],
+            &[agent.to_string()],
         )
         .expect("write project bootstrap settings");
         bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo_root, false)
             .expect("install git hooks");
         bitloops::adapters::agents::AgentAdapterRegistry::builtin()
-            .install_agent_hooks(repo_root, "codex", false, false)
-            .expect("install Codex hooks");
+            .install_agent_hooks(repo_root, agent, false, false)
+            .unwrap_or_else(|err| panic!("install {agent} hooks: {err:#}"));
     });
+}
+
+pub fn bootstrap_codex_workspace(workspace: &Workspace) {
+    bootstrap_agent_workspace(workspace, "codex");
+}
+
+pub fn run_devql_init(workspace: &Workspace) {
+    with_repo_app_env(workspace.repo_dir(), || {
+        let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
+            .expect("resolve repo identity for workspace");
+        let cfg =
+            bitloops::host::devql::DevqlConfig::from_env(workspace.repo_dir().to_path_buf(), repo)
+                .expect("build DevQL config for workspace");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for devql init")
+            .block_on(bitloops::host::devql::run_init(&cfg))
+            .expect("initialise DevQL schema");
+    });
+}
+
+pub fn ingest_test_harness_tests(workspace: &Workspace, commit_sha: &str) {
+    with_devql_host(workspace, |host| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for ingest-tests")
+            .block_on(host.invoke_ingester(
+                "test_harness",
+                bitloops::capability_packs::test_harness::types::TEST_HARNESS_LINKAGE_INGESTER_ID,
+                json!({ "commit_sha": commit_sha }),
+            ))
+            .expect("ingest test harness discovery");
+    });
+}
+
+pub fn ingest_test_harness_coverage(
+    workspace: &Workspace,
+    commit_sha: &str,
+    coverage_path: &Path,
+    scope_kind: bitloops::models::ScopeKind,
+    tool: &str,
+    format: bitloops::models::CoverageFormat,
+) {
+    with_devql_host(workspace, |host| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for ingest-coverage")
+            .block_on(host.invoke_ingester(
+                "test_harness",
+                bitloops::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_INGESTER_ID,
+                json!({
+                    "coverage_path": coverage_path.to_string_lossy(),
+                    "commit_sha": commit_sha,
+                    "scope_kind": scope_kind.to_string(),
+                    "tool": tool,
+                    "format": format.as_str(),
+                }),
+            ))
+            .expect("ingest test harness coverage");
+    });
+}
+
+pub fn open_test_harness_repository(
+    workspace: &Workspace,
+) -> bitloops::capability_packs::test_harness::storage::BitloopsTestHarnessRepository {
+    with_repo_app_env(workspace.repo_dir(), || {
+        bitloops::capability_packs::test_harness::storage::open_repository_for_repo(
+            workspace.repo_dir(),
+        )
+        .expect("open test harness repository for workspace")
+    })
 }
 
 pub fn seed_production_artefacts(workspace: &Workspace, commit_sha: &str) {
@@ -220,6 +288,21 @@ LIMIT 1
         |row| row.get(0),
     )
     .unwrap_or_else(|_| panic!("expected symbol_fqn matching pattern {pattern}"))
+}
+
+pub fn load_symbol_id(conn: &Connection, pattern: &str) -> String {
+    conn.query_row(
+        r#"
+SELECT symbol_id
+FROM artefacts_current
+WHERE symbol_fqn LIKE ?1
+ORDER BY symbol_fqn ASC
+LIMIT 1
+"#,
+        params![pattern],
+        |row| row.get(0),
+    )
+    .unwrap_or_else(|_| panic!("expected symbol_id matching pattern {pattern}"))
 }
 
 pub fn load_test_scenario_signatures(conn: &Connection, commit_sha: &str) -> Vec<String> {
@@ -789,6 +872,11 @@ fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
         .expect("resolve configured sqlite path")
 }
 
+fn bootstrap_workspace_stores(repo_root: &Path) {
+    write_test_daemon_config(repo_root);
+    ensure_relational_store_file(repo_root);
+}
+
 fn ensure_relational_store_file(repo_root: &Path) {
     let sqlite =
         bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
@@ -809,6 +897,18 @@ fn ensure_relational_store_file(repo_root: &Path) {
     runtime
         .initialise_runtime_checkpoint_schema()
         .expect("initialise runtime checkpoint schema");
+}
+
+fn with_devql_host<T>(workspace: &Workspace, f: impl FnOnce(&DevqlCapabilityHost) -> T) -> T {
+    with_repo_app_env(workspace.repo_dir(), || {
+        let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
+            .expect("resolve repo identity for DevQL host");
+        let host = DevqlCapabilityHost::builtin(workspace.repo_dir().to_path_buf(), repo)
+            .expect("create builtin DevQL capability host");
+        host.ensure_migrations_applied_sync()
+            .expect("apply DevQL host migrations");
+        f(&host)
+    })
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {

@@ -19,6 +19,24 @@ use crate::utils::paths;
 use super::backend::SessionBackend;
 use super::state::{PrePromptState, PreTaskState, SessionState};
 
+const GIT_REPO_RESOLUTION_ENV_KEYS: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+];
+
+fn repo_scoped_git_command() -> Command {
+    let mut cmd = Command::new("git");
+    for key in GIT_REPO_RESOLUTION_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
 pub struct LocalFileBackend {
     /// Repository root.
     repo_root: PathBuf,
@@ -55,7 +73,7 @@ impl LocalFileBackend {
 
     /// Resolves the git common dir, falling back to `<repo_root>/.git` on failure.
     fn git_common_dir(&self) -> PathBuf {
-        let output = Command::new("git")
+        let output = repo_scoped_git_command()
             .args(["rev-parse", "--git-common-dir"])
             .current_dir(&self.repo_root)
             .stdin(Stdio::null())
@@ -283,7 +301,9 @@ mod tests {
     use super::*;
     use crate::host::checkpoints::session::phase::SessionPhase;
     use crate::host::checkpoints::session::state::PendingCheckpointState;
-    use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
+    use crate::test_support::process_state::{
+        ProcessStateGuard, enter_env_vars, isolated_git_command,
+    };
     use tempfile::TempDir;
 
     const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
@@ -325,6 +345,19 @@ mod tests {
             first_prompt: "Fix the bug".to_string(),
             ..Default::default()
         }
+    }
+
+    fn init_git_repo(path: &Path) {
+        let run = |args: &[&str]| {
+            let out = isolated_git_command(path).args(args).output().unwrap();
+            assert!(out.status.success(), "git {:?} failed", args);
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test User"]);
+        fs::write(path.join("tracked.txt"), "tracked\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
     }
 
     #[test]
@@ -744,6 +777,28 @@ mod tests {
         // No sessions saved → directory won't exist.
         let sessions = setup.backend.list_sessions().unwrap();
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn git_common_dir_ignores_inherited_git_env() {
+        let repo_a = tempfile::tempdir().unwrap();
+        let repo_b = tempfile::tempdir().unwrap();
+        init_git_repo(repo_a.path());
+        init_git_repo(repo_b.path());
+
+        let git_dir = repo_b.path().join(".git");
+        let work_tree = repo_b.path().to_string_lossy().into_owned();
+        let git_dir = git_dir.to_string_lossy().into_owned();
+        let _guard = enter_env_vars(&[
+            ("GIT_DIR", Some(git_dir.as_str())),
+            ("GIT_WORK_TREE", Some(work_tree.as_str())),
+        ]);
+
+        let backend = LocalFileBackend::new(repo_a.path());
+        assert_eq!(
+            backend.sessions_dir(),
+            repo_a.path().join(".git").join("bitloops-sessions")
+        );
     }
 
     #[test]

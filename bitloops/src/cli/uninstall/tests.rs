@@ -163,7 +163,7 @@ fn no_flags_selector_maps_targets() {
 fn no_flags_without_tty_errors() {
     let mut out = Vec::new();
     let err = collect_requested_targets(&UninstallArgs::default(), &mut out, None).unwrap_err();
-    assert!(format!("{err:#}").contains(NO_FLAGS_ERROR));
+    assert_eq!(err.to_string(), NO_FLAGS_ERROR);
 }
 
 #[test]
