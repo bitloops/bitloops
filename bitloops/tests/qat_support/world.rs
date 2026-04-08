@@ -27,6 +27,15 @@ pub struct QatWorld {
     pub last_command_exit_code: Option<i32>,
     pub last_query_result_count: Option<usize>,
     pub captured_commit_shas: Vec<String>,
+    pub expected_commit_shas: Vec<String>,
+    pub expected_paths: Vec<String>,
+    pub pre_rewrite_shas: Vec<String>,
+    pub post_rewrite_shas: Vec<String>,
+    pub rewrite_new_shas: Vec<String>,
+    pub completed_ledger_shas_snapshot: Vec<String>,
+    pub completed_ledger_count_snapshot: Option<usize>,
+    pub artefacts_current_count_snapshot: Option<usize>,
+    pub semantic_clones_fallback_active: bool,
     pub knowledge_items_by_url: HashMap<String, String>,
     pub knowledge_versions_by_ref: HashMap<String, usize>,
     pub last_knowledge_add_had_commit_association: Option<bool>,
@@ -66,6 +75,15 @@ impl QatWorld {
         self.last_command_exit_code = None;
         self.last_query_result_count = None;
         self.captured_commit_shas = Vec::new();
+        self.expected_commit_shas = Vec::new();
+        self.expected_paths = Vec::new();
+        self.pre_rewrite_shas = Vec::new();
+        self.post_rewrite_shas = Vec::new();
+        self.rewrite_new_shas = Vec::new();
+        self.completed_ledger_shas_snapshot = Vec::new();
+        self.completed_ledger_count_snapshot = None;
+        self.artefacts_current_count_snapshot = None;
+        self.semantic_clones_fallback_active = false;
         self.knowledge_items_by_url = HashMap::new();
         self.knowledge_versions_by_ref = HashMap::new();
         self.last_knowledge_add_had_commit_association = None;

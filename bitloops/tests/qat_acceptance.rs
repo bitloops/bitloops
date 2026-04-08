@@ -46,6 +46,15 @@ async fn qat_devql_capabilities() {
 }
 
 #[tokio::test]
+#[ignore = "slow E2E: runs QAT DevQL ingest suite; use `cargo qat-devql-ingest`"]
+async fn qat_devql_ingest() {
+    let binary = resolve_binary();
+    runner::run_suite(binary, Suite::DevqlIngest)
+        .await
+        .expect("QAT DevQL ingest suite failed");
+}
+
+#[tokio::test]
 #[ignore = "slow E2E: runs QAT DevQL sync suite; use `cargo qat-devql-sync` or `cargo qat`"]
 async fn qat_devql_sync() {
     let binary = resolve_binary();

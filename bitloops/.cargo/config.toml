@@ -46,3 +46,5 @@ qat-smoke = "test --features qat-tests --test qat_acceptance qat_smoke -- --igno
 qat-devql-sync = "test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignored --exact"
 qat-onboarding = "test --features qat-tests --test qat_acceptance qat_onboarding -- --ignored --exact"
 qat-devql-capabilities = "test --features qat-tests --test qat_acceptance qat_devql_capabilities -- --ignored --exact"
+qat-devql-ingest = "test --features qat-tests --test qat_acceptance qat_devql_ingest -- --ignored --exact"
+
