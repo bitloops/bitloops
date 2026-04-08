@@ -30,13 +30,13 @@ impl DevqlGraphqlContext {
             crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
                 &repo_root,
             )?;
-        relational_store
-            .initialise_local_relational_checkpoint_schema()
-            .context("initialising relational checkpoint schema for selected symbol checkpoints")?;
         let sqlite_path = relational_store.sqlite_path().to_path_buf();
         if !sqlite_path.is_file() {
             return Ok(Vec::new());
         }
+        relational_store
+            .initialise_local_relational_checkpoint_schema()
+            .context("initialising relational checkpoint schema for selected symbol checkpoints")?;
 
         let relational = relational_store.to_local_inner();
         let matches =

@@ -746,7 +746,7 @@ type Clone {
 }"#;
 
 const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  deps(kind: EdgeKind, direction: DepsDirection = BOTH, includeUnresolved: Boolean = false): DependencyStageResult!
+  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false): DependencyStageResult!
 }
 
 type DependencyStageResult {

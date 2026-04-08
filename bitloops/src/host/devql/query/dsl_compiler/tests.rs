@@ -592,6 +592,29 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector() {
+    let parsed = parse_devql_query(
+        r#"deps(direction:"in",include_unresolved:true)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    deps(direction: IN, includeUnresolved: true) {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
     let parsed = parse_devql_query(
         r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(summary,schema)"#,

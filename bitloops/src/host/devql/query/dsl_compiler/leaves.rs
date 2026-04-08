@@ -279,7 +279,7 @@ fn selection_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSel
             "summary" => selections.push(GraphqlSelection::scalar("summary")),
             "schema" => selections.push(GraphqlSelection::scalar("schema")),
             other => bail!(
-                "selectArtefacts(...) only supports select(summary) or select(summary,schema); unsupported field `{other}`"
+                "selectArtefacts(...) only supports select(summary), select(schema), or selecting both summary and schema; unsupported field `{other}`"
             ),
         }
     }
