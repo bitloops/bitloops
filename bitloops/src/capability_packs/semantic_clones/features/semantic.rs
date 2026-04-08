@@ -274,6 +274,13 @@ pub(super) fn normalize_summary_text(summary: &str) -> String {
     summary.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+pub(crate) fn synthesize_deterministic_summary(
+    template_summary: &str,
+    docstring_summary: Option<&str>,
+) -> String {
+    synthesize_summary(template_summary, docstring_summary, None)
+}
+
 fn synthesize_summary(
     template_summary: &str,
     docstring_summary: Option<&str>,

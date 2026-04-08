@@ -29,7 +29,32 @@ cargo install --path bitloops-embeddings --force
 On macOS, prefer `cargo dev-install` over plain `cargo install --path bitloops --force` so the
 DuckDB runtime is staged correctly for the installed `bitloops` binary.
 
-## Config Location
+## Fastest Setup Paths
+
+Bitloops can now set up the default local embeddings profile for you without manual `config.toml` edits.
+
+If you are bootstrapping a repo and want `init` to install the default daemon first:
+
+```bash
+bitloops init --install-default-daemon --sync=true
+```
+
+When embeddings are not already configured, `bitloops init --install-default-daemon`:
+
+- bootstraps the default daemon config if needed
+- adds the default local embeddings profile to the effective daemon config
+- runs the existing runtime warm/bootstrap path before any init-triggered sync
+
+If the repo is already initialised and you just want to add embeddings:
+
+```bash
+bitloops enable --install-embeddings
+bitloops daemon enable --install-embeddings
+```
+
+Interactive `bitloops enable` also asks whether to install embeddings when they are not already configured. The prompt uses `[Y/n]`, so pressing `Enter` accepts the recommended setup.
+
+## Config Location And Targeting
 
 Semantic and embeddings runtime settings live in the Bitloops daemon config.
 
@@ -45,16 +70,19 @@ If you have not bootstrapped the daemon config yet:
 bitloops start --create-default-config
 ```
 
-## Local Embeddings + Semantic Summaries
+Repo-scoped embeddings setup uses the effective daemon config in this order:
 
-Add this to the daemon config:
+1. `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`
+2. the nearest repo `config.toml`
+3. the default global daemon config
+
+That same resolved path is used for both config mutation and runtime bootstrap.
+
+## Default Local Embeddings Config
+
+When Bitloops auto-configures embeddings, it writes the minimum profile required for the default local setup:
 
 ```toml
-[semantic]
-provider = "openai"
-model = "gpt-5.4-mini"
-api_key = "${OPENAI_API_KEY}"
-
 [semantic_clones]
 embedding_profile = "local"
 
@@ -64,8 +92,26 @@ kind = "local_fastembed"
 
 Notes:
 
-- `embedding_profile` is just a profile name. `local` is a convention, not a reserved keyword.
-- `kind = "local_fastembed"` uses the local embeddings runtime with the Jina model by default.
+- `local` is the default auto-created profile name.
+- `local_fastembed` is the default auto-created profile kind.
+- If an active embedding profile already exists, Bitloops does not overwrite it.
+- If that existing active profile is local, Bitloops still runs the normal warm/bootstrap path for it.
+- If that existing active profile is hosted or otherwise non-local, Bitloops treats embeddings as already enabled and skips local runtime bootstrap.
+
+## Optional Semantic Summaries
+
+If you also want semantic summaries, add semantic provider settings to the daemon config:
+
+```toml
+[semantic]
+provider = "openai"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+```
+
+Notes:
+
+- `kind = "local_fastembed"` uses the local embeddings runtime with the default local model settings.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 
 ## Warm The Local Model
@@ -84,6 +130,8 @@ What this does:
 - downloads the model if it is missing
 
 This is the best first check that `bitloops-embeddings` is installed and reachable.
+
+`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` reuse this same warm/bootstrap path automatically; `bitloops embeddings pull local` remains useful when you want to rerun it explicitly.
 
 ## Verify Health
 
@@ -178,6 +226,18 @@ If the first local model startup is slow, raise the daemon timeouts:
 [embeddings.runtime]
 startup_timeout_secs = 120
 request_timeout_secs = 120
+```
+
+### Enable or init succeeded, but embeddings setup failed
+
+If Bitloops reports that core `enable` or `init` succeeded but embeddings setup failed, the command already rolled back only the new embeddings-related daemon-config changes from that invocation.
+
+After fixing the local runtime, rerun one of:
+
+```bash
+bitloops enable --install-embeddings
+bitloops daemon enable --install-embeddings
+bitloops embeddings pull local
 ```
 
 ### Semantic summaries stay on deterministic fallback

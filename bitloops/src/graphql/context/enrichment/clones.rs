@@ -21,13 +21,16 @@ impl DevqlGraphqlContext {
             return Ok(Vec::new());
         };
         let repo_id = self.repo_id_for_scope(scope)?;
-
-        let sql = build_project_clones_sql(
+        let spec = plan_graphql_artefact_query(
             &repo_id,
             &self.current_branch_name(scope),
-            project_path,
-            filter,
+            None,
+            None,
+            scope,
+            None,
         );
+
+        let sql = build_project_clones_sql(&spec, project_path, filter);
         let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
@@ -42,13 +45,15 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
     ) -> Result<Vec<SemanticClone>> {
         let repo_id = self.repo_id_for_scope(scope)?;
-        let sql = build_artefact_clones_sql(
+        let spec = plan_graphql_artefact_query(
             &repo_id,
             &self.current_branch_name(scope),
-            artefact_id,
-            scope.project_path(),
-            filter,
+            None,
+            None,
+            scope,
+            None,
         );
+        let sql = build_artefact_clones_sql(&spec, artefact_id, filter);
         let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
@@ -67,7 +72,15 @@ impl DevqlGraphqlContext {
         }
 
         let repo_id = self.repo_id_for_scope(scope)?;
-        let sql = build_selected_clones_sql(&repo_id, artefact_ids, filter);
+        let spec = plan_graphql_artefact_query(
+            &repo_id,
+            &self.current_branch_name(scope),
+            None,
+            None,
+            scope,
+            None,
+        );
+        let sql = build_selected_clones_sql(&spec, artefact_ids, filter);
         let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
@@ -101,65 +114,73 @@ impl DevqlGraphqlContext {
 }
 
 fn build_project_clones_sql(
-    repo_id: &str,
-    _branch: &str,
+    spec: &ArtefactQuerySpec,
     project_path: &str,
     filter: Option<&ClonesFilterInput>,
 ) -> String {
-    let mut clauses = build_clone_filters(repo_id, filter);
-    clauses.push(repo_path_prefix_clause("src.path", project_path));
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let (clone_edges_table, artefacts_table) = clone_projection_tables(spec);
+    let mut clauses = build_clone_filters(spec.repo_id.as_str(), filter);
+    let project_clause = repo_path_prefix_clause("src.path", project_path);
+    clauses.push(project_clause);
 
     format!(
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, \
+        "{filtered_cte} \
+         SELECT ce.source_artefact_id, ce.target_artefact_id, \
                 src.start_line AS source_start_line, src.end_line AS source_end_line, \
                 tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
-                ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
-          WHERE {} \
+                ce.relation_kind, ce.score, \
+                ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
+           FROM {clone_edges_table} ce \
+           JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
+           JOIN {artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
+                                     AND tgt.artefact_id = ce.target_artefact_id \
+          WHERE {clauses} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
-        clauses.join(" AND "),
+        filtered_cte = filtered_cte,
+        clone_edges_table = clone_edges_table,
+        artefacts_table = artefacts_table,
+        clauses = clauses.join(" AND "),
     )
 }
 
 fn build_artefact_clones_sql(
-    repo_id: &str,
-    _branch: &str,
+    spec: &ArtefactQuerySpec,
     artefact_id: &str,
-    project_path: Option<&str>,
     filter: Option<&ClonesFilterInput>,
 ) -> String {
-    let mut clauses = build_clone_filters(repo_id, filter);
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let (clone_edges_table, artefacts_table) = clone_projection_tables(spec);
+    let mut clauses = build_clone_filters(spec.repo_id.as_str(), filter);
     clauses.push(format!("ce.source_artefact_id = '{}'", esc_pg(artefact_id)));
-    if let Some(project_path) = project_path {
-        clauses.push(repo_path_prefix_clause("src.path", project_path));
-    }
 
     format!(
-        "SELECT ce.source_artefact_id, ce.target_artefact_id, \
+        "{filtered_cte} \
+         SELECT ce.source_artefact_id, ce.target_artefact_id, \
                 src.start_line AS source_start_line, src.end_line AS source_end_line, \
                 tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
-                ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
-          WHERE {} \
+                ce.relation_kind, ce.score, \
+                ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
+           FROM {clone_edges_table} ce \
+           JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
+           JOIN {artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
+                                     AND tgt.artefact_id = ce.target_artefact_id \
+          WHERE {clauses} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
-        clauses.join(" AND "),
+        filtered_cte = filtered_cte,
+        clone_edges_table = clone_edges_table,
+        artefacts_table = artefacts_table,
+        clauses = clauses.join(" AND "),
     )
 }
 
 fn build_selected_clones_sql(
-    repo_id: &str,
+    spec: &ArtefactQuerySpec,
     artefact_ids: &[String],
     filter: Option<&ClonesFilterInput>,
 ) -> String {
-    let mut clauses = build_clone_filters(repo_id, filter);
+    let (clone_edges_table, artefacts_table) = clone_projection_tables(spec);
+    let mut clauses = build_clone_filters(spec.repo_id.as_str(), filter);
     let ids = artefact_ids
         .iter()
         .map(|artefact_id| format!("'{}'", esc_pg(artefact_id)))
@@ -174,17 +195,27 @@ fn build_selected_clones_sql(
                 src.start_line AS source_start_line, src.end_line AS source_end_line, \
                 tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
                 ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
-           FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
-                                     AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
-                                     AND tgt.symbol_id = ce.target_symbol_id \
-          WHERE {} \
+           FROM {clone_edges_table} ce \
+           JOIN {artefacts_table} src ON src.repo_id = ce.repo_id \
+                                     AND src.artefact_id = ce.source_artefact_id \
+           JOIN {artefacts_table} tgt ON tgt.repo_id = ce.repo_id \
+                                     AND tgt.artefact_id = ce.target_artefact_id \
+          WHERE {clauses} \
        ORDER BY ce.score DESC, src.path, COALESCE(src.symbol_fqn, ''), \
                 tgt.path, COALESCE(tgt.symbol_fqn, ''), \
                 ce.source_artefact_id, ce.target_artefact_id",
-        clauses.join(" AND "),
+        clone_edges_table = clone_edges_table,
+        artefacts_table = artefacts_table,
+        clauses = clauses.join(" AND "),
     )
+}
+
+fn clone_projection_tables(spec: &ArtefactQuerySpec) -> (&'static str, &'static str) {
+    if spec.temporal_scope.use_historical_tables() {
+        ("symbol_clone_edges", "artefacts")
+    } else {
+        ("symbol_clone_edges_current", "artefacts_current")
+    }
 }
 
 fn build_clone_filters(repo_id: &str, filter: Option<&ClonesFilterInput>) -> Vec<String> {
@@ -203,17 +234,19 @@ fn build_clone_filters(repo_id: &str, filter: Option<&ClonesFilterInput>) -> Vec
 
 fn build_clone_summary_sql(spec: &ArtefactQuerySpec, filter: Option<&ClonesFilterInput>) -> String {
     let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let (clone_edges_table, _) = clone_projection_tables(spec);
     let clauses = build_clone_filters(spec.repo_id.as_str(), filter);
 
     format!(
         "{filtered_cte} \
          SELECT ce.relation_kind AS relation_kind, COUNT(*) AS count \
            FROM filtered fa \
-           JOIN symbol_clone_edges ce \
+           JOIN {clone_edges_table} ce \
              ON ce.repo_id = '{repo_id}' \
             AND ce.source_artefact_id = fa.artefact_id \
           WHERE {clauses} \
        GROUP BY ce.relation_kind",
+        clone_edges_table = clone_edges_table,
         repo_id = esc_pg(spec.repo_id.as_str()),
         clauses = clauses.join(" AND "),
     )
@@ -362,17 +395,17 @@ mod clone_summary_tests {
         ArtefactQuerySpec, ArtefactScope, ArtefactStructuralFilter, ArtefactTemporalScope,
     };
 
-    fn clone_summary_spec() -> ArtefactQuerySpec {
+    fn clone_spec(temporal_scope: ArtefactTemporalScope) -> ArtefactQuerySpec {
         ArtefactQuerySpec {
             repo_id: "repo-1".to_string(),
-            branch: Some("main".to_string()),
+            branch: (!temporal_scope.use_historical_tables()).then(|| "main".to_string()),
             historical_path_blob_sha: None,
             scope: ArtefactScope {
                 project_path: Some("packages/api".to_string()),
                 path: None,
                 files_path: None,
             },
-            temporal_scope: ArtefactTemporalScope::Current,
+            temporal_scope,
             structural_filter: ArtefactStructuralFilter::default(),
             activity_filter: None,
             pagination: None,
@@ -380,9 +413,46 @@ mod clone_summary_tests {
     }
 
     #[test]
-    fn clone_summary_sql_aggregates_filtered_sources_by_relation_kind() {
+    fn project_clone_sql_uses_current_projection_tables_for_current_scope() {
+        let sql = build_project_clones_sql(
+            &clone_spec(ArtefactTemporalScope::Current),
+            "packages/api",
+            Some(&ClonesFilterInput {
+                relation_kind: Some("similar_implementation".to_string()),
+                min_score: Some(0.75),
+            }),
+        );
+
+        assert!(sql.contains("WITH filtered AS"));
+        assert!(sql.contains("FROM symbol_clone_edges_current ce"));
+        assert!(sql.contains("JOIN filtered src ON src.artefact_id = ce.source_artefact_id"));
+        assert!(sql.contains("JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id"));
+        assert!(sql.contains("tgt.artefact_id = ce.target_artefact_id"));
+        assert!(!sql.contains("src.symbol_id = ce.source_symbol_id"));
+        assert!(!sql.contains("tgt.symbol_id = ce.target_symbol_id"));
+    }
+
+    #[test]
+    fn selected_clone_sql_uses_historical_projection_tables_for_historical_scope() {
+        let sql = build_selected_clones_sql(
+            &clone_spec(ArtefactTemporalScope::HistoricalCommit {
+                commit_sha: "abc123".to_string(),
+            }),
+            &["artefact::source".to_string()],
+            None,
+        );
+
+        assert!(sql.contains("FROM symbol_clone_edges ce"));
+        assert!(sql.contains("JOIN artefacts src ON src.repo_id = ce.repo_id"));
+        assert!(sql.contains("src.artefact_id = ce.source_artefact_id"));
+        assert!(sql.contains("JOIN artefacts tgt ON tgt.repo_id = ce.repo_id"));
+        assert!(sql.contains("tgt.artefact_id = ce.target_artefact_id"));
+    }
+
+    #[test]
+    fn clone_summary_sql_uses_current_projection_tables_for_current_scope() {
         let sql = build_clone_summary_sql(
-            &clone_summary_spec(),
+            &clone_spec(ArtefactTemporalScope::Current),
             Some(&ClonesFilterInput {
                 relation_kind: Some("similar_implementation".to_string()),
                 min_score: Some(0.75),
@@ -391,7 +461,7 @@ mod clone_summary_tests {
 
         assert!(sql.contains("WITH filtered AS"));
         assert!(sql.contains("FROM filtered fa"));
-        assert!(sql.contains("JOIN symbol_clone_edges ce"));
+        assert!(sql.contains("JOIN symbol_clone_edges_current ce"));
         assert!(sql.contains("ce.source_artefact_id = fa.artefact_id"));
         assert!(sql.contains("ce.relation_kind = 'similar_implementation'"));
         assert!(sql.contains("ce.score >= 0.75"));

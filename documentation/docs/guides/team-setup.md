@@ -62,6 +62,8 @@ Use plain `bitloops init` when the daemon is already running. Use `bitloops init
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 
+When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile and warms it before any init-triggered sync runs.
+
 `bitloops init` can also queue an initial DevQL current-state sync after hooks are installed. Use `--sync=true` to run it immediately, or `--sync=false` to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook setup whether you want to sync the codebase.
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
@@ -106,7 +108,11 @@ Example:
 enabled = false
 ```
 
-Use `bitloops enable` and `bitloops disable` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks. If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask before it edits project policy.
+Use `bitloops enable` and `bitloops disable` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks.
+
+Use `bitloops enable --install-embeddings` or `bitloops daemon enable --install-embeddings` when a developer also needs the default local embeddings profile added to the effective daemon config. Interactive `bitloops enable` offers that setup automatically with a default-yes `[Y/n]` prompt when embeddings are not already configured.
+
+If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask before it edits project policy.
 
 ## What Not To Commit
 

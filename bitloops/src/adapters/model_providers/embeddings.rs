@@ -14,6 +14,11 @@ use bitloops_embeddings_protocol::{
 
 const DEFAULT_EMBEDDINGS_RUNTIME_COMMAND: &str = "bitloops-embeddings";
 const INTERNAL_EMBEDDINGS_RUNTIME_SUBCOMMAND: &str = "__embeddings-runtime";
+const LOCAL_RUNTIME_FASTEMBED_THREADS: &str = "1";
+const LOCAL_RUNTIME_TOKENIZERS_PARALLELISM: &str = "false";
+const LOCAL_RUNTIME_RAYON_THREADS: &str = "1";
+const LOCAL_RUNTIME_OMP_THREADS: &str = "1";
+const LOCAL_RUNTIME_OMP_WAIT_POLICY: &str = "PASSIVE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {
@@ -145,6 +150,7 @@ impl RuntimeSession {
         if let Some(repo_root) = config.repo_root.as_ref() {
             command.arg("--repo-root").arg(repo_root);
         }
+        apply_runtime_child_environment(&mut command);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::inherit());
@@ -222,6 +228,18 @@ fn resolve_runtime_invocation(
         program: PathBuf::from(configured_command),
         prefix_args: Vec::new(),
     }
+}
+
+fn apply_runtime_child_environment(command: &mut Command) {
+    // Keep local embedding runtimes from fanning out across the whole machine.
+    command.env("FASTEMBED_THREADS", LOCAL_RUNTIME_FASTEMBED_THREADS);
+    command.env(
+        "TOKENIZERS_PARALLELISM",
+        LOCAL_RUNTIME_TOKENIZERS_PARALLELISM,
+    );
+    command.env("RAYON_NUM_THREADS", LOCAL_RUNTIME_RAYON_THREADS);
+    command.env("OMP_NUM_THREADS", LOCAL_RUNTIME_OMP_THREADS);
+    command.env("OMP_WAIT_POLICY", LOCAL_RUNTIME_OMP_WAIT_POLICY);
 }
 
 #[derive(Debug)]
@@ -363,5 +381,47 @@ mod tests {
             PathBuf::from("/usr/local/bin/custom-embeddings")
         );
         assert!(invocation.prefix_args.is_empty());
+    }
+
+    #[test]
+    fn runtime_child_environment_limits_parallelism() {
+        let mut command = Command::new("echo");
+        apply_runtime_child_environment(&mut command);
+
+        let envs = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value.map(|value| value.to_string_lossy().to_string()),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            envs.get("FASTEMBED_THREADS")
+                .and_then(|value| value.as_deref()),
+            Some(LOCAL_RUNTIME_FASTEMBED_THREADS)
+        );
+        assert_eq!(
+            envs.get("TOKENIZERS_PARALLELISM")
+                .and_then(|value| value.as_deref()),
+            Some(LOCAL_RUNTIME_TOKENIZERS_PARALLELISM)
+        );
+        assert_eq!(
+            envs.get("RAYON_NUM_THREADS")
+                .and_then(|value| value.as_deref()),
+            Some(LOCAL_RUNTIME_RAYON_THREADS)
+        );
+        assert_eq!(
+            envs.get("OMP_NUM_THREADS")
+                .and_then(|value| value.as_deref()),
+            Some(LOCAL_RUNTIME_OMP_THREADS)
+        );
+        assert_eq!(
+            envs.get("OMP_WAIT_POLICY")
+                .and_then(|value| value.as_deref()),
+            Some(LOCAL_RUNTIME_OMP_WAIT_POLICY)
+        );
     }
 }

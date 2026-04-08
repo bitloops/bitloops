@@ -23,10 +23,14 @@ After that, use capture toggles:
 
 ```bash
 bitloops enable
+bitloops enable --install-embeddings
+bitloops daemon enable
 bitloops disable
 ```
 
 These commands edit `[capture].enabled` in the nearest discovered project policy. Installed hooks stay in place and no-op while capture is disabled.
+
+`bitloops daemon enable` is an alias to the same implementation. `--install-embeddings` also lets `enable` configure the default local embeddings profile in the effective daemon config and run the existing runtime warm/bootstrap path. In an interactive terminal, plain `bitloops enable` asks about that setup when embeddings are not already configured and defaults to `Yes`.
 
 If the global daemon config already exists but telemetry consent is unresolved, interactive `bitloops enable` can ask before it edits project policy. In non-interactive mode you must pass an explicit telemetry flag.
 
@@ -54,3 +58,5 @@ Capture policy does not define:
 - dashboard bundle locations
 
 Those remain daemon concerns.
+
+The optional embeddings install path is the exception: it updates the effective daemon config, not repo policy, and only adds the default local profile when no active embedding profile is already configured.

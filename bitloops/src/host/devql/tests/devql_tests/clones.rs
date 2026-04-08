@@ -56,26 +56,6 @@ async fn execute_devql_query_rejects_clones_without_artefacts_stage() {
 }
 
 #[tokio::test]
-async fn execute_devql_query_rejects_clones_with_asof() {
-    let cfg = test_cfg();
-    let events_cfg = default_events_cfg();
-    let temp = tempdir().expect("tempdir");
-    let parsed = parse_devql_query(
-        r#"repo("temp2")->asOf(commit:"abc123")->artefacts(kind:"function")->clones()->limit(5)"#,
-    )
-    .unwrap();
-    let relational = sqlite_relational_store_with_schema(&temp.path().join("db.sqlite")).await;
-    let err = execute_devql_query(&cfg, &parsed, &events_cfg, Some(&relational))
-        .await
-        .unwrap_err();
-
-    assert!(
-        err.to_string()
-            .contains("clones() does not yet support asOf")
-    );
-}
-
-#[tokio::test]
 async fn sqlite_symbol_clone_edges_table_exists_after_semantic_clones_ddl() {
     let temp = tempdir().expect("temp dir");
     let db_path = temp.path().join("devql.sqlite");
@@ -96,6 +76,114 @@ async fn sqlite_symbol_clone_edges_table_exists_after_semantic_clones_ddl() {
         .expect("symbol_clone_edges table");
 
     assert_eq!(table_name, "symbol_clone_edges");
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_reads_commit_asof_clones_from_historical_tables() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+
+    conn.execute(
+        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![repo_id, "commit-old", "src/pdf.ts", "blob-1"],
+    )
+    .expect("insert file_state");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::invoice_pdf",
+            "sym::invoice_pdf",
+            repo_id,
+            "blob-1",
+            "src/pdf.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/pdf.ts::createInvoicePdf",
+            1,
+            12,
+            0,
+            120,
+            "[]",
+            "hash-1",
+        ],
+    )
+    .expect("insert source historical artefact");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::invoice_doc",
+            "sym::invoice_doc",
+            repo_id,
+            "blob-2",
+            "src/render.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/render.ts::renderInvoiceDocument",
+            1,
+            12,
+            0,
+            120,
+            "[]",
+            "hash-2",
+        ],
+    )
+    .expect("insert target historical artefact");
+    conn.execute(
+        "INSERT INTO symbol_clone_edges (
+            repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+            relation_kind, score, semantic_score, lexical_score, structural_score,
+            clone_input_hash, explanation_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            repo_id,
+            "sym::invoice_pdf",
+            "artefact::invoice_pdf",
+            "sym::invoice_doc",
+            "artefact::invoice_doc",
+            "similar_implementation",
+            0.91_f64,
+            0.91_f64,
+            0.73_f64,
+            0.69_f64,
+            "clone-hash-old",
+            "{}",
+        ],
+    )
+    .expect("insert historical clone edge");
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->asOf(commit:"commit-old")->file("src/pdf.ts")->artefacts(kind:"function")->clones(min_score:0.5)->limit(10)"#,
+    )
+    .expect("parse historical clone query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute historical clone query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["source_path"],
+        Value::String("src/pdf.ts".to_string())
+    );
+    assert_eq!(
+        rows[0]["target_symbol_fqn"],
+        Value::String("src/render.ts::renderInvoiceDocument".to_string())
+    );
 }
 
 #[tokio::test]
@@ -205,12 +293,14 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     .expect("insert target current artefact");
 
     conn.execute(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, template_summary, summary, confidence)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, template_summary, summary, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             "artefact::invoice_pdf",
             repo_id,
+            "src/pdf.ts",
             "blob-1",
+            "sym::invoice_pdf",
             "semantic-hash-1",
             "Function create invoice pdf.",
             "Function create invoice pdf. Generates an invoice PDF for an order.",
@@ -219,12 +309,14 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     )
     .expect("insert source semantics");
     conn.execute(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, template_summary, summary, confidence)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, template_summary, summary, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             "artefact::invoice_doc",
             repo_id,
+            "src/render.ts",
             "blob-2",
+            "sym::invoice_doc",
             "semantic-hash-2",
             "Function render invoice document.",
             "Function render invoice document. Renders the invoice document for an order.",
@@ -234,12 +326,14 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     .expect("insert target semantics");
 
     conn.execute(
-        "INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             "artefact::invoice_pdf",
             repo_id,
+            "src/pdf.ts",
             "blob-1",
+            "sym::invoice_pdf",
             "semantic-hash-1",
             "create_invoice_pdf",
             "function createInvoicePdf(orderId: string, locale: string)",
@@ -251,12 +345,14 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     )
     .expect("insert source features");
     conn.execute(
-        "INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         rusqlite::params![
             "artefact::invoice_doc",
             repo_id,
+            "src/render.ts",
             "blob-2",
+            "sym::invoice_doc",
             "semantic-hash-2",
             "render_invoice_document",
             "function renderInvoiceDocument(orderId: string, locale: string)",
@@ -269,12 +365,14 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     .expect("insert target features");
 
     conn.execute(
-        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             "artefact::invoice_pdf",
             repo_id,
+            "src/pdf.ts",
             "blob-1",
+            "sym::invoice_pdf",
             "local",
             "jinaai/jina-embeddings-v2-base-code",
             3,
@@ -284,12 +382,14 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     )
     .expect("insert source embedding");
     conn.execute(
-        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             "artefact::invoice_doc",
             repo_id,
+            "src/render.ts",
             "blob-2",
+            "sym::invoice_doc",
             "local",
             "jinaai/jina-embeddings-v2-base-code",
             3,
@@ -299,7 +399,11 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     )
     .expect("insert target embedding");
 
-    let clone_result = rebuild_symbol_clone_edges(&relational, repo_id)
+    let clone_result =
+        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+            &relational,
+            repo_id,
+        )
         .await
         .expect("rebuild clone edges");
     assert!(clone_result.edges.len() >= 2);
@@ -433,7 +537,7 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
         ),
     ] {
         conn.execute(
-            "INSERT INTO symbol_clone_edges (
+            "INSERT INTO symbol_clone_edges_current (
                 repo_id, source_symbol_id, source_artefact_id, target_symbol_id,
                 target_artefact_id, relation_kind, score, semantic_score, lexical_score,
                 structural_score, clone_input_hash, explanation_json
