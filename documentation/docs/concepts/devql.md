@@ -46,6 +46,40 @@ Repository
 
 Most list fields use cursor-based GraphQL connections, so pagination, field selection, and introspection all work with standard GraphQL tooling.
 
+## Selection Stages
+
+The slim, repo-scoped GraphQL surface also exposes a selection-oriented entry point for agent tool calls:
+
+```graphql
+{
+  selectArtefacts(by: { path: "rust-app/src/main.rs", lines: { start: 6, end: 10 } }) {
+    summary
+  }
+}
+```
+
+`selectArtefacts(by: ...)` resolves a current set of `0..n` artefacts and then lets you query analyses over that same set. Supported selectors are:
+
+- `symbolFqn`
+- `path`
+- `path` plus `lines`
+
+The selection object currently exposes:
+
+- `summary` for one aggregate JSON payload covering all available categories
+- `checkpoints`
+- `clones`
+- `deps`
+- `tests`
+
+Each stage returns:
+
+- `summary` as stage-owned JSON
+- `schema` as an optional stage-local SDL fragment
+- `items(first: ...)` when you want typed detail rows
+
+This shape is designed for agents: one selector, compact defaults, and optional detail escalation only when needed.
+
 ## Query Modes
 
 `bitloops devql query` is daemon-backed:
@@ -68,6 +102,8 @@ Capability packs extend DevQL through typed fields and generic stage execution:
 
 This keeps the core schema typed while still leaving room for pack-specific extensions.
 
+The aggregate `selectArtefacts { summary }` field is currently available on the slim GraphQL surface. The DevQL DSL supports `selectArtefacts(...)` for one explicit terminal stage such as `checkpoints()`, `deps()`, `clones()`, or `tests()`, but it does not yet compile the aggregate `summary` form.
+
 ## Storage Model
 
 DevQL still uses the three-store Bitloops architecture:
@@ -83,4 +119,5 @@ DevQL still uses the three-store Bitloops architecture:
 Start with [Configuring DevQL](/guides/configuring-devql), then use:
 
 - [DevQL GraphQL](/guides/devql-graphql) for endpoints, SDL export, mutations, subscriptions, and migration notes
+- [selectArtefacts](/guides/select-artefacts) for the slim selection-stage model, aggregate summaries, and staged detail queries
 - [DevQL Query Cookbook](/guides/devql-query-cookbook) for practical query examples

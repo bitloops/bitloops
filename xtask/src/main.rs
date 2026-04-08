@@ -17,7 +17,6 @@ const SLOW_TEST_TARGETS: &[&str] = &[
     "e2e_scenario_groups",
     "graphql",
     "performance",
-    "qat_acceptance",
     "testlens_gherkin",
     "testlens_sqlite_acceptance",
 ];
@@ -1283,6 +1282,61 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown test lane")
         );
+    }
+
+    #[test]
+    fn slow_lane_excludes_qat_acceptance() {
+        assert!(
+            !SLOW_TEST_TARGETS.contains(&"qat_acceptance"),
+            "qat acceptance should remain outside the generic slow lane"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_and_qat_aliases_use_dedicated_qat_tests_feature() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+
+        let manifest_path = workspace_root.join("bitloops").join("Cargo.toml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", manifest_path.display()));
+        assert!(
+            manifest.contains("qat-tests = []"),
+            "bitloops manifest should declare a dedicated qat-tests feature"
+        );
+        assert!(
+            manifest.contains(
+                "name = \"qat_acceptance\"\npath = \"tests/qat_acceptance.rs\"\nrequired-features = [\"qat-tests\"]"
+            ),
+            "qat_acceptance target should require only the qat-tests feature"
+        );
+
+        let config_path = workspace_root.join(".cargo").join("config.toml");
+        let config = fs::read_to_string(&config_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", config_path.display()));
+
+        for alias in [
+            "qat = ",
+            "qat-smoke = ",
+            "qat-devql-sync = ",
+            "qat-onboarding = ",
+        ] {
+            let line = config
+                .lines()
+                .find(|line| line.starts_with(alias))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing cargo alias `{}` in {}",
+                        alias,
+                        config_path.display()
+                    )
+                });
+            assert!(
+                line.contains("--features qat-tests"),
+                "cargo alias should enable the dedicated qat-tests feature: {line}"
+            );
+        }
     }
 
     #[test]

@@ -214,6 +214,20 @@ pub(super) fn then_claude_session_exists(
     })
 }
 
+pub(super) fn then_agent_session_exists(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "agent session exists",
+            helpers::assert_agent_session_exists_for_repo(world, &repo_name, &agent_name),
+        );
+    })
+}
+
 pub(super) fn then_checkpoint_mapping_exists(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -778,6 +792,229 @@ pub(super) fn then_sync_history_artefacts_for_current_head(
 }
 
 // ── DevQL sync/ingest summary assertions ─────────────────────
+
+pub(super) fn then_all_reachable_shas_completed_in_ledger(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "all reachable SHAs are completed in commit_ingest_ledger",
+            helpers::assert_all_reachable_shas_completed_in_ledger(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_artefacts_current_has_rows(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "artefacts_current has rows",
+            helpers::assert_artefacts_current_has_rows(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_expected_shas_completed_in_ledger(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "expected SHAs are completed in commit_ingest_ledger",
+            helpers::assert_expected_shas_completed_in_ledger(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_expected_shas_have_file_state_rows(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "expected SHAs have file_state rows",
+            helpers::assert_expected_shas_have_file_state_rows(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_exact_expected_shas_newly_completed_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "exact expected SHAs were newly completed since snapshot",
+            helpers::assert_exact_expected_shas_newly_completed_since_snapshot(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_no_new_completed_shas_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "no new SHAs were completed since snapshot",
+            helpers::assert_no_new_completed_shas_since_snapshot(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_ledger_completed_count_unchanged_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "completed ledger count is unchanged since snapshot",
+            helpers::assert_ledger_completed_count_unchanged_since_snapshot(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_artefacts_current_count_unchanged_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "artefacts_current count is unchanged since snapshot",
+            helpers::assert_artefacts_current_count_unchanged_since_snapshot(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_artefacts_current_count_increased_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "artefacts_current count increased since snapshot",
+            helpers::assert_artefacts_current_count_increased_since_snapshot(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_artefacts_current_contains_path(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "artefacts_current contains path",
+            helpers::assert_artefacts_current_contains_path(world, &repo_name, &path),
+        );
+    })
+}
+
+pub(super) fn then_only_latest_reachable_shas_completed(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("latest reachable count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "only latest reachable SHAs are completed in commit_ingest_ledger",
+            helpers::assert_only_latest_reachable_shas_completed_in_ledger(
+                world, &repo_name, count,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_ingest_summary_field_exact(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected: usize = ctx.matches[1]
+            .1
+            .parse()
+            .expect("expected ingest summary value should parse");
+        let field = ctx.matches[2].1.clone();
+        let _repo_name = ctx.matches[3].1.clone();
+        run_step(
+            &format!("DevQL ingest summary `{field}` == {expected}"),
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                let value = helpers::parse_ingest_summary_field(stdout, &field).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing ingest summary field `{field}` while expecting value {expected}\nstdout: {stdout}"
+                    )
+                })?;
+                anyhow::ensure!(
+                    value == expected,
+                    "expected ingest summary `{field}` == {expected}, got {value}\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}
+
+pub(super) fn then_rewrite_new_shas_count(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("expected rewrite SHA count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "rewrite introduces expected number of new SHAs",
+            helpers::assert_rewrite_new_shas_count(world, &repo_name, expected),
+        );
+    })
+}
+
+pub(super) fn then_pre_rewrite_shas_absent_from_post_segment(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "old rewritten SHAs are absent from post-rewrite segment",
+            helpers::assert_pre_rewrite_shas_absent_from_post_segment(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_rewrite_new_shas_completed_in_ledger(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "rewritten new SHAs are completed in commit_ingest_ledger",
+            helpers::assert_rewrite_new_shas_completed_in_ledger(world, &repo_name),
+        );
+    })
+}
 
 pub(super) fn then_sync_summary_field_greater_than(
     world: &mut QatWorld,

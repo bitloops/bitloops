@@ -1,11 +1,18 @@
 use super::*;
 
 fn slim_schema_for_repo(repo_root: &Path) -> crate::graphql::SlimDevqlSchema {
+    slim_schema_for_scope(repo_root, None)
+}
+
+fn slim_schema_for_scope(
+    repo_root: &Path,
+    project_path: Option<&str>,
+) -> crate::graphql::SlimDevqlSchema {
     crate::graphql::build_slim_schema(crate::graphql::DevqlGraphqlContext::for_slim_request(
         repo_root.to_path_buf(),
         repo_root.to_path_buf(),
         Some("main".to_string()),
-        None,
+        project_path.map(str::to_string),
         None,
         true,
         super::super::db::DashboardDbPools::default(),
@@ -1250,5 +1257,200 @@ async fn devql_health_query_surfaces_blob_bootstrap_errors() {
             .as_str()
             .expect("blob detail string")
             .contains("both s3_bucket and gcs_bucket are set")
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_resolves_symbol_selection_and_empty_checkpoint_schema() {
+    let repo = seed_graphql_devql_repo();
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { symbolFqn: "src/target.ts::target" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+                checkpoints {
+                  summary
+                  schema
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["path"],
+        "src/target.ts"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["symbolFqn"],
+        "src/target.ts::target"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["checkpoints"]["summary"]["totalCount"],
+        0
+    );
+    assert!(json["selectArtefacts"]["checkpoints"]["schema"].is_null());
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/caller.ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert!(
+        artefacts
+            .iter()
+            .all(|artefact| artefact["path"] == "packages/api/src/caller.ts"),
+        "unexpected artefact paths: {artefacts:?}"
+    );
+    assert!(
+        artefacts
+            .iter()
+            .any(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller"),
+        "expected project-scoped caller artefact, got {artefacts:?}"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_items() {
+    let repo = seed_graphql_monorepo_repo_with_duckdb_events();
+    seed_graphql_clone_data(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[(
+            "sym::api-caller",
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "caller delegates to target",
+        )],
+    );
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/caller.ts", lines: { start: 4, end: 6 } }) {
+                count
+                summary
+                deps {
+                  schema
+                  items(first: 5) {
+                    id
+                    edgeKind
+                    toSymbolRef
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["selectedArtefactCount"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["checkpoints"]["summary"]["totalCount"],
+        0
+    );
+    assert!(
+        json["selectArtefacts"]["summary"]["checkpoints"]["schema"].is_null(),
+        "expected empty checkpoint schema in aggregate summary: {json:#}"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["clones"]["summary"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["deps"]["summary"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["tests"]["summary"]["matchedArtefactCount"],
+        2
+    );
+    let aggregate_deps_schema = json["selectArtefacts"]["summary"]["deps"]["schema"]
+        .as_str()
+        .expect("aggregate dependency schema string");
+    assert!(
+        aggregate_deps_schema.contains("items(first: Int! = 20): [DependencyEdge!]!"),
+        "expected aggregate summary to surface dependency items(...), got {aggregate_deps_schema}"
+    );
+
+    let deps_schema = json["selectArtefacts"]["deps"]["schema"]
+        .as_str()
+        .expect("dependency schema string");
+    assert!(
+        deps_schema.contains("items(first: Int! = 20): [DependencyEdge!]!"),
+        "expected dependency schema to expose items(...), got {deps_schema}"
+    );
+    let deps_items = json["selectArtefacts"]["deps"]["items"]
+        .as_array()
+        .expect("dependency items array");
+    assert_eq!(deps_items.len(), 2);
+    assert_eq!(deps_items[0]["edgeKind"], "CALLS");
+    assert_eq!(
+        deps_items[0]["toSymbolRef"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(deps_items[1]["edgeKind"], "CALLS");
+    assert_eq!(
+        deps_items[1]["toSymbolRef"],
+        "packages/web/src/page.ts::render"
     );
 }

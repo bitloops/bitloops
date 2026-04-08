@@ -67,6 +67,12 @@ pub(crate) struct CheckpointArtefactCopyLineageMatch {
     pub dest_artefact_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckpointArtefactMatch {
+    pub checkpoint_id: String,
+    pub event_time: String,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CheckpointFileActivityFilter<'a> {
     pub agent: Option<&'a str>,
@@ -356,6 +362,47 @@ impl<'a> CheckpointFileGateway<'a> {
             .map(checkpoint_artefact_copy_lineage_from_row)
             .collect()
     }
+
+    pub(crate) async fn list_checkpoint_ids_for_symbol_ids(
+        &self,
+        repo_id: &str,
+        symbol_ids: &[String],
+        activity_filter: CheckpointFileActivityFilter<'_>,
+    ) -> Result<Vec<CheckpointArtefactMatch>> {
+        if symbol_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let symbol_ids = symbol_ids
+            .iter()
+            .map(|symbol_id| symbol_id.trim())
+            .filter(|symbol_id| !symbol_id.is_empty())
+            .map(|symbol_id| format!("'{}'", esc_pg(symbol_id)))
+            .collect::<Vec<_>>();
+        if symbol_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut clauses = vec![format!("ca.repo_id = '{}'", esc_pg(repo_id))];
+        clauses.push(format!(
+            "(ca.before_symbol_id IN ({symbols}) OR ca.after_symbol_id IN ({symbols}))",
+            symbols = symbol_ids.join(", "),
+        ));
+        clauses.extend(activity_filter.sql_clauses("ca"));
+
+        let sql = format!(
+            "SELECT ca.checkpoint_id, MAX(ca.event_time) AS event_time \
+               FROM checkpoint_artefacts ca \
+              WHERE {} \
+           GROUP BY ca.checkpoint_id \
+           ORDER BY event_time DESC, ca.checkpoint_id DESC",
+            clauses.join(" AND "),
+        );
+        let rows = self.relational.query_rows(&sql).await?;
+        rows.into_iter()
+            .map(checkpoint_artefact_match_from_row)
+            .collect()
+    }
 }
 
 fn checkpoint_match_from_row(row: Value) -> Result<CheckpointFileSnapshotMatch> {
@@ -432,6 +479,13 @@ fn checkpoint_artefact_copy_lineage_from_row(
         source_artefact_id: json_required_text_field(&row, "source_artefact_id")?,
         dest_symbol_id: json_required_text_field(&row, "dest_symbol_id")?,
         dest_artefact_id: json_required_text_field(&row, "dest_artefact_id")?,
+    })
+}
+
+fn checkpoint_artefact_match_from_row(row: Value) -> Result<CheckpointArtefactMatch> {
+    Ok(CheckpointArtefactMatch {
+        checkpoint_id: json_required_text_field(&row, "checkpoint_id")?,
+        event_time: json_required_text_field(&row, "event_time")?,
     })
 }
 

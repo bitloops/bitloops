@@ -51,6 +51,56 @@ Run it from the CLI with:
 bitloops devql query --compact '{ repo(name: "bitloops") { project(path: "bitloops/src/graphql") { artefacts(first: 10) { edges { node { path symbolFqn } } } } } }'
 ```
 
+## Aggregate Selection Summary For Agents
+
+Use the slim repo-scoped `selectArtefacts(by: ...)` field when you want one compact summary over a selected set of artefacts.
+
+For the full selector contract and stage semantics, see [selectArtefacts](/guides/select-artefacts).
+
+```graphql
+{
+  selectArtefacts(by: { path: "rust-app/src/main.rs", lines: { start: 6, end: 10 } }) {
+    summary
+  }
+}
+```
+
+The `summary` payload includes one entry per available category, currently:
+
+- `checkpoints`
+- `clones`
+- `deps`
+- `tests`
+
+Each category includes its default `summary` payload and, when results exist, a stage-local `schema` string.
+
+## Selection Stage Details
+
+When a category summary shows something interesting, ask that stage for typed detail rows through `items(first: ...)`.
+
+```graphql
+{
+  selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
+    deps {
+      summary
+      schema
+      items(first: 10) {
+        id
+        edgeKind
+        toSymbolRef
+      }
+    }
+  }
+}
+```
+
+This is the intended follow-up flow for agents:
+
+- start with `selectArtefacts { summary }`
+- inspect the category summaries
+- use `schema` only when needed
+- ask the relevant stage for `items(...)`
+
 ## Query A Historical Snapshot
 
 ### DSL
@@ -283,3 +333,4 @@ Use `cloneSummary(...)` for one aggregate result over the filtered artefacts. Us
 - Use `asOf(...)` when you need reproducible answers against a commit or save state
 - Use `/devql/playground` to inspect the live schema before writing a client
 - Use `bitloops devql schema --global --human > bitloops/schema.graphql` when you need client code generation or schema review
+- The aggregate `selectArtefacts { summary }` query is currently GraphQL-only; the DevQL DSL `selectArtefacts(...)` path still targets one explicit terminal stage at a time

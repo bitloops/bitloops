@@ -137,6 +137,7 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
     assert!(body.contains("clones(filter:"));
     assert!(body.contains("chatHistory"));
+    assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
     assert!(!body.contains("repo(name: String!): Repository!"));
 }
@@ -163,6 +164,7 @@ async fn devql_global_routes_serve_full_schema_and_playground() {
     assert!(sdl_body.contains("repo(name: String!): Repository!"));
     assert!(sdl_body.contains("branch(name: String!): Repository!"));
     assert!(sdl_body.contains("project(path: String!): Project!"));
+    assert!(!sdl_body.contains("selectArtefacts(by: ArtefactSelectorInput!)"));
 }
 
 #[test]

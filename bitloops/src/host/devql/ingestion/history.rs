@@ -50,7 +50,30 @@ pub(super) async fn select_missing_branch_commit_segment(
             && !branch_watermark.is_empty()
         {
             if commit_is_ancestor_of(repo_root, branch_watermark, head_sha) {
-                return list_commit_range(repo_root, &format!("{branch_watermark}..{head_sha}"));
+                let forward_commits =
+                    list_commit_range(repo_root, &format!("{branch_watermark}..{head_sha}"))?;
+                if !forward_commits.is_empty() {
+                    return Ok(forward_commits);
+                }
+
+                // A bounded backfill may have ingested only the newest commits and still stored
+                // the watermark at HEAD, leaving older commits pending behind it.
+                let bounded_gap_recovery = select_recent_branch_commit_backfill_window(
+                    repo_root,
+                    relational,
+                    repo_id,
+                    head_sha,
+                    DEFAULT_REBASE_RECOVERY_BACKFILL,
+                )
+                .await?;
+                if !bounded_gap_recovery.is_empty() {
+                    log::info!(
+                        "historical ingest watermark `{branch_watermark}` reaches HEAD `{head_sha}` but older commits remain pending; using bounded catch-up recovery"
+                    );
+                    return Ok(bounded_gap_recovery);
+                }
+
+                return Ok(Vec::new());
             }
 
             log::info!(

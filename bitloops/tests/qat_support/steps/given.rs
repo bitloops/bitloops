@@ -137,6 +137,31 @@ pub(super) fn given_init_bitloops_with_agent_sync_true(
     })
 }
 
+pub(super) fn given_init_bitloops_with_agent_sync_false_ingest_true_backfill(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let backfill = ctx.matches[2]
+            .1
+            .parse::<usize>()
+            .expect("backfill should parse as usize");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I run bitloops init --agent --sync=false --ingest=true --backfill",
+            helpers::run_init_bitloops_with_agent_sync_ingest_backfill(
+                world,
+                &repo_name,
+                &agent_name,
+                false,
+                true,
+                backfill,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_enable_cli(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -228,6 +253,20 @@ pub(super) fn given_first_claude_change(
     })
 }
 
+pub(super) fn given_first_agent_change(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I make a first change using an agent",
+            helpers::run_first_change_using_agent_for_repo(world, &repo_name, &agent_name),
+        );
+    })
+}
+
 pub(super) fn given_claude_code_prompt(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -251,6 +290,20 @@ pub(super) fn given_second_claude_change(
         run_step(
             "I make a second change using Claude Code",
             helpers::run_second_change_using_claude_code_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_second_agent_change(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I make a second change using an agent",
+            helpers::run_second_change_using_agent_for_repo(world, &repo_name, &agent_name),
         );
     })
 }
@@ -313,6 +366,126 @@ pub(super) fn given_devql_ingest(
         run_step(
             "I run DevQL ingest",
             helpers::run_devql_ingest_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_snapshot_ingest_db_state(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I snapshot ingest DB state",
+            helpers::snapshot_ingest_db_state_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_create_ingest_commits(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("commit count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I create ingest commits",
+            helpers::create_ingest_commits_for_repo(world, &repo_name, count),
+        );
+    })
+}
+
+pub(super) fn given_non_ff_merge_with_two_feature_commits(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a non-FF merge with 2 feature commits",
+            helpers::create_non_ff_merge_with_two_feature_commits_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_ff_merge_with_two_feature_commits(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create an FF merge with 2 feature commits",
+            helpers::create_ff_merge_with_two_feature_commits_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_cherry_pick_two_commits(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I cherry-pick 2 commits",
+            helpers::cherry_pick_two_commits_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_capture_top_reachable_before_rewrite(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("rewrite capture count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I capture top reachable SHAs before rewrite",
+            helpers::capture_top_reachable_shas_before_rewrite_for_repo(world, &repo_name, count),
+        );
+    })
+}
+
+pub(super) fn given_rebase_edit_rewrite_last_commits(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("rebase rewrite count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I rewrite commits with rebase edit",
+            helpers::rewrite_last_commits_with_rebase_edit_for_repo(world, &repo_name, count),
+        );
+    })
+}
+
+pub(super) fn given_reset_and_rewrite_last_commits(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("reset rewrite count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I reset and rewrite commits",
+            helpers::reset_and_rewrite_last_commits_for_repo(world, &repo_name, count),
         );
     })
 }
