@@ -135,10 +135,43 @@ fn resolve_start_preflight(
     input: &mut dyn BufRead,
 ) -> Result<StartPreflightDecision> {
     let default_config_missing = args.config.is_none() && !default_daemon_config_exists()?;
+    resolve_start_preflight_with_state(
+        args,
+        out,
+        input,
+        default_config_missing,
+        telemetry_consent::can_prompt_interactively(),
+    )
+}
+
+#[cfg(test)]
+fn resolve_start_preflight_for_tests(
+    args: &DaemonStartArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    default_config_missing: bool,
+    can_prompt_interactively: bool,
+) -> Result<StartPreflightDecision> {
+    resolve_start_preflight_with_state(
+        args,
+        out,
+        input,
+        default_config_missing,
+        can_prompt_interactively,
+    )
+}
+
+fn resolve_start_preflight_with_state(
+    args: &DaemonStartArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    default_config_missing: bool,
+    can_prompt_interactively: bool,
+) -> Result<StartPreflightDecision> {
     let mut create_default_config = args.create_default_config;
 
     if default_config_missing && !create_default_config {
-        if !telemetry_consent::can_prompt_interactively() {
+        if !can_prompt_interactively {
             bail!(missing_default_daemon_bootstrap_message());
         }
         create_default_config = telemetry_consent::prompt_default_config_setup(out, input)?;
@@ -152,6 +185,7 @@ fn resolve_start_preflight(
         args,
         out,
         input,
+        can_prompt_interactively,
     )?;
 
     Ok(StartPreflightDecision {
@@ -165,6 +199,7 @@ fn collect_startup_telemetry_choice(
     args: &DaemonStartArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    can_prompt_interactively: bool,
 ) -> Result<Option<bool>> {
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
@@ -176,7 +211,7 @@ fn collect_startup_telemetry_choice(
         return Ok(Some(choice));
     }
 
-    if !telemetry_consent::can_prompt_interactively() {
+    if !can_prompt_interactively {
         bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
     }
 
@@ -203,6 +238,10 @@ fn send_session_end_for_all_sessions() {
     let Ok(state_dir) = crate::utils::platform_dirs::bitloops_state_dir() else {
         return;
     };
+    send_session_end_for_all_sessions_in(state_dir.as_path());
+}
+
+fn send_session_end_for_all_sessions_in(state_dir: &Path) {
     let session_path = state_dir.join("telemetry_sessions.json");
 
     // Load and end all sessions
@@ -233,7 +272,7 @@ fn send_session_end_for_all_sessions() {
     }
 
     // Clear the session file
-    let _ = crate::telemetry::sessions::SessionStore::default().save(&state_dir);
+    let _ = crate::telemetry::sessions::SessionStore::default().save(state_dir);
 }
 
 pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {

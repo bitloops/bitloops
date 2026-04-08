@@ -276,7 +276,8 @@ CREATE TABLE IF NOT EXISTS repositories (
 }
 
 fn write_current_runtime_state(repo_root: &Path) {
-    let runtime_path = crate::daemon::runtime_state_path(repo_root);
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(repo_root));
     let runtime_state = crate::daemon::DaemonRuntimeState {
         version: 1,
         config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),

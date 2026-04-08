@@ -13,7 +13,8 @@ fn slim_schema_for_repo(repo_root: &Path) -> crate::graphql::SlimDevqlSchema {
 }
 
 fn write_current_repo_runtime_state(repo_root: &Path) {
-    let runtime_path = crate::daemon::runtime_state_path(repo_root);
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(repo_root));
     let runtime_state = crate::daemon::DaemonRuntimeState {
         version: 1,
         config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
@@ -182,7 +183,8 @@ enabled = false
         temp.path().to_path_buf(),
         super::super::db::DashboardDbPools::default(),
     ));
-    let runtime_path = crate::daemon::runtime_state_path(temp.path());
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(temp.path())
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(temp.path()));
     let runtime_state = crate::daemon::DaemonRuntimeState {
         version: 1,
         config_path: config_path.clone(),

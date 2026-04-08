@@ -81,6 +81,8 @@ use self::service_manager::*;
 use self::state_store::*;
 use self::supervisor_client::*;
 #[cfg(test)]
+use self::types::RUNTIME_STATE_FILE_NAME;
+#[cfg(test)]
 use self::types::global_daemon_dir_fallback;
 use self::types::{
     GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME, READY_TIMEOUT, STOP_TIMEOUT,
@@ -90,6 +92,19 @@ use self::types::{
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {
     types::runtime_state_path(repo_root)
+}
+
+#[cfg(test)]
+pub(crate) fn repo_local_runtime_state_path_for_tests(repo_root: &Path) -> Option<PathBuf> {
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return None;
+    }
+    Some(
+        repo_root
+            .join(".bitloops-test-state")
+            .join("daemon")
+            .join(RUNTIME_STATE_FILE_NAME),
+    )
 }
 
 pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
@@ -105,7 +120,19 @@ pub fn require_current_repo_runtime(
     operation: &str,
 ) -> Result<DaemonRuntimeState> {
     #[cfg(test)]
-    let runtime = state_store::read_runtime_state_legacy(repo_root)?
+    let runtime = repo_local_runtime_state_path_for_tests(repo_root)
+        .map(|path| state_store::read_json::<DaemonRuntimeState>(&path))
+        .transpose()?
+        .flatten()
+        .filter(|runtime| {
+            runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
+        })
+        .or(
+            state_store::read_runtime_state_legacy(repo_root)?.filter(|runtime| {
+                runtime.pid == std::process::id()
+                    || process_is_running(runtime.pid).unwrap_or(false)
+            }),
+        )
         .filter(|runtime| {
             runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
         })

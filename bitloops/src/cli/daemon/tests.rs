@@ -6,7 +6,6 @@ use crate::daemon::{
     SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
-use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::io::Cursor;
 use tempfile::TempDir;
@@ -227,92 +226,10 @@ fn daemon_logs_cli_rejects_lines_flag() {
 
 #[tokio::test]
 async fn run_start_requires_explicit_bootstrap_when_default_config_is_missing() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-        ],
-    );
-
-    let err = run_start(DaemonStartArgs {
-        config: None,
-        create_default_config: false,
-        bootstrap_local_stores: false,
-        detached: false,
-        until_stopped: false,
-        host: None,
-        port: crate::api::DEFAULT_DASHBOARD_PORT,
-        http: false,
-        recheck_local_dashboard_net: false,
-        bundle_dir: None,
-        telemetry: None,
-        no_telemetry: false,
-    })
-    .await
-    .expect_err("plain start should require explicit bootstrap");
-
-    assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
-}
-
-#[test]
-fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemetry() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-    );
     let mut out = Vec::new();
-    let mut input = Cursor::new(b"\n\n".to_vec());
+    let mut input = Cursor::new(Vec::<u8>::new());
 
-    let decision = resolve_start_preflight(
+    let err = resolve_start_preflight_for_tests(
         &DaemonStartArgs {
             config: None,
             create_default_config: false,
@@ -329,6 +246,38 @@ fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemet
         },
         &mut out,
         &mut input,
+        true,
+        false,
+    )
+    .expect_err("plain start should require explicit bootstrap");
+
+    assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
+}
+
+#[test]
+fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemetry() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new(b"\n\n".to_vec());
+
+    let decision = resolve_start_preflight_for_tests(
+        &DaemonStartArgs {
+            config: None,
+            create_default_config: false,
+            bootstrap_local_stores: false,
+            detached: false,
+            until_stopped: false,
+            host: None,
+            port: crate::api::DEFAULT_DASHBOARD_PORT,
+            http: false,
+            recheck_local_dashboard_net: false,
+            bundle_dir: None,
+            telemetry: None,
+            no_telemetry: false,
+        },
+        &mut out,
+        &mut input,
+        true,
+        true,
     )
     .expect("start preflight should prompt for bootstrap and telemetry");
 
@@ -344,40 +293,10 @@ fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemet
 
 #[test]
 fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-    );
     let mut out = Vec::new();
     let mut input = Cursor::new(b"n\n".to_vec());
 
-    let err = resolve_start_preflight(
+    let err = resolve_start_preflight_for_tests(
         &DaemonStartArgs {
             config: None,
             create_default_config: false,
@@ -394,6 +313,8 @@ fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
         },
         &mut out,
         &mut input,
+        true,
+        true,
     )
     .expect_err("declining bootstrap should fail with the missing-config error");
 
@@ -407,40 +328,10 @@ fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
 
 #[test]
 fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
-    let config_root = TempDir::new().expect("temp dir");
-    let data_root = TempDir::new().expect("temp dir");
-    let cache_root = TempDir::new().expect("temp dir");
-    let state_root = TempDir::new().expect("temp dir");
-    let config_root_str = config_root.path().to_string_lossy().to_string();
-    let data_root_str = data_root.path().to_string_lossy().to_string();
-    let cache_root_str = cache_root.path().to_string_lossy().to_string();
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-    );
     let mut out = Vec::new();
     let mut input = Cursor::new(b"".to_vec());
 
-    let decision = resolve_start_preflight(
+    let decision = resolve_start_preflight_for_tests(
         &DaemonStartArgs {
             config: None,
             create_default_config: true,
@@ -457,6 +348,8 @@ fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
         },
         &mut out,
         &mut input,
+        true,
+        true,
     )
     .expect("explicit telemetry flag should suppress prompting");
 
@@ -636,15 +529,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
 fn send_session_end_for_all_sessions_clears_store_with_valid_json() {
     let state_root = TempDir::new().expect("temp dir");
     let repo_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let state_dir = crate::utils::platform_dirs::bitloops_state_dir().expect("state dir");
+    let state_dir = state_root.path().join("bitloops");
 
     let mut store = crate::telemetry::sessions::SessionStore::default();
     let _ = store.get_or_create_session(repo_root.path());
@@ -652,7 +537,7 @@ fn send_session_end_for_all_sessions_clears_store_with_valid_json() {
         .save(&state_dir)
         .expect("save session store before stop");
 
-    send_session_end_for_all_sessions();
+    send_session_end_for_all_sessions_in(&state_dir);
 
     let cleared_path = state_dir.join("telemetry_sessions.json");
     let cleared_content = fs::read_to_string(&cleared_path).expect("read cleared session store");

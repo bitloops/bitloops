@@ -1,7 +1,8 @@
 use super::*;
 
 fn write_current_repo_runtime_state(repo_root: &Path) {
-    let runtime_path = crate::daemon::runtime_state_path(repo_root);
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(repo_root));
     let runtime_state = crate::daemon::DaemonRuntimeState {
         version: 1,
         config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
@@ -1213,36 +1214,6 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
 #[tokio::test]
 async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subscription_hub() {
     let repo = seed_dashboard_repo();
-    let app_root = TempDir::new().expect("isolated app temp dir");
-    let config_root = app_root.path().join("xdg-config");
-    let data_root = app_root.path().join("xdg-data");
-    let cache_root = app_root.path().join("xdg-cache");
-    let state_root = app_root.path().join("xdg-state");
-    let config_root_str = config_root.to_string_lossy().into_owned();
-    let data_root_str = data_root.to_string_lossy().into_owned();
-    let cache_root_str = cache_root.to_string_lossy().into_owned();
-    let state_root_str = state_root.to_string_lossy().into_owned();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[
-            (
-                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                Some(config_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                Some(data_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                Some(cache_root_str.as_str()),
-            ),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(state_root_str.as_str()),
-            ),
-        ],
-    );
     write_envelope_config(
         repo.path(),
         json!({
