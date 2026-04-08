@@ -158,6 +158,10 @@ fn collect_call_edge(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
             }
         }
         "member_access_expression" => {
+            let receiver_text = expression
+                .child_by_field_name("expression")
+                .and_then(|receiver_node| trimmed_node_text(receiver_node, ctx.content))
+                .unwrap_or_else(|| "member".to_string());
             let Some(member_node) = expression.child_by_field_name("name") else {
                 return;
             };
@@ -167,7 +171,10 @@ fn collect_call_edge(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
             (
                 CallForm::Method,
                 None,
-                Some(format!("{}::{member_name}", ctx.path)),
+                Some(format!(
+                    "{}::member::{}::{}",
+                    ctx.path, receiver_text, member_name
+                )),
                 Resolution::Unresolved,
             )
         }
@@ -424,6 +431,36 @@ public class UserService
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
                 && edge.to_target_symbol_fqn.as_deref()
                     == Some("src/UserService.cs::UserService::Helper")
+        }));
+    }
+
+    #[test]
+    fn extract_csharp_dependency_edges_preserve_receiver_context_for_unresolved_member_calls() {
+        let content = r#"public class UserService
+{
+    public void Run(Repo repo, Cache cache)
+    {
+        repo.Save();
+        cache.Save();
+    }
+}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Calls
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
+                && edge.to_symbol_ref.as_deref()
+                    == Some("src/UserService.cs::member::repo::Save")
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Calls
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
+                && edge.to_symbol_ref.as_deref()
+                    == Some("src/UserService.cs::member::cache::Save")
         }));
     }
 }

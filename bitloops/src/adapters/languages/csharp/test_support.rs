@@ -21,7 +21,7 @@ impl LanguageTestSupport for CSharpTestSupport {
     }
 
     fn priority(&self) -> u8 {
-        50
+        5
     }
 
     fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {

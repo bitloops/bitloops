@@ -13,6 +13,9 @@ struct CSharpArtefactDescriptor {
     name: String,
     symbol_fqn: String,
     parent_symbol_fqn: Option<String>,
+    signature: String,
+    modifiers: Vec<String>,
+    docstring: Option<String>,
 }
 
 pub(crate) fn extract_csharp_artefacts(content: &str, path: &str) -> Result<Vec<LanguageArtefact>> {
@@ -95,12 +98,14 @@ fn collect_csharp_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     CSharpArtefactDescriptor {
                         language_kind,
                         name,
                         symbol_fqn: symbol_fqn.clone(),
                         parent_symbol_fqn: parent_fqn.map(str::to_string),
+                        signature: first_line_of(node, content),
+                        modifiers: collect_modifiers(node, content),
+                        docstring: extract_xml_doc_comment(node, content),
                     },
                 );
 
@@ -130,12 +135,14 @@ fn collect_csharp_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     CSharpArtefactDescriptor {
                         language_kind,
                         name: name.clone(),
                         symbol_fqn: format!("{path}::ns::{name}"),
                         parent_symbol_fqn: None,
+                        signature: first_line_of(node, content),
+                        modifiers: collect_modifiers(node, content),
+                        docstring: extract_xml_doc_comment(node, content),
                     },
                 );
             }
@@ -155,12 +162,14 @@ fn collect_csharp_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     CSharpArtefactDescriptor {
                         language_kind,
                         name,
                         symbol_fqn,
                         parent_symbol_fqn: parent_fqn.map(str::to_string),
+                        signature: first_line_of(node, content),
+                        modifiers: collect_modifiers(node, content),
+                        docstring: extract_xml_doc_comment(node, content),
                     },
                 );
             }
@@ -176,17 +185,22 @@ fn collect_csharp_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     CSharpArtefactDescriptor {
                         language_kind: LanguageKind::csharp(CSharpKind::Property),
                         name,
                         symbol_fqn,
                         parent_symbol_fqn: parent_fqn.map(str::to_string),
+                        signature: first_line_of(node, content),
+                        modifiers: collect_modifiers(node, content),
+                        docstring: extract_xml_doc_comment(node, content),
                     },
                 );
             }
         }
         "field_declaration" => {
+            let signature = first_line_of(node, content);
+            let modifiers = collect_modifiers(node, content);
+            let docstring = extract_xml_doc_comment(node, content);
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 if child.kind() != "variable_declaration" {
@@ -206,13 +220,15 @@ fn collect_csharp_nodes_recursive(
                         push_csharp_artefact(
                             out,
                             seen,
-                            node,
-                            content,
+                            declarator,
                             CSharpArtefactDescriptor {
                                 language_kind: LanguageKind::csharp(CSharpKind::Field),
                                 name,
                                 symbol_fqn,
                                 parent_symbol_fqn: parent_fqn.map(str::to_string),
+                                signature: signature.clone(),
+                                modifiers: modifiers.clone(),
+                                docstring: docstring.clone(),
                             },
                         );
                     }
@@ -226,12 +242,14 @@ fn collect_csharp_nodes_recursive(
                     out,
                     seen,
                     node,
-                    content,
                     CSharpArtefactDescriptor {
                         language_kind: LanguageKind::csharp(CSharpKind::Using),
                         name: name.clone(),
                         symbol_fqn: format!("{path}::using::{name}@{line_no}"),
                         parent_symbol_fqn: None,
+                        signature: first_line_of(node, content),
+                        modifiers: collect_modifiers(node, content),
+                        docstring: extract_xml_doc_comment(node, content),
                     },
                 );
             }
@@ -259,7 +277,6 @@ fn push_csharp_artefact(
     out: &mut Vec<LanguageArtefact>,
     seen: &mut HashSet<(LanguageKind, String, i32)>,
     node: Node<'_>,
-    content: &str,
     descriptor: CSharpArtefactDescriptor,
 ) {
     let CSharpArtefactDescriptor {
@@ -267,6 +284,9 @@ fn push_csharp_artefact(
         name,
         symbol_fqn,
         parent_symbol_fqn,
+        signature,
+        modifiers,
+        docstring,
     } = descriptor;
 
     if name.is_empty()
@@ -295,9 +315,9 @@ fn push_csharp_artefact(
         end_line: node.end_position().row as i32 + 1,
         start_byte: node.start_byte() as i32,
         end_byte: node.end_byte() as i32,
-        signature: first_line_of(node, content),
-        modifiers: collect_modifiers(node, content),
-        docstring: extract_xml_doc_comment(node, content),
+        signature,
+        modifiers,
+        docstring,
     });
 }
 
@@ -471,6 +491,10 @@ public record UserService
             second_field.parent_symbol_fqn.as_deref(),
             Some("src/UserService.cs::UserService")
         );
+        assert!(first_field.start_byte < first_field.end_byte);
+        assert!(second_field.start_byte < second_field.end_byte);
+        assert_ne!(first_field.start_byte, second_field.start_byte);
+        assert_ne!(first_field.end_byte, second_field.end_byte);
 
         let method = artefacts
             .iter()
