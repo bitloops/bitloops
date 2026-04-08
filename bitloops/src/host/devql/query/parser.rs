@@ -8,6 +8,7 @@ pub(crate) struct ParsedDevqlQuery {
     pub(crate) repo: Option<String>,
     pub(crate) project_path: Option<String>,
     pub(crate) as_of: Option<AsOfSelector>,
+    pub(crate) select_artefacts: Option<SelectArtefactsFilter>,
     pub(crate) file: Option<String>,
     pub(crate) files_path: Option<String>,
     pub(crate) artefacts: ArtefactFilter,
@@ -48,6 +49,13 @@ pub(crate) struct ArtefactFilter {
     pub(crate) lines: Option<(i32, i32)>,
     pub(crate) agent: Option<String>,
     pub(crate) since: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SelectArtefactsFilter {
+    pub(crate) symbol_fqn: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) lines: Option<(i32, i32)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -140,6 +148,24 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             } else {
                 bail!("asOf(...) requires `commit:`, `ref:`, `save:`, or `saveRevision:`")
             }
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("selectArtefacts(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.deps.direction = DepsDirection::Both;
+            parsed.deps.include_unresolved = false;
+            parsed.select_artefacts = Some(SelectArtefactsFilter {
+                symbol_fqn: args.get("symbol_fqn").cloned(),
+                path: args.get("path").cloned(),
+                lines: args
+                    .get("lines")
+                    .map(|lines| parse_lines_range(lines))
+                    .transpose()?,
+            });
             continue;
         }
 

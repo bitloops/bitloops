@@ -161,6 +161,8 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx"));
@@ -197,6 +199,8 @@ fn sqlite_schema_sql_includes_sync_state_table() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx"));

@@ -1,11 +1,18 @@
 use super::*;
 
 fn slim_schema_for_repo(repo_root: &Path) -> crate::graphql::SlimDevqlSchema {
+    slim_schema_for_scope(repo_root, None)
+}
+
+fn slim_schema_for_scope(
+    repo_root: &Path,
+    project_path: Option<&str>,
+) -> crate::graphql::SlimDevqlSchema {
     crate::graphql::build_slim_schema(crate::graphql::DevqlGraphqlContext::for_slim_request(
         repo_root.to_path_buf(),
         repo_root.to_path_buf(),
         Some("main".to_string()),
-        None,
+        project_path.map(str::to_string),
         None,
         true,
         super::super::db::DashboardDbPools::default(),
@@ -1250,5 +1257,99 @@ async fn devql_health_query_surfaces_blob_bootstrap_errors() {
             .as_str()
             .expect("blob detail string")
             .contains("both s3_bucket and gcs_bucket are set")
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_resolves_symbol_selection_and_empty_checkpoint_schema() {
+    let repo = seed_graphql_devql_repo();
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { symbolFqn: "src/target.ts::target" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+                checkpoints {
+                  summary
+                  schema
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["path"],
+        "src/target.ts"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["symbolFqn"],
+        "src/target.ts::target"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["checkpoints"]["summary"]["totalCount"],
+        0
+    );
+    assert!(json["selectArtefacts"]["checkpoints"]["schema"].is_null());
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/caller.ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert!(
+        artefacts
+            .iter()
+            .all(|artefact| artefact["path"] == "packages/api/src/caller.ts"),
+        "unexpected artefact paths: {artefacts:?}"
+    );
+    assert!(
+        artefacts
+            .iter()
+            .any(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller"),
+        "expected project-scoped caller artefact, got {artefacts:?}"
     );
 }

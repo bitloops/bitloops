@@ -3,9 +3,11 @@ use anyhow::{Result, bail};
 use super::args::{
     compile_artefact_args, compile_checkpoint_args, compile_clone_summary_args,
     compile_clones_args, compile_coverage_args, compile_deps_args, compile_deps_summary_args,
-    compile_knowledge_args, compile_telemetry_args, compile_tests_args, connection_field,
-    first_arg,
+    compile_knowledge_args, compile_select_artefacts_args, compile_selection_checkpoint_args,
+    compile_selection_clones_args, compile_selection_deps_args, compile_selection_tests_args,
+    compile_telemetry_args, compile_tests_args, connection_field, first_arg,
 };
+use super::document_builder::GraphqlSelection;
 use super::document_builder::{GraphqlArgument, GraphqlField};
 use super::field_mapping::{
     KNOWLEDGE_STAGE_NAME, SelectableLeaf, clone_result_selections, clone_summary_selections,
@@ -18,6 +20,10 @@ pub(super) fn compile_terminal_leaf(
     parsed: &ParsedDevqlQuery,
     registered_stage: Option<RegisteredStageKind<'_>>,
 ) -> Result<GraphqlField> {
+    if parsed.select_artefacts.is_some() {
+        return compile_select_artefacts_leaf(parsed, registered_stage);
+    }
+
     if parsed.has_checkpoints_stage {
         return compile_checkpoints_leaf(parsed);
     }
@@ -53,6 +59,34 @@ pub(super) fn compile_terminal_leaf(
     }
 
     bail!("the GraphQL compiler could not determine a queryable leaf stage")
+}
+
+fn compile_select_artefacts_leaf(
+    parsed: &ParsedDevqlQuery,
+    registered_stage: Option<RegisteredStageKind<'_>>,
+) -> Result<GraphqlField> {
+    let selections = selection_stage_selections(&parsed.select_fields)?;
+    let stage_field = if parsed.has_checkpoints_stage {
+        GraphqlField::new(
+            "checkpoints",
+            compile_selection_checkpoint_args(parsed)?,
+            selections,
+        )
+    } else if parsed.has_clones_stage {
+        GraphqlField::new("clones", compile_selection_clones_args(parsed), selections)
+    } else if parsed.has_deps_stage {
+        GraphqlField::new("deps", compile_selection_deps_args(parsed), selections)
+    } else if let Some(RegisteredStageKind::Tests(stage)) = registered_stage {
+        GraphqlField::new("tests", compile_selection_tests_args(stage), selections)
+    } else {
+        bail!("selectArtefacts(...) requires checkpoints(), clones(), deps(), or tests()");
+    };
+
+    Ok(GraphqlField::new(
+        "selectArtefacts",
+        compile_select_artefacts_args(parsed)?,
+        vec![stage_field.into()],
+    ))
 }
 
 pub(super) fn compile_project_stage_leaf(
@@ -230,6 +264,26 @@ fn compile_artefacts_leaf(
         compile_artefact_args(parsed, outer_first)?,
         node_selections,
     ))
+}
+
+fn selection_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSelection>> {
+    let fields = if select_fields.is_empty() {
+        vec!["summary".to_string()]
+    } else {
+        select_fields.to_vec()
+    };
+
+    let mut selections = Vec::new();
+    for field in fields {
+        match field.as_str() {
+            "summary" => selections.push(GraphqlSelection::scalar("summary")),
+            "schema" => selections.push(GraphqlSelection::scalar("schema")),
+            other => bail!(
+                "selectArtefacts(...) only supports select(summary) or select(summary,schema); unsupported field `{other}`"
+            ),
+        }
+    }
+    Ok(selections)
 }
 
 pub(super) fn wrap_in_scopes(
