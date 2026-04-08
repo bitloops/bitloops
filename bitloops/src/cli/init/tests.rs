@@ -7,11 +7,12 @@ use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
 };
 use crate::cli::{Cli, Commands};
-use crate::config::ensure_daemon_config_exists;
+use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ensure_daemon_config_exists};
 use crate::test_support::process_state::with_process_state;
 
 use clap::Parser;
 use std::io::Cursor;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn setup_git_repo(dir: &TempDir) {
@@ -92,6 +93,164 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("runtime")
+}
+
+#[cfg(unix)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-init-embeddings-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        std::fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"#!/bin/sh
+profile_name=fake
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      profile_name=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"test","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id" "$profile_name"
+      ;;
+    *'"type":"embed_batch"'*)
+      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+      exit 0
+      ;;
+    *)
+      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      ;;
+  esac
+done
+"#;
+    std::fs::write(&script_path, script).expect("write fake runtime script");
+    let mut permissions = std::fs::metadata(&script_path)
+        .expect("stat fake runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions).expect("chmod fake runtime script");
+    ("sh".to_string(), vec![script_path.display().to_string()])
+}
+
+#[cfg(windows)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-init-embeddings-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        std::fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"
+$profileName = "fake"
+for ($i = 0; $i -lt $args.Length; $i++) {
+  if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
+    $profileName = $args[$i + 1]
+    break
+  }
+}
+$stdin = [Console]::In
+while (($line = $stdin.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.type) {
+    "describe" {
+      $response = @{
+        type = "describe"
+        request_id = $request.request_id
+        protocol_version = 1
+        runtime = @{
+          protocol_version = 1
+          runtime_name = "bitloops-embeddings"
+          runtime_version = "test"
+          profile_name = $profileName
+          provider = @{
+            kind = "local_fastembed"
+            provider_name = "local_fastembed"
+            model_name = "test-model"
+            output_dimension = 3
+            cache_dir = $null
+          }
+        }
+      }
+    }
+    "embed_batch" {
+      $response = @{
+        type = "embed_batch"
+        request_id = $request.request_id
+        protocol_version = 1
+        vectors = @(@{
+          index = 0
+          values = @(0.1, 0.2, 0.3)
+        })
+      }
+    }
+    "shutdown" {
+      $response = @{
+        type = "shutdown"
+        request_id = $request.request_id
+        protocol_version = 1
+        accepted = $true
+      }
+      $response | ConvertTo-Json -Compress
+      break
+    }
+    default {
+      $response = @{
+        type = "error"
+        request_id = $request.request_id
+        code = "runtime_error"
+        message = "unexpected request"
+      }
+    }
+  }
+  $response | ConvertTo-Json -Compress
+}
+"#;
+    std::fs::write(&script_path, script).expect("write fake runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.display().to_string(),
+        ],
+    )
+}
+
+fn write_runtime_only_daemon_config(config_path: &Path, command: &str, args: &[String]) {
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        config_path,
+        format!(
+            r#"
+[runtime]
+local_dev = false
+
+[embeddings.runtime]
+command = {command:?}
+args = [{runtime_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+"#
+        ),
+    )
+    .expect("write daemon config");
 }
 
 #[test]
@@ -612,6 +771,149 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                 .expect_err("init should fail without explicit telemetry flag");
 
             assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
+        },
+    );
+}
+
+#[test]
+fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            let config_path = ensure_daemon_config_exists().expect("create default daemon config");
+            let (command, args) = fake_runtime_command_and_args(repo.path());
+            write_runtime_only_daemon_config(&config_path, &command, &args);
+
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, variables| {
+                    assert_eq!(variables["telemetry"], serde_json::json!(false));
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": false,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = test_runtime();
+                    runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: Some(false),
+                                no_telemetry: false,
+                                skip_baseline: false,
+                                sync: Some(false),
+                                ingest: Some(false),
+                                backfill: None,
+                            },
+                            &mut out,
+                            &mut input,
+                            None,
+                        ))
+                        .expect("run init");
+
+                    let config = std::fs::read_to_string(&config_path).expect("read config");
+                    assert!(
+                        !config.contains("embedding_profile = \"local\""),
+                        "plain init should not install embeddings:\n{config}"
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn run_init_with_install_default_daemon_auto_installs_embeddings() {
+    let repo = tempfile::tempdir().unwrap();
+    let repo_root = repo.path().to_path_buf();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            with_install_default_daemon_hook(
+                move |install_default_daemon| {
+                    assert!(install_default_daemon);
+                    let config_path =
+                        ensure_daemon_config_exists().expect("create default daemon config");
+                    let (command, args) = fake_runtime_command_and_args(&repo_root);
+                    write_runtime_only_daemon_config(&config_path, &command, &args);
+                    Ok(())
+                },
+                || {
+                    with_global_graphql_executor_hook(
+                        |_runtime_root, _query, variables| {
+                            assert_eq!(variables["telemetry"], serde_json::json!(false));
+                            Ok(serde_json::json!({
+                                "updateCliTelemetryConsent": {
+                                    "telemetry": false,
+                                    "needsPrompt": false
+                                }
+                            }))
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let mut input = Cursor::new("");
+                            let runtime = test_runtime();
+                            runtime
+                                .block_on(run_with_io_async(
+                                    InitArgs {
+                                        install_default_daemon: true,
+                                        force: false,
+                                        agent: None,
+                                        telemetry: Some(false),
+                                        no_telemetry: false,
+                                        skip_baseline: false,
+                                        sync: Some(false),
+                                        ingest: Some(false),
+                                        backfill: None,
+                                    },
+                                    &mut out,
+                                    &mut input,
+                                    None,
+                                ))
+                                .expect("run init");
+
+                            let rendered = String::from_utf8(out).expect("utf8 output");
+                            assert!(rendered.contains("Pulled embedding profile `local`."));
+                            let config = std::fs::read_to_string(
+                                repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+                            )
+                            .unwrap_or_else(|_| String::new());
+                            assert!(
+                                config.is_empty(),
+                                "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                            );
+                            let daemon_config = ensure_daemon_config_exists()
+                                .expect("resolve daemon config after init");
+                            let daemon_config =
+                                std::fs::read_to_string(daemon_config).expect("read daemon config");
+                            assert!(daemon_config.contains("embedding_profile = \"local\""));
+                        },
+                    );
+                },
+            );
         },
     );
 }

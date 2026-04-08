@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use crate::utils::paths;
 
 use super::constants::*;
-#[cfg(not(test))]
-use super::daemon_config::default_daemon_config_exists;
-use super::daemon_config::{LoadedDaemonSettings, load_daemon_settings};
+use super::daemon_config::{
+    LoadedDaemonSettings, default_daemon_config_exists, default_daemon_config_path,
+    load_daemon_settings,
+};
 use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
@@ -92,6 +93,22 @@ fn required_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSet
 
 pub fn resolve_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
     required_daemon_settings_for_repo(repo_root).map(|loaded| loaded.root)
+}
+
+pub fn resolve_daemon_config_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        return Ok(PathBuf::from(explicit_path));
+    }
+
+    if let Some(config_path) = discover_nearest_daemon_config(repo_root) {
+        return Ok(config_path);
+    }
+
+    if default_daemon_config_exists().unwrap_or(false) {
+        return default_daemon_config_path();
+    }
+
+    default_daemon_config_path()
 }
 
 #[cfg(test)]

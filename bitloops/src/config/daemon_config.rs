@@ -34,6 +34,52 @@ pub struct LoadedDaemonSettings {
     pub cli: DaemonCliSettings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonEmbeddingsInstallMode {
+    Bootstrap,
+    WarmExisting,
+    SkipHosted,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DaemonEmbeddingsInstallPlan {
+    pub config_path: PathBuf,
+    pub profile_name: String,
+    pub profile_kind: Option<String>,
+    pub mode: DaemonEmbeddingsInstallMode,
+    pub config_modified: bool,
+    original_contents: Option<String>,
+}
+
+impl DaemonEmbeddingsInstallPlan {
+    pub fn rollback(&self) -> Result<()> {
+        if !self.config_modified {
+            return Ok(());
+        }
+
+        match &self.original_contents {
+            Some(contents) => fs::write(&self.config_path, contents).with_context(|| {
+                format!(
+                    "restoring Bitloops daemon config after failed embeddings install {}",
+                    self.config_path.display()
+                )
+            })?,
+            None => {
+                if self.config_path.exists() {
+                    fs::remove_file(&self.config_path).with_context(|| {
+                        format!(
+                            "removing Bitloops daemon config after failed embeddings install {}",
+                            self.config_path.display()
+                        )
+                    })?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct DaemonTomlFile {
@@ -281,6 +327,97 @@ pub fn persist_dashboard_tls_hint(enabled: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
+pub(crate) fn prepare_daemon_embeddings_install(
+    config_path: &Path,
+) -> Result<DaemonEmbeddingsInstallPlan> {
+    ensure_parent_dir(config_path)?;
+
+    let original_contents = match fs::read_to_string(config_path) {
+        Ok(contents) => Some(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("reading Bitloops daemon config {}", config_path.display())
+            });
+        }
+    };
+
+    let mut doc = match original_contents.as_deref() {
+        Some(existing) => existing
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?,
+        None => DocumentMut::new(),
+    };
+
+    if let Some(profile_name) = active_embedding_profile_name(&doc) {
+        let profile_kind = embedding_profile_kind(&doc, &profile_name);
+        let mode = if profile_kind.as_deref() == Some("local_fastembed") {
+            DaemonEmbeddingsInstallMode::WarmExisting
+        } else {
+            DaemonEmbeddingsInstallMode::SkipHosted
+        };
+        return Ok(DaemonEmbeddingsInstallPlan {
+            config_path: config_path.to_path_buf(),
+            profile_name,
+            profile_kind,
+            mode,
+            config_modified: false,
+            original_contents,
+        });
+    }
+
+    if let Some(kind) = embedding_profile_kind(&doc, "local")
+        && kind != "local_fastembed"
+    {
+        bail!(
+            "cannot install default local embeddings because profile `local` already exists with kind `{kind}`"
+        );
+    }
+
+    let mut modified = false;
+    {
+        let semantic_clones = ensure_table(&mut doc, "semantic_clones");
+        if semantic_clones
+            .get("embedding_profile")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            != Some("local")
+        {
+            semantic_clones["embedding_profile"] = Item::Value("local".into());
+            modified = true;
+        }
+    }
+
+    {
+        let embeddings = ensure_table(&mut doc, "embeddings");
+        let profiles = ensure_child_table(embeddings, "profiles");
+        let local_profile = ensure_child_table(profiles, "local");
+        if local_profile
+            .get("kind")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            != Some("local_fastembed")
+        {
+            local_profile["kind"] = Item::Value("local_fastembed".into());
+            modified = true;
+        }
+    }
+
+    if modified {
+        fs::write(config_path, doc.to_string())
+            .with_context(|| format!("writing Bitloops daemon config {}", config_path.display()))?;
+    }
+
+    Ok(DaemonEmbeddingsInstallPlan {
+        config_path: config_path.to_path_buf(),
+        profile_name: "local".to_string(),
+        profile_kind: Some("local_fastembed".to_string()),
+        mode: DaemonEmbeddingsInstallMode::Bootstrap,
+        config_modified: modified,
+        original_contents,
+    })
+}
+
 fn default_daemon_config_toml() -> Result<String> {
     let mut doc = DocumentMut::new();
     doc["runtime"] = Item::Table(Table::new());
@@ -346,6 +483,43 @@ fn ensure_child_table<'a>(table: &'a mut Table, key: &str) -> &'a mut Table {
     table[key]
         .as_table_mut()
         .expect("TOML item should be a table after initialisation")
+}
+
+fn active_embedding_profile_name(doc: &DocumentMut) -> Option<String> {
+    let value = doc
+        .as_table()
+        .get("semantic_clones")?
+        .as_table()?
+        .get("embedding_profile")?
+        .as_value()?
+        .as_str()?
+        .trim();
+    if value.is_empty() {
+        return None;
+    }
+    if matches!(
+        value.to_ascii_lowercase().as_str(),
+        "none" | "disabled" | "off"
+    ) {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn embedding_profile_kind(doc: &DocumentMut, profile_name: &str) -> Option<String> {
+    doc.as_table()
+        .get("embeddings")?
+        .as_table()?
+        .get("profiles")?
+        .as_table()?
+        .get(profile_name)?
+        .as_table()?
+        .get("kind")?
+        .as_value()?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn ensure_local_store_artifacts(loaded: &LoadedDaemonSettings) -> Result<()> {

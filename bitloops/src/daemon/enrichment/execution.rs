@@ -16,7 +16,7 @@ use crate::capability_packs::semantic_clones::{
     refresh_current_repo_symbol_embeddings_and_clone_edges, upsert_symbol_embedding_rows,
 };
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, resolve_embedding_capability_config_for_repo,
+    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
     resolve_store_backend_config_for_repo, resolve_store_semantic_config_for_repo,
 };
 use crate::host::devql::{DevqlConfig, RelationalStorage, resolve_repo_identity};
@@ -273,7 +273,8 @@ async fn execute_embedding_job(
 
     let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
     let provider_config = EmbeddingProviderConfig {
-        daemon_config_path: job.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        daemon_config_path: resolve_daemon_config_path_for_repo(&job.repo_root)
+            .unwrap_or_else(|_| job.config_root.join("config.toml")),
         embedding_profile: capability.semantic_clones.embedding_profile,
         runtime_command: capability.embeddings.runtime.command,
         runtime_args: capability.embeddings.runtime.args,

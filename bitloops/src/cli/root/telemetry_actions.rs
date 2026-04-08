@@ -99,6 +99,7 @@ pub(crate) fn telemetry_action_for_command(
             crate::cli::daemon::DaemonCommand::Stop(args) => Some(daemon_stop_action(args)),
             crate::cli::daemon::DaemonCommand::Status(args) => Some(daemon_status_action(args)),
             crate::cli::daemon::DaemonCommand::Restart(args) => Some(daemon_restart_action(args)),
+            crate::cli::daemon::DaemonCommand::Enable(args) => Some(enable_action(args)),
             crate::cli::daemon::DaemonCommand::Enrichments(args) => daemon_enrichments_action(args),
             crate::cli::daemon::DaemonCommand::Logs(args) => Some(daemon_logs_action(args)),
         },
@@ -355,6 +356,9 @@ fn enable_action(
     }
     if args.no_telemetry {
         flags.push("no_telemetry");
+    }
+    if args.install_embeddings {
+        flags.push("install_embeddings");
     }
     insert_flags(&mut props, flags);
     insert_bool_property(&mut props, "has_agent", args.agent.is_some());

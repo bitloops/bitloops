@@ -2,9 +2,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, SemanticCloneEmbeddingMode, SemanticSummaryMode,
-    default_daemon_config_path, resolve_embedding_capability_config_for_repo,
-    resolve_store_semantic_config_for_repo,
+    SemanticCloneEmbeddingMode, SemanticSummaryMode, resolve_daemon_config_path_for_repo,
+    resolve_embedding_capability_config_for_repo, resolve_store_semantic_config_for_repo,
 };
 use crate::host::capability_host::CapabilityHealthContext;
 use crate::host::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
@@ -143,7 +142,7 @@ fn embeddings_disabled(capability: &crate::config::EmbeddingCapabilityConfig) ->
 }
 
 fn daemon_config_path_for_health(repo_root: &Path) -> PathBuf {
-    default_daemon_config_path().unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+    resolve_daemon_config_path_for_repo(repo_root).unwrap_or_else(|_| repo_root.join("config.toml"))
 }
 
 fn command_exists(command: &str) -> bool {

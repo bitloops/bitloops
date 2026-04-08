@@ -115,6 +115,21 @@ fn daemon_start_cli_parses_lifecycle_and_server_flags() {
 }
 
 #[test]
+fn daemon_enable_cli_parses_install_embeddings_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "daemon", "enable", "--install-embeddings"])
+        .expect("daemon enable should parse");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Enable(enable)) = daemon.command else {
+        panic!("expected daemon enable command");
+    };
+
+    assert!(enable.install_embeddings);
+}
+
+#[test]
 fn daemon_start_cli_parses_telemetry_flags() {
     let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "--telemetry=false"])
         .expect("daemon start should parse telemetry=false");

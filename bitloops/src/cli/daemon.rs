@@ -47,6 +47,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Stop(args) => run_stop(args).await,
         DaemonCommand::Status(args) => run_status(args).await,
         DaemonCommand::Restart(args) => run_restart(args).await,
+        DaemonCommand::Enable(args) => crate::cli::enable::run(args).await,
         DaemonCommand::Enrichments(args) => run_enrichments(args).await,
         DaemonCommand::Logs(args) => run_logs(args).await,
     }
