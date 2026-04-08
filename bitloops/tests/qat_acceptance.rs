@@ -28,7 +28,7 @@ async fn qat() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT smoke suite; use `cargo test --test qat_acceptance qat_smoke -- --ignored`"]
+#[ignore = "slow E2E: runs QAT smoke suite; use `cargo test --features qat-tests --test qat_acceptance qat_smoke -- --ignored`"]
 async fn qat_smoke() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::Smoke)
@@ -37,7 +37,7 @@ async fn qat_smoke() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT DevQL suite; use `cargo test --test qat_acceptance qat_devql -- --ignored`"]
+#[ignore = "slow E2E: runs QAT DevQL suite; use `cargo test --features qat-tests --test qat_acceptance qat_devql -- --ignored`"]
 async fn qat_devql() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::Devql)
@@ -64,7 +64,7 @@ async fn qat_onboarding() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT quickstart suite; use `cargo test --test qat_acceptance qat_quickstart -- --ignored`"]
+#[ignore = "slow E2E: runs QAT quickstart suite; use `cargo test --features qat-tests --test qat_acceptance qat_quickstart -- --ignored`"]
 async fn qat_quickstart() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::Quickstart)

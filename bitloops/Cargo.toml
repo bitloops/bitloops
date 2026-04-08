@@ -12,6 +12,8 @@ duckdb-bundled = ["duckdb/bundled"]
 postgres-tests = []
 # Opt-in end-to-end and heavy integration suites.
 slow-tests = []
+# Opt-in QAT acceptance suites, exposed through the `cargo qat*` aliases.
+qat-tests = []
 
 [lib]
 path = "src/lib.rs"
@@ -91,6 +93,7 @@ required-features = ["slow-tests"]
 [[test]]
 name = "qat_acceptance"
 path = "tests/qat_acceptance.rs"
+required-features = ["qat-tests"]
 
 [[test]]
 name = "qat_bundle"

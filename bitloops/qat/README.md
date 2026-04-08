@@ -3,7 +3,7 @@
 This document explains how to run Bitloops QAT (Cucumber) journeys and how to inspect artifacts.
 
 QAT runs as a standard Cargo integration test. The production binary no longer exposes a
-`qat` subcommand, and no Cargo feature flag is required.
+`qat` subcommand, and the repo aliases enable the dedicated `qat-tests` feature automatically.
 
 ## Where to run from
 
@@ -39,7 +39,7 @@ cargo qat-smoke
 Or equivalently:
 
 ```bash
-cargo test --test qat_acceptance qat_smoke -- --ignored
+cargo test --features qat-tests --test qat_acceptance qat_smoke -- --ignored
 ```
 
 **Scenarios:**
@@ -64,7 +64,7 @@ cargo qat-onboarding
 Or equivalently:
 
 ```bash
-cargo test --test qat_acceptance qat_onboarding -- --ignored
+cargo test --features qat-tests --test qat_acceptance qat_onboarding -- --ignored
 ```
 
 **Scenarios:**
@@ -98,7 +98,7 @@ cargo qat-devql-sync
 Or equivalently:
 
 ```bash
-cargo test --test qat_acceptance qat_devql_sync -- --ignored
+cargo test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignored
 ```
 
 **Scenarios:**
