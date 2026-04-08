@@ -16,7 +16,7 @@ pub(super) fn next_pending_run_index(state: &PersistedCapabilityEventQueueState)
         .enumerate()
         .filter(|(_, run)| run.status == CapabilityEventRunStatus::Queued)
         .filter(|(_, run)| !running_lanes.contains(run.lane_key.as_str()))
-        .min_by_key(|(_, run)| (run.submitted_at_unix, run.run_id.clone()))
+        .min_by_key(|(index, run)| (run.submitted_at_unix, *index))
         .map(|(index, _)| index)
 }
 
@@ -109,10 +109,12 @@ fn select_repo_run(
         .cloned()
         .or_else(|| {
             runs.iter()
+                .enumerate()
                 .filter(|run| {
-                    run.repo_id == repo_id && run.status == CapabilityEventRunStatus::Queued
+                    run.1.repo_id == repo_id && run.1.status == CapabilityEventRunStatus::Queued
                 })
-                .min_by_key(|run| (run.submitted_at_unix, run.run_id.clone()))
+                .min_by_key(|(index, run)| (run.submitted_at_unix, *index))
+                .map(|(_, run)| run)
                 .cloned()
         })
         .or_else(|| {

@@ -79,6 +79,36 @@ fn next_pending_run_skips_running_lane_and_preserves_fifo() {
 }
 
 #[test]
+fn next_pending_run_preserves_insertion_order_with_same_timestamp() {
+    let state = PersistedCapabilityEventQueueState {
+        version: 1,
+        runs: vec![
+            queued_run(
+                "run-z",
+                "repo-1",
+                "test_harness",
+                "test_harness#0",
+                1,
+                CapabilityEventRunStatus::Queued,
+            ),
+            queued_run(
+                "run-a",
+                "repo-1",
+                "test_harness",
+                "test_harness#0",
+                1,
+                CapabilityEventRunStatus::Queued,
+            ),
+        ],
+        last_action: Some("enqueue".to_string()),
+        updated_at_unix: 1,
+    };
+
+    let index = next_pending_run_index(&state).expect("expected runnable run");
+    assert_eq!(state.runs[index].run_id, "run-z");
+}
+
+#[test]
 fn different_lanes_remain_runnable_when_one_lane_is_running() {
     let state = PersistedCapabilityEventQueueState {
         version: 1,
@@ -192,6 +222,42 @@ fn project_status_counts_runs_and_selects_current_repo_run() {
             .as_ref()
             .map(|run| run.run_id.as_str()),
         Some("run-a-3")
+    );
+}
+
+#[test]
+fn project_status_selects_first_queued_run_for_same_timestamp() {
+    let state = PersistedCapabilityEventQueueState {
+        version: 1,
+        runs: vec![
+            queued_run(
+                "run-z",
+                "repo-1",
+                "test_harness",
+                "test_harness#0",
+                1,
+                CapabilityEventRunStatus::Queued,
+            ),
+            queued_run(
+                "run-a",
+                "repo-1",
+                "test_harness",
+                "test_harness#0",
+                1,
+                CapabilityEventRunStatus::Queued,
+            ),
+        ],
+        last_action: Some("enqueue".to_string()),
+        updated_at_unix: 1,
+    };
+
+    let projected = project_status(&state, Some("repo-1"), true);
+    assert_eq!(
+        projected
+            .current_repo_run
+            .as_ref()
+            .map(|run| run.run_id.as_str()),
+        Some("run-z")
     );
 }
 
