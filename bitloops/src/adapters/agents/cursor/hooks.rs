@@ -340,17 +340,7 @@ fn are_hooks_installed_at_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::process_state::with_cwd;
     use std::path::{Path, PathBuf};
-
-    fn init_repo(path: &std::path::Path) {
-        let output = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(path)
-            .output()
-            .expect("git init");
-        assert!(output.status.success(), "git init failed");
-    }
 
     fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = fs::read_dir(dir) else {
@@ -371,73 +361,62 @@ mod tests {
     #[test]
     fn install_hooks_canonical_fresh_and_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let count = install_hooks(false, false).expect("install");
-            assert_eq!(count, 9);
-            assert!(are_hooks_installed());
+        let count = install_hooks_at(dir.path(), false, false).expect("install");
+        assert_eq!(count, 9);
+        assert!(are_hooks_installed_at(dir.path()));
 
-            let second = install_hooks(false, false).expect("install second");
-            assert_eq!(second, 0);
-        });
+        let second = install_hooks_at(dir.path(), false, false).expect("install second");
+        assert_eq!(second, 0);
     }
 
     #[test]
     fn install_hooks_local_dev_writes_cargo_run_commands() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let installed = install_hooks(true, false).expect("install local-dev");
-            assert_eq!(installed, 9);
+        let installed = install_hooks_at(dir.path(), true, false).expect("install local-dev");
+        assert_eq!(installed, 9);
 
-            let output = fs::read_to_string(dir.path().join(".cursor").join("hooks.json"))
-                .expect("read written hooks.json");
-            assert!(output.contains("cargo run -- hooks cursor session-start"));
-            assert!(output.contains("cargo run -- hooks cursor stop"));
-            assert!(!output.contains("bitloops hooks cursor session-start"));
-        });
+        let output = fs::read_to_string(dir.path().join(".cursor").join("hooks.json"))
+            .expect("read written hooks.json");
+        assert!(output.contains("cargo run -- hooks cursor session-start"));
+        assert!(output.contains("cargo run -- hooks cursor stop"));
+        assert!(!output.contains("bitloops hooks cursor session-start"));
     }
 
     #[test]
     fn install_hooks_force_reinstalls_managed_hooks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            install_hooks(false, false).expect("initial install");
+        install_hooks_at(dir.path(), false, false).expect("initial install");
 
-            let installed = install_hooks(false, true).expect("force install");
-            assert_eq!(installed, 9);
+        let installed = install_hooks_at(dir.path(), false, true).expect("force install");
+        assert_eq!(installed, 9);
 
-            let output = fs::read_to_string(dir.path().join(".cursor").join("hooks.json"))
-                .expect("read written hooks.json");
-            let parsed: Value = serde_json::from_str(&output).expect("json parse");
-            let hooks = parsed
-                .get("hooks")
-                .and_then(Value::as_object)
-                .expect("hooks object");
-            let stop = hooks
-                .get("stop")
-                .and_then(Value::as_array)
-                .expect("stop hooks");
-            let stop_count = stop
-                .iter()
-                .filter_map(command_of)
-                .filter(|command| *command == "bitloops hooks cursor stop")
-                .count();
-            assert_eq!(stop_count, 1, "force should keep one managed stop hook");
-        });
+        let output = fs::read_to_string(dir.path().join(".cursor").join("hooks.json"))
+            .expect("read written hooks.json");
+        let parsed: Value = serde_json::from_str(&output).expect("json parse");
+        let hooks = parsed
+            .get("hooks")
+            .and_then(Value::as_object)
+            .expect("hooks object");
+        let stop = hooks
+            .get("stop")
+            .and_then(Value::as_array)
+            .expect("stop hooks");
+        let stop_count = stop
+            .iter()
+            .filter_map(command_of)
+            .filter(|command| *command == "bitloops hooks cursor stop")
+            .count();
+        assert_eq!(stop_count, 1, "force should keep one managed stop hook");
     }
 
     #[test]
     fn are_hooks_installed_false_when_shell_hooks_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let cursor_dir = dir.path().join(".cursor");
-            fs::create_dir_all(&cursor_dir).expect("create .cursor");
-            fs::write(
-                cursor_dir.join("hooks.json"),
-                r#"{
+        let cursor_dir = dir.path().join(".cursor");
+        fs::create_dir_all(&cursor_dir).expect("create .cursor");
+        fs::write(
+            cursor_dir.join("hooks.json"),
+            r#"{
   "version": 1,
   "hooks": {
     "sessionStart": [{"command": "bitloops hooks cursor session-start"}],
@@ -450,115 +429,103 @@ mod tests {
   }
 }
 "#,
-            )
-            .expect("seed hooks");
+        )
+        .expect("seed hooks");
 
-            assert!(
-                !are_hooks_installed(),
-                "legacy 7-hook install should be treated as incomplete"
-            );
+        assert!(
+            !are_hooks_installed_at(dir.path()),
+            "legacy 7-hook install should be treated as incomplete"
+        );
 
-            let installed = install_hooks(false, false).expect("install");
-            assert_eq!(installed, 2, "should add missing shell hooks only");
-            assert!(are_hooks_installed());
-        });
+        let installed = install_hooks_at(dir.path(), false, false).expect("install");
+        assert_eq!(installed, 2, "should add missing shell hooks only");
+        assert!(are_hooks_installed_at(dir.path()));
     }
 
     #[test]
     fn install_hooks_preserves_unknown_fields() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let cursor_dir = dir.path().join(".cursor");
-            fs::create_dir_all(&cursor_dir).expect("create .cursor");
-            fs::write(
-                cursor_dir.join("hooks.json"),
-                r#"{
+        let cursor_dir = dir.path().join(".cursor");
+        fs::create_dir_all(&cursor_dir).expect("create .cursor");
+        fs::write(
+            cursor_dir.join("hooks.json"),
+            r#"{
   "version": 1,
   "cursorSettings": {"foo": true},
   "hooks": {"customHook": [{"command": "echo custom"}]}
 }
 "#,
-            )
-            .expect("seed hooks");
+        )
+        .expect("seed hooks");
 
-            install_hooks(false, false).expect("install");
-            let output =
-                fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
-            let parsed: Value = serde_json::from_str(&output).expect("json parse");
-            assert!(parsed.get("cursorSettings").is_some());
-            assert!(
-                parsed
-                    .get("hooks")
-                    .and_then(Value::as_object)
-                    .and_then(|h| h.get("customHook"))
-                    .is_some()
-            );
-        });
+        install_hooks_at(dir.path(), false, false).expect("install");
+        let output =
+            fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
+        let parsed: Value = serde_json::from_str(&output).expect("json parse");
+        assert!(parsed.get("cursorSettings").is_some());
+        assert!(
+            parsed
+                .get("hooks")
+                .and_then(Value::as_object)
+                .and_then(|h| h.get("customHook"))
+                .is_some()
+        );
     }
 
     #[test]
     fn uninstall_preserves_non_bitloops_hooks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            install_hooks(false, false).expect("install");
-            let hooks_path = dir.path().join(".cursor").join("hooks.json");
-            let seeded = r#"{
+        install_hooks_at(dir.path(), false, false).expect("install");
+        let hooks_path = dir.path().join(".cursor").join("hooks.json");
+        let seeded = r#"{
   "version": 1,
   "hooks": {
     "sessionStart": [{"command": "bitloops hooks cursor session-start"}, {"command": "echo custom"}]
   }
 }
 "#;
-            fs::write(&hooks_path, seeded).expect("seed");
+        fs::write(&hooks_path, seeded).expect("seed");
 
-            uninstall_hooks().expect("uninstall");
-            let output = fs::read_to_string(hooks_path).expect("read");
-            assert!(output.contains("echo custom"));
-            assert!(!output.contains("bitloops hooks cursor session-start"));
-        });
+        uninstall_hooks_at(dir.path()).expect("uninstall");
+        let output = fs::read_to_string(hooks_path).expect("read");
+        assert!(output.contains("echo custom"));
+        assert!(!output.contains("bitloops hooks cursor session-start"));
     }
 
     #[test]
     fn install_hooks_migrates_local_dev_commands_without_force() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let cursor_dir = dir.path().join(".cursor");
-            fs::create_dir_all(&cursor_dir).expect("create .cursor");
-            fs::write(
-                cursor_dir.join("hooks.json"),
-                r#"{
+        let cursor_dir = dir.path().join(".cursor");
+        fs::create_dir_all(&cursor_dir).expect("create .cursor");
+        fs::write(
+            cursor_dir.join("hooks.json"),
+            r#"{
   "version": 1,
   "hooks": {
     "sessionStart": [{"command": "cargo run -- hooks cursor session-start"}]
   }
 }
 "#,
-            )
-            .expect("seed hooks");
+        )
+        .expect("seed hooks");
 
-            let installed = install_hooks(false, false).expect("install");
-            assert_eq!(installed, 9);
+        let installed = install_hooks_at(dir.path(), false, false).expect("install");
+        assert_eq!(installed, 9);
 
-            let output =
-                fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
-            assert!(!output.contains("cargo run -- hooks cursor session-start"));
-            assert!(output.contains("bitloops hooks cursor session-start"));
-        });
+        let output =
+            fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
+        assert!(!output.contains("cargo run -- hooks cursor session-start"));
+        assert!(output.contains("bitloops hooks cursor session-start"));
     }
 
     #[test]
     fn install_hooks_removes_non_target_managed_when_canonical_already_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let cursor_dir = dir.path().join(".cursor");
-            fs::create_dir_all(&cursor_dir).expect("create .cursor");
-            fs::write(
-                cursor_dir.join("hooks.json"),
-                r#"{
+        let cursor_dir = dir.path().join(".cursor");
+        fs::create_dir_all(&cursor_dir).expect("create .cursor");
+        fs::write(
+            cursor_dir.join("hooks.json"),
+            r#"{
   "version": 1,
   "hooks": {
     "stop": [
@@ -568,32 +535,31 @@ mod tests {
   }
 }
 "#,
-            )
-            .expect("seed hooks");
+        )
+        .expect("seed hooks");
 
-            let installed = install_hooks(false, false).expect("install");
-            assert_eq!(installed, 8);
+        let installed = install_hooks_at(dir.path(), false, false).expect("install");
+        assert_eq!(installed, 8);
 
-            let output =
-                fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
-            assert!(!output.contains("cargo run -- hooks cursor stop"));
+        let output =
+            fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
+        assert!(!output.contains("cargo run -- hooks cursor stop"));
 
-            let parsed: Value = serde_json::from_str(&output).expect("json parse");
-            let hooks = parsed
-                .get("hooks")
-                .and_then(Value::as_object)
-                .expect("hooks object");
-            let stop = hooks
-                .get("stop")
-                .and_then(Value::as_array)
-                .expect("stop hooks");
-            let stop_count = stop
-                .iter()
-                .filter_map(command_of)
-                .filter(|command| *command == "bitloops hooks cursor stop")
-                .count();
-            assert_eq!(stop_count, 1);
-        });
+        let parsed: Value = serde_json::from_str(&output).expect("json parse");
+        let hooks = parsed
+            .get("hooks")
+            .and_then(Value::as_object)
+            .expect("hooks object");
+        let stop = hooks
+            .get("stop")
+            .and_then(Value::as_array)
+            .expect("stop hooks");
+        let stop_count = stop
+            .iter()
+            .filter_map(command_of)
+            .filter(|command| *command == "bitloops hooks cursor stop")
+            .count();
+        assert_eq!(stop_count, 1);
     }
 
     #[test]

@@ -59,6 +59,12 @@ fn write_log_content(path: &Path, content: &str) {
     fs::write(path, content).expect("write daemon log");
 }
 
+fn temp_log_path() -> (TempDir, std::path::PathBuf) {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("logs").join("daemon.log");
+    (dir, path)
+}
+
 #[test]
 fn daemon_start_cli_parses_lifecycle_and_server_flags() {
     let parsed = Cli::try_parse_from([
@@ -481,15 +487,7 @@ fn daemon_enrichments_cli_parses_controls() {
 
 #[test]
 fn status_lines_show_global_supervisor_install_and_state() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let report = DaemonStatusReport {
         runtime: None,
@@ -538,10 +536,9 @@ fn status_lines_show_global_supervisor_install_and_state() {
         }),
         sync: None,
     };
-    let log_path = daemon::daemon_log_file_path();
 
     assert_eq!(
-        status_lines(&report),
+        super::display::status_lines_with_log_path(&report, &log_path),
         vec![
             "Bitloops daemon: stopped".to_string(),
             "Mode: always-on service".to_string(),
@@ -573,15 +570,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
 
 #[test]
 fn status_lines_show_log_file_for_running_daemon() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let report = DaemonStatusReport {
         runtime: Some(crate::daemon::DaemonRuntimeState {
@@ -609,24 +598,13 @@ fn status_lines_show_log_file_for_running_daemon() {
         sync: None,
     };
 
-    let lines = status_lines(&report);
-    assert!(lines.contains(&format!(
-        "Log file: {}",
-        daemon::daemon_log_file_path().display()
-    )));
+    let lines = super::display::status_lines_with_log_path(&report, &log_path);
+    assert!(lines.contains(&format!("Log file: {}", log_path.display())));
 }
 
 #[test]
 fn status_lines_show_log_file_when_daemon_is_stopped() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let report = DaemonStatusReport {
         runtime: None,
@@ -638,11 +616,11 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
     };
 
     assert_eq!(
-        status_lines(&report),
+        super::display::status_lines_with_log_path(&report, &log_path),
         vec![
             "Bitloops daemon: stopped".to_string(),
             "Mode: not running".to_string(),
-            format!("Log file: {}", daemon::daemon_log_file_path().display()),
+            format!("Log file: {}", log_path.display()),
         ]
     );
 }
@@ -753,16 +731,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
 
 #[test]
 fn run_logs_prints_default_last_two_hundred_lines() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     let lines = (1..=250)
         .map(|idx| format!("{{\"line\":{idx}}}"))
         .collect::<Vec<_>>();
@@ -771,7 +740,11 @@ fn run_logs_prints_default_last_two_hundred_lines() {
 
     tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(run_logs_with_io(DaemonLogsArgs::default(), &mut out))
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs::default(),
+            &mut out,
+            log_path,
+        ))
         .expect("run daemon logs");
 
     let rendered = String::from_utf8(out).expect("utf8 output");
@@ -783,16 +756,7 @@ fn run_logs_prints_default_last_two_hundred_lines() {
 
 #[test]
 fn run_logs_honours_explicit_line_count() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     let lines = (1..=5)
         .map(|idx| format!("{{\"line\":{idx}}}"))
         .collect::<Vec<_>>();
@@ -801,13 +765,14 @@ fn run_logs_honours_explicit_line_count() {
 
     tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(run_logs_with_io(
+        .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: Some(3),
                 follow: false,
                 path: false,
             },
             &mut out,
+            log_path,
         ))
         .expect("run daemon logs");
 
@@ -819,70 +784,47 @@ fn run_logs_honours_explicit_line_count() {
 
 #[test]
 fn run_logs_prints_log_path() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
     let mut out = Vec::new();
 
     tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(run_logs_with_io(
+        .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: None,
                 follow: false,
                 path: true,
             },
             &mut out,
+            log_path.clone(),
         ))
         .expect("print daemon log path");
 
     assert_eq!(
         String::from_utf8(out).expect("utf8 output"),
-        format!("{}\n", daemon::daemon_log_file_path().display())
+        format!("{}\n", log_path.display())
     );
 }
 
 #[test]
 fn run_logs_reports_missing_file_with_expected_path() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
+    let (_log_dir, log_path) = temp_log_path();
 
     let err = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(run_logs_with_io(DaemonLogsArgs::default(), &mut Vec::new()))
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs::default(),
+            &mut Vec::new(),
+            log_path.clone(),
+        ))
         .expect_err("daemon logs should fail when file is missing");
 
-    assert!(
-        err.to_string()
-            .contains(&daemon::daemon_log_file_path().display().to_string())
-    );
+    assert!(err.to_string().contains(&log_path.display().to_string()));
 }
 
 #[test]
 fn follow_log_file_streams_appended_lines() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     write_log_lines(&log_path, &["{\"line\":1}".to_string()]);
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -961,22 +903,13 @@ fn tail_log_file_returns_all_lines_when_tail_exceeds_file_length() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn run_logs_follow_stops_when_async_shutdown_resolves() {
-    let state_root = TempDir::new().expect("temp dir");
-    let state_root_str = state_root.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        None,
-        &[(
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(state_root_str.as_str()),
-        )],
-    );
-    let log_path = daemon::daemon_log_file_path();
+    let (_log_dir, log_path) = temp_log_path();
     write_log_lines(&log_path, &["{\"line\":1}".to_string()]);
     let mut out = SharedBuffer::default();
 
     tokio::time::timeout(
         Duration::from_millis(250),
-        run_logs_with_io_and_shutdown_and_poll_interval(
+        run_logs_with_io_and_shutdown_at_path(
             DaemonLogsArgs {
                 tail: Some(1),
                 follow: true,
@@ -987,6 +920,7 @@ async fn run_logs_follow_stops_when_async_shutdown_resolves() {
                 tokio::time::sleep(Duration::from_millis(30)).await;
             },
             Duration::from_millis(10),
+            log_path,
         ),
     )
     .await

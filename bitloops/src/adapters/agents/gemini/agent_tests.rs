@@ -7,10 +7,9 @@ use tempfile::tempdir;
 use super::*;
 use crate::adapters::agents::gemini::transcript::GeminiToolCall;
 use crate::adapters::agents::{
-    AGENT_NAME_GEMINI, AGENT_TYPE_GEMINI, Agent, AgentSession, HookInput, HookSupport,
-    MAX_CHUNK_SIZE,
+    AGENT_NAME_GEMINI, AGENT_TYPE_GEMINI, Agent, AgentSession, HookInput, MAX_CHUNK_SIZE,
 };
-use crate::test_support::process_state::{with_cwd, with_env_var};
+use crate::test_support::process_state::with_env_var;
 
 #[test]
 #[allow(non_snake_case)]
@@ -40,19 +39,17 @@ fn TestDescription() {
 #[allow(non_snake_case)]
 fn TestDetectPresence() {
     let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = GeminiCliAgent;
-        let present = agent
-            .detect_presence()
-            .expect("detect presence should not error");
-        assert!(!present);
+    let agent = GeminiCliAgent;
+    let present = agent
+        .detect_presence_at(dir.path())
+        .expect("detect presence should not error");
+    assert!(!present);
 
-        std::fs::create_dir_all(dir.path().join(".gemini")).expect("failed to create .gemini");
-        let present = agent
-            .detect_presence()
-            .expect("detect presence should not error");
-        assert!(present);
-    });
+    std::fs::create_dir_all(dir.path().join(".gemini")).expect("failed to create .gemini");
+    let present = agent
+        .detect_presence_at(dir.path())
+        .expect("detect presence should not error");
+    assert!(present);
 }
 
 #[test]
@@ -494,118 +491,113 @@ fn TestInstallHooks() {
     let agent = GeminiCliAgent;
     // Fresh install + idempotent + force + command verification.
     let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let count = agent
-            .install_hooks(false, false)
-            .expect("fresh hook install should work");
-        assert_eq!(count, 12);
+    let count = agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("fresh hook install should work");
+    assert_eq!(count, 12);
 
-        let settings = read_gemini_settings(dir.path());
-        assert!(settings.hooks_config.enabled);
-        assert_eq!(settings.hooks.session_start.len(), 1);
-        assert_eq!(settings.hooks.session_end.len(), 2);
-        assert_eq!(settings.hooks.before_agent.len(), 1);
-        assert_eq!(settings.hooks.after_agent.len(), 1);
-        assert_eq!(settings.hooks.before_model.len(), 1);
-        assert_eq!(settings.hooks.after_model.len(), 1);
-        assert_eq!(settings.hooks.before_tool_selection.len(), 1);
-        assert_eq!(settings.hooks.before_tool.len(), 1);
-        assert_eq!(settings.hooks.after_tool.len(), 1);
-        assert_eq!(settings.hooks.pre_compress.len(), 1);
-        assert_eq!(settings.hooks.notification.len(), 1);
-        verify_hook_command(
-            &settings.hooks.session_start,
-            "",
-            "bitloops hooks gemini session-start",
-        );
-        verify_hook_command(
-            &settings.hooks.session_end,
-            "exit",
-            "bitloops hooks gemini session-end",
-        );
-        verify_hook_command(
-            &settings.hooks.session_end,
-            "logout",
-            "bitloops hooks gemini session-end",
-        );
-        verify_hook_command(
-            &settings.hooks.before_agent,
-            "",
-            "bitloops hooks gemini before-agent",
-        );
-        verify_hook_command(
-            &settings.hooks.after_agent,
-            "",
-            "bitloops hooks gemini after-agent",
-        );
-        verify_hook_command(
-            &settings.hooks.before_model,
-            "",
-            "bitloops hooks gemini before-model",
-        );
-        verify_hook_command(
-            &settings.hooks.after_model,
-            "",
-            "bitloops hooks gemini after-model",
-        );
-        verify_hook_command(
-            &settings.hooks.before_tool_selection,
-            "",
-            "bitloops hooks gemini before-tool-selection",
-        );
-        verify_hook_command(
-            &settings.hooks.before_tool,
-            "*",
-            "bitloops hooks gemini before-tool",
-        );
-        verify_hook_command(
-            &settings.hooks.after_tool,
-            "*",
-            "bitloops hooks gemini after-tool",
-        );
-        verify_hook_command(
-            &settings.hooks.pre_compress,
-            "",
-            "bitloops hooks gemini pre-compress",
-        );
-        verify_hook_command(
-            &settings.hooks.notification,
-            "",
-            "bitloops hooks gemini notification",
-        );
+    let settings = read_gemini_settings(dir.path());
+    assert!(settings.hooks_config.enabled);
+    assert_eq!(settings.hooks.session_start.len(), 1);
+    assert_eq!(settings.hooks.session_end.len(), 2);
+    assert_eq!(settings.hooks.before_agent.len(), 1);
+    assert_eq!(settings.hooks.after_agent.len(), 1);
+    assert_eq!(settings.hooks.before_model.len(), 1);
+    assert_eq!(settings.hooks.after_model.len(), 1);
+    assert_eq!(settings.hooks.before_tool_selection.len(), 1);
+    assert_eq!(settings.hooks.before_tool.len(), 1);
+    assert_eq!(settings.hooks.after_tool.len(), 1);
+    assert_eq!(settings.hooks.pre_compress.len(), 1);
+    assert_eq!(settings.hooks.notification.len(), 1);
+    verify_hook_command(
+        &settings.hooks.session_start,
+        "",
+        "bitloops hooks gemini session-start",
+    );
+    verify_hook_command(
+        &settings.hooks.session_end,
+        "exit",
+        "bitloops hooks gemini session-end",
+    );
+    verify_hook_command(
+        &settings.hooks.session_end,
+        "logout",
+        "bitloops hooks gemini session-end",
+    );
+    verify_hook_command(
+        &settings.hooks.before_agent,
+        "",
+        "bitloops hooks gemini before-agent",
+    );
+    verify_hook_command(
+        &settings.hooks.after_agent,
+        "",
+        "bitloops hooks gemini after-agent",
+    );
+    verify_hook_command(
+        &settings.hooks.before_model,
+        "",
+        "bitloops hooks gemini before-model",
+    );
+    verify_hook_command(
+        &settings.hooks.after_model,
+        "",
+        "bitloops hooks gemini after-model",
+    );
+    verify_hook_command(
+        &settings.hooks.before_tool_selection,
+        "",
+        "bitloops hooks gemini before-tool-selection",
+    );
+    verify_hook_command(
+        &settings.hooks.before_tool,
+        "*",
+        "bitloops hooks gemini before-tool",
+    );
+    verify_hook_command(
+        &settings.hooks.after_tool,
+        "*",
+        "bitloops hooks gemini after-tool",
+    );
+    verify_hook_command(
+        &settings.hooks.pre_compress,
+        "",
+        "bitloops hooks gemini pre-compress",
+    );
+    verify_hook_command(
+        &settings.hooks.notification,
+        "",
+        "bitloops hooks gemini notification",
+    );
 
-        let count = agent
-            .install_hooks(false, false)
-            .expect("idempotent hook install should work");
-        assert_eq!(count, 0);
+    let count = agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("idempotent hook install should work");
+    assert_eq!(count, 0);
 
-        let count = agent
-            .install_hooks(false, true)
-            .expect("force hook install should work");
-        assert_eq!(count, 12);
-    });
+    let count = agent
+        .install_hooks_at(dir.path(), false, true)
+        .expect("force hook install should work");
+    assert_eq!(count, 12);
 
     // Local dev command prefix.
     let local_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(local_dir.path(), || {
-        let count = agent
-            .install_hooks(true, false)
-            .expect("local dev hook install should work");
-        assert_eq!(count, 12);
-        let settings = read_gemini_settings(local_dir.path());
-        verify_hook_command(
-            &settings.hooks.session_start,
-            "",
-            "cargo run -- hooks gemini session-start",
-        );
-    });
+    let count = agent
+        .install_hooks_at(local_dir.path(), true, false)
+        .expect("local dev hook install should work");
+    assert_eq!(count, 12);
+    let settings = read_gemini_settings(local_dir.path());
+    verify_hook_command(
+        &settings.hooks.session_start,
+        "",
+        "cargo run -- hooks gemini session-start",
+    );
 
     // Preserve user hooks.
     let user_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(user_dir.path(), || {
-        write_gemini_settings(
-            user_dir.path(),
-            r#"{
+    write_gemini_settings(
+        user_dir.path(),
+        r#"{
   "hooks": {
 "SessionStart": [
   {
@@ -615,28 +607,26 @@ fn TestInstallHooks() {
 ]
   }
 }"#,
-        );
-        agent
-            .install_hooks(false, false)
-            .expect("install hooks should preserve user hooks");
-        let settings = read_gemini_settings(user_dir.path());
-        assert_eq!(settings.hooks.session_start.len(), 2);
-        let found_user_hook = settings.hooks.session_start.iter().any(|matcher| {
-            matcher.matcher == "startup"
-                && matcher
-                    .hooks
-                    .iter()
-                    .any(|hook| hook.name == "my-hook" && hook.command == "echo hello")
-        });
-        assert!(found_user_hook);
+    );
+    agent
+        .install_hooks_at(user_dir.path(), false, false)
+        .expect("install hooks should preserve user hooks");
+    let settings = read_gemini_settings(user_dir.path());
+    assert_eq!(settings.hooks.session_start.len(), 2);
+    let found_user_hook = settings.hooks.session_start.iter().any(|matcher| {
+        matcher.matcher == "startup"
+            && matcher
+                .hooks
+                .iter()
+                .any(|hook| hook.name == "my-hook" && hook.command == "echo hello")
     });
+    assert!(found_user_hook);
 
     // Preserve unknown hook types.
     let unknown_hook_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(unknown_hook_dir.path(), || {
-        write_gemini_settings(
-            unknown_hook_dir.path(),
-            r#"{
+    write_gemini_settings(
+        unknown_hook_dir.path(),
+        r#"{
   "hooks": {
 "FutureHook": [
   {
@@ -652,42 +642,39 @@ fn TestInstallHooks() {
 ]
   }
 }"#,
-        );
-        agent
-            .install_hooks(false, false)
-            .expect("install hooks should preserve unknown hook types");
-        let raw_hooks = read_raw_hooks(unknown_hook_dir.path());
-        assert!(raw_hooks.contains_key("FutureHook"));
-        assert!(raw_hooks.contains_key("AnotherNewHook"));
-        assert!(raw_hooks.contains_key("SessionStart"));
-        let future_matchers: Vec<GeminiHookMatcher> =
-            serde_json::from_value(raw_hooks["FutureHook"].clone())
-                .expect("failed to parse FutureHook");
-        assert_eq!(future_matchers.len(), 1);
-        assert_eq!(future_matchers[0].hooks[0].command, "echo future");
-        let another_matchers: Vec<GeminiHookMatcher> =
-            serde_json::from_value(raw_hooks["AnotherNewHook"].clone())
-                .expect("failed to parse AnotherNewHook");
-        assert_eq!(another_matchers[0].matcher, "pattern");
-    });
+    );
+    agent
+        .install_hooks_at(unknown_hook_dir.path(), false, false)
+        .expect("install hooks should preserve unknown hook types");
+    let raw_hooks = read_raw_hooks(unknown_hook_dir.path());
+    assert!(raw_hooks.contains_key("FutureHook"));
+    assert!(raw_hooks.contains_key("AnotherNewHook"));
+    assert!(raw_hooks.contains_key("SessionStart"));
+    let future_matchers: Vec<GeminiHookMatcher> =
+        serde_json::from_value(raw_hooks["FutureHook"].clone())
+            .expect("failed to parse FutureHook");
+    assert_eq!(future_matchers.len(), 1);
+    assert_eq!(future_matchers[0].hooks[0].command, "echo future");
+    let another_matchers: Vec<GeminiHookMatcher> =
+        serde_json::from_value(raw_hooks["AnotherNewHook"].clone())
+            .expect("failed to parse AnotherNewHook");
+    assert_eq!(another_matchers[0].matcher, "pattern");
 
     // Preserve unknown top-level settings fields.
     let unknown_fields_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(unknown_fields_dir.path(), || {
-        write_gemini_settings(
-            unknown_fields_dir.path(),
-            r#"{
+    write_gemini_settings(
+        unknown_fields_dir.path(),
+        r#"{
   "someOtherField": "value",
   "customConfig": {"nested": true}
 }"#,
-        );
-        agent
-            .install_hooks(false, false)
-            .expect("install hooks should preserve unknown settings fields");
-        let raw_settings = read_raw_settings(unknown_fields_dir.path());
-        assert!(raw_settings.contains_key("someOtherField"));
-        assert!(raw_settings.contains_key("customConfig"));
-    });
+    );
+    agent
+        .install_hooks_at(unknown_fields_dir.path(), false, false)
+        .expect("install hooks should preserve unknown settings fields");
+    let raw_settings = read_raw_settings(unknown_fields_dir.path());
+    assert!(raw_settings.contains_key("someOtherField"));
+    assert!(raw_settings.contains_key("customConfig"));
 }
 
 #[test]
@@ -695,30 +682,27 @@ fn TestInstallHooks() {
 fn TestUninstallHooks() {
     let agent = GeminiCliAgent;
     let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        agent
-            .install_hooks(false, false)
-            .expect("hook install should work");
-        assert!(agent.are_hooks_installed());
+    agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("hook install should work");
+    assert!(agent.are_hooks_installed_at(dir.path()));
 
-        agent.uninstall_hooks().expect("hook uninstall should work");
-        assert!(!agent.are_hooks_installed());
-    });
+    agent
+        .uninstall_hooks_at(dir.path())
+        .expect("hook uninstall should work");
+    assert!(!agent.are_hooks_installed_at(dir.path()));
 
     // No settings file should not error.
     let no_settings_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(no_settings_dir.path(), || {
-        agent
-            .uninstall_hooks()
-            .expect("uninstall should not fail without settings");
-    });
+    agent
+        .uninstall_hooks_at(no_settings_dir.path())
+        .expect("uninstall should not fail without settings");
 
     // Preserve user hooks.
     let user_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(user_dir.path(), || {
-        write_gemini_settings(
-            user_dir.path(),
-            r#"{
+    write_gemini_settings(
+        user_dir.path(),
+        r#"{
   "hooks": {
 "SessionStart": [
   {
@@ -731,21 +715,19 @@ fn TestUninstallHooks() {
 ]
   }
 }"#,
-        );
-        agent
-            .uninstall_hooks()
-            .expect("uninstall should preserve user hooks");
-        let settings = read_gemini_settings(user_dir.path());
-        assert_eq!(settings.hooks.session_start.len(), 1);
-        assert_eq!(settings.hooks.session_start[0].matcher, "startup");
-    });
+    );
+    agent
+        .uninstall_hooks_at(user_dir.path())
+        .expect("uninstall should preserve user hooks");
+    let settings = read_gemini_settings(user_dir.path());
+    assert_eq!(settings.hooks.session_start.len(), 1);
+    assert_eq!(settings.hooks.session_start[0].matcher, "startup");
 
     // Preserve unknown hook types.
     let unknown_type_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(unknown_type_dir.path(), || {
-        write_gemini_settings(
-            unknown_type_dir.path(),
-            r#"{
+    write_gemini_settings(
+        unknown_type_dir.path(),
+        r#"{
   "hooks": {
 "SessionStart": [
   {
@@ -760,34 +742,31 @@ fn TestUninstallHooks() {
 ]
   }
 }"#,
-        );
-        agent
-            .uninstall_hooks()
-            .expect("uninstall should preserve unknown hook types");
-        let raw_hooks = read_raw_hooks(unknown_type_dir.path());
-        assert!(raw_hooks.contains_key("FutureHook"));
-        if let Some(session_start) = raw_hooks.get("SessionStart")
-            && let Ok(matchers) =
-                serde_json::from_value::<Vec<GeminiHookMatcher>>(session_start.clone())
-        {
-            assert!(matchers.is_empty());
-        }
-    });
+    );
+    agent
+        .uninstall_hooks_at(unknown_type_dir.path())
+        .expect("uninstall should preserve unknown hook types");
+    let raw_hooks = read_raw_hooks(unknown_type_dir.path());
+    assert!(raw_hooks.contains_key("FutureHook"));
+    if let Some(session_start) = raw_hooks.get("SessionStart")
+        && let Ok(matchers) =
+            serde_json::from_value::<Vec<GeminiHookMatcher>>(session_start.clone())
+    {
+        assert!(matchers.is_empty());
+    }
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestAreHooksInstalled() {
     let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = GeminiCliAgent;
-        assert!(!agent.are_hooks_installed());
+    let agent = GeminiCliAgent;
+    assert!(!agent.are_hooks_installed_at(dir.path()));
 
-        agent
-            .install_hooks(false, false)
-            .expect("hook install should work");
-        assert!(agent.are_hooks_installed());
-    });
+    agent
+        .install_hooks_at(dir.path(), false, false)
+        .expect("hook install should work");
+    assert!(agent.are_hooks_installed_at(dir.path()));
 }
 
 #[test]

@@ -254,34 +254,38 @@ pub async fn run_logs(args: DaemonLogsArgs) -> Result<()> {
 }
 
 async fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
-    run_logs_with_io_and_shutdown(args, out, async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+    run_logs_with_io_and_shutdown_at_path(
+        args,
+        out,
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        },
+        LOG_FOLLOW_POLL_INTERVAL,
+        daemon::daemon_log_file_path(),
+    )
     .await
 }
 
-async fn run_logs_with_io_and_shutdown<S>(
+#[cfg(test)]
+async fn run_logs_with_io_at_path(
     args: DaemonLogsArgs,
     out: &mut dyn Write,
-    shutdown: S,
-) -> Result<()>
-where
-    S: Future<Output = ()>,
-{
-    run_logs_with_io_and_shutdown_and_poll_interval(args, out, shutdown, LOG_FOLLOW_POLL_INTERVAL)
+    log_path: std::path::PathBuf,
+) -> Result<()> {
+    run_logs_with_io_and_shutdown_at_path(args, out, async {}, LOG_FOLLOW_POLL_INTERVAL, log_path)
         .await
 }
 
-async fn run_logs_with_io_and_shutdown_and_poll_interval<S>(
+async fn run_logs_with_io_and_shutdown_at_path<S>(
     args: DaemonLogsArgs,
     out: &mut dyn Write,
     shutdown: S,
     poll_interval: Duration,
+    log_path: std::path::PathBuf,
 ) -> Result<()>
 where
     S: Future<Output = ()>,
 {
-    let log_path = daemon::daemon_log_file_path();
     if args.path {
         writeln!(out, "{}", log_path.display()).context("writing daemon log path")?;
         return Ok(());
