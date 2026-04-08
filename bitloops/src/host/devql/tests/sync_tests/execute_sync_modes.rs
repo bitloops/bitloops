@@ -657,8 +657,17 @@ async fn sync_populates_current_semantic_and_embedding_tables() {
         )
         .expect("count symbol_embeddings_current rows");
 
-    assert!(result.success, "sync should succeed with current clone projection");
+    assert!(
+        result.success,
+        "sync should succeed with current clone projection"
+    );
     assert!(semantic_rows > 0, "current semantics should be populated");
-    assert!(feature_rows > 0, "current semantic features should be populated");
-    assert!(embedding_rows > 0, "current baseline embeddings should be populated");
+    assert!(
+        feature_rows > 0,
+        "current semantic features should be populated"
+    );
+    assert!(
+        embedding_rows > 0,
+        "current baseline embeddings should be populated"
+    );
 }

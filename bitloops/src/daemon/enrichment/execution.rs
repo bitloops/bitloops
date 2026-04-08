@@ -137,7 +137,7 @@ fn load_or_build_embedding_provider(
     let profile_name = profile_name.to_string();
     match init.get_or_init(|| {
         match build_symbol_embedding_provider(provider_config, Some(repo_root)) {
-            Ok(Some(provider)) => Ok(Arc::from(provider)),
+            Ok(Some(provider)) => Ok(provider),
             Ok(None) => Err(format!(
                 "embedding profile `{profile_name}` is not available"
             )),

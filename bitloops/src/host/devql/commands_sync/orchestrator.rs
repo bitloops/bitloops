@@ -737,9 +737,14 @@ async fn flush_pending_materialisations(
         .await
         .context("flushing pending SQLite sync materialisations")?;
     if !outcome.materialized_items.is_empty() {
-        project_materialized_items(cfg, relational, current_projection, &outcome.materialized_items)
-            .await
-            .context("projecting current semantic clone rows for synced paths")?;
+        project_materialized_items(
+            cfg,
+            relational,
+            current_projection,
+            &outcome.materialized_items,
+        )
+        .await
+        .context("projecting current semantic clone rows for synced paths")?;
         *current_projection_dirty = true;
     }
     for artefact in outcome.pre_artefacts.clone() {
@@ -817,7 +822,7 @@ fn build_current_projection_context(cfg: &DevqlConfig) -> CurrentProjectionConte
         match semantic_clones_pack::build_semantic_summary_provider(
             &super::super::semantic_provider_config(cfg),
         ) {
-            Ok(provider) => Arc::from(provider),
+            Ok(provider) => provider,
             Err(err) => {
                 log::warn!(
                     "semantic_clones current sync summaries degraded; using deterministic summaries only: {err:#}"
@@ -833,7 +838,7 @@ fn build_current_projection_context(cfg: &DevqlConfig) -> CurrentProjectionConte
         &embedding_config,
         Some(&cfg.repo_root),
     ) {
-        Ok(provider) => provider.map(Arc::from),
+        Ok(provider) => provider,
         Err(err) => {
             log::warn!(
                 "semantic_clones current sync embeddings degraded; skipping current embedding projection: {err:#}"
@@ -862,7 +867,10 @@ async fn project_materialized_items(
             &item.extraction,
             &item.effective_content,
             Arc::clone(&current_projection.summary_provider),
-            current_projection.embedding_provider.as_ref().map(Arc::clone),
+            current_projection
+                .embedding_provider
+                .as_ref()
+                .map(Arc::clone),
         )
         .await
         .with_context(|| {
