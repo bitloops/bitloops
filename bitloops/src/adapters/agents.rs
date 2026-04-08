@@ -25,11 +25,23 @@ pub use session::*;
 pub use types::*;
 
 pub(crate) fn managed_hook_command(command: &str) -> String {
-    match std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+    managed_hook_command_with_daemon_config(
+        command,
+        std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE)
+            .as_deref()
+            .map(std::path::Path::new),
+    )
+}
+
+pub(crate) fn managed_hook_command_with_daemon_config(
+    command: &str,
+    daemon_config_override: Option<&std::path::Path>,
+) -> String {
+    match daemon_config_override {
         Some(path) => format!(
             "{}={} {}",
             crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
-            shell_single_quote(&PathBuf::from(path).to_string_lossy()),
+            shell_single_quote(&path.to_string_lossy()),
             command,
         ),
         None => command.to_string(),

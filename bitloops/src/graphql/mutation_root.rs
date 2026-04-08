@@ -291,28 +291,8 @@ impl MutationRoot {
 
         let cli_version =
             require_non_empty_input(cli_version, "cliVersion", "updateCliTelemetryConsent")?;
-        let runtime = crate::daemon::status()
-            .await
-            .map_err(|err| {
-                operation_error(
-                    "BACKEND_ERROR",
-                    "configuration",
-                    "updateCliTelemetryConsent",
-                    err,
-                )
-            })?
-            .runtime
-            .ok_or_else(|| {
-                operation_error(
-                    "BACKEND_ERROR",
-                    "configuration",
-                    "updateCliTelemetryConsent",
-                    "Bitloops daemon runtime state is unavailable",
-                )
-            })?;
-
         let state = crate::config::update_daemon_telemetry_consent(
-            Some(runtime.config_path.as_path()),
+            Some(context.daemon_config_path().as_path()),
             &cli_version,
             telemetry,
         )

@@ -72,6 +72,11 @@ pub(super) fn delete_supervisor_runtime_state() -> Result<()> {
 }
 
 #[cfg(test)]
+pub(super) fn read_runtime_state_legacy(repo_root: &Path) -> Result<Option<DaemonRuntimeState>> {
+    read_json(&runtime_state_path(repo_root))
+}
+
+#[cfg(test)]
 pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let data = match fs::read(path) {
         Ok(data) => data,

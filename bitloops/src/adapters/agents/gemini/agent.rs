@@ -117,18 +117,7 @@ impl Agent for GeminiCliAgent {
 
     fn detect_presence(&self) -> Result<bool> {
         let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
-
-        let gemini_dir = repo_root.join(".gemini");
-        if gemini_dir.exists() {
-            return Ok(true);
-        }
-
-        let settings_file = gemini_dir.join(GEMINI_SETTINGS_FILE_NAME);
-        if settings_file.exists() {
-            return Ok(true);
-        }
-
-        Ok(false)
+        self.detect_presence_at(&repo_root)
     }
 
     fn get_session_id(&self, input: &HookInput) -> String {
@@ -339,7 +328,86 @@ impl Agent for GeminiCliAgent {
 
 impl HookSupport for GeminiCliAgent {
     fn install_hooks(&self, local_dev: bool, force: bool) -> Result<usize> {
-        let settings_path = self.settings_path()?;
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.install_hooks_at(&repo_root, local_dev, force)
+    }
+
+    fn uninstall_hooks(&self) -> Result<()> {
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.uninstall_hooks_at(&repo_root)
+    }
+
+    fn are_hooks_installed(&self) -> bool {
+        let repo_root = match crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        }) {
+            Ok(repo_root) => repo_root,
+            Err(_) => return false,
+        };
+        self.are_hooks_installed_at(&repo_root)
+    }
+}
+
+impl TranscriptPositionProvider for GeminiCliAgent {
+    fn get_transcript_position(&self, path: &str) -> Result<usize> {
+        Self::get_transcript_position_impl(path)
+    }
+}
+
+impl TranscriptAnalyzer for GeminiCliAgent {
+    fn get_transcript_position(&self, path: &str) -> Result<usize> {
+        Self::get_transcript_position_impl(path)
+    }
+
+    fn extract_modified_files_from_offset(
+        &self,
+        path: &str,
+        start_offset: usize,
+    ) -> Result<(Vec<String>, usize)> {
+        Self::extract_modified_files_from_offset_impl(self, path, start_offset)
+    }
+
+    fn extract_prompts(&self, session_ref: &str, from_offset: usize) -> Result<Vec<String>> {
+        Self::extract_prompts_impl(self, session_ref, from_offset)
+    }
+
+    fn extract_summary(&self, session_ref: &str) -> Result<String> {
+        Self::extract_summary_impl(self, session_ref)
+    }
+}
+
+impl TokenCalculator for GeminiCliAgent {
+    fn calculate_token_usage(&self, session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
+        Self::calculate_token_usage_impl(self, session_ref, from_offset)
+    }
+}
+
+impl GeminiCliAgent {
+    pub(crate) fn detect_presence_at(&self, repo_root: &Path) -> Result<bool> {
+        let gemini_dir = repo_root.join(".gemini");
+        if gemini_dir.exists() {
+            return Ok(true);
+        }
+
+        let settings_file = gemini_dir.join(GEMINI_SETTINGS_FILE_NAME);
+        if settings_file.exists() {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub(crate) fn install_hooks_at(
+        &self,
+        repo_root: &Path,
+        local_dev: bool,
+        force: bool,
+    ) -> Result<usize> {
+        let settings_path = self.settings_path_at(repo_root);
 
         let mut raw_settings: Map<String, Value> = match std::fs::read(&settings_path) {
             Ok(data) => serde_json::from_slice(&data)
@@ -512,8 +580,8 @@ impl HookSupport for GeminiCliAgent {
         Ok(12)
     }
 
-    fn uninstall_hooks(&self) -> Result<()> {
-        let settings_path = self.settings_path()?;
+    pub(crate) fn uninstall_hooks_at(&self, repo_root: &Path) -> Result<()> {
+        let settings_path = self.settings_path_at(repo_root);
         let data = match std::fs::read(&settings_path) {
             Ok(data) => data,
             Err(_) => return Ok(()),
@@ -584,12 +652,8 @@ impl HookSupport for GeminiCliAgent {
         Ok(())
     }
 
-    fn are_hooks_installed(&self) -> bool {
-        let settings_path = match self.settings_path() {
-            Ok(path) => path,
-            Err(_) => return false,
-        };
-
+    pub(crate) fn are_hooks_installed_at(&self, repo_root: &Path) -> bool {
+        let settings_path = self.settings_path_at(repo_root);
         let data = match std::fs::read(settings_path) {
             Ok(data) => data,
             Err(_) => return false,
@@ -612,43 +676,6 @@ impl HookSupport for GeminiCliAgent {
             || Self::has_bitloops_hook(&settings.hooks.pre_compress)
             || Self::has_bitloops_hook(&settings.hooks.notification)
     }
-}
-
-impl TranscriptPositionProvider for GeminiCliAgent {
-    fn get_transcript_position(&self, path: &str) -> Result<usize> {
-        Self::get_transcript_position_impl(path)
-    }
-}
-
-impl TranscriptAnalyzer for GeminiCliAgent {
-    fn get_transcript_position(&self, path: &str) -> Result<usize> {
-        Self::get_transcript_position_impl(path)
-    }
-
-    fn extract_modified_files_from_offset(
-        &self,
-        path: &str,
-        start_offset: usize,
-    ) -> Result<(Vec<String>, usize)> {
-        Self::extract_modified_files_from_offset_impl(self, path, start_offset)
-    }
-
-    fn extract_prompts(&self, session_ref: &str, from_offset: usize) -> Result<Vec<String>> {
-        Self::extract_prompts_impl(self, session_ref, from_offset)
-    }
-
-    fn extract_summary(&self, session_ref: &str) -> Result<String> {
-        Self::extract_summary_impl(self, session_ref)
-    }
-}
-
-impl TokenCalculator for GeminiCliAgent {
-    fn calculate_token_usage(&self, session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
-        Self::calculate_token_usage_impl(self, session_ref, from_offset)
-    }
-}
-
-impl GeminiCliAgent {
     pub fn get_project_hash(project_root: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(project_root.as_bytes());
@@ -800,11 +827,8 @@ impl GeminiCliAgent {
         calculate_token_usage_from_file(session_ref, from_offset)
     }
 
-    fn settings_path(&self) -> Result<PathBuf> {
-        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
-            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
-        })?;
-        Ok(repo_root.join(".gemini").join(GEMINI_SETTINGS_FILE_NAME))
+    pub(crate) fn settings_path_at(&self, repo_root: &Path) -> PathBuf {
+        repo_root.join(".gemini").join(GEMINI_SETTINGS_FILE_NAME)
     }
 
     fn is_bitloops_hook(command: &str) -> bool {

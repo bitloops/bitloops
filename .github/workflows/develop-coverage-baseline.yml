@@ -29,8 +29,9 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: bitloops
+          workspaces: . -> target
           shared-key: dev-baseline
+          cache-workspace-crates: true
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
       - name: Generate LCOV
