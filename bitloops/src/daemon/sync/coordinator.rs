@@ -331,6 +331,7 @@ impl SyncCoordinator {
                 if let Some(host) = host.as_ref() {
                     let capability_event_coordinator =
                         crate::daemon::shared_capability_event_coordinator();
+                    capability_event_coordinator.activate_worker();
                     if let Err(err) = enqueue_sync_completed_runs(
                         capability_event_coordinator.as_ref(),
                         host,

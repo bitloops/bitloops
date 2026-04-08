@@ -282,6 +282,7 @@ pub fn shared_sync_coordinator() -> Arc<SyncCoordinator> {
 }
 
 pub(crate) fn activate_sync_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
+    CapabilityEventCoordinator::shared().activate_worker();
     SyncCoordinator::shared().activate_worker(Some(subscription_hub));
 }
 

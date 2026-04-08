@@ -245,9 +245,7 @@ impl CapabilityEventCoordinator {
             *coordinator = Self::new_shared_instance(runtime_store);
         }
 
-        let coordinator = Arc::clone(&coordinator);
-        coordinator.spawn_worker_if_possible();
-        coordinator
+        Arc::clone(&coordinator)
     }
 
     fn new_shared_instance(runtime_store: DaemonSqliteRuntimeStore) -> Arc<Self> {
@@ -257,6 +255,10 @@ impl CapabilityEventCoordinator {
             notify: Notify::new(),
             worker_started: AtomicBool::new(false),
         })
+    }
+
+    pub(crate) fn activate_worker(self: &Arc<Self>) {
+        self.spawn_worker_if_possible();
     }
 
     fn spawn_worker_if_possible(self: &Arc<Self>) {
@@ -950,6 +952,115 @@ mod tests {
                         .as_ref()
                         .map(|run| run.run_id.as_str()),
                     Some("run-1")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_does_not_recover_running_runs_without_activation() {
+        let state_dir = TempDir::new().expect("tempdir");
+        with_env_var(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir.path().to_string_lossy().as_ref()),
+            || {
+                let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+                let started_at_unix = 42_u64;
+                let updated_at_unix = 99_u64;
+                store
+                    .mutate_capability_event_queue_state(|state| {
+                        state.version = 1;
+                        state.last_action = Some("running".to_string());
+                        state.updated_at_unix = updated_at_unix;
+                        let mut run = queued_run(
+                            "run-running",
+                            "repo-1",
+                            "test_harness",
+                            "test_harness#0",
+                            1,
+                            CapabilityEventRunStatus::Running,
+                        );
+                        run.started_at_unix = Some(started_at_unix);
+                        run.updated_at_unix = updated_at_unix;
+                        state.runs = vec![run];
+                        Ok(())
+                    })
+                    .expect("seed running capability event run");
+
+                let coordinator = CapabilityEventCoordinator::shared();
+                let snapshot = coordinator
+                    .snapshot(Some("repo-1"))
+                    .expect("snapshot capability event status");
+                assert_eq!(snapshot.state.running_runs, 1);
+
+                let loaded = store
+                    .load_capability_event_queue_state()
+                    .expect("load capability event queue state")
+                    .expect("state exists");
+                let run = loaded
+                    .runs
+                    .iter()
+                    .find(|run| run.run_id == "run-running")
+                    .expect("running run exists");
+                assert_eq!(run.status, CapabilityEventRunStatus::Running);
+                assert_eq!(run.started_at_unix, Some(started_at_unix));
+                assert_eq!(loaded.last_action.as_deref(), Some("running"));
+                assert_eq!(loaded.updated_at_unix, updated_at_unix);
+            },
+        );
+    }
+
+    #[test]
+    fn activate_worker_recovers_running_runs() {
+        let state_dir = TempDir::new().expect("tempdir");
+        with_env_var(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir.path().to_string_lossy().as_ref()),
+            || {
+                let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+                store
+                    .mutate_capability_event_queue_state(|state| {
+                        state.version = 1;
+                        state.last_action = Some("running".to_string());
+                        let mut run = queued_run(
+                            "run-running",
+                            "repo-1",
+                            "test_harness",
+                            "test_harness#0",
+                            1,
+                            CapabilityEventRunStatus::Running,
+                        );
+                        run.started_at_unix = Some(12);
+                        run.error = Some("previous failure".to_string());
+                        state.runs = vec![run];
+                        Ok(())
+                    })
+                    .expect("seed running capability event run");
+
+                let coordinator = CapabilityEventCoordinator::shared();
+                coordinator.activate_worker();
+                let snapshot = coordinator
+                    .snapshot(Some("repo-1"))
+                    .expect("snapshot capability event status");
+                assert_eq!(snapshot.state.pending_runs, 1);
+                assert_eq!(snapshot.state.running_runs, 0);
+
+                let loaded = store
+                    .load_capability_event_queue_state()
+                    .expect("load capability event queue state")
+                    .expect("state exists");
+                let run = loaded
+                    .runs
+                    .iter()
+                    .find(|run| run.run_id == "run-running")
+                    .expect("running run exists");
+                assert_eq!(run.status, CapabilityEventRunStatus::Queued);
+                assert_eq!(run.started_at_unix, None);
+                assert_eq!(run.completed_at_unix, None);
+                assert_eq!(run.error, None);
+                assert_eq!(
+                    loaded.last_action.as_deref(),
+                    Some("recovered_running_runs")
                 );
             },
         );
