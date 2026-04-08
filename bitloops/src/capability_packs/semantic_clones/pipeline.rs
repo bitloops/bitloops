@@ -26,7 +26,7 @@ use super::{ensure_semantic_embeddings_schema, ensure_semantic_features_schema};
 
 use super::schema::{semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql};
 use super::{
-    load_active_embedding_setup, load_current_repo_embedding_setups, persist_active_embedding_setup,
+    load_active_embedding_setup, load_current_repo_embedding_states, persist_active_embedding_setup,
 };
 
 async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
@@ -185,11 +185,11 @@ async fn rebuild_symbol_clone_edges_for_projection(
     ensure_semantic_clones_schema(relational).await?;
     ensure_semantic_features_schema(relational).await?;
     ensure_semantic_embeddings_schema(relational).await?;
-    let active_setup =
-        resolve_active_embedding_setup_for_clone_rebuild(relational, repo_id).await?;
-    let candidates = match active_setup.as_ref() {
-        Some(active_setup) => {
-            load_symbol_clone_candidate_inputs(relational, repo_id, projection, active_setup)
+    let active_state =
+        resolve_active_embedding_setup_for_clone_rebuild(relational, repo_id, projection).await?;
+    let candidates = match active_state.as_ref() {
+        Some(active_state) => {
+            load_symbol_clone_candidate_inputs(relational, repo_id, projection, active_state)
                 .await?
         }
         None => Vec::new(),
@@ -209,7 +209,7 @@ async fn load_symbol_clone_candidate_inputs(
     relational: &RelationalStorage,
     repo_id: &str,
     projection: CloneProjection,
-    active_setup: &embeddings::EmbeddingSetup,
+    active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> Result<Vec<scoring::SymbolCloneCandidateInput>> {
     let churn_by_symbol_id = load_symbol_churn_counts(relational, repo_id, projection).await?;
     let call_targets_by_symbol_id =
@@ -220,7 +220,7 @@ async fn load_symbol_clone_candidate_inputs(
         .query_rows(&build_symbol_clone_candidate_lookup_sql(
             repo_id,
             projection,
-            active_setup,
+            active_state,
         ))
         .await?;
 
@@ -292,7 +292,7 @@ async fn load_symbol_clone_candidate_inputs(
                     .unwrap_or_default(),
                 row.get("embedding_dimension")
                     .and_then(value_as_usize)
-                    .unwrap_or(active_setup.dimension),
+                    .unwrap_or(active_state.setup.dimension),
             ),
             embedding,
             call_targets: call_targets_by_symbol_id
@@ -313,25 +313,70 @@ async fn load_symbol_clone_candidate_inputs(
 async fn resolve_active_embedding_setup_for_clone_rebuild(
     relational: &RelationalStorage,
     repo_id: &str,
-) -> Result<Option<embeddings::EmbeddingSetup>> {
-    if let Some(active_setup) = load_active_embedding_setup(relational, repo_id).await? {
-        return Ok(Some(active_setup));
+    projection: CloneProjection,
+) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
+    if projection == CloneProjection::Current {
+        let current_states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+        return choose_current_projection_embedding_state(&current_states);
     }
 
-    let current_setups = load_current_repo_embedding_setups(relational, repo_id).await?;
-    match current_setups.as_slice() {
-        [setup] => {
-            persist_active_embedding_setup(relational, repo_id, setup).await?;
-            Ok(Some(setup.clone()))
+    if let Some(active_state) = load_active_embedding_setup(relational, repo_id).await? {
+        return Ok(Some(active_state));
+    }
+
+    let current_states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+    match current_states.as_slice() {
+        [state] => {
+            persist_active_embedding_setup(relational, repo_id, state).await?;
+            Ok(Some(state.clone()))
         }
         [] => Ok(None),
+        _ if current_states
+            .iter()
+            .all(|state| state.setup == current_states[0].setup) =>
+        {
+            let chosen = current_states
+                .iter()
+                .find(|state| {
+                    state.representation_kind == embeddings::EmbeddingRepresentationKind::Enriched
+                })
+                .unwrap_or(&current_states[0])
+                .clone();
+            persist_active_embedding_setup(relational, repo_id, &chosen).await?;
+            Ok(Some(chosen))
+        }
         _ => {
             log::warn!(
-                "semantic_clones clone rebuild skipped for repo {}: multiple embedding setups exist but no active setup is persisted",
+                "semantic_clones clone rebuild skipped for repo {}: multiple embedding representations or setups exist but no active state is persisted",
                 repo_id
             );
             Ok(None)
         }
+    }
+}
+
+fn choose_current_projection_embedding_state(
+    current_states: &[embeddings::ActiveEmbeddingRepresentationState],
+) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
+    match current_states {
+        [] => Ok(None),
+        [state] => Ok(Some(state.clone())),
+        _ if current_states
+            .iter()
+            .all(|state| state.setup == current_states[0].setup) =>
+        {
+            Ok(Some(
+                current_states
+                    .iter()
+                    .find(|state| {
+                        state.representation_kind
+                            == embeddings::EmbeddingRepresentationKind::Enriched
+                    })
+                    .unwrap_or(&current_states[0])
+                    .clone(),
+            ))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -471,7 +516,7 @@ WHERE e.repo_id = '{}' AND e.edge_kind <> '{}' AND e.edge_kind <> '{}'",
 fn build_symbol_clone_candidate_lookup_sql(
     repo_id: &str,
     projection: CloneProjection,
-    active_setup: &embeddings::EmbeddingSetup,
+    active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> String {
     let artefacts_table = projection.artefacts_table();
     let semantics_table = projection.semantics_table();
@@ -489,11 +534,13 @@ JOIN {semantics_table} ss ON ss.repo_id = e.repo_id AND ss.artefact_id = e.artef
 JOIN {features_table} sf ON sf.repo_id = e.repo_id AND sf.artefact_id = e.artefact_id AND sf.{snapshot_column} = e.{snapshot_column} \
 JOIN {artefacts_table} a ON a.repo_id = e.repo_id AND a.artefact_id = e.artefact_id AND a.{snapshot_column} = e.{snapshot_column} \
 WHERE e.repo_id = '{}' AND e.provider = '{}' AND e.model = '{}' AND e.dimension = {} \
+AND e.representation_kind = '{}' \
 ORDER BY a.path, a.start_line, a.symbol_id",
         esc_pg(repo_id),
-        esc_pg(&active_setup.provider),
-        esc_pg(&active_setup.model),
-        active_setup.dimension,
+        esc_pg(&active_state.setup.provider),
+        esc_pg(&active_state.setup.model),
+        active_state.setup.dimension,
+        esc_pg(&active_state.representation_kind.to_string()),
         artefacts_table = artefacts_table,
         semantics_table = semantics_table,
         features_table = features_table,
@@ -609,7 +656,10 @@ mod semantic_clone_pipeline_tests {
         semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql,
     };
 
-    use super::{CloneProjection, build_symbol_clone_candidate_lookup_sql};
+    use super::{
+        CloneProjection, build_symbol_clone_candidate_lookup_sql,
+        choose_current_projection_embedding_state,
+    };
 
     #[test]
     fn semantic_clone_schema_includes_clone_edge_table() {
@@ -628,7 +678,10 @@ mod semantic_clone_pipeline_tests {
         let sql = build_symbol_clone_candidate_lookup_sql(
             "repo'1",
             CloneProjection::Current,
-            &super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            &super::embeddings::ActiveEmbeddingRepresentationState::new(
+                super::embeddings::EmbeddingRepresentationKind::Baseline,
+                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            ),
         );
 
         assert!(sql.contains("FROM symbol_embeddings_current e"));
@@ -636,5 +689,26 @@ mod semantic_clone_pipeline_tests {
         assert!(sql.contains("repo''1"));
         assert!(sql.contains("test-model"));
         assert!(!sql.contains(" IN ("));
+    }
+
+    #[test]
+    fn current_projection_prefers_enriched_representation_when_setups_match() {
+        let chosen = choose_current_projection_embedding_state(&[
+            super::embeddings::ActiveEmbeddingRepresentationState::new(
+                super::embeddings::EmbeddingRepresentationKind::Baseline,
+                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            ),
+            super::embeddings::ActiveEmbeddingRepresentationState::new(
+                super::embeddings::EmbeddingRepresentationKind::Enriched,
+                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            ),
+        ])
+        .expect("choose current projection setup")
+        .expect("current projection setup");
+
+        assert_eq!(
+            chosen.representation_kind,
+            super::embeddings::EmbeddingRepresentationKind::Enriched
+        );
     }
 }

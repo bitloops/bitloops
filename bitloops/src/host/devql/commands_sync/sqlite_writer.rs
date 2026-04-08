@@ -33,6 +33,7 @@ pub(crate) struct PreparedRemoval {
 pub(crate) struct PreparedSyncItem {
     pub(crate) index: usize,
     pub(crate) desired: DesiredFileState,
+    pub(crate) effective_content: String,
     pub(crate) extraction: CachedExtraction,
     pub(crate) prepared_rows: PreparedMaterialisationRows,
     pub(crate) cache_store_retention_class: Option<&'static str>,
@@ -94,9 +95,10 @@ impl SyncBatch {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct WriterCommitOutcome {
     pub(crate) materialized_paths: Vec<String>,
+    pub(crate) materialized_items: Vec<PreparedSyncItem>,
     pub(crate) removed_paths: Vec<String>,
     pub(crate) pre_artefacts: Vec<DiffArtefactRecord>,
     pub(crate) post_artefacts: Vec<DiffArtefactRecord>,
@@ -290,6 +292,7 @@ impl SqliteSyncWriter {
                 .context("committing SQLite sync writer transaction")?;
             Ok(WriterCommitOutcome {
                 materialized_paths,
+                materialized_items: batch.items,
                 removed_paths: Vec::new(),
                 pre_artefacts,
                 post_artefacts,
@@ -323,6 +326,7 @@ impl SqliteSyncWriter {
                 .context("committing SQLite sync cache touch transaction")?;
             Ok(WriterCommitOutcome {
                 materialized_paths: Vec::new(),
+                materialized_items: Vec::new(),
                 removed_paths: Vec::new(),
                 pre_artefacts: Vec::new(),
                 post_artefacts: Vec::new(),
@@ -368,6 +372,7 @@ impl SqliteSyncWriter {
                 .context("committing SQLite removal transaction")?;
             Ok(WriterCommitOutcome {
                 materialized_paths: Vec::new(),
+                materialized_items: Vec::new(),
                 removed_paths,
                 pre_artefacts,
                 post_artefacts: Vec::new(),
@@ -397,6 +402,7 @@ impl SqliteSyncWriter {
             } else {
                 WriterCommitOutcome {
                     materialized_paths: Vec::new(),
+                    materialized_items: Vec::new(),
                     removed_paths: Vec::new(),
                     pre_artefacts: Vec::new(),
                     post_artefacts: Vec::new(),
@@ -458,6 +464,8 @@ fn prepare_sync_item_with_connection(
 
     let retention_class = determine_retention_class(&desired);
     let path = desired.path.clone();
+    let content = read_effective_content(cfg, &desired)
+        .with_context(|| format!("reading effective content for `{}`", desired.path))?;
 
     let (
         extraction,
@@ -485,8 +493,6 @@ fn prepare_sync_item_with_connection(
             )
         }
         None => {
-            let content = read_effective_content(cfg, &desired)
-                .with_context(|| format!("reading effective content for `{}`", desired.path))?;
             let extraction_started = Instant::now();
             let Some(extraction) = crate::host::devql::sync::extraction::extract_to_cache_format(
                 cfg,
@@ -528,6 +534,7 @@ fn prepare_sync_item_with_connection(
         prepared_item: Some(PreparedSyncItem {
             index,
             desired,
+            effective_content: content,
             extraction,
             prepared_rows,
             cache_store_retention_class,

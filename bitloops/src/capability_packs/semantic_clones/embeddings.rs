@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -13,6 +14,35 @@ use crate::capability_packs::semantic_clones::features::{
 
 const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingRepresentationKind {
+    #[default]
+    Baseline,
+    Enriched,
+}
+
+impl fmt::Display for EmbeddingRepresentationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Baseline => write!(f, "baseline"),
+            Self::Enriched => write!(f, "enriched"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct EmbeddingProviderConfig {
@@ -64,6 +94,7 @@ pub struct SymbolEmbeddingInput {
     pub artefact_id: String,
     pub repo_id: String,
     pub blob_sha: String,
+    pub representation_kind: EmbeddingRepresentationKind,
     pub path: String,
     pub language: String,
     pub canonical_kind: String,
@@ -83,6 +114,7 @@ pub struct SymbolEmbeddingRow {
     pub artefact_id: String,
     pub repo_id: String,
     pub blob_sha: String,
+    pub representation_kind: EmbeddingRepresentationKind,
     pub provider: String,
     pub model: String,
     pub dimension: usize,
@@ -96,6 +128,21 @@ pub struct EmbeddingSetup {
     pub model: String,
     pub dimension: usize,
     pub setup_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveEmbeddingRepresentationState {
+    pub representation_kind: EmbeddingRepresentationKind,
+    pub setup: EmbeddingSetup,
+}
+
+impl ActiveEmbeddingRepresentationState {
+    pub fn new(representation_kind: EmbeddingRepresentationKind, setup: EmbeddingSetup) -> Self {
+        Self {
+            representation_kind,
+            setup,
+        }
+    }
 }
 
 impl EmbeddingSetup {
@@ -119,12 +166,14 @@ pub struct SymbolEmbeddingIndexState {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SymbolEmbeddingIngestionStats {
+    pub eligible: usize,
     pub upserted: usize,
     pub skipped: usize,
 }
 
 pub fn build_symbol_embedding_inputs(
     inputs: &[SemanticFeatureInput],
+    representation_kind: EmbeddingRepresentationKind,
     summary_by_artefact_id: &std::collections::HashMap<String, String>,
 ) -> Vec<SymbolEmbeddingInput> {
     inputs
@@ -147,6 +196,7 @@ pub fn build_symbol_embedding_inputs(
                 artefact_id: input.artefact_id.clone(),
                 repo_id: input.repo_id.clone(),
                 blob_sha: input.blob_sha.clone(),
+                representation_kind,
                 path: input.path.clone(),
                 language: input.language.clone(),
                 canonical_kind: input.canonical_kind.clone(),
@@ -205,6 +255,7 @@ pub fn build_symbol_embedding_input_hash(
             "artefact_id": &input.artefact_id,
             "repo_id": &input.repo_id,
             "blob_sha": &input.blob_sha,
+            "representation_kind": input.representation_kind,
             "language": input.language.to_ascii_lowercase(),
             "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
             "language_kind": input.language_kind.to_ascii_lowercase(),
@@ -253,6 +304,7 @@ pub fn build_symbol_embedding_row(
         artefact_id: input.artefact_id.clone(),
         repo_id: input.repo_id.clone(),
         blob_sha: input.blob_sha.clone(),
+        representation_kind: input.representation_kind,
         provider: provider.provider_name().to_string(),
         model: provider.model_name().to_string(),
         dimension: embedding.len(),
@@ -354,6 +406,7 @@ mod tests {
             artefact_id: "artefact-1".to_string(),
             repo_id: "repo-1".to_string(),
             blob_sha: "blob-1".to_string(),
+            representation_kind: EmbeddingRepresentationKind::Baseline,
             path: "src/services/user.ts".to_string(),
             language: "typescript".to_string(),
             canonical_kind: "function".to_string(),
@@ -423,9 +476,17 @@ mod tests {
             ("import-1".to_string(), "Import statement.".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(&inputs, &summaries);
+        let rows = build_symbol_embedding_inputs(
+            &inputs,
+            EmbeddingRepresentationKind::Baseline,
+            &summaries,
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
+        assert_eq!(
+            rows[0].representation_kind,
+            EmbeddingRepresentationKind::Baseline
+        );
     }
 
     #[test]
@@ -478,7 +539,11 @@ mod tests {
             ("function-2".to_string(), "   ".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(&inputs, &summaries);
+        let rows = build_symbol_embedding_inputs(
+            &inputs,
+            EmbeddingRepresentationKind::Baseline,
+            &summaries,
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
     }
@@ -542,6 +607,19 @@ mod tests {
         changed.parent_kind = Some("module".to_string());
 
         assert_eq!(
+            build_symbol_embedding_input_hash(&base, &provider),
+            build_symbol_embedding_input_hash(&changed, &provider)
+        );
+    }
+
+    #[test]
+    fn symbol_embedding_hash_changes_when_representation_changes() {
+        let provider = MockEmbeddingProvider;
+        let base = sample_input();
+        let mut changed = base.clone();
+        changed.representation_kind = EmbeddingRepresentationKind::Enriched;
+
+        assert_ne!(
             build_symbol_embedding_input_hash(&base, &provider),
             build_symbol_embedding_input_hash(&changed, &provider)
         );

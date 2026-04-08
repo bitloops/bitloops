@@ -1,11 +1,182 @@
 use rusqlite::Connection;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 use super::fixtures::{
     seed_full_sync_repo, seed_supported_and_unsupported_repo,
     sqlite_relational_store_with_sync_schema, sync_test_cfg_for_repo,
 };
+
+#[cfg(unix)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-sync-embeddings-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"#!/bin/sh
+profile_name=fake
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      profile_name=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"sync-test","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"sync-test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id" "$profile_name"
+      ;;
+    *'"type":"embed_batch"'*)
+      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+      exit 0
+      ;;
+    *)
+      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      ;;
+  esac
+done
+"#;
+    fs::write(&script_path, script).expect("write fake runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod fake runtime script");
+    ("sh".to_string(), vec![script_path.display().to_string()])
+}
+
+#[cfg(windows)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-sync-embeddings-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"
+$profileName = "fake"
+for ($i = 0; $i -lt $args.Length; $i++) {
+  if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
+    $profileName = $args[$i + 1]
+    break
+  }
+}
+$stdin = [Console]::In
+while (($line = $stdin.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.type) {
+    "describe" {
+      $response = @{
+        type = "describe"
+        request_id = $request.request_id
+        protocol_version = 1
+        runtime = @{
+          protocol_version = 1
+          runtime_name = "bitloops-embeddings"
+          runtime_version = "sync-test"
+          profile_name = $profileName
+          provider = @{
+            kind = "local_fastembed"
+            provider_name = "local_fastembed"
+            model_name = "sync-test-model"
+            output_dimension = 3
+            cache_dir = $null
+          }
+        }
+      }
+    }
+    "embed_batch" {
+      $response = @{
+        type = "embed_batch"
+        request_id = $request.request_id
+        protocol_version = 1
+        vectors = @(@{
+          index = 0
+          values = @(0.1, 0.2, 0.3)
+        })
+      }
+    }
+    "shutdown" {
+      $response = @{
+        type = "shutdown"
+        request_id = $request.request_id
+        protocol_version = 1
+        accepted = $true
+      }
+      $response | ConvertTo-Json -Compress
+      break
+    }
+    default {
+      $response = @{
+        type = "error"
+        request_id = $request.request_id
+        code = "runtime_error"
+        message = "unexpected request"
+      }
+    }
+  }
+  $response | ConvertTo-Json -Compress
+}
+"#;
+    fs::write(&script_path, script).expect("write fake runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.display().to_string(),
+        ],
+    )
+}
+
+fn write_sync_semantic_clone_config(repo_root: &Path) {
+    let (command, args) = fake_runtime_command_and_args(repo_root);
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).expect("create daemon config dir");
+    }
+    fs::write(
+        config_path,
+        format!(
+            r#"[semantic]
+provider = "disabled"
+
+[semantic_clones]
+summary_mode = "off"
+embedding_profile = "alpha"
+
+[embeddings.runtime]
+command = {command:?}
+args = [{runtime_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+
+[embeddings.profiles.alpha]
+kind = "local_fastembed"
+model = "sync-test-model"
+"#
+        ),
+    )
+    .expect("write sync semantic clone config");
+}
 
 #[tokio::test]
 async fn unborn_head_syncs_from_index_and_worktree() {
@@ -445,4 +616,49 @@ async fn sync_removes_deleted_file() {
     assert_eq!(artefact_count, 0);
     assert_eq!(edge_count, 0);
     assert_eq!(current_state_count, 0);
+}
+
+#[tokio::test]
+async fn sync_populates_current_semantic_and_embedding_tables() {
+    let repo = seed_full_sync_repo();
+    write_sync_semantic_clone_config(repo.path());
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync with current semantic clone projection");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let semantic_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_semantics_current rows");
+    let feature_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_features_current rows");
+    let embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'baseline'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_embeddings_current rows");
+
+    assert!(result.success, "sync should succeed with current clone projection");
+    assert!(semantic_rows > 0, "current semantics should be populated");
+    assert!(feature_rows > 0, "current semantic features should be populated");
+    assert!(embedding_rows > 0, "current baseline embeddings should be populated");
 }

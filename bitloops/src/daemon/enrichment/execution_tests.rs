@@ -531,7 +531,8 @@ fn build_embedding_job(
                 .unwrap_or_else(|| "batch".to_string()),
             artefact_ids,
             input_hashes,
-            embedding_mode: SemanticCloneEmbeddingMode::Deterministic,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
         },
     }
 }

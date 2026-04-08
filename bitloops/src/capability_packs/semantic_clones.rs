@@ -23,7 +23,7 @@ pub(crate) use stage_embeddings::{
     clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
     determine_repo_embedding_sync_action, ensure_semantic_embeddings_schema,
     init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
-    load_active_embedding_setup, load_current_repo_embedding_setups,
+    load_active_embedding_setup, load_current_repo_embedding_states,
     persist_active_embedding_setup, refresh_current_repo_symbol_embeddings_and_clone_edges,
     upsert_current_symbol_embedding_rows, upsert_symbol_embedding_rows,
 };

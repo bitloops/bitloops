@@ -38,11 +38,11 @@ mod tests {
 
     #[test]
     fn enrichment_worker_count_defaults_to_ten_for_missing_or_invalid_values() {
-        assert_eq!(resolve_enrichment_worker_count(None), 10);
-        assert_eq!(resolve_enrichment_worker_count(Some("")), 10);
-        assert_eq!(resolve_enrichment_worker_count(Some("0")), 10);
-        assert_eq!(resolve_enrichment_worker_count(Some("-1")), 10);
-        assert_eq!(resolve_enrichment_worker_count(Some("nope")), 10);
+        assert_eq!(resolve_enrichment_worker_count(None), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("")), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("0")), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("-1")), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("nope")), 2);
     }
 
     #[test]

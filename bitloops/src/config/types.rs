@@ -92,7 +92,7 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
     }
 }
 
-pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 10;
+pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticClonesConfig {
