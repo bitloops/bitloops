@@ -481,6 +481,19 @@ pub(super) fn then_testlens_includes_failing_test(
     })
 }
 
+pub(super) fn then_daemon_capability_event_status_test_harness_completed(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "daemon capability-event status shows TestHarness sync handler completed",
+            helpers::wait_for_test_harness_capability_event_completion_for_repo(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn then_devql_clones_returns_at_least(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

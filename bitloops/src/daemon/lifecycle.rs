@@ -210,6 +210,7 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         .ok()
         .and_then(|repo_root| crate::host::devql::resolve_repo_identity(&repo_root).ok())
         .map(|repo| repo.repo_id);
+    let capability_events = super::capability_event_status(current_repo_id.as_deref()).ok();
     let sync = super::sync_status(current_repo_id.as_deref()).ok();
 
     Ok(DaemonStatusReport {
@@ -217,6 +218,7 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         service,
         service_running,
         health,
+        capability_events,
         enrichment,
         sync,
     })

@@ -1,9 +1,10 @@
 use super::*;
 use crate::cli::{Cli, Commands};
 use crate::daemon::{
-    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
-    EnrichmentQueueStatus, ServiceManagerKind, SyncQueueState, SyncQueueStatus, SyncTaskMode,
-    SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+    CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
+    CapabilityEventRunStatus, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, ServiceManagerKind, SyncQueueState,
+    SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
 use clap::Parser;
@@ -39,6 +40,53 @@ impl Write for SharedBuffer {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+fn sample_capability_event_run(status: CapabilityEventRunStatus) -> CapabilityEventRunRecord {
+    CapabilityEventRunRecord {
+        run_id: "capability-event-run-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        capability_id: "test_harness".to_string(),
+        handler_id: "sync_completed".to_string(),
+        event_kind: "sync_completed".to_string(),
+        lane_key: "repo-1:test_harness:sync_completed".to_string(),
+        event_payload_json: serde_json::json!({
+            "repo_id": "repo-1",
+            "repo_root": "/tmp/repo",
+            "active_branch": "main",
+            "head_commit_sha": "abc123",
+            "sync_mode": "full",
+            "sync_completed_at": "2026-04-06T00:00:00Z",
+            "files": {"added": [], "changed": [], "removed": []},
+            "artefacts": {"added": [], "changed": [], "removed": []},
+        })
+        .to_string(),
+        status,
+        attempts: 1,
+        submitted_at_unix: 1,
+        started_at_unix: Some(2),
+        updated_at_unix: 3,
+        completed_at_unix: Some(4),
+        error: Some("handler failed".to_string()),
+    }
+}
+
+fn sample_capability_event_status() -> CapabilityEventQueueStatus {
+    CapabilityEventQueueStatus {
+        state: CapabilityEventQueueState {
+            version: 1,
+            pending_runs: 2,
+            running_runs: 1,
+            failed_runs: 3,
+            completed_recent_runs: 4,
+            last_action: Some("running".to_string()),
+            last_updated_unix: 5,
+        },
+        persisted: true,
+        current_repo_run: Some(sample_capability_event_run(
+            CapabilityEventRunStatus::Running,
+        )),
     }
 }
 
@@ -426,6 +474,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
         }),
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: Some(EnrichmentQueueStatus {
             state: EnrichmentQueueState {
                 version: 1,
@@ -509,6 +558,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         service: None,
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: None,
         sync: None,
     };
@@ -526,6 +576,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         service: None,
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: None,
         sync: None,
     };
@@ -568,6 +619,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
         service: None,
         service_running: false,
         health: None,
+        capability_events: None,
         enrichment: None,
         sync: Some(SyncQueueStatus {
             state: SyncQueueState {
@@ -634,6 +686,78 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
     );
     assert!(lines.contains(&"Current repo sync path: src/lib.rs".to_string()));
     assert!(lines.contains(&"Sync persisted: yes".to_string()));
+}
+
+#[test]
+fn status_lines_include_capability_event_queue_and_current_repo_run() {
+    let report = DaemonStatusReport {
+        runtime: None,
+        service: None,
+        service_running: false,
+        health: None,
+        capability_events: Some({
+            let mut status = sample_capability_event_status();
+            status.current_repo_run = Some(sample_capability_event_run(
+                CapabilityEventRunStatus::Failed,
+            ));
+            status
+        }),
+        enrichment: None,
+        sync: None,
+    };
+
+    let lines = status_lines(&report);
+    assert!(lines.contains(&"Capability event queue: available".to_string()));
+    assert!(lines.contains(&"Capability event pending runs: 2".to_string()));
+    assert!(lines.contains(&"Capability event running runs: 1".to_string()));
+    assert!(lines.contains(&"Capability event failed runs: 3".to_string()));
+    assert!(lines.contains(&"Capability event completed recent runs: 4".to_string()));
+    assert!(lines.contains(&"Capability event last action: running".to_string()));
+    assert!(lines.contains(
+        &"Current repo capability event run: capability-event-run-1 (failed, capability=test_harness, handler=sync_completed, event_kind=sync_completed)".to_string()
+    ));
+    assert!(lines.contains(&"Current repo capability event error: handler failed".to_string()));
+    assert!(lines.contains(&"Capability event persisted: yes".to_string()));
+}
+
+#[test]
+fn run_status_writes_json_when_requested() {
+    let report = DaemonStatusReport {
+        runtime: None,
+        service: None,
+        service_running: false,
+        health: None,
+        capability_events: Some(sample_capability_event_status()),
+        enrichment: None,
+        sync: None,
+    };
+    let mut out = SharedBuffer::default();
+
+    write_status_output(&report, true, &mut out).expect("write daemon status json");
+
+    let rendered = out.contents();
+    let value: serde_json::Value =
+        serde_json::from_str(rendered.trim()).expect("parse daemon status json");
+    assert_eq!(
+        value["capability_events"]["state"]["pending_runs"],
+        serde_json::json!(2)
+    );
+    assert_eq!(
+        value["capability_events"]["state"]["running_runs"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        value["capability_events"]["current_repo_run"]["capability_id"],
+        serde_json::json!("test_harness")
+    );
+    assert_eq!(
+        value["capability_events"]["current_repo_run"]["handler_id"],
+        serde_json::json!("sync_completed")
+    );
+    assert_eq!(
+        value["capability_events"]["current_repo_run"]["error"],
+        serde_json::json!("handler failed")
+    );
 }
 
 #[test]

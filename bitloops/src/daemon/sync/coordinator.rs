@@ -9,6 +9,7 @@ use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use crate::graphql::SubscriptionHub;
+use crate::host::capability_host::{SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff};
 use crate::host::devql::{
     DevqlConfig, RepoIdentity, SyncMode, SyncObserver, SyncProgressPhase, SyncProgressUpdate,
     SyncSummary,
@@ -335,34 +336,22 @@ impl SyncCoordinator {
         .await
         {
             Ok((summary, file_diff, artefact_diff)) => {
-                if summary.success
-                    && summary.mode != "validate"
-                    && let Some(host) = host.as_ref()
-                {
-                    match host.build_event_handler_context() {
-                        Ok(handler_context) => {
-                            let payload = crate::host::capability_host::SyncCompletedPayload {
-                                repo_id: cfg.repo.repo_id.clone(),
-                                repo_root: cfg.repo_root.clone(),
-                                active_branch: summary.active_branch.clone(),
-                                head_commit_sha: summary.head_commit_sha.clone(),
-                                sync_mode: summary.mode.clone(),
-                                sync_completed_at: Utc::now().to_rfc3339(),
-                                files: file_diff,
-                                artefacts: artefact_diff,
-                            };
-                            crate::host::capability_host::dispatch_event(
-                                crate::host::capability_host::HostEvent::SyncCompleted(payload),
-                                host.event_handlers(),
-                                Arc::new(handler_context),
-                            );
-                        }
-                        Err(err) => {
-                            log::warn!(
-                                "failed to build sync event context (task_id={}): {err:#}",
-                                task.task_id
-                            );
-                        }
+                if let Some(host) = host.as_ref() {
+                    let capability_event_coordinator =
+                        crate::daemon::shared_capability_event_coordinator();
+                    capability_event_coordinator.activate_worker();
+                    if let Err(err) = enqueue_sync_completed_runs(
+                        capability_event_coordinator.as_ref(),
+                        host,
+                        &cfg,
+                        &summary,
+                        file_diff,
+                        artefact_diff,
+                    ) {
+                        log::warn!(
+                            "failed to enqueue sync capability event runs (task_id={}): {err:#}",
+                            task.task_id
+                        );
                     }
                 }
                 self.finish_task_completed(&task.task_id, summary)?
@@ -538,6 +527,37 @@ impl SyncCoordinator {
             hub.publish_sync_task(task);
         }
     }
+}
+
+fn enqueue_sync_completed_runs(
+    coordinator: &crate::daemon::CapabilityEventCoordinator,
+    host: &crate::host::capability_host::DevqlCapabilityHost,
+    cfg: &DevqlConfig,
+    summary: &SyncSummary,
+    file_diff: SyncFileDiff,
+    artefact_diff: SyncArtefactDiff,
+) -> Result<usize> {
+    if !summary.success || summary.mode == "validate" {
+        return Ok(0);
+    }
+
+    let payload = SyncCompletedPayload {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        active_branch: summary.active_branch.clone(),
+        head_commit_sha: summary.head_commit_sha.clone(),
+        sync_mode: summary.mode.clone(),
+        sync_completed_at: Utc::now().to_rfc3339(),
+        files: file_diff,
+        artefacts: artefact_diff,
+    };
+    let runs = crate::daemon::capability_events::build_sync_completed_runs(host, &payload)?;
+    if runs.is_empty() {
+        return Ok(0);
+    }
+    let run_count = runs.len();
+    coordinator.enqueue_runs(runs)?;
+    Ok(run_count)
 }
 
 fn should_persist_progress(
@@ -838,5 +858,90 @@ mod tests {
             Some(now),
             now + Duration::from_millis(10),
         ));
+    }
+
+    #[test]
+    fn enqueue_sync_completed_runs_persists_matching_capability_events() {
+        let (dir, cfg) = seeded_cfg();
+        let host = crate::host::devql::build_capability_host(&cfg.repo_root, cfg.repo.clone())
+            .expect("build capability host");
+        let capability_event_store_path = dir.path().join("capability-events.sqlite");
+        let capability_event_coordinator =
+            crate::daemon::capability_events::test_shared_instance_at(
+                capability_event_store_path.clone(),
+            );
+        let summary = SyncSummary {
+            success: true,
+            mode: "full".to_string(),
+            active_branch: Some("main".to_string()),
+            head_commit_sha: Some("abc123".to_string()),
+            ..SyncSummary::default()
+        };
+
+        let enqueued = enqueue_sync_completed_runs(
+            capability_event_coordinator.as_ref(),
+            &host,
+            &cfg,
+            &summary,
+            SyncFileDiff::default(),
+            SyncArtefactDiff::default(),
+        )
+        .expect("enqueue capability event runs");
+
+        assert!(enqueued >= 1, "expected at least one capability event run");
+        let state = crate::host::runtime_store::DaemonSqliteRuntimeStore::open_at(
+            capability_event_store_path,
+        )
+        .expect("open runtime store")
+        .load_capability_event_queue_state()
+        .expect("load capability event queue state")
+        .expect("state should exist");
+        assert!(
+            state
+                .runs
+                .iter()
+                .any(|run| run.repo_id == cfg.repo.repo_id && run.event_kind == "sync_completed")
+        );
+    }
+
+    #[test]
+    fn enqueue_sync_completed_runs_skips_validate_mode() {
+        let (dir, cfg) = seeded_cfg();
+        let host = crate::host::devql::build_capability_host(&cfg.repo_root, cfg.repo.clone())
+            .expect("build capability host");
+        let capability_event_store_path = dir.path().join("capability-events.sqlite");
+        let capability_event_coordinator =
+            crate::daemon::capability_events::test_shared_instance_at(
+                capability_event_store_path.clone(),
+            );
+        let summary = SyncSummary {
+            success: true,
+            mode: "validate".to_string(),
+            active_branch: Some("main".to_string()),
+            head_commit_sha: Some("abc123".to_string()),
+            ..SyncSummary::default()
+        };
+
+        let enqueued = enqueue_sync_completed_runs(
+            capability_event_coordinator.as_ref(),
+            &host,
+            &cfg,
+            &summary,
+            SyncFileDiff::default(),
+            SyncArtefactDiff::default(),
+        )
+        .expect("enqueue capability event runs");
+
+        assert_eq!(enqueued, 0);
+        let state = crate::host::runtime_store::DaemonSqliteRuntimeStore::open_at(
+            capability_event_store_path,
+        )
+        .expect("open runtime store")
+        .load_capability_event_queue_state()
+        .expect("load capability event queue state");
+        assert!(
+            state.is_none(),
+            "validate mode should not enqueue capability event runs"
+        );
     }
 }

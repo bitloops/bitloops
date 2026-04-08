@@ -13,7 +13,9 @@ use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::storage::SqliteConnectionPool;
 use crate::utils::paths::default_global_runtime_db_path;
 
-use super::types::{DaemonSqliteRuntimeStore, PersistedSyncQueueState};
+use super::types::{
+    DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState, PersistedSyncQueueState,
+};
 
 const RUNTIME_DOCUMENTS_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS runtime_documents (
@@ -61,6 +63,10 @@ impl DaemonSqliteRuntimeStore {
 
     pub fn enrichment_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_enrichment_state())
+    }
+
+    pub fn capability_event_state_exists(&self) -> Result<bool> {
+        self.document_exists(document_key_capability_event_state())
     }
 
     pub fn load_runtime_state(&self) -> Result<Option<DaemonRuntimeState>> {
@@ -159,6 +165,28 @@ impl DaemonSqliteRuntimeStore {
 
     pub fn save_enrichment_queue_state(&self, state: &PersistedEnrichmentQueueState) -> Result<()> {
         self.save_document(document_key_enrichment_state(), state)
+    }
+
+    pub fn load_capability_event_queue_state(
+        &self,
+    ) -> Result<Option<PersistedCapabilityEventQueueState>> {
+        let state: Option<PersistedCapabilityEventQueueState> = self.load_document(
+            document_key_capability_event_state(),
+            Some(capability_event_state_legacy_path()),
+        )?;
+        Ok(state)
+    }
+
+    pub fn mutate_capability_event_queue_state<T>(
+        &self,
+        mutate: impl FnOnce(&mut PersistedCapabilityEventQueueState) -> Result<T>,
+    ) -> Result<T> {
+        self.mutate_document(
+            document_key_capability_event_state(),
+            Some(capability_event_state_legacy_path()),
+            PersistedCapabilityEventQueueState::default,
+            mutate,
+        )
     }
 
     fn document_exists(&self, kind: &'static str) -> Result<bool> {
@@ -324,6 +352,10 @@ fn document_key_enrichment_state() -> &'static str {
     "enrichment_queue_state"
 }
 
+fn document_key_capability_event_state() -> &'static str {
+    "capability_event_queue_state"
+}
+
 fn daemon_state_root() -> PathBuf {
     crate::utils::platform_dirs::bitloops_state_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("bitloops").join("state"))
@@ -336,6 +368,10 @@ fn sync_state_legacy_path() -> PathBuf {
 
 fn enrichment_state_legacy_path() -> PathBuf {
     daemon_state_root().join(crate::daemon::ENRICHMENT_STATE_FILE_NAME)
+}
+
+fn capability_event_state_legacy_path() -> PathBuf {
+    daemon_state_root().join("capability-event-queue.json")
 }
 
 fn legacy_supervisor_runtime_state_path() -> PathBuf {
