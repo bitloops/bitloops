@@ -13,11 +13,15 @@ use crate::host::devql::{
 };
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
-use chrono::{NaiveDateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::path::Path;
+
+mod event_parsing;
+
+use self::event_parsing::{escape_like_literal, parse_event_time, parse_payload};
 
 impl DevqlGraphqlContext {
     pub(crate) async fn list_project_clones(
@@ -375,15 +379,15 @@ fn clone_edge_matches_filter(
     let Some(filter) = filter else {
         return true;
     };
-    if let Some(relation_kind) = filter.relation_kind() {
-        if !edge.relation_kind.eq_ignore_ascii_case(relation_kind) {
-            return false;
-        }
+    if let Some(relation_kind) = filter.relation_kind()
+        && !edge.relation_kind.eq_ignore_ascii_case(relation_kind)
+    {
+        return false;
     }
-    if let Some(min_score) = filter.min_score {
-        if edge.score < min_score.clamp(0.0, 1.0) as f32 {
-            return false;
-        }
+    if let Some(min_score) = filter.min_score
+        && edge.score < min_score.clamp(0.0, 1.0) as f32
+    {
+        return false;
     }
     true
 }
@@ -952,214 +956,4 @@ fn parse_string_array(value: Option<&Value>) -> Result<Vec<String>> {
 }
 
 #[cfg(test)]
-mod row_parsing_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn clone_from_row_preserves_metadata_and_missing_spans() {
-        let clone = clone_from_row(json!({
-            "source_artefact_id": "artefact::source",
-            "target_artefact_id": "artefact::target",
-            "relation_kind": "similar_implementation",
-            "score": 0.9,
-            "semantic_score": 0.8,
-            "lexical_score": 0.7,
-            "structural_score": 0.6,
-            "explanation_json": "{\"reason\":\"shared structure\"}"
-        }))
-        .expect("clone row parses");
-
-        assert_eq!(clone.source_start_line, None);
-        assert_eq!(clone.source_end_line, None);
-        assert_eq!(clone.target_start_line, None);
-        assert_eq!(clone.target_end_line, None);
-        let metadata = clone.metadata.expect("metadata should be present");
-        assert_eq!(metadata.0["semanticScore"], json!(0.8));
-        assert_eq!(metadata.0["lexicalScore"], json!(0.7));
-        assert_eq!(metadata.0["structuralScore"], json!(0.6));
-        assert_eq!(metadata.0["explanation"]["reason"], "shared structure");
-    }
-}
-
-#[allow(dead_code)]
-fn parse_payload(value: Option<&Value>) -> Result<Option<Value>> {
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(raw)) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            let parsed = serde_json::from_str(trimmed)
-                .unwrap_or_else(|_| Value::String(trimmed.to_string()));
-            Ok(Some(parsed))
-        }
-        Some(other) => Ok(Some(other.clone())),
-    }
-}
-
-fn parse_event_time(raw: &str) -> Result<DateTimeScalar> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        bail!("event time is empty");
-    }
-
-    if let Ok(value) = DateTimeScalar::from_rfc3339(trimmed.to_string()) {
-        return Ok(value);
-    }
-
-    for pattern in [
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-    ] {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, pattern) {
-            let timestamp = Utc.from_utc_datetime(&naive).to_rfc3339();
-            return DateTimeScalar::from_rfc3339(timestamp)
-                .context("formatting event timestamp as RFC 3339");
-        }
-    }
-
-    if let Ok(unix_seconds) = trimmed.parse::<i64>()
-        && let Some(timestamp) = Utc.timestamp_opt(unix_seconds, 0).single()
-    {
-        return DateTimeScalar::from_rfc3339(timestamp.to_rfc3339())
-            .context("formatting unix event timestamp as RFC 3339");
-    }
-
-    bail!("unsupported event timestamp `{trimmed}`")
-}
-
-#[allow(dead_code)]
-fn escape_like_literal(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::capability_packs::semantic_clones::scoring::SymbolCloneEdgeRow;
-    use serde_json::json;
-
-    #[test]
-    fn clone_edge_filter_applies_relation_and_min_score() {
-        let edge = SymbolCloneEdgeRow {
-            repo_id: "repo-1".to_string(),
-            source_symbol_id: "sym-source".to_string(),
-            source_artefact_id: "a-source".to_string(),
-            target_symbol_id: "sym-target".to_string(),
-            target_artefact_id: "a-target".to_string(),
-            relation_kind: "similar_implementation".to_string(),
-            score: 0.77,
-            semantic_score: 0.8,
-            lexical_score: 0.6,
-            structural_score: 0.4,
-            clone_input_hash: "hash".to_string(),
-            explanation_json: json!({}),
-        };
-
-        let matching = ClonesFilterInput {
-            relation_kind: Some("similar_implementation".to_string()),
-            min_score: Some(0.75),
-            neighbors: None,
-        };
-        assert!(clone_edge_matches_filter(&edge, Some(&matching)));
-
-        let wrong_relation = ClonesFilterInput {
-            relation_kind: Some("exact_duplicate".to_string()),
-            min_score: None,
-            neighbors: None,
-        };
-        assert!(!clone_edge_matches_filter(&edge, Some(&wrong_relation)));
-
-        let high_min_score = ClonesFilterInput {
-            relation_kind: None,
-            min_score: Some(0.9),
-            neighbors: None,
-        };
-        assert!(!clone_edge_matches_filter(&edge, Some(&high_min_score)));
-    }
-
-    #[test]
-    fn clone_from_edge_preserves_metadata_shape() {
-        let edge = SymbolCloneEdgeRow {
-            repo_id: "repo-1".to_string(),
-            source_symbol_id: "sym-source".to_string(),
-            source_artefact_id: "a-source".to_string(),
-            target_symbol_id: "sym-target".to_string(),
-            target_artefact_id: "a-target".to_string(),
-            relation_kind: "similar_implementation".to_string(),
-            score: 0.77,
-            semantic_score: 0.8,
-            lexical_score: 0.6,
-            structural_score: 0.4,
-            clone_input_hash: "hash".to_string(),
-            explanation_json: json!({"labels":["preferred_local_pattern"]}),
-        };
-
-        let clone = clone_from_edge(edge).expect("clone row");
-        assert_eq!(clone.relation_kind, "similar_implementation");
-        assert!((clone.score - 0.77_f64).abs() < 1e-6);
-        let metadata = clone
-            .metadata
-            .expect("metadata")
-            .0
-            .as_object()
-            .cloned()
-            .expect("metadata object");
-        assert!(metadata.contains_key("semanticScore"));
-        assert!(metadata.contains_key("lexicalScore"));
-        assert!(metadata.contains_key("structuralScore"));
-        assert!(metadata.contains_key("explanation"));
-    }
-}
-
-#[cfg(test)]
-mod clone_summary_tests {
-    use super::*;
-    use crate::artefact_query_planner::{
-        ArtefactQuerySpec, ArtefactScope, ArtefactStructuralFilter, ArtefactTemporalScope,
-    };
-
-    fn clone_summary_spec() -> ArtefactQuerySpec {
-        ArtefactQuerySpec {
-            repo_id: "repo-1".to_string(),
-            branch: Some("main".to_string()),
-            historical_path_blob_sha: None,
-            scope: ArtefactScope {
-                project_path: Some("packages/api".to_string()),
-                path: None,
-                files_path: None,
-            },
-            temporal_scope: ArtefactTemporalScope::Current,
-            structural_filter: ArtefactStructuralFilter::default(),
-            activity_filter: None,
-            pagination: None,
-        }
-    }
-
-    #[test]
-    fn clone_summary_sql_aggregates_filtered_sources_by_relation_kind() {
-        let sql = build_clone_summary_sql(
-            &clone_summary_spec(),
-            Some(&ClonesFilterInput {
-                relation_kind: Some("similar_implementation".to_string()),
-                min_score: Some(0.75),
-                neighbors: None,
-            }),
-        );
-
-        assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM filtered fa"));
-        assert!(sql.contains("JOIN symbol_clone_edges ce"));
-        assert!(sql.contains("ce.source_artefact_id = fa.artefact_id"));
-        assert!(sql.contains("ce.relation_kind = 'similar_implementation'"));
-        assert!(sql.contains("ce.score >= 0.75"));
-        assert!(sql.contains("GROUP BY ce.relation_kind"));
-    }
-}
+mod tests;
