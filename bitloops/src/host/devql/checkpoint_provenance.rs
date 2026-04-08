@@ -205,10 +205,11 @@ pub(crate) use self::artefacts::collect_checkpoint_artefact_provenance;
 #[cfg(test)]
 pub(crate) use self::artefacts::normalise_semantic_source;
 pub(crate) use self::git::collect_checkpoint_file_provenance_rows;
+#[allow(unused_imports)]
 pub(crate) use self::query::{
-    CheckpointFileActivityFilter, CheckpointFileDebugRow, CheckpointFileExistsSql,
-    CheckpointFileGateway, CheckpointFileProvenanceDetailRow, CheckpointFileScope,
-    CheckpointFileSnapshotMatch, build_checkpoint_file_debug_sql,
+    CheckpointArtefactMatch, CheckpointFileActivityFilter, CheckpointFileDebugRow,
+    CheckpointFileExistsSql, CheckpointFileGateway, CheckpointFileProvenanceDetailRow,
+    CheckpointFileScope, CheckpointFileSnapshotMatch, build_checkpoint_file_debug_sql,
     build_checkpoint_file_exists_clause, build_checkpoint_file_lookup_sql, checkpoint_display_path,
 };
 pub(crate) use self::sql::{

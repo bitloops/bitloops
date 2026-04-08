@@ -130,6 +130,57 @@ Do not mix the two modes in the same field call.
 }
 ```
 
+### Slim selection stages for agent-oriented queries
+
+The slim repo-scoped surface also exposes `selectArtefacts(by: ...)` for set-oriented analysis over the currently selected artefacts.
+
+For the full selector contract, stage signatures, and agent flow, see [selectArtefacts](/guides/select-artefacts).
+
+Use it when you want one compact answer first, then typed detail only if needed:
+
+```graphql
+{
+  selectArtefacts(by: { path: "rust-app/src/main.rs", lines: { start: 6, end: 10 } }) {
+    summary
+  }
+}
+```
+
+The aggregate `summary` JSON includes the available stage categories, currently:
+
+- `checkpoints`
+- `clones`
+- `deps`
+- `tests`
+
+Each category entry includes the default stage summary and, when the stage is non-empty, a stage-local `schema` SDL fragment.
+
+When you need detail rows, query the stage directly and use `items(first: ...)`:
+
+```graphql
+{
+  selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
+    deps {
+      summary
+      schema
+      items(first: 10) {
+        id
+        edgeKind
+        toSymbolRef
+      }
+    }
+  }
+}
+```
+
+Selector rules:
+
+- `symbolFqn` selects by logical artefact identity
+- `path` selects all current artefacts in that file
+- `path` plus `lines` selects all current artefacts overlapping that range
+
+Current limitation: the raw GraphQL slim surface supports `selectArtefacts { summary }`, but the DevQL DSL compiler still supports one explicit terminal stage at a time such as `checkpoints()`, `clones()`, `deps()`, or `tests()`.
+
 ### DevQL `summary()` stage
 
 In the DevQL DSL, `summary()` is overloaded: it either aggregates **clone detection** results or attaches **dependency edge counts** to each artefact row. Both shapes compile to typed GraphQL; they are not interchangeable.

@@ -5,14 +5,15 @@ use serde_json::{Value, json};
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
+use super::types::artefact_selection::ArtefactSelectorMode;
 use super::types::{
-    Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, Branch,
-    CheckpointConnection, CheckpointEdge, CloneConnection, CloneEdge, CloneSummary,
-    ClonesFilterInput, CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, SyncTaskObject,
-    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, ArtefactSelection,
+    ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection, CheckpointEdge,
+    CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
+    ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
+    DepsFilterInput, FileContext, HealthStatus, KnowledgeItemConnection, KnowledgeItemEdge,
+    KnowledgeProvider, SyncTaskObject, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
+    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -360,6 +361,56 @@ impl SlimQueryRoot {
             page_info,
             total_count,
         ))
+    }
+
+    #[graphql(name = "selectArtefacts")]
+    async fn select_artefacts(
+        &self,
+        ctx: &Context<'_>,
+        by: ArtefactSelectorInput,
+    ) -> Result<ArtefactSelection> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        let selector = by.selection_mode()?;
+
+        let artefacts = match selector {
+            ArtefactSelectorMode::SymbolFqn(symbol_fqn) => {
+                let filter = ArtefactFilterInput {
+                    symbol_fqn: Some(symbol_fqn),
+                    ..Default::default()
+                };
+                context
+                    .list_artefacts(None, Some(&filter), &scope)
+                    .await
+                    .map_err(|err| {
+                        backend_error(format!(
+                            "failed to resolve selected artefacts by symbolFqn: {err:#}"
+                        ))
+                    })?
+            }
+            ArtefactSelectorMode::Path { path, lines } => {
+                let normalized = context
+                    .resolve_scope_path(&scope, &path, false)
+                    .map_err(bad_user_input_error)?;
+                let filter = lines.map(|lines| ArtefactFilterInput {
+                    lines: Some(lines),
+                    ..Default::default()
+                });
+                context
+                    .list_artefacts(Some(&normalized), filter.as_ref(), &scope)
+                    .await
+                    .map_err(|err| {
+                        backend_error(format!(
+                            "failed to resolve selected artefacts for `{normalized}`: {err:#}"
+                        ))
+                    })?
+            }
+        };
+
+        Ok(ArtefactSelection::new(artefacts, scope))
     }
 
     async fn deps(
