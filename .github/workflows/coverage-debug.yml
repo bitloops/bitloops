@@ -1,0 +1,57 @@
+name: Coverage Debug
+
+on:
+  push:
+    branches:
+      - antonis/coverage-debug
+
+permissions:
+  contents: read
+
+env:
+  DUCKDB_DOWNLOAD_LIB: "1"
+  RUST_BACKTRACE: "full"
+  CARGO_TERM_VERBOSE: "true"
+
+jobs:
+  coverage-debug:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: coverage-debug
+          cache-workspace-crates: true
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Dump runner context
+        run: |
+          set -euxo pipefail
+          whoami
+          id
+          pwd
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "RUNNER_TEMP=$RUNNER_TEMP"
+          env | sort | grep -E '^(GITHUB_|RUNNER_|RUST|CARGO|DUCKDB|BITLOOPS_)' || true
+          ls -la
+          ls -la "$GITHUB_WORKSPACE"
+
+      - name: Run exact coverage command
+        run: |
+          set -euxo pipefail
+          cargo llvm-cov --manifest-path bitloops/Cargo.toml \
+            --workspace \
+            --all-targets \
+            --features slow-tests \
+            --no-default-features \
+            --lcov \
+            --output-path bitloops/target/llvm-cov.info
