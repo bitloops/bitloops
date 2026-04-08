@@ -745,9 +745,12 @@ async fn execute_ingest_recovers_older_skipped_history_after_bounded_backfill() 
     let third_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
 
     let cfg = cfg_for_repo(repo.path());
-    execute_init_schema(&cfg, "commit-history bounded backfill full-ingest catchup test")
-        .await
-        .expect("initialise local devql store");
+    execute_init_schema(
+        &cfg,
+        "commit-history bounded backfill full-ingest catchup test",
+    )
+    .await
+    .expect("initialise local devql store");
 
     let first_summary = execute_ingest_with_backfill_window(&cfg, false, 1, None, None)
         .await
