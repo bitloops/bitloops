@@ -91,7 +91,6 @@ required-features = ["slow-tests"]
 [[test]]
 name = "qat_acceptance"
 path = "tests/qat_acceptance.rs"
-required-features = ["slow-tests"]
 
 [[test]]
 name = "qat_bundle"
