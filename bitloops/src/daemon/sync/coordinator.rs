@@ -13,6 +13,8 @@ use crate::host::devql::{
     DevqlConfig, RepoIdentity, SyncMode, SyncObserver, SyncProgressPhase, SyncProgressUpdate,
     SyncSummary,
 };
+#[cfg(test)]
+use crate::utils::paths::default_global_runtime_db_path;
 
 use super::super::types::{
     SyncQueueStatus, SyncTaskRecord, SyncTaskSource, SyncTaskStatus, unix_timestamp_now,
@@ -101,19 +103,25 @@ impl SyncObserver for CoordinatorObserver {
 
 impl SyncCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
-        let runtime_store =
-            DaemonSqliteRuntimeStore::open().expect("opening daemon runtime store for sync queue");
         static INSTANCE: OnceLock<Mutex<Arc<SyncCoordinator>>> = OnceLock::new();
-        let slot =
-            INSTANCE.get_or_init(|| Mutex::new(Self::new_shared_instance(runtime_store.clone())));
+        let slot = INSTANCE.get_or_init(|| {
+            let runtime_store = DaemonSqliteRuntimeStore::open()
+                .expect("opening daemon runtime store for sync queue");
+            Mutex::new(Self::new_shared_instance(runtime_store))
+        });
         let coordinator = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
         #[cfg(test)]
         let mut coordinator = coordinator;
 
         #[cfg(test)]
-        if coordinator.runtime_store.db_path() != runtime_store.db_path() {
-            *coordinator = Self::new_shared_instance(runtime_store);
+        {
+            let runtime_db_path = default_global_runtime_db_path();
+            if coordinator.runtime_store.db_path() != runtime_db_path.as_path() {
+                let runtime_store = DaemonSqliteRuntimeStore::open_at(runtime_db_path)
+                    .expect("opening daemon runtime store for sync queue");
+                *coordinator = Self::new_shared_instance(runtime_store);
+            }
         }
 
         Arc::clone(&coordinator)

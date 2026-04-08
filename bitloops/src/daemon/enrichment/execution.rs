@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -96,8 +97,9 @@ fn build_embedding_provider_cache_key(
     repo_root: &std::path::Path,
 ) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         provider_config.daemon_config_path.display(),
+        embedding_provider_config_fingerprint(provider_config),
         provider_config
             .embedding_profile
             .as_deref()
@@ -107,8 +109,20 @@ fn build_embedding_provider_cache_key(
         provider_config.startup_timeout_secs,
         provider_config.request_timeout_secs,
         provider_config.warnings.join("\u{1f}"),
+        std::env::var("BITLOOPS_TEST_EMBED_PROVIDER").unwrap_or_default(),
+        std::env::var("BITLOOPS_TEST_EMBED_MODEL").unwrap_or_default(),
+        std::env::var("BITLOOPS_TEST_EMBED_DIMENSION").unwrap_or_default(),
         repo_root.display(),
     )
+}
+
+fn embedding_provider_config_fingerprint(provider_config: &EmbeddingProviderConfig) -> String {
+    let bytes = std::fs::read(&provider_config.daemon_config_path).unwrap_or_default();
+    let digest = Sha256::digest(bytes);
+    digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
 }
 
 fn load_or_build_embedding_provider(

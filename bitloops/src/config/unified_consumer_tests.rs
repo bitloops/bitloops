@@ -8,9 +8,10 @@ use super::unified_config::{
     resolve_semantic_from_unified, resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL,
-    ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
-    SemanticCloneEmbeddingMode, SemanticSummaryMode,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DashboardLocalDashboardConfig,
+    ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL, ENV_SEMANTIC_PROVIDER,
+    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS, SemanticCloneEmbeddingMode,
+    SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -248,7 +249,10 @@ fn semantic_clones_from_unified_reads_mode_fields() {
         SemanticCloneEmbeddingMode::RefreshOnUpgrade
     );
     assert_eq!(semantic_clones.embedding_profile, None);
-    assert_eq!(semantic_clones.enrichment_workers, 10);
+    assert_eq!(
+        semantic_clones.enrichment_workers,
+        DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
+    );
 }
 
 #[test]

@@ -377,7 +377,10 @@ async fn semantic_embedding_loads_summary_map_from_relational_storage() {
         summary_map.get("artefact-3").map(String::as_str),
         Some("template summary 3. summarizes function 3.")
     );
-    assert!(!summary_map.contains_key("artefact-2"));
+    assert_eq!(
+        summary_map.get("artefact-2").map(String::as_str),
+        Some("template summary 2")
+    );
 }
 
 #[tokio::test]

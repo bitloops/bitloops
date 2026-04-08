@@ -251,7 +251,9 @@ async fn load_persisted_summary_map(
         .join(", ");
     let rows = relational
         .query_rows(&format!(
-            "SELECT artefact_id, summary FROM symbol_semantics WHERE artefact_id IN ({ids_sql})"
+            "SELECT artefact_id, template_summary, docstring_summary \
+             FROM symbol_semantics \
+             WHERE artefact_id IN ({ids_sql})"
         ))
         .await?;
     let mut summaries = HashMap::with_capacity(rows.len());
@@ -259,10 +261,23 @@ async fn load_persisted_summary_map(
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
             continue;
         };
-        let Some(summary) = row.get("summary").and_then(Value::as_str) else {
+        let Some(template_summary) = row
+            .get("template_summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             continue;
         };
-        summaries.insert(artefact_id.to_string(), summary.to_string());
+        let docstring_summary = row
+            .get("docstring_summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        summaries.insert(
+            artefact_id.to_string(),
+            semantic::synthesize_deterministic_summary(template_summary, docstring_summary),
+        );
     }
     Ok(summaries)
 }
