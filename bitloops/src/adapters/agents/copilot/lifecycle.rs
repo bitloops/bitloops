@@ -28,21 +28,44 @@ pub fn resolve_transcript_ref(session_id: &str) -> String {
         return String::new();
     }
 
-    let agent = CopilotCliAgent;
-    let Ok(session_dir) = agent.get_session_dir("") else {
+    resolve_transcript_ref_with_session_dir(session_id, None)
+}
+
+fn resolve_transcript_ref_with_session_dir(session_id: &str, session_dir: Option<&str>) -> String {
+    if session_id.trim().is_empty() {
         return String::new();
+    }
+
+    let agent = CopilotCliAgent;
+    let session_dir = match session_dir {
+        Some(session_dir) => session_dir.to_string(),
+        None => match agent.get_session_dir("") {
+            Ok(session_dir) => session_dir,
+            Err(_) => return String::new(),
+        },
     };
     agent.resolve_session_file(&session_dir, session_id)
 }
 
 pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<LifecycleEvent>> {
+    parse_hook_event_with_session_dir(hook_name, stdin, None)
+}
+
+fn parse_hook_event_with_session_dir(
+    hook_name: &str,
+    stdin: &mut dyn Read,
+    session_dir: Option<&str>,
+) -> Result<Option<LifecycleEvent>> {
+    let resolve_session_ref =
+        |session_id: &str| resolve_transcript_ref_with_session_dir(session_id, session_dir);
+
     match hook_name {
         HOOK_NAME_USER_PROMPT_SUBMITTED => {
             let raw: CopilotUserPromptSubmittedRaw = read_and_parse_hook_input(stdin)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnStart),
                 session_id: raw.session_id.clone(),
-                session_ref: resolve_transcript_ref(&raw.session_id),
+                session_ref: resolve_session_ref(&raw.session_id),
                 prompt: raw.prompt,
                 model: raw.model,
                 ..LifecycleEvent::default()
@@ -53,7 +76,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionStart),
                 session_id: raw.session_id.clone(),
-                session_ref: resolve_transcript_ref(&raw.session_id),
+                session_ref: resolve_session_ref(&raw.session_id),
                 prompt: raw.initial_prompt,
                 model: raw.model,
                 ..LifecycleEvent::default()
@@ -62,7 +85,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
         HOOK_NAME_AGENT_STOP => {
             let raw: CopilotAgentStopRaw = read_and_parse_hook_input(stdin)?;
             let transcript_path = if raw.transcript_path.trim().is_empty() {
-                resolve_transcript_ref(&raw.session_id)
+                resolve_session_ref(&raw.session_id)
             } else {
                 raw.transcript_path
             };
@@ -81,7 +104,7 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
         }
         HOOK_NAME_SESSION_END => {
             let raw: CopilotSessionEndRaw = read_and_parse_hook_input(stdin)?;
-            let session_ref = resolve_transcript_ref(&raw.session_id);
+            let session_ref = resolve_session_ref(&raw.session_id);
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionEnd),
                 session_id: raw.session_id,
@@ -128,41 +151,34 @@ fn read_model_from_transcript_path(transcript_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::process_state::with_env_var;
 
     #[test]
     fn resolves_transcript_path_from_session_id() {
-        with_env_var(
-            "BITLOOPS_TEST_COPILOT_SESSION_DIR",
-            Some("/tmp/copilot-session-state"),
-            || {
-                assert_eq!(
-                    resolve_transcript_ref("session-1"),
-                    "/tmp/copilot-session-state/session-1/events.jsonl"
-                );
-            },
+        assert_eq!(
+            resolve_transcript_ref_with_session_dir(
+                "session-1",
+                Some("/tmp/copilot-session-state")
+            ),
+            "/tmp/copilot-session-state/session-1/events.jsonl"
         );
     }
 
     #[test]
     fn parses_user_prompt_submitted_as_turn_start() {
-        with_env_var(
-            "BITLOOPS_TEST_COPILOT_SESSION_DIR",
+        let mut stdin =
+            std::io::Cursor::new(br#"{"sessionId":"session-1","prompt":"hello"}"#.as_slice());
+        let event = parse_hook_event_with_session_dir(
+            HOOK_NAME_USER_PROMPT_SUBMITTED,
+            &mut stdin,
             Some("/tmp/copilot-session-state"),
-            || {
-                let mut stdin = std::io::Cursor::new(
-                    br#"{"sessionId":"session-1","prompt":"hello"}"#.as_slice(),
-                );
-                let event = parse_hook_event(HOOK_NAME_USER_PROMPT_SUBMITTED, &mut stdin)
-                    .expect("parse")
-                    .expect("event");
-                assert_eq!(event.event_type, Some(LifecycleEventType::TurnStart));
-                assert_eq!(event.prompt, "hello");
-                assert_eq!(
-                    event.session_ref,
-                    "/tmp/copilot-session-state/session-1/events.jsonl"
-                );
-            },
+        )
+        .expect("parse")
+        .expect("event");
+        assert_eq!(event.event_type, Some(LifecycleEventType::TurnStart));
+        assert_eq!(event.prompt, "hello");
+        assert_eq!(
+            event.session_ref,
+            "/tmp/copilot-session-state/session-1/events.jsonl"
         );
     }
 
@@ -180,44 +196,40 @@ mod tests {
 
     #[test]
     fn parses_session_start_with_prompt_and_resolved_transcript() {
-        with_env_var(
-            "BITLOOPS_TEST_COPILOT_SESSION_DIR",
+        let mut stdin = std::io::Cursor::new(
+            br#"{"sessionId":"session-1","initialPrompt":"bootstrap","modelSlug":"gpt-5.4"}"#
+                .as_slice(),
+        );
+        let event = parse_hook_event_with_session_dir(
+            HOOK_NAME_SESSION_START,
+            &mut stdin,
             Some("/tmp/copilot-session-state"),
-            || {
-                let mut stdin = std::io::Cursor::new(
-                    br#"{"sessionId":"session-1","initialPrompt":"bootstrap","modelSlug":"gpt-5.4"}"#.as_slice(),
-                );
-                let event = parse_hook_event(HOOK_NAME_SESSION_START, &mut stdin)
-                    .expect("parse")
-                    .expect("event");
-                assert_eq!(event.event_type, Some(LifecycleEventType::SessionStart));
-                assert_eq!(event.prompt, "bootstrap");
-                assert_eq!(event.model, "gpt-5.4");
-                assert_eq!(
-                    event.session_ref,
-                    "/tmp/copilot-session-state/session-1/events.jsonl"
-                );
-            },
+        )
+        .expect("parse")
+        .expect("event");
+        assert_eq!(event.event_type, Some(LifecycleEventType::SessionStart));
+        assert_eq!(event.prompt, "bootstrap");
+        assert_eq!(event.model, "gpt-5.4");
+        assert_eq!(
+            event.session_ref,
+            "/tmp/copilot-session-state/session-1/events.jsonl"
         );
     }
 
     #[test]
     fn agent_stop_falls_back_to_resolved_transcript_path() {
-        with_env_var(
-            "BITLOOPS_TEST_COPILOT_SESSION_DIR",
+        let mut stdin =
+            std::io::Cursor::new(br#"{"sessionId":"session-1","transcriptPath":""}"#.as_slice());
+        let event = parse_hook_event_with_session_dir(
+            HOOK_NAME_AGENT_STOP,
+            &mut stdin,
             Some("/tmp/copilot-session-state"),
-            || {
-                let mut stdin = std::io::Cursor::new(
-                    br#"{"sessionId":"session-1","transcriptPath":""}"#.as_slice(),
-                );
-                let event = parse_hook_event(HOOK_NAME_AGENT_STOP, &mut stdin)
-                    .expect("parse")
-                    .expect("event");
-                assert_eq!(
-                    event.session_ref,
-                    "/tmp/copilot-session-state/session-1/events.jsonl"
-                );
-            },
+        )
+        .expect("parse")
+        .expect("event");
+        assert_eq!(
+            event.session_ref,
+            "/tmp/copilot-session-state/session-1/events.jsonl"
         );
     }
 

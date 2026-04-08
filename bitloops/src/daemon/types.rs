@@ -545,13 +545,29 @@ pub(super) struct SupervisorAppState {
     pub(super) operation_lock: Arc<Mutex<()>>,
 }
 
+#[cfg(test)]
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {
-    let _ = repo_root;
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return global_daemon_dir_fallback().join(RUNTIME_STATE_FILE_NAME);
+    }
+    crate::utils::paths::default_runtime_state_dir(repo_root).join(RUNTIME_STATE_FILE_NAME)
+}
+
+#[cfg(not(test))]
+pub fn runtime_state_path(_repo_root: &Path) -> PathBuf {
     global_daemon_dir_fallback().join(RUNTIME_STATE_FILE_NAME)
 }
 
+#[cfg(test)]
 pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
-    let _ = repo_root;
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return global_daemon_dir_fallback().join(SERVICE_STATE_FILE_NAME);
+    }
+    crate::utils::paths::default_runtime_state_dir(repo_root).join(SERVICE_STATE_FILE_NAME)
+}
+
+#[cfg(not(test))]
+pub fn service_metadata_path(_repo_root: &Path) -> PathBuf {
     global_daemon_dir_fallback().join(SERVICE_STATE_FILE_NAME)
 }
 

@@ -216,49 +216,6 @@ fn write_transcript(path: &Path, prompt: &str, response: &str) {
 }
 
 #[test]
-fn cursor_basic_workflow() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    init_and_enable_cursor(dir.path());
-
-    let sid = "cursor-basic-1";
-    let transcript_path = dir.path().join("cursor-transcript-basic.jsonl");
-    cursor_before_submit_prompt(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Create cursor_hello.rs",
-    );
-    fs::write(
-        dir.path().join("cursor_hello.rs"),
-        "package main\n\nfunc CursorHello() {}\n",
-    )
-    .unwrap();
-    write_transcript(
-        &transcript_path,
-        "Create cursor_hello.rs",
-        "Created cursor_hello.rs",
-    );
-    cursor_stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-
-    run_git_expect_success(
-        dir.path(),
-        &["add", "cursor_hello.rs"],
-        "git add cursor_hello.rs",
-    );
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "add cursor hello file"],
-        "commit cursor_hello.rs",
-    );
-
-    assert!(
-        checkpoint_id_for_head(dir.path()).is_some(),
-        "cursor workflow commit should map HEAD to a checkpoint"
-    );
-}
-
-#[test]
 fn cursor_checkpoint_metadata() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());

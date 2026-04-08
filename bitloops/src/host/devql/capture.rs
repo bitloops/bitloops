@@ -10,8 +10,14 @@ pub(crate) fn capture_temporary_checkpoint_batch(
     cfg: &crate::host::devql::DevqlConfig,
     changed_paths: &[PathBuf],
 ) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new().context("creating watcher capture runtime")?;
-    capture_temporary_checkpoint_batch_with_handle(cfg, changed_paths, runtime.handle())
+    let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating watcher capture runtime")?;
+    runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))
 }
 
 pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
@@ -19,8 +25,25 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     changed_paths: &[PathBuf],
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    if changed_paths.is_empty() {
+    let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
         return Ok(());
+    };
+    handle.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
+
+    Ok(())
+}
+
+struct PreparedCaptureBatch {
+    modified: Vec<String>,
+    deleted: Vec<String>,
+}
+
+fn prepare_capture_temporary_checkpoint_batch(
+    cfg: &crate::host::devql::DevqlConfig,
+    changed_paths: &[PathBuf],
+) -> Result<Option<PreparedCaptureBatch>> {
+    if changed_paths.is_empty() {
+        return Ok(None);
     }
 
     let repo_root = &cfg.repo_root;
@@ -48,7 +71,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     }
 
     if modified.is_empty() && deleted.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let parent_tree = crate::host::checkpoints::strategy::manual_commit::run_git(
@@ -66,7 +89,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     )
     .context("building temporary checkpoint tree hash for devql watch")?;
     if parent_tree.as_deref() == Some(tree_hash.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
     let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
@@ -88,7 +111,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         .map_err(anyhow::Error::from)
     })?;
     if latest_tree_hash.as_deref() == Some(tree_hash.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
     let _row_id = sqlite.with_connection(|conn| {
@@ -103,10 +126,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         )
         .map_err(anyhow::Error::from)
     })?;
-
-    handle.block_on(sync_changed_paths(cfg, &modified, &deleted))?;
-
-    Ok(())
+    Ok(Some(PreparedCaptureBatch { modified, deleted }))
 }
 
 async fn sync_changed_paths(
@@ -571,7 +591,11 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create test runtime");
         let target = dir.path().join("src/lib.rs");
 
         fs::write(&target, "pub fn second() -> i32 {\n    2\n}\n").expect("update file");
@@ -629,7 +653,11 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create test runtime");
         let target = dir.path().join("src/lib.rs");
         capture_temporary_checkpoint_batch_with_handle(
             &cfg,

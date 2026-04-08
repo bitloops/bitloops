@@ -5,6 +5,31 @@ use super::SqliteConnectionPool;
 use super::introspection::{sqlite_table_has_column, sqlite_table_pk_columns};
 
 #[test]
+fn sqlite_connection_pool_uses_wal_and_normal_synchronous() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("runtime.sqlite");
+    let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+    let (journal_mode, synchronous): (String, i64) = sqlite.with_connection(|conn| {
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .context("read journal_mode pragma")?;
+        let synchronous: i64 = conn
+            .query_row("PRAGMA synchronous;", [], |row| row.get(0))
+            .context("read synchronous pragma")?;
+        Ok((journal_mode, synchronous))
+    })?;
+
+    assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    assert_eq!(
+        synchronous, 1,
+        "SQLite NORMAL synchronous pragma should be enabled"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn sqlite_connection_pool_initialises_devql_schema_workspace_revisions_table() -> Result<()> {
     let temp = TempDir::new().context("creating temp dir")?;
     let sqlite_path = temp.path().join("devql.sqlite");

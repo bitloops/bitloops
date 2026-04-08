@@ -1,7 +1,8 @@
 use super::*;
 
 fn write_current_repo_runtime_state(repo_root: &Path) {
-    let runtime_path = crate::daemon::runtime_state_path(repo_root);
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(repo_root));
     let runtime_state = crate::daemon::DaemonRuntimeState {
         version: 1,
         config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
@@ -600,6 +601,10 @@ async fn devql_post_route_executes_slim_clone_queries() {
               node {
                 relationKind
                 score
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
                 sourceArtefact {
                   symbolFqn
                 }
@@ -1209,18 +1214,6 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
 #[tokio::test]
 async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subscription_hub() {
     let repo = seed_dashboard_repo();
-    let daemon_state = TempDir::new().expect("temp dir");
-    let daemon_state_str = daemon_state.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[
-            ("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", Some("disabled")),
-            (
-                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                Some(daemon_state_str.as_str()),
-            ),
-        ],
-    );
     write_envelope_config(
         repo.path(),
         json!({

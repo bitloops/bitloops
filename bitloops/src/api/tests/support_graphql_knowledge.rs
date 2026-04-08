@@ -216,14 +216,13 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
                 format!("hash-{artefact_id}"),
             ],
         )
-        .expect("insert artefact row");
+        .expect("insert artefact metadata row");
         conn.execute(
             "INSERT INTO artefact_snapshots (
                 repo_id, blob_sha, path, artefact_id, parent_artefact_id,
                 start_line, end_line, start_byte, end_byte, created_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, 0, ?8, '2026-03-26T09:00:00Z'
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, '2026-03-26T09:00:00Z'
             )",
             rusqlite::params![
                 repo_id.as_str(),

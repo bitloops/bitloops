@@ -324,6 +324,7 @@ pub fn handle_stop_with_profile_and_model(
         .filter(|value| !value.trim().is_empty());
     let metadata = std::fs::read(&input.transcript_path)
         .ok()
+        .filter(|transcript| !transcript.is_empty())
         .and_then(|transcript| {
             let derived_prompts = extract_prompts_from_transcript_bytes(&transcript);
             let last_prompt = derived_prompts.last().cloned().unwrap_or_default();

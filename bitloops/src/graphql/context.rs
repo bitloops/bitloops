@@ -139,6 +139,11 @@ impl DevqlGraphqlContext {
         })
     }
 
+    pub(crate) fn daemon_config_path(&self) -> PathBuf {
+        self.config_root
+            .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH)
+    }
+
     pub(crate) fn repo_id(&self) -> &str {
         self.repo_identity.repo_id.as_str()
     }

@@ -17,28 +17,33 @@ git checkout -b your-feature
 
 # Make your changes, then verify (from bitloops/)
 cd bitloops
-cargo check
-./scripts/test-summary.sh
-cargo fmt
-cargo clippy
+cargo dev-check
+cargo dev-test-fast
+cargo dev-test-merge
+cargo dev-fmt-check
+cargo dev-clippy
 ```
 
-Keep changes focused. One PR per concern — don't mix a bug fix with a refactor.
+If your change touches broad slow suites or post-merge flows, also run `cargo dev-test-full`.
+
+Keep changes focused. One PR per concern; do not mix a bug fix with a refactor.
 
 ## Submit a PR
 
 1. Push your branch to your fork
 2. Open a PR against `develop`
-3. Fill in the PR template — describe what you changed and why
+3. Fill in the PR template; describe what you changed and why
 4. CI will run automatically
-5. A maintainer will review your code
+5. Pull requests into `develop` block on file-size, formatting, Clippy, `cargo dev-test-fast`, and `cargo dev-test-merge`
+6. Pushes to `develop` run `cargo dev-test-full` after merge, and pull requests into `main` include `cargo dev-test-full`
+7. A maintainer will review your code
 
 ### PR Tips
 
 - **Update tests** if you changed behavior
-- **Don't commit secrets** — use environment variable interpolation in config
-- **Follow existing patterns** — look at how similar code is structured in the repo
-- **Small PRs get reviewed faster** — break large changes into smaller pieces if you can
+- **Don't commit secrets** - use environment variable interpolation in config
+- **Follow existing patterns** - look at how similar code is structured in the repo
+- **Small PRs get reviewed faster** - break large changes into smaller pieces if you can
 
 ## Commit Messages
 
@@ -61,10 +66,10 @@ Releases are handled by maintainers. The flow is:
 4. `./scripts/release.sh` creates and pushes a release tag
 5. GitHub Actions builds and publishes release artifacts
 
-You don't need to worry about releases — just get your PR merged and we'll handle the rest.
+You don't need to worry about releases; just get your PR merged and we'll handle the rest.
 
 ## Got Questions?
 
 - Open a [GitHub Discussion](https://github.com/bitloops/bitloops/discussions)
 - Join [Discord](https://discord.com/invite/vj8EdZx8gK)
-- Ask in your PR — we're happy to help
+- Ask in your PR - we're happy to help

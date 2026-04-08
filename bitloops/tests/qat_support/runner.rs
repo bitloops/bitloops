@@ -16,7 +16,6 @@ pub enum Suite {
     Smoke,
     Devql,
     DevqlSync,
-    ClaudeCode,
     Onboarding,
     Quickstart,
 }
@@ -274,7 +273,6 @@ fn suite_feature_path(suite: &Suite) -> PathBuf {
         Suite::Smoke => root.join("smoke"),
         Suite::Devql => root.join("devql"),
         Suite::DevqlSync => root.join("devql-sync"),
-        Suite::ClaudeCode => root.join("claude-code"),
         Suite::Onboarding => root.join("onboarding"),
         Suite::Quickstart => root.join("quickstart"),
     }

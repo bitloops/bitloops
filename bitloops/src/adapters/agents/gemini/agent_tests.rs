@@ -7,10 +7,13 @@ use tempfile::tempdir;
 use super::*;
 use crate::adapters::agents::gemini::transcript::GeminiToolCall;
 use crate::adapters::agents::{
-    AGENT_NAME_GEMINI, AGENT_TYPE_GEMINI, Agent, AgentSession, HookInput, HookSupport,
-    MAX_CHUNK_SIZE,
+    AGENT_NAME_GEMINI, AGENT_TYPE_GEMINI, Agent, AgentSession, HookInput, MAX_CHUNK_SIZE,
 };
-use crate::test_support::process_state::{with_cwd, with_env_var};
+use crate::test_support::process_state::with_env_var;
+
+fn with_managed_hook_env_cleared<T>(f: impl FnOnce() -> T) -> T {
+    with_env_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, f)
+}
 
 #[test]
 #[allow(non_snake_case)]
@@ -40,19 +43,17 @@ fn TestDescription() {
 #[allow(non_snake_case)]
 fn TestDetectPresence() {
     let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
-        let agent = GeminiCliAgent;
-        let present = agent
-            .detect_presence()
-            .expect("detect presence should not error");
-        assert!(!present);
+    let agent = GeminiCliAgent;
+    let present = agent
+        .detect_presence_at(dir.path())
+        .expect("detect presence should not error");
+    assert!(!present);
 
-        std::fs::create_dir_all(dir.path().join(".gemini")).expect("failed to create .gemini");
-        let present = agent
-            .detect_presence()
-            .expect("detect presence should not error");
-        assert!(present);
-    });
+    std::fs::create_dir_all(dir.path().join(".gemini")).expect("failed to create .gemini");
+    let present = agent
+        .detect_presence_at(dir.path())
+        .expect("detect presence should not error");
+    assert!(present);
 }
 
 #[test]
@@ -491,12 +492,12 @@ fn TestReassembleTranscript() {
 #[test]
 #[allow(non_snake_case)]
 fn TestInstallHooks() {
-    let agent = GeminiCliAgent;
-    // Fresh install + idempotent + force + command verification.
-    let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
+    with_managed_hook_env_cleared(|| {
+        let agent = GeminiCliAgent;
+        // Fresh install + idempotent + force + command verification.
+        let dir = tempdir().expect("failed to create temp dir");
         let count = agent
-            .install_hooks(false, false)
+            .install_hooks_at(dir.path(), false, false)
             .expect("fresh hook install should work");
         assert_eq!(count, 12);
 
@@ -575,21 +576,19 @@ fn TestInstallHooks() {
         );
 
         let count = agent
-            .install_hooks(false, false)
+            .install_hooks_at(dir.path(), false, false)
             .expect("idempotent hook install should work");
         assert_eq!(count, 0);
 
         let count = agent
-            .install_hooks(false, true)
+            .install_hooks_at(dir.path(), false, true)
             .expect("force hook install should work");
         assert_eq!(count, 12);
-    });
 
-    // Local dev command prefix.
-    let local_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(local_dir.path(), || {
+        // Local dev command prefix.
+        let local_dir = tempdir().expect("failed to create temp dir");
         let count = agent
-            .install_hooks(true, false)
+            .install_hooks_at(local_dir.path(), true, false)
             .expect("local dev hook install should work");
         assert_eq!(count, 12);
         let settings = read_gemini_settings(local_dir.path());
@@ -598,11 +597,9 @@ fn TestInstallHooks() {
             "",
             "cargo run -- hooks gemini session-start",
         );
-    });
 
-    // Preserve user hooks.
-    let user_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(user_dir.path(), || {
+        // Preserve user hooks.
+        let user_dir = tempdir().expect("failed to create temp dir");
         write_gemini_settings(
             user_dir.path(),
             r#"{
@@ -617,7 +614,7 @@ fn TestInstallHooks() {
 }"#,
         );
         agent
-            .install_hooks(false, false)
+            .install_hooks_at(user_dir.path(), false, false)
             .expect("install hooks should preserve user hooks");
         let settings = read_gemini_settings(user_dir.path());
         assert_eq!(settings.hooks.session_start.len(), 2);
@@ -629,11 +626,9 @@ fn TestInstallHooks() {
                     .any(|hook| hook.name == "my-hook" && hook.command == "echo hello")
         });
         assert!(found_user_hook);
-    });
 
-    // Preserve unknown hook types.
-    let unknown_hook_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(unknown_hook_dir.path(), || {
+        // Preserve unknown hook types.
+        let unknown_hook_dir = tempdir().expect("failed to create temp dir");
         write_gemini_settings(
             unknown_hook_dir.path(),
             r#"{
@@ -654,7 +649,7 @@ fn TestInstallHooks() {
 }"#,
         );
         agent
-            .install_hooks(false, false)
+            .install_hooks_at(unknown_hook_dir.path(), false, false)
             .expect("install hooks should preserve unknown hook types");
         let raw_hooks = read_raw_hooks(unknown_hook_dir.path());
         assert!(raw_hooks.contains_key("FutureHook"));
@@ -669,11 +664,9 @@ fn TestInstallHooks() {
             serde_json::from_value(raw_hooks["AnotherNewHook"].clone())
                 .expect("failed to parse AnotherNewHook");
         assert_eq!(another_matchers[0].matcher, "pattern");
-    });
 
-    // Preserve unknown top-level settings fields.
-    let unknown_fields_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(unknown_fields_dir.path(), || {
+        // Preserve unknown top-level settings fields.
+        let unknown_fields_dir = tempdir().expect("failed to create temp dir");
         write_gemini_settings(
             unknown_fields_dir.path(),
             r#"{
@@ -682,7 +675,7 @@ fn TestInstallHooks() {
 }"#,
         );
         agent
-            .install_hooks(false, false)
+            .install_hooks_at(unknown_fields_dir.path(), false, false)
             .expect("install hooks should preserve unknown settings fields");
         let raw_settings = read_raw_settings(unknown_fields_dir.path());
         assert!(raw_settings.contains_key("someOtherField"));
@@ -693,29 +686,27 @@ fn TestInstallHooks() {
 #[test]
 #[allow(non_snake_case)]
 fn TestUninstallHooks() {
-    let agent = GeminiCliAgent;
-    let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
+    with_managed_hook_env_cleared(|| {
+        let agent = GeminiCliAgent;
+        let dir = tempdir().expect("failed to create temp dir");
         agent
-            .install_hooks(false, false)
+            .install_hooks_at(dir.path(), false, false)
             .expect("hook install should work");
-        assert!(agent.are_hooks_installed());
+        assert!(agent.are_hooks_installed_at(dir.path()));
 
-        agent.uninstall_hooks().expect("hook uninstall should work");
-        assert!(!agent.are_hooks_installed());
-    });
-
-    // No settings file should not error.
-    let no_settings_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(no_settings_dir.path(), || {
         agent
-            .uninstall_hooks()
-            .expect("uninstall should not fail without settings");
-    });
+            .uninstall_hooks_at(dir.path())
+            .expect("hook uninstall should work");
+        assert!(!agent.are_hooks_installed_at(dir.path()));
 
-    // Preserve user hooks.
-    let user_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(user_dir.path(), || {
+        // No settings file should not error.
+        let no_settings_dir = tempdir().expect("failed to create temp dir");
+        agent
+            .uninstall_hooks_at(no_settings_dir.path())
+            .expect("uninstall should not fail without settings");
+
+        // Preserve user hooks.
+        let user_dir = tempdir().expect("failed to create temp dir");
         write_gemini_settings(
             user_dir.path(),
             r#"{
@@ -733,16 +724,14 @@ fn TestUninstallHooks() {
 }"#,
         );
         agent
-            .uninstall_hooks()
+            .uninstall_hooks_at(user_dir.path())
             .expect("uninstall should preserve user hooks");
         let settings = read_gemini_settings(user_dir.path());
         assert_eq!(settings.hooks.session_start.len(), 1);
         assert_eq!(settings.hooks.session_start[0].matcher, "startup");
-    });
 
-    // Preserve unknown hook types.
-    let unknown_type_dir = tempdir().expect("failed to create temp dir");
-    with_cwd(unknown_type_dir.path(), || {
+        // Preserve unknown hook types.
+        let unknown_type_dir = tempdir().expect("failed to create temp dir");
         write_gemini_settings(
             unknown_type_dir.path(),
             r#"{
@@ -762,7 +751,7 @@ fn TestUninstallHooks() {
 }"#,
         );
         agent
-            .uninstall_hooks()
+            .uninstall_hooks_at(unknown_type_dir.path())
             .expect("uninstall should preserve unknown hook types");
         let raw_hooks = read_raw_hooks(unknown_type_dir.path());
         assert!(raw_hooks.contains_key("FutureHook"));
@@ -778,15 +767,15 @@ fn TestUninstallHooks() {
 #[test]
 #[allow(non_snake_case)]
 fn TestAreHooksInstalled() {
-    let dir = tempdir().expect("failed to create temp dir");
-    with_cwd(dir.path(), || {
+    with_managed_hook_env_cleared(|| {
+        let dir = tempdir().expect("failed to create temp dir");
         let agent = GeminiCliAgent;
-        assert!(!agent.are_hooks_installed());
+        assert!(!agent.are_hooks_installed_at(dir.path()));
 
         agent
-            .install_hooks(false, false)
+            .install_hooks_at(dir.path(), false, false)
             .expect("hook install should work");
-        assert!(agent.are_hooks_installed());
+        assert!(agent.are_hooks_installed_at(dir.path()));
     });
 }
 

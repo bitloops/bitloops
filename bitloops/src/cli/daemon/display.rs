@@ -1,8 +1,17 @@
+use std::path::Path;
+
 use crate::daemon;
 
 pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
-    let mut lines = Vec::new();
     let log_path = daemon::daemon_log_file_path();
+    status_lines_with_log_path(report, &log_path)
+}
+
+pub(super) fn status_lines_with_log_path(
+    report: &daemon::DaemonStatusReport,
+    log_path: &Path,
+) -> Vec<String> {
+    let mut lines = Vec::new();
 
     if let Some(runtime) = report.runtime.as_ref() {
         lines.push("Bitloops daemon: running".to_string());

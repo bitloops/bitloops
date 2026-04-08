@@ -118,8 +118,173 @@ fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
         .expect("apply symbol_clone_edges DDL");
 }
 
-fn apply_legacy_current_state_compat_schema(_path: &Path) {
-    // Legacy compat schema no longer needed — init schema and sync schema are aligned.
+fn apply_legacy_current_state_compat_schema(path: &Path) {
+    let conn = rusqlite::Connection::open(path).expect("open sqlite for legacy compat DDL");
+
+    let table_has_column = |table: &str, column: &str| -> bool {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("prepare table_info pragma");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query table_info pragma");
+        rows.filter_map(Result::ok)
+            .any(|name| name.eq_ignore_ascii_case(column))
+    };
+
+    let ensure_artefacts_column = |column: &str, ddl_type: &str| {
+        if table_has_column("artefacts", column) {
+            return;
+        }
+        conn.execute(
+            &format!("ALTER TABLE artefacts ADD COLUMN {column} {ddl_type}"),
+            [],
+        )
+        .unwrap_or_else(|err| panic!("add legacy artefacts.{column} column: {err}"));
+    };
+
+    ensure_artefacts_column("blob_sha", "TEXT");
+    ensure_artefacts_column("path", "TEXT");
+    ensure_artefacts_column("parent_artefact_id", "TEXT");
+    ensure_artefacts_column("start_line", "INTEGER");
+    ensure_artefacts_column("end_line", "INTEGER");
+    ensure_artefacts_column("start_byte", "INTEGER");
+    ensure_artefacts_column("end_byte", "INTEGER");
+
+    conn.execute_batch(
+        r#"
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_snapshot_after_insert
+AFTER INSERT ON artefacts
+WHEN NEW.blob_sha IS NOT NULL AND NEW.path IS NOT NULL
+BEGIN
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.blob_sha,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_snapshot_after_update
+AFTER UPDATE OF blob_sha, path, parent_artefact_id, start_line, end_line, start_byte, end_byte
+ON artefacts
+WHEN NEW.blob_sha IS NOT NULL AND NEW.path IS NOT NULL
+BEGIN
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.blob_sha,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_from_current_after_insert
+AFTER INSERT ON artefacts_current
+BEGIN
+    UPDATE artefacts
+       SET blob_sha = NEW.content_id,
+           path = NEW.path,
+           parent_artefact_id = NEW.parent_artefact_id,
+           start_line = NEW.start_line,
+           end_line = NEW.end_line,
+           start_byte = NEW.start_byte,
+           end_byte = NEW.end_byte
+     WHERE repo_id = NEW.repo_id
+       AND artefact_id = NEW.artefact_id;
+
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.content_id,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_from_current_after_update
+AFTER UPDATE OF content_id, path, parent_artefact_id, start_line, end_line, start_byte, end_byte
+ON artefacts_current
+BEGIN
+    UPDATE artefacts
+       SET blob_sha = NEW.content_id,
+           path = NEW.path,
+           parent_artefact_id = NEW.parent_artefact_id,
+           start_line = NEW.start_line,
+           end_line = NEW.end_line,
+           start_byte = NEW.start_byte,
+           end_byte = NEW.end_byte
+     WHERE repo_id = NEW.repo_id
+       AND artefact_id = NEW.artefact_id;
+
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.content_id,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+"#,
+    )
+    .expect("apply legacy current-state compatibility schema");
 }
 
 async fn seed_test_repository_catalog_row(relational: &RelationalStorage, cfg: &DevqlConfig) {
