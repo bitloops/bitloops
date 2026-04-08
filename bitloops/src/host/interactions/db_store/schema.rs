@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 pub(super) const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     agent_type TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
@@ -15,14 +15,15 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     started_at TEXT NOT NULL DEFAULT '',
     ended_at TEXT,
     last_event_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, session_id)
 );
 
 CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
 ON interaction_sessions (repo_id, last_event_at, started_at);
 
 CREATE TABLE IF NOT EXISTS interaction_turns (
-    turn_id TEXT PRIMARY KEY,
+    turn_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     turn_number INTEGER NOT NULL DEFAULT 0,
@@ -44,17 +45,18 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     transcript_fragment TEXT NOT NULL DEFAULT '',
     files_modified TEXT NOT NULL DEFAULT '[]',
     checkpoint_id TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, turn_id)
 );
 
 CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
-ON interaction_turns (session_id, turn_number, started_at);
+ON interaction_turns (repo_id, session_id, turn_number, started_at);
 
 CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
 ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
 
 CREATE TABLE IF NOT EXISTS interaction_events (
-    event_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     turn_id TEXT,
     repo_id TEXT NOT NULL,
@@ -62,14 +64,15 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     event_time TEXT NOT NULL,
     agent_type TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
-    payload TEXT NOT NULL DEFAULT '{}'
+    payload TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (repo_id, event_id)
 );
 
 CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
 ON interaction_events (repo_id, event_time, event_id);
 
 CREATE INDEX IF NOT EXISTS interaction_events_session_idx
-ON interaction_events (session_id, event_time, event_id);
+ON interaction_events (repo_id, session_id, event_time, event_id);
 
 CREATE TABLE IF NOT EXISTS interaction_spool_queue (
     mutation_id INTEGER PRIMARY KEY AUTOINCREMENT,

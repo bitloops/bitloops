@@ -1,7 +1,6 @@
 //! Auto-commit strategy adapter.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,10 +11,10 @@ use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::state::{PendingCheckpointState, SessionState};
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedMetadata, WriteCommittedOptions, insert_commit_checkpoint_mapping,
-    persist_committed_checkpoint_db_and_blobs, redact_bytes, redact_jsonl_bytes_with_fallback,
-    redact_text, run_git,
+    persist_committed_checkpoint_db_and_blobs, read_session_metadata_bundle, redact_bytes,
+    redact_jsonl_bytes_with_fallback, redact_text, run_git, write_session_metadata,
 };
-use crate::utils::paths;
+use crate::host::checkpoints::transcript::metadata::SessionMetadataBundle;
 use crate::utils::strings;
 
 use super::manual_commit::ManualCommitStrategy;
@@ -292,6 +291,28 @@ impl AutoCommitStrategy {
 
         Ok(true)
     }
+
+    fn resolve_session_metadata_bundle(
+        &self,
+        session_id: &str,
+        in_memory: Option<&SessionMetadataBundle>,
+        transcript_path: &str,
+    ) -> Option<SessionMetadataBundle> {
+        if let Some(bundle) = in_memory {
+            return Some(bundle.clone());
+        }
+
+        if let Some(bundle) = read_session_metadata_bundle(&self.repo_root, session_id) {
+            return Some(bundle);
+        }
+
+        if transcript_path.trim().is_empty() {
+            return None;
+        }
+
+        let _ = write_session_metadata(&self.repo_root, session_id, transcript_path);
+        read_session_metadata_bundle(&self.repo_root, session_id)
+    }
 }
 
 impl SessionInitializer for AutoCommitStrategy {
@@ -396,14 +417,6 @@ fn generate_checkpoint_id() -> String {
     id[..12].to_string()
 }
 
-fn read_optional_file(path: &Path) -> String {
-    fs::read_to_string(path).unwrap_or_default()
-}
-
-fn read_optional_bytes(path: &Path) -> Vec<u8> {
-    fs::read(path).unwrap_or_default()
-}
-
 fn merge_files_touched(
     modified: &[String],
     new_files: &[String],
@@ -434,37 +447,22 @@ impl Strategy for AutoCommitStrategy {
             return Ok(());
         }
 
-        let metadata_dir_abs = if !ctx.metadata_dir_abs.trim().is_empty() {
-            Some(PathBuf::from(&ctx.metadata_dir_abs))
-        } else if !ctx.metadata_dir.trim().is_empty() {
-            Some(self.repo_root.join(&ctx.metadata_dir))
-        } else {
-            None
-        };
-
-        let transcript = {
-            if let Some(metadata_dir_abs) = metadata_dir_abs.as_ref() {
-                let from_metadata = metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME);
-                if from_metadata.exists() {
-                    read_optional_bytes(&from_metadata)
-                } else if !ctx.transcript_path.trim().is_empty() {
-                    read_optional_bytes(Path::new(&ctx.transcript_path))
-                } else {
-                    vec![]
-                }
-            } else if !ctx.transcript_path.trim().is_empty() {
-                read_optional_bytes(Path::new(&ctx.transcript_path))
-            } else {
-                vec![]
-            }
-        };
-        let prompt = metadata_dir_abs
+        let metadata = self.resolve_session_metadata_bundle(
+            &ctx.session_id,
+            ctx.metadata.as_ref(),
+            &ctx.transcript_path,
+        );
+        let transcript = metadata
             .as_ref()
-            .map(|path| read_optional_file(&path.join(paths::PROMPT_FILE_NAME)))
+            .map(|bundle| bundle.transcript.clone())
             .unwrap_or_default();
-        let context = metadata_dir_abs
+        let prompt = metadata
             .as_ref()
-            .map(|path| read_optional_file(&path.join(paths::CONTEXT_FILE_NAME)))
+            .map(SessionMetadataBundle::prompt_text)
+            .unwrap_or_default();
+        let context = metadata
+            .as_ref()
+            .map(|bundle| String::from_utf8_lossy(&bundle.context).to_string())
             .unwrap_or_default();
         let checkpoint_id = generate_checkpoint_id();
 
@@ -491,11 +489,23 @@ impl Strategy for AutoCommitStrategy {
     fn save_task_step(&self, ctx: &TaskStepContext) -> Result<()> {
         let files_touched =
             merge_files_touched(&ctx.modified_files, &ctx.new_files, &ctx.deleted_files);
-        let transcript = if !ctx.transcript_path.trim().is_empty() {
-            read_optional_bytes(Path::new(&ctx.transcript_path))
-        } else {
-            vec![]
-        };
+        let metadata = self.resolve_session_metadata_bundle(
+            &ctx.session_id,
+            ctx.session_metadata.as_ref(),
+            &ctx.transcript_path,
+        );
+        let transcript = metadata
+            .as_ref()
+            .map(|bundle| bundle.transcript.clone())
+            .unwrap_or_default();
+        let prompt = metadata
+            .as_ref()
+            .map(SessionMetadataBundle::prompt_text)
+            .unwrap_or_default();
+        let context = metadata
+            .as_ref()
+            .map(|bundle| String::from_utf8_lossy(&bundle.context).to_string())
+            .unwrap_or_default();
         let checkpoint_id = generate_checkpoint_id();
 
         self.write_checkpoint_to_db(&MetadataCommitInput {
@@ -503,8 +513,8 @@ impl Strategy for AutoCommitStrategy {
             session_id: &ctx.session_id,
             agent_type: &ctx.agent_type,
             transcript: &transcript,
-            prompt: "",
-            context: "",
+            prompt: &prompt,
+            context: &context,
             files_touched: &files_touched,
             author_name: &ctx.author_name,
             author_email: &ctx.author_email,

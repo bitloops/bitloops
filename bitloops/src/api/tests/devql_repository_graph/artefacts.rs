@@ -124,6 +124,78 @@ async fn devql_repository_file_and_artefact_queries_resolve_current_devql_graph(
 }
 
 #[tokio::test]
+async fn devql_repository_artefacts_query_tolerates_null_canonical_kind_rows() {
+    let repo = seed_graphql_devql_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let sqlite_path = repo
+        .path()
+        .join(".bitloops")
+        .join("stores")
+        .join("graphql.sqlite");
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id,
+            language, canonical_kind, language_kind,
+            symbol_fqn, parent_symbol_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte,
+            signature, modifiers, docstring, updated_at
+        ) VALUES (
+            ?1, 'src/bad.ts', 'blob-bad', 'sym::bad', 'artefact::bad',
+            'typescript', NULL, 'function_declaration',
+            'src/bad.ts::bad', NULL, NULL,
+            1, 2, 0, 20,
+            NULL, '[]', NULL, '2026-03-26T09:00:00Z'
+        )",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert malformed artefact row");
+
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                artefacts(first: 20) {
+                  totalCount
+                  edges {
+                    node {
+                      symbolId
+                      canonicalKind
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["artefacts"]["totalCount"], 8);
+    assert!(
+        json["repo"]["artefacts"]["edges"]
+            .as_array()
+            .expect("artefact edges array")
+            .iter()
+            .any(|edge| {
+                edge["node"]["symbolId"] == "sym::bad" && edge["node"]["canonicalKind"].is_null()
+            })
+    );
+}
+
+#[tokio::test]
 async fn devql_artefact_connection_supports_cursor_pagination_for_graphql_artefacts() {
     let repo = seed_graphql_devql_repo();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -671,6 +743,199 @@ async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
         json["repo"]["artefacts"]["edges"][0]["node"]["incomingDeps"]["edges"][0]["node"]["fromArtefact"]
             ["symbolFqn"],
         "src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_line_scope() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "src/caller.ts") {
+                  artefacts(filter: { kind: FUNCTION }) {
+                    totalCount
+                    edges {
+                      node {
+                        symbolFqn
+                        depsSummary {
+                          totalCount
+                          incomingCount
+                          outgoingCount
+                          kindCounts {
+                            imports
+                            calls
+                            references
+                            extends
+                            implements
+                            exports
+                          }
+                        }
+                        outOnly: depsSummary(filter: { direction: OUT }) {
+                          totalCount
+                          incomingCount
+                          outgoingCount
+                        }
+                        includeUnresolved: depsSummary(filter: { unresolved: true }) {
+                          totalCount
+                          incomingCount
+                          outgoingCount
+                          kindCounts {
+                            calls
+                          }
+                        }
+                        resolvedOnly: depsSummary(filter: { unresolved: false }) {
+                          totalCount
+                          incomingCount
+                          outgoingCount
+                        }
+                        importsOnly: depsSummary(filter: { kind: IMPORTS }) {
+                          totalCount
+                          incomingCount
+                          outgoingCount
+                        }
+                      }
+                    }
+                  }
+                  lineScoped: artefacts(filter: { kind: FUNCTION, lines: { start: 1, end: 3 } }) {
+                    totalCount
+                    edges {
+                      node {
+                        symbolFqn
+                        depsSummary {
+                          totalCount
+                          outgoingCount
+                        }
+                      }
+                    }
+                  }
+                }
+                artefacts(filter: { symbolFqn: "src/target.ts::target" }) {
+                  edges {
+                    node {
+                      inOnly: depsSummary(filter: { direction: IN }) {
+                        totalCount
+                        incomingCount
+                        outgoingCount
+                        kindCounts {
+                          calls
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["file"]["artefacts"]["totalCount"], 2);
+    assert_eq!(json["repo"]["file"]["lineScoped"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["symbolFqn"],
+        "src/caller.ts::caller"
+    );
+    assert_eq!(
+        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["depsSummary"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["depsSummary"]["outgoingCount"],
+        1
+    );
+
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["symbolFqn"],
+        "src/caller.ts::caller"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["incomingCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["outgoingCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["kindCounts"]["calls"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["kindCounts"]["imports"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["importsOnly"]["totalCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["resolvedOnly"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["includeUnresolved"]["totalCount"],
+        1
+    );
+
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["symbolFqn"],
+        "src/caller.ts::helper"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["depsSummary"]["totalCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["outOnly"]["outgoingCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["resolvedOnly"]["totalCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["includeUnresolved"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["includeUnresolved"]["kindCounts"]["calls"],
+        1
+    );
+
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["inOnly"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["inOnly"]["incomingCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["inOnly"]["outgoingCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["inOnly"]["kindCounts"]["calls"],
+        1
     );
 }
 

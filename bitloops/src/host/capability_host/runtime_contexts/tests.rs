@@ -114,6 +114,13 @@ impl RelationalGateway for DummyRelationalGateway {
         bail!("load_repo_id_for_commit is not used in runtime_contexts tests")
     }
 
+    fn load_current_production_artefacts(
+        &self,
+        _repo_id: &str,
+    ) -> Result<Vec<crate::models::ProductionArtefact>> {
+        Ok(Vec::new())
+    }
+
     fn load_production_artefacts(
         &self,
         _commit_sha: &str,

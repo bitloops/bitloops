@@ -1,0 +1,47 @@
+[package]
+name = "libduckdb-sys"
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+keywords = { workspace = true }
+readme = { workspace = true }
+build = "build.rs"
+categories = ["external-ffi-bindings", "database"]
+description = "Native bindings to the libduckdb library, C API"
+exclude = ["duckdb-sources"]
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[features]
+default = ["vcpkg", "pkg-config"]
+bundled = ["cc"]
+buildtime_bindgen = ["bindgen", "pkg-config", "vcpkg"]
+json = ["bundled"]
+parquet = ["bundled"]
+extensions-full = ["json", "parquet"]
+winduckdb = []
+# Warning: experimental feature
+loadable-extension = ["prettyplease", "quote", "syn"]
+
+[build-dependencies]
+bindgen = { workspace = true, features = ["runtime"], optional = true }
+cc = { workspace = true, features = ["parallel"], optional = true }
+flate2 = { workspace = true }
+pkg-config = { workspace = true, optional = true }
+prettyplease = { workspace = true, optional = true }
+quote = { workspace = true, optional = true }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+syn = { workspace = true, optional = true }
+tar = { workspace = true }
+vcpkg = { workspace = true, optional = true }
+zip = { version = "6", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+arrow = { workspace = true, features = ["ffi"] }

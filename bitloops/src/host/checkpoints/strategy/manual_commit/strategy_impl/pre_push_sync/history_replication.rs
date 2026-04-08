@@ -26,7 +26,7 @@ WHERE repo_id = '{}' AND commit_sha = '{}'",
     let artefact_rows = relational
         .query_rows(&format!(
             "SELECT artefact_id, symbol_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
-FROM artefacts WHERE repo_id = '{}' AND blob_sha IN (\
+FROM artefacts_historical WHERE repo_id = '{}' AND blob_sha IN (\
     SELECT DISTINCT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}'\
 )",
             crate::host::devql::esc_pg(repo_id),
@@ -55,6 +55,10 @@ FROM artefact_edges WHERE repo_id = '{}' AND blob_sha IN (\
     ));
     statements.extend(build_file_state_replication_sql(repo_id, &file_state_rows));
     statements.extend(build_artefacts_replication_sql(repo_id, &artefact_rows));
+    statements.extend(build_artefact_snapshots_replication_sql(
+        repo_id,
+        &artefact_rows,
+    ));
     statements.extend(build_artefact_edges_replication_sql(repo_id, &edge_rows));
 
     relational
@@ -143,12 +147,6 @@ pub(super) fn build_artefacts_replication_sql(
             let Some(artefact_id) = sql_helpers::row_text(row, "artefact_id") else {
                 continue;
             };
-            let Some(blob_sha) = sql_helpers::row_text(row, "blob_sha") else {
-                continue;
-            };
-            let Some(path) = sql_helpers::row_text(row, "path") else {
-                continue;
-            };
             let Some(language) = sql_helpers::row_text(row, "language") else {
                 continue;
             };
@@ -160,12 +158,6 @@ pub(super) fn build_artefacts_replication_sql(
                 sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "language_kind"));
             let symbol_fqn =
                 sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "symbol_fqn"));
-            let parent_artefact_id =
-                sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "parent_artefact_id"));
-            let start_line = sql_helpers::row_i64(row, "start_line").unwrap_or_default();
-            let end_line = sql_helpers::row_i64(row, "end_line").unwrap_or_default();
-            let start_byte = sql_helpers::row_i64(row, "start_byte").unwrap_or_default();
-            let end_byte = sql_helpers::row_i64(row, "end_byte").unwrap_or_default();
             let signature = sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "signature"));
             let modifiers = sql_helpers::sql_jsonb_text(row.get("modifiers"), "[]");
             let docstring = sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "docstring"));
@@ -173,21 +165,14 @@ pub(super) fn build_artefacts_replication_sql(
                 sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "content_hash"));
 
             values.push(format!(
-                "('{}', {}, '{}', '{}', '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                "('{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {})",
                 crate::host::devql::esc_pg(artefact_id),
                 symbol_id,
                 crate::host::devql::esc_pg(repo_id),
-                crate::host::devql::esc_pg(blob_sha),
-                crate::host::devql::esc_pg(path),
                 crate::host::devql::esc_pg(language),
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                start_byte,
-                end_byte,
                 signature,
                 modifiers,
                 docstring,
@@ -199,8 +184,57 @@ pub(super) fn build_artefacts_replication_sql(
         }
 
         statements.push(format!(
-            "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) VALUES {} \
+            "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) VALUES {} \
 ON CONFLICT (artefact_id) DO NOTHING",
+            values.join(","),
+        ));
+    }
+    statements
+}
+
+pub(super) fn build_artefact_snapshots_replication_sql(
+    repo_id: &str,
+    rows: &[serde_json::Value],
+) -> Vec<String> {
+    let mut statements = Vec::new();
+    for chunk in rows.chunks(constants::PRE_PUSH_BATCH_SIZE) {
+        let mut values = Vec::new();
+        for row in chunk {
+            let Some(artefact_id) = sql_helpers::row_text(row, "artefact_id") else {
+                continue;
+            };
+            let Some(blob_sha) = sql_helpers::row_text(row, "blob_sha") else {
+                continue;
+            };
+            let Some(path) = sql_helpers::row_text(row, "path") else {
+                continue;
+            };
+            let parent_artefact_id =
+                sql_helpers::sql_nullable_text(sql_helpers::row_text(row, "parent_artefact_id"));
+            let start_line = sql_helpers::row_i64(row, "start_line").unwrap_or_default();
+            let end_line = sql_helpers::row_i64(row, "end_line").unwrap_or_default();
+            let start_byte = sql_helpers::row_i64(row, "start_byte").unwrap_or_default();
+            let end_byte = sql_helpers::row_i64(row, "end_byte").unwrap_or_default();
+
+            values.push(format!(
+                "('{}', '{}', '{}', '{}', {}, {}, {}, {}, {})",
+                crate::host::devql::esc_pg(repo_id),
+                crate::host::devql::esc_pg(blob_sha),
+                crate::host::devql::esc_pg(path),
+                crate::host::devql::esc_pg(artefact_id),
+                parent_artefact_id,
+                start_line,
+                end_line,
+                start_byte,
+                end_byte,
+            ));
+        }
+        if values.is_empty() {
+            continue;
+        }
+        statements.push(format!(
+            "INSERT INTO artefact_snapshots (repo_id, blob_sha, path, artefact_id, parent_artefact_id, start_line, end_line, start_byte, end_byte) VALUES {} \
+ON CONFLICT (repo_id, blob_sha, artefact_id) DO NOTHING",
             values.join(","),
         ));
     }

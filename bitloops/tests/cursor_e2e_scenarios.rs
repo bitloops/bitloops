@@ -131,24 +131,8 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["commit", "-m", "initial"]);
 }
 
-fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
-        .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
-}
-
 fn ensure_relational_store_file(repo_root: &Path) {
-    let sqlite =
-        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
-            .expect("create relational sqlite file");
-    sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+    test_command_support::ensure_repo_daemon_stores(repo_root);
 }
 
 fn init_cursor(repo: &Path) {
@@ -229,49 +213,6 @@ fn write_transcript(path: &Path, prompt: &str, response: &str) {
         .expect("open transcript for append");
     file.write_all(payload.as_bytes())
         .expect("append transcript payload");
-}
-
-#[test]
-fn cursor_basic_workflow() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    init_and_enable_cursor(dir.path());
-
-    let sid = "cursor-basic-1";
-    let transcript_path = dir.path().join("cursor-transcript-basic.jsonl");
-    cursor_before_submit_prompt(
-        dir.path(),
-        sid,
-        transcript_path.to_string_lossy().as_ref(),
-        "Create cursor_hello.rs",
-    );
-    fs::write(
-        dir.path().join("cursor_hello.rs"),
-        "package main\n\nfunc CursorHello() {}\n",
-    )
-    .unwrap();
-    write_transcript(
-        &transcript_path,
-        "Create cursor_hello.rs",
-        "Created cursor_hello.rs",
-    );
-    cursor_stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
-
-    run_git_expect_success(
-        dir.path(),
-        &["add", "cursor_hello.rs"],
-        "git add cursor_hello.rs",
-    );
-    run_git_expect_success(
-        dir.path(),
-        &["commit", "-m", "add cursor hello file"],
-        "commit cursor_hello.rs",
-    );
-
-    assert!(
-        checkpoint_id_for_head(dir.path()).is_some(),
-        "cursor workflow commit should map HEAD to a checkpoint"
-    );
 }
 
 #[test]

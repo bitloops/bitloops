@@ -2,13 +2,12 @@ use super::*;
 
 pub(super) const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
-pub(super) const ENRICHMENT_STATE_FILE_NAME: &str = "enrichment.json";
-pub(super) const SYNC_STATE_FILE_NAME: &str = "sync.json";
-pub(super) const SYNC_STATE_LOCK_FILE_NAME: &str = "sync.lock";
+pub(crate) const ENRICHMENT_STATE_FILE_NAME: &str = "enrichment.json";
+pub(crate) const SYNC_STATE_FILE_NAME: &str = "sync.json";
 pub(super) const INTERNAL_DAEMON_COMMAND_NAME: &str = "__daemon-process";
 pub(super) const INTERNAL_SUPERVISOR_COMMAND_NAME: &str = "__daemon-supervisor";
 pub(super) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops.daemon";
-pub(super) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
+pub(crate) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
 pub(super) const SUPERVISOR_SERVICE_STATE_FILE_NAME: &str = "supervisor-service.json";
 pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -376,7 +375,8 @@ pub struct SyncTaskRecord {
     pub repo_provider: String,
     pub repo_organisation: String,
     pub repo_identity: String,
-    pub config_root: PathBuf,
+    #[serde(alias = "config_root", default)]
+    pub daemon_config_root: PathBuf,
     pub repo_root: PathBuf,
     pub source: SyncTaskSource,
     pub mode: SyncTaskMode,
@@ -390,6 +390,14 @@ pub struct SyncTaskRecord {
     pub progress: crate::host::devql::SyncProgressUpdate,
     pub error: Option<String>,
     pub summary: Option<crate::host::devql::SyncSummary>,
+}
+
+impl SyncTaskRecord {
+    pub fn normalise_legacy_values(&mut self) {
+        if self.daemon_config_root.as_os_str().is_empty() {
+            self.daemon_config_root = self.repo_root.clone();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -464,13 +472,29 @@ pub(super) struct SupervisorAppState {
     pub(super) operation_lock: Arc<Mutex<()>>,
 }
 
+#[cfg(test)]
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {
-    let _ = repo_root;
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return global_daemon_dir_fallback().join(RUNTIME_STATE_FILE_NAME);
+    }
+    crate::utils::paths::default_runtime_state_dir(repo_root).join(RUNTIME_STATE_FILE_NAME)
+}
+
+#[cfg(not(test))]
+pub fn runtime_state_path(_repo_root: &Path) -> PathBuf {
     global_daemon_dir_fallback().join(RUNTIME_STATE_FILE_NAME)
 }
 
+#[cfg(test)]
 pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
-    let _ = repo_root;
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return global_daemon_dir_fallback().join(SERVICE_STATE_FILE_NAME);
+    }
+    crate::utils::paths::default_runtime_state_dir(repo_root).join(SERVICE_STATE_FILE_NAME)
+}
+
+#[cfg(not(test))]
+pub fn service_metadata_path(_repo_root: &Path) -> PathBuf {
     global_daemon_dir_fallback().join(SERVICE_STATE_FILE_NAME)
 }
 
@@ -482,10 +506,6 @@ pub(super) fn global_daemon_dir_fallback() -> PathBuf {
     crate::utils::platform_dirs::bitloops_state_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("bitloops").join("state"))
         .join("daemon")
-}
-
-pub(super) fn supervisor_runtime_state_path() -> Result<PathBuf> {
-    Ok(global_daemon_dir()?.join(SUPERVISOR_RUNTIME_STATE_FILE_NAME))
 }
 
 pub(super) fn supervisor_service_metadata_path() -> Result<PathBuf> {

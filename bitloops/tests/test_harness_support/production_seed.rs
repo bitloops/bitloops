@@ -10,11 +10,12 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
-use tree_sitter::{Node, Parser};
-use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
-use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 use walkdir::WalkDir;
 
+use bitloops::host::capability_host::gateways::{
+    DefaultHostServicesGateway, HostServicesGateway, SymbolIdentityInput,
+};
+use bitloops::host::devql::extract_production_file_artefacts;
 use bitloops::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
     ProductionArtefactRecord, RepositoryRecord,
@@ -88,6 +89,7 @@ impl ProductionBatchBuilder {
     #[allow(clippy::too_many_arguments)]
     fn push_artefact(
         &mut self,
+        host_services: &dyn HostServicesGateway,
         repo_id: &str,
         commit_sha: &str,
         blob_sha: &str,
@@ -104,23 +106,26 @@ impl ProductionBatchBuilder {
         start_byte: i64,
         end_byte: i64,
         signature: Option<&str>,
+        modifiers: &[String],
+        docstring: Option<&str>,
         content_bytes: &[u8],
     ) -> ParsedArtefactIds {
         let symbol_id = if canonical_kind == "file" {
             file_symbol_id(path)
         } else {
-            structural_symbol_id(
+            host_services.derive_symbol_id(&SymbolIdentityInput {
                 path,
                 canonical_kind,
-                language_kind,
+                language_kind: language_kind.unwrap_or("<null>"),
+                name: identity_name,
                 parent_symbol_id,
-                identity_name,
-                signature,
-            )
+                signature: signature.unwrap_or_default(),
+                modifiers,
+            })
         };
-        let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
+        let artefact_id = host_services.derive_artefact_id(blob_sha, &symbol_id);
         let content_hash = Some(sha256_hex(content_bytes));
-        let modifiers = "[]".to_string();
+        let modifiers = serde_json::to_string(modifiers).unwrap_or_else(|_| "[]".to_string());
 
         self.artefacts.push(ProductionArtefactRecord {
             artefact_id: artefact_id.clone(),
@@ -139,7 +144,7 @@ impl ProductionBatchBuilder {
             end_byte,
             signature: signature.map(str::to_string),
             modifiers: modifiers.clone(),
-            docstring: None,
+            docstring: docstring.map(str::to_string),
             content_hash: content_hash.clone(),
         });
         self.current_artefacts
@@ -162,7 +167,7 @@ impl ProductionBatchBuilder {
                 end_byte,
                 signature: signature.map(str::to_string),
                 modifiers,
-                docstring: None,
+                docstring: docstring.map(str::to_string),
                 content_hash,
             });
 
@@ -193,19 +198,10 @@ pub fn execute(
     commit_sha: &str,
 ) -> Result<IngestProductionSummary> {
     let repo = resolve_repository_record(repo_dir)?;
+    let host_services = DefaultHostServicesGateway::new(repo.repo_id.clone());
     let branch_name = default_branch_name(repo_dir);
     let production_files = find_production_files(repo_dir)?;
     let committed_at = chrono::Utc::now().to_rfc3339();
-
-    let mut ts_parser = Parser::new();
-    ts_parser
-        .set_language(&LANGUAGE_TYPESCRIPT.into())
-        .context("failed to load TypeScript parser")?;
-
-    let mut rust_parser = Parser::new();
-    rust_parser
-        .set_language(&LANGUAGE_RUST.into())
-        .context("failed to load Rust parser")?;
 
     let mut stats = IngestProductionStats::default();
     let mut builder = ProductionBatchBuilder::default();
@@ -219,12 +215,17 @@ pub fn execute(
         let source_bytes = source.as_bytes();
         let blob_sha = sha256_hex(source_bytes);
         let end_line = std::cmp::max(source.lines().count() as i64, 1);
-
-        let (language, parser) = if relative_path.ends_with(".rs") {
-            ("rust", &mut rust_parser)
-        } else {
-            ("typescript", &mut ts_parser)
-        };
+        let extraction = extract_production_file_artefacts(&relative_path, &source)?;
+        let language = extraction
+            .as_ref()
+            .map(|file| file.language.clone())
+            .unwrap_or_else(|| {
+                if relative_path.ends_with(".rs") {
+                    "rust".to_string()
+                } else {
+                    "typescript".to_string()
+                }
+            });
 
         builder.push_file_state(
             &repo.repo_id,
@@ -234,14 +235,16 @@ pub fn execute(
             &committed_at,
         );
 
+        let no_modifiers: Vec<String> = Vec::new();
         let file_ids = builder.push_artefact(
+            &host_services,
             &repo.repo_id,
             commit_sha,
             &blob_sha,
             &relative_path,
-            language,
+            &language,
             "file",
-            Some("source_file"),
+            Some("file"),
             Some(&relative_path),
             &relative_path,
             None,
@@ -251,38 +254,25 @@ pub fn execute(
             0,
             source_bytes.len() as i64,
             None,
+            &no_modifiers,
+            extraction
+                .as_ref()
+                .and_then(|file| file.file_docstring.as_deref()),
             source_bytes,
         );
         stats.artefacts += 1;
-
-        let tree = parser
-            .parse(&source, None)
-            .with_context(|| format!("failed parsing source file {}", abs_path.display()))?;
-        let root = tree.root_node();
-
-        if language == "typescript" {
-            stats.artefacts += ingest_typescript_artefacts(
-                &mut builder,
-                &repo.repo_id,
-                commit_sha,
-                &relative_path,
-                &blob_sha,
-                &file_ids,
-                root,
-                source_bytes,
-            )?;
-        } else {
-            stats.artefacts += ingest_rust_artefacts(
-                &mut builder,
-                &repo.repo_id,
-                commit_sha,
-                &relative_path,
-                &blob_sha,
-                &file_ids,
-                root,
-                source_bytes,
-            )?;
-        }
+        stats.artefacts += ingest_adapter_artefacts(
+            &host_services,
+            &mut builder,
+            &repo.repo_id,
+            commit_sha,
+            &relative_path,
+            &blob_sha,
+            &language,
+            &file_ids,
+            extraction,
+            source_bytes,
+        );
     }
 
     let persisted_artefact_count = builder
@@ -363,6 +353,24 @@ fn persist_production_rows(
     commit: &CommitRecord,
     batch: &ProductionBatchBuilder,
 ) -> Result<()> {
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed creating parent directory for sqlite database at {}",
+                db_path.display()
+            )
+        })?;
+    }
+
+    bitloops::storage::SqliteConnectionPool::connect(db_path.to_path_buf())
+        .context("creating sqlite pool for production seed")?
+        .initialise_devql_schema()
+        .context("initialising SQLite DevQL schema for production seed")?;
+    bitloops::capability_packs::test_harness::storage::init_test_domain_database(db_path)
+        .context("initialising test-harness schema for production seed")?;
+
     let mut conn = Connection::open(db_path)
         .with_context(|| format!("failed opening sqlite database at {}", db_path.display()))?;
     let tx = conn
@@ -370,10 +378,10 @@ fn persist_production_rows(
         .context("failed to open sqlite transaction")?;
 
     tx.execute(
-        "DELETE FROM test_artefact_edges_current WHERE commit_sha = ?1",
-        params![commit.commit_sha],
+        "DELETE FROM test_artefact_edges_current WHERE repo_id = ?1",
+        params![repository.repo_id],
     )
-    .context("failed clearing test_artefact_edges_current for commit")?;
+    .context("failed clearing test_artefact_edges_current for repo")?;
     tx.execute(
         r#"DELETE FROM coverage_hits WHERE capture_id IN (
             SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1
@@ -587,26 +595,18 @@ ON CONFLICT(repo_id, path) DO UPDATE SET
         tx.execute(
             r#"
 INSERT INTO artefacts (
-  artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-  language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
-  end_byte, signature, modifiers, docstring, content_hash
+  artefact_id, symbol_id, repo_id, language, canonical_kind,
+  language_kind, symbol_fqn, signature, modifiers, docstring, content_hash
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 )
 ON CONFLICT(artefact_id) DO UPDATE SET
   symbol_id = excluded.symbol_id,
   repo_id = excluded.repo_id,
-  blob_sha = excluded.blob_sha,
-  path = excluded.path,
   language = excluded.language,
   canonical_kind = excluded.canonical_kind,
   language_kind = excluded.language_kind,
   symbol_fqn = excluded.symbol_fqn,
-  parent_artefact_id = excluded.parent_artefact_id,
-  start_line = excluded.start_line,
-  end_line = excluded.end_line,
-  start_byte = excluded.start_byte,
-  end_byte = excluded.end_byte,
   signature = excluded.signature,
   modifiers = excluded.modifiers,
   docstring = excluded.docstring,
@@ -616,17 +616,10 @@ ON CONFLICT(artefact_id) DO UPDATE SET
                 artefact.artefact_id,
                 artefact.symbol_id,
                 artefact.repo_id,
-                artefact.blob_sha,
-                artefact.path,
                 artefact.language,
                 artefact.canonical_kind,
                 artefact.language_kind,
                 artefact.symbol_fqn,
-                artefact.parent_artefact_id,
-                artefact.start_line,
-                artefact.end_line,
-                artefact.start_byte,
-                artefact.end_byte,
                 artefact.signature,
                 artefact.modifiers,
                 artefact.docstring,
@@ -634,6 +627,41 @@ ON CONFLICT(artefact_id) DO UPDATE SET
             ],
         )
         .with_context(|| format!("failed upserting artefact {}", artefact.artefact_id))?;
+
+        tx.execute(
+            r#"
+INSERT INTO artefact_snapshots (
+  repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+  start_line, end_line, start_byte, end_byte
+) VALUES (
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+)
+ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+  path = excluded.path,
+  parent_artefact_id = excluded.parent_artefact_id,
+  start_line = excluded.start_line,
+  end_line = excluded.end_line,
+  start_byte = excluded.start_byte,
+  end_byte = excluded.end_byte
+"#,
+            params![
+                artefact.repo_id,
+                artefact.blob_sha,
+                artefact.path,
+                artefact.artefact_id,
+                artefact.parent_artefact_id,
+                artefact.start_line,
+                artefact.end_line,
+                artefact.start_byte,
+                artefact.end_byte,
+            ],
+        )
+        .with_context(|| {
+            format!(
+                "failed upserting artefact snapshot {}",
+                artefact.artefact_id
+            )
+        })?;
     }
 
     for artefact in &batch.current_artefacts {
@@ -843,466 +871,91 @@ fn is_test_file(path: &Path, normalized: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn ingest_typescript_artefacts(
+fn ingest_adapter_artefacts(
+    host_services: &dyn HostServicesGateway,
     builder: &mut ProductionBatchBuilder,
     repo_id: &str,
     commit_sha: &str,
     path: &str,
     blob_sha: &str,
+    language: &str,
     file_ids: &ParsedArtefactIds,
-    root: Node<'_>,
+    extraction: Option<bitloops::host::devql::ExtractedProductionFile>,
     source: &[u8],
-) -> Result<usize> {
-    let mut inserted = 0usize;
-    let mut cursor = root.walk();
+) -> usize {
+    let Some(extraction) = extraction else {
+        return 0;
+    };
 
-    for child in root.named_children(&mut cursor) {
-        let declaration = if child.kind() == "export_statement" {
-            child.named_child(0).unwrap_or(child)
+    let mut inserted = 0usize;
+    let mut symbol_ids_by_fqn = HashMap::new();
+    let mut artefact_ids_by_fqn = HashMap::new();
+    symbol_ids_by_fqn.insert(path.to_string(), file_ids.symbol_id.clone());
+    artefact_ids_by_fqn.insert(path.to_string(), file_ids.artefact_id.clone());
+
+    for artefact in extraction.artefacts {
+        let canonical_kind = artefact.canonical_kind.as_deref().unwrap_or("<null>");
+        let parent_symbol_id = artefact
+            .parent_symbol_fqn
+            .as_ref()
+            .and_then(|fqn| symbol_ids_by_fqn.get(fqn))
+            .map(String::as_str)
+            .or(Some(file_ids.symbol_id.as_str()));
+        let parent_artefact_id = artefact
+            .parent_symbol_fqn
+            .as_ref()
+            .and_then(|fqn| artefact_ids_by_fqn.get(fqn))
+            .map(String::as_str)
+            .or(Some(file_ids.artefact_id.as_str()));
+        let signature = if artefact.signature.trim().is_empty() {
+            None
         } else {
-            child
+            Some(artefact.signature.as_str())
         };
 
-        match declaration.kind() {
-            "function_declaration" => {
-                if let Some(name) = declaration
-                    .child_by_field_name("name")
-                    .and_then(|node| node.utf8_text(source).ok())
-                {
-                    builder.push_artefact(
-                        repo_id,
-                        commit_sha,
-                        blob_sha,
-                        path,
-                        "typescript",
-                        "function",
-                        Some("function_declaration"),
-                        Some(name),
-                        name,
-                        Some(&file_ids.symbol_id),
-                        Some(&file_ids.artefact_id),
-                        declaration.start_position().row as i64 + 1,
-                        declaration.end_position().row as i64 + 1,
-                        declaration.start_byte() as i64,
-                        declaration.end_byte() as i64,
-                        compact_signature(declaration, source).as_deref(),
-                        node_bytes(declaration, source),
-                    );
-                    inserted += 1;
-                }
-            }
-            "class_declaration" => {
-                let Some(class_name) = declaration
-                    .child_by_field_name("name")
-                    .and_then(|node| node.utf8_text(source).ok())
-                else {
-                    continue;
-                };
-
-                let class_ids = builder.push_artefact(
-                    repo_id,
-                    commit_sha,
-                    blob_sha,
-                    path,
-                    "typescript",
-                    "class",
-                    Some("class_declaration"),
-                    Some(class_name),
-                    class_name,
-                    Some(&file_ids.symbol_id),
-                    Some(&file_ids.artefact_id),
-                    declaration.start_position().row as i64 + 1,
-                    declaration.end_position().row as i64 + 1,
-                    declaration.start_byte() as i64,
-                    declaration.end_byte() as i64,
-                    compact_signature(declaration, source).as_deref(),
-                    node_bytes(declaration, source),
-                );
-                inserted += 1;
-
-                if let Some(body) = declaration.child_by_field_name("body") {
-                    let mut body_cursor = body.walk();
-                    for body_child in body.named_children(&mut body_cursor) {
-                        if body_child.kind() != "method_definition" {
-                            continue;
-                        }
-                        let Some(method_name_raw) = body_child
-                            .child_by_field_name("name")
-                            .and_then(|node| node.utf8_text(source).ok())
-                        else {
-                            continue;
-                        };
-                        let method_name =
-                            unquote(method_name_raw).unwrap_or_else(|| method_name_raw.to_string());
-                        let symbol_fqn = format!("{class_name}.{method_name}");
-
-                        builder.push_artefact(
-                            repo_id,
-                            commit_sha,
-                            blob_sha,
-                            path,
-                            "typescript",
-                            "method",
-                            Some("method_definition"),
-                            Some(&symbol_fqn),
-                            &method_name,
-                            Some(&class_ids.symbol_id),
-                            Some(&class_ids.artefact_id),
-                            body_child.start_position().row as i64 + 1,
-                            body_child.end_position().row as i64 + 1,
-                            body_child.start_byte() as i64,
-                            body_child.end_byte() as i64,
-                            compact_signature(body_child, source).as_deref(),
-                            node_bytes(body_child, source),
-                        );
-                        inserted += 1;
-                    }
-                }
-            }
-            "interface_declaration" => {
-                if let Some(name) = declaration
-                    .child_by_field_name("name")
-                    .and_then(|node| node.utf8_text(source).ok())
-                {
-                    builder.push_artefact(
-                        repo_id,
-                        commit_sha,
-                        blob_sha,
-                        path,
-                        "typescript",
-                        "interface",
-                        Some("interface_declaration"),
-                        Some(name),
-                        name,
-                        Some(&file_ids.symbol_id),
-                        Some(&file_ids.artefact_id),
-                        declaration.start_position().row as i64 + 1,
-                        declaration.end_position().row as i64 + 1,
-                        declaration.start_byte() as i64,
-                        declaration.end_byte() as i64,
-                        compact_signature(declaration, source).as_deref(),
-                        node_bytes(declaration, source),
-                    );
-                    inserted += 1;
-                }
-            }
-            "type_alias_declaration" => {
-                if let Some(name) = declaration
-                    .child_by_field_name("name")
-                    .and_then(|node| node.utf8_text(source).ok())
-                {
-                    builder.push_artefact(
-                        repo_id,
-                        commit_sha,
-                        blob_sha,
-                        path,
-                        "typescript",
-                        "type",
-                        Some("type_alias_declaration"),
-                        Some(name),
-                        name,
-                        Some(&file_ids.symbol_id),
-                        Some(&file_ids.artefact_id),
-                        declaration.start_position().row as i64 + 1,
-                        declaration.end_position().row as i64 + 1,
-                        declaration.start_byte() as i64,
-                        declaration.end_byte() as i64,
-                        compact_signature(declaration, source).as_deref(),
-                        node_bytes(declaration, source),
-                    );
-                    inserted += 1;
-                }
-            }
-            "lexical_declaration" => {
-                if !declaration_is_const(declaration, source) {
-                    continue;
-                }
-                for const_name in collect_variable_declarator_names(declaration, source) {
-                    builder.push_artefact(
-                        repo_id,
-                        commit_sha,
-                        blob_sha,
-                        path,
-                        "typescript",
-                        "constant",
-                        Some("variable_declaration"),
-                        Some(&const_name),
-                        &const_name,
-                        Some(&file_ids.symbol_id),
-                        Some(&file_ids.artefact_id),
-                        declaration.start_position().row as i64 + 1,
-                        declaration.end_position().row as i64 + 1,
-                        declaration.start_byte() as i64,
-                        declaration.end_byte() as i64,
-                        compact_signature(declaration, source).as_deref(),
-                        node_bytes(declaration, source),
-                    );
-                    inserted += 1;
-                }
-            }
-            _ => {}
-        }
+        let ids = builder.push_artefact(
+            host_services,
+            repo_id,
+            commit_sha,
+            blob_sha,
+            path,
+            language,
+            canonical_kind,
+            Some(artefact.language_kind.as_str()),
+            Some(artefact.symbol_fqn.as_str()),
+            artefact.name.as_str(),
+            parent_symbol_id,
+            parent_artefact_id,
+            artefact.start_line as i64,
+            artefact.end_line as i64,
+            artefact.start_byte as i64,
+            artefact.end_byte as i64,
+            signature,
+            artefact.modifiers.as_slice(),
+            artefact.docstring.as_deref(),
+            artefact_source_bytes(artefact.start_byte, artefact.end_byte, source),
+        );
+        symbol_ids_by_fqn.insert(artefact.symbol_fqn.clone(), ids.symbol_id.clone());
+        artefact_ids_by_fqn.insert(artefact.symbol_fqn, ids.artefact_id.clone());
+        inserted += 1;
     }
 
-    Ok(inserted)
+    inserted
 }
 
-#[allow(clippy::too_many_arguments)]
-fn ingest_rust_artefacts(
-    builder: &mut ProductionBatchBuilder,
-    repo_id: &str,
-    commit_sha: &str,
-    path: &str,
-    blob_sha: &str,
-    file_ids: &ParsedArtefactIds,
-    root: Node<'_>,
-    source: &[u8],
-) -> Result<usize> {
-    let mut inserted = 0usize;
-    let mut cursor = root.walk();
-    let mut parent_types: HashMap<String, ParsedArtefactIds> = HashMap::new();
-
-    for child in root.named_children(&mut cursor) {
-        match child.kind() {
-            "function_item" => {
-                if let Some(name) = child
-                    .child_by_field_name("name")
-                    .and_then(|node| node.utf8_text(source).ok())
-                {
-                    builder.push_artefact(
-                        repo_id,
-                        commit_sha,
-                        blob_sha,
-                        path,
-                        "rust",
-                        "function",
-                        Some("function_item"),
-                        Some(name),
-                        name,
-                        Some(&file_ids.symbol_id),
-                        Some(&file_ids.artefact_id),
-                        child.start_position().row as i64 + 1,
-                        child.end_position().row as i64 + 1,
-                        child.start_byte() as i64,
-                        child.end_byte() as i64,
-                        compact_signature(child, source).as_deref(),
-                        node_bytes(child, source),
-                    );
-                    inserted += 1;
-                }
-            }
-            "struct_item" | "enum_item" | "type_item" | "trait_item" => {
-                if let Some(name) = child
-                    .child_by_field_name("name")
-                    .and_then(|node| node.utf8_text(source).ok())
-                {
-                    let canonical_kind = if child.kind() == "trait_item" {
-                        "interface"
-                    } else {
-                        "type"
-                    };
-                    let ids = builder.push_artefact(
-                        repo_id,
-                        commit_sha,
-                        blob_sha,
-                        path,
-                        "rust",
-                        canonical_kind,
-                        Some(child.kind()),
-                        Some(name),
-                        name,
-                        Some(&file_ids.symbol_id),
-                        Some(&file_ids.artefact_id),
-                        child.start_position().row as i64 + 1,
-                        child.end_position().row as i64 + 1,
-                        child.start_byte() as i64,
-                        child.end_byte() as i64,
-                        compact_signature(child, source).as_deref(),
-                        node_bytes(child, source),
-                    );
-                    parent_types.insert(name.to_string(), ids);
-                    inserted += 1;
-                }
-            }
-            "impl_item" => {
-                let impl_type =
-                    extract_rust_impl_type(child, source).unwrap_or_else(|| "impl".to_string());
-                let impl_identity =
-                    extract_rust_impl_identity(child, source).unwrap_or_else(|| impl_type.clone());
-                let parent_ids = parent_types.get(&impl_type).unwrap_or(file_ids);
-
-                let mut impl_cursor = child.walk();
-                for impl_child in child.named_children(&mut impl_cursor) {
-                    if impl_child.kind() != "declaration_list" {
-                        continue;
-                    }
-                    let mut decl_cursor = impl_child.walk();
-                    for decl in impl_child.named_children(&mut decl_cursor) {
-                        if decl.kind() != "function_item" {
-                            continue;
-                        }
-                        let Some(method_name) = decl
-                            .child_by_field_name("name")
-                            .and_then(|node| node.utf8_text(source).ok())
-                        else {
-                            continue;
-                        };
-                        let symbol_fqn = format!("{impl_identity}.{method_name}");
-                        builder.push_artefact(
-                            repo_id,
-                            commit_sha,
-                            blob_sha,
-                            path,
-                            "rust",
-                            "method",
-                            Some("impl_method"),
-                            Some(&symbol_fqn),
-                            &symbol_fqn,
-                            Some(&parent_ids.symbol_id),
-                            Some(&parent_ids.artefact_id),
-                            decl.start_position().row as i64 + 1,
-                            decl.end_position().row as i64 + 1,
-                            decl.start_byte() as i64,
-                            decl.end_byte() as i64,
-                            compact_signature(decl, source).as_deref(),
-                            node_bytes(decl, source),
-                        );
-                        inserted += 1;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(inserted)
-}
-
-fn extract_rust_impl_type(node: Node<'_>, source: &[u8]) -> Option<String> {
-    if let Some(type_name) = node
-        .child_by_field_name("type")
-        .and_then(|type_node| clean_node_text(type_node, source))
-    {
-        return Some(type_name);
-    }
-
-    let raw = node.utf8_text(source).ok()?;
-    let after_impl = raw.strip_prefix("impl")?.trim_start();
-    let first = after_impl.split_whitespace().next()?;
-    let cleaned = first
-        .trim_start_matches('<')
-        .trim_end_matches('>')
-        .trim_matches('{')
-        .trim_matches(':')
-        .to_string();
-    if cleaned.is_empty() {
-        None
+fn artefact_source_bytes(start_byte: i32, end_byte: i32, source: &[u8]) -> &[u8] {
+    let len = source.len();
+    let start = usize::try_from(start_byte).unwrap_or_default().min(len);
+    let end = usize::try_from(end_byte).unwrap_or_default().min(len);
+    if start >= end {
+        &[]
     } else {
-        Some(cleaned)
+        &source[start..end]
     }
-}
-
-fn extract_rust_impl_identity(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let impl_type = extract_rust_impl_type(node, source)?;
-    let impl_trait = node
-        .child_by_field_name("trait")
-        .and_then(|trait_node| clean_node_text(trait_node, source));
-    match impl_trait {
-        Some(trait_name) => Some(format!("{trait_name} for {impl_type}")),
-        None => Some(impl_type),
-    }
-}
-
-fn clean_node_text(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let raw = node.utf8_text(source).ok()?;
-    let cleaned = raw.trim().to_string();
-    if cleaned.is_empty() {
-        None
-    } else {
-        Some(cleaned)
-    }
-}
-
-fn declaration_is_const(node: Node<'_>, source: &[u8]) -> bool {
-    node.utf8_text(source)
-        .ok()
-        .map(|text| text.trim_start().starts_with("const "))
-        .unwrap_or(false)
-}
-
-fn collect_variable_declarator_names(node: Node<'_>, source: &[u8]) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut stack = vec![node];
-
-    while let Some(current) = stack.pop() {
-        if current.kind() == "variable_declarator"
-            && let Some(name_node) = current.child_by_field_name("name")
-            && name_node.kind() == "identifier"
-            && let Ok(name) = name_node.utf8_text(source)
-        {
-            names.push(name.to_string());
-        }
-
-        let mut cursor = current.walk();
-        for child in current.children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-
-    names
-}
-
-fn compact_signature(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let raw = node.utf8_text(source).ok()?;
-    let first_line = raw.lines().next()?.trim();
-    if first_line.is_empty() {
-        None
-    } else {
-        Some(first_line.chars().take(240).collect())
-    }
-}
-
-fn node_bytes<'a>(node: Node<'_>, source: &'a [u8]) -> &'a [u8] {
-    &source[node.start_byte()..node.end_byte()]
-}
-
-fn normalize_identity_fragment(input: &str) -> String {
-    let normalized = input
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
-    if normalized.is_empty() {
-        input.trim().to_string()
-    } else {
-        normalized
-    }
-}
-
-fn structural_symbol_id(
-    path: &str,
-    canonical_kind: &str,
-    language_kind: Option<&str>,
-    parent_symbol_id: Option<&str>,
-    identity_name: &str,
-    signature: Option<&str>,
-) -> String {
-    deterministic_uuid(&format!(
-        "{}|{}|{}|{}|{}|{}",
-        path,
-        canonical_kind,
-        language_kind.unwrap_or(""),
-        parent_symbol_id.unwrap_or(""),
-        normalize_identity_fragment(identity_name),
-        normalize_identity_fragment(signature.unwrap_or(identity_name))
-    ))
 }
 
 fn file_symbol_id(path: &str) -> String {
     deterministic_uuid(&format!("{path}|file"))
-}
-
-fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
-    deterministic_uuid(&format!("{repo_id}|{blob_sha}|{symbol_id}"))
 }
 
 fn deterministic_uuid(input: &str) -> String {
@@ -1352,19 +1005,4 @@ fn collect_duplicate_current_artefacts(
 
 fn normalize_rel_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
-}
-
-fn unquote(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.len() < 2 {
-        return None;
-    }
-
-    let start = trimmed.as_bytes()[0] as char;
-    let end = trimmed.as_bytes()[trimmed.len() - 1] as char;
-    if (start == '\'' || start == '"' || start == '`') && start == end {
-        Some(trimmed[1..trimmed.len() - 1].to_string())
-    } else {
-        None
-    }
 }

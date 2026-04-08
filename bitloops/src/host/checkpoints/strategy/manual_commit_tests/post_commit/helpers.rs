@@ -1,7 +1,33 @@
 use super::*;
 use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
-use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::interaction_repository::create_interaction_repository;
+use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 use crate::host::interactions::types::{InteractionSession, InteractionTurn};
+
+fn daemon_state_root(repo_root: &Path) -> PathBuf {
+    repo_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            repo_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        )
+}
+
+fn open_test_event_repository(
+    repo_root: &Path,
+) -> impl crate::host::interactions::store::InteractionEventRepository + use<> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root)
+        .expect("resolve repo identity for interaction repository");
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve interaction repository backends");
+    create_interaction_repository(&backends.events, repo_root, repo.repo_id)
+        .expect("create interaction repository")
+}
 
 pub(crate) fn open_test_spool(repo_root: &Path) -> SqliteInteractionSpool {
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
@@ -37,6 +63,7 @@ pub(crate) fn seed_interaction_turn_with_fragment(
     transcript_fragment: &str,
 ) {
     let spool = open_test_spool(repo_root);
+    let event_repo = open_test_event_repository(repo_root);
     let transcript_path = repo_root.join("transcript.jsonl");
     if !transcript_path.exists() {
         std::fs::write(&transcript_path, "{}\n").expect("seed transcript");
@@ -79,6 +106,8 @@ pub(crate) fn seed_interaction_turn_with_fragment(
         updated_at: "2026-04-05T10:00:02Z".to_string(),
         ..Default::default()
     };
+    event_repo.upsert_session(&session).expect("record session");
+    event_repo.upsert_turn(&turn).expect("record turn");
     spool.record_session(&session).expect("record session");
     spool.record_turn(&turn).expect("record turn");
 }
@@ -139,12 +168,22 @@ fn init_devql_schema_with_store_backend(
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
     let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
         .expect("build devql cfg for post-commit test");
-    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime for devql init");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("create tokio runtime for devql init");
     runtime
         .block_on(crate::host::devql::run_init(&cfg))
         .expect("initialise DevQL schema for post-commit test");
+    write_current_runtime_state(repo_root);
 
-    let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve post-commit test backends");
+    let sqlite_path = backends
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .expect("resolve relational sqlite path for post-commit test");
     let sqlite = rusqlite::Connection::open(&sqlite_path)
         .expect("open relational sqlite after DevQL init for post-commit test");
     sqlite
@@ -184,6 +223,23 @@ CREATE TABLE IF NOT EXISTS repositories (
     sqlite
         .execute_batch(crate::host::devql::sync::schema::sync_schema_sql())
         .expect("ensure DevQL sync tables exist for post-commit test");
+    sqlite
+        .execute_batch(crate::host::devql::sync::schema::sync_artefacts_current_migration_sql())
+        .expect("ensure DevQL artefacts_current table exists for post-commit test");
+
+    let runtime_sqlite_path = crate::config::resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path for post-commit test");
+    if let Some(parent) = runtime_sqlite_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime_sqlite = crate::storage::SqliteConnectionPool::connect(runtime_sqlite_path)
+        .expect("open runtime sqlite after DevQL init for post-commit test");
+    runtime_sqlite
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema for post-commit test");
+
     let has_artefacts_current: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'artefacts_current'",
@@ -219,6 +275,38 @@ CREATE TABLE IF NOT EXISTS repositories (
     sqlite_path
 }
 
+fn write_current_runtime_state(repo_root: &Path) {
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(repo_root));
+    let runtime_state = crate::daemon::DaemonRuntimeState {
+        version: 1,
+        config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        config_root: repo_root.to_path_buf(),
+        pid: std::process::id(),
+        mode: crate::daemon::DaemonMode::Detached,
+        service_name: None,
+        url: "http://127.0.0.1:5667".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 5667,
+        bundle_dir: repo_root.join("bundle"),
+        relational_db_path: repo_root.join(".bitloops/stores/relational/post-commit-devql.db"),
+        events_db_path: repo_root.join(".bitloops/stores/events/post-commit-events.duckdb"),
+        blob_store_path: repo_root.join(".bitloops/stores/blobs/post-commit"),
+        repo_registry_path: repo_root.join("repo-registry.json"),
+        binary_fingerprint: crate::daemon::current_binary_fingerprint().unwrap_or_default(),
+        updated_at_unix: 0,
+    };
+    fs::create_dir_all(
+        runtime_path
+            .parent()
+            .expect("runtime state should have a parent directory"),
+    )
+    .expect("create runtime state parent");
+    let mut bytes = serde_json::to_vec_pretty(&runtime_state).expect("serialise runtime state");
+    bytes.push(b'\n');
+    fs::write(&runtime_path, bytes).expect("write runtime state");
+}
+
 fn write_post_commit_test_config(
     repo_root: &Path,
     postgres_dsn: Option<&str>,
@@ -227,9 +315,23 @@ fn write_post_commit_test_config(
     clickhouse_password: Option<&str>,
     clickhouse_database: Option<&str>,
 ) {
-    let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
-    let duckdb_path = repo_root.join(".bitloops/stores/events/post-commit-events.duckdb");
-    let blob_local_path = repo_root.join(".bitloops/stores/blobs/post-commit");
+    let state_root = daemon_state_root(repo_root);
+    let sqlite_path = state_root
+        .join("stores")
+        .join("relational")
+        .join("post-commit-devql.db");
+    let duckdb_path = state_root
+        .join("stores")
+        .join("event")
+        .join("post-commit-events.duckdb");
+    let blob_local_path = state_root.join("stores").join("blob").join("post-commit");
+    if let Some(parent) = sqlite_path.parent() {
+        fs::create_dir_all(parent).expect("create post-commit sqlite parent");
+    }
+    if let Some(parent) = duckdb_path.parent() {
+        fs::create_dir_all(parent).expect("create post-commit duckdb parent");
+    }
+    fs::create_dir_all(&blob_local_path).expect("create post-commit blob root");
     let postgres_line = postgres_dsn
         .map(|dsn| format!("postgres_dsn = {dsn:?}\n"))
         .unwrap_or_default();

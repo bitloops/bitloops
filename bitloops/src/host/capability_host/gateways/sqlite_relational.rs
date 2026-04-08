@@ -28,8 +28,8 @@ impl SqliteRelationalGateway {
         }
 
         self.sqlite
-            .initialise_checkpoint_schema()
-            .context("initialising checkpoint schema for checkpoint resolution")?;
+            .initialise_relational_checkpoint_schema()
+            .context("initialising relational checkpoint schema for checkpoint resolution")?;
 
         let exists = self.sqlite.with_connection(|conn| {
             conn.query_row(
@@ -56,7 +56,7 @@ impl SqliteRelationalGateway {
                 .query_row(params![commit_sha], |row| row.get(0))
                 .with_context(|| {
                     format!(
-                        "no production artefacts found for commit {}; materialize production artefacts first (use `bitloops devql ingest` for Bitloops-backed stores or `testlens ingest-production-artefacts` in prototype mode)",
+                        "no production artefacts found for commit {}; materialize production artefacts first (use `bitloops devql ingest` or `bitloops devql sync`)",
                         commit_sha
                     )
                 })?;
@@ -72,7 +72,7 @@ impl SqliteRelationalGateway {
                     r#"
 SELECT DISTINCT a.artefact_id, a.symbol_id, COALESCE(a.symbol_fqn, ''), a.path, a.start_line
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
@@ -103,6 +103,44 @@ ORDER BY a.path ASC, a.start_line ASC
         })
     }
 
+    pub fn load_current_production_artefacts(
+        &self,
+        repo_id: &str,
+    ) -> Result<Vec<ProductionArtefact>> {
+        let repo_id = repo_id.to_string();
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+SELECT artefact_id, symbol_id, COALESCE(symbol_fqn, ''), path, start_line
+FROM artefacts_current
+WHERE repo_id = ?1
+  AND canonical_kind IN ('function', 'method', 'class')
+ORDER BY path ASC, start_line ASC
+"#,
+                )
+                .context("failed preparing current production artefact query")?;
+
+            let rows = stmt
+                .query_map(params![repo_id], |row| {
+                    Ok(ProductionArtefact {
+                        artefact_id: row.get(0)?,
+                        symbol_id: row.get(1)?,
+                        symbol_fqn: row.get::<_, String>(2)?,
+                        path: row.get(3)?,
+                        start_line: row.get(4)?,
+                    })
+                })
+                .context("failed querying current production artefacts")?;
+
+            let mut artefacts = Vec::new();
+            for row in rows {
+                artefacts.push(row.context("failed decoding current production artefact row")?);
+            }
+            Ok(artefacts)
+        })
+    }
+
     pub fn load_artefacts_for_file_lines(
         &self,
         commit_sha: &str,
@@ -116,7 +154,7 @@ ORDER BY a.path ASC, a.start_line ASC
                     r#"
 SELECT DISTINCT a.artefact_id, a.start_line, a.end_line
 FROM file_state fs
-JOIN artefacts a
+JOIN artefacts_historical a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
@@ -201,6 +239,10 @@ impl RelationalGateway for SqliteRelationalGateway {
 
     fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
         SqliteRelationalGateway::load_repo_id_for_commit(self, commit_sha)
+    }
+
+    fn load_current_production_artefacts(&self, repo_id: &str) -> Result<Vec<ProductionArtefact>> {
+        SqliteRelationalGateway::load_current_production_artefacts(self, repo_id)
     }
 
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {

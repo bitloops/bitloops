@@ -269,7 +269,52 @@ pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
         .query_rows(&build_semantic_get_artefacts_by_ids_sql(artefact_ids))
         .await?;
     let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
+    hydrate_semantic_feature_inputs(
+        relational,
+        repo_root,
+        target_artefacts,
+        &requested_ids,
+        &requested_order,
+    )
+    .await
+}
 
+pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    let target_rows = relational
+        .query_rows(&build_current_repo_artefacts_sql(repo_id))
+        .await?;
+    let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
+    let requested_ids = target_artefacts
+        .iter()
+        .map(|row| row.artefact_id.clone())
+        .collect::<BTreeSet<_>>();
+    let requested_order = target_artefacts
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.artefact_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    hydrate_semantic_feature_inputs(
+        relational,
+        repo_root,
+        target_artefacts,
+        &requested_ids,
+        &requested_order,
+    )
+    .await
+}
+
+async fn hydrate_semantic_feature_inputs(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    target_artefacts: Vec<semantic::PreStageArtefactRow>,
+    requested_ids: &BTreeSet<String>,
+    requested_order: &HashMap<String, usize>,
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
     let groups = target_artefacts
         .iter()
         .map(|row| (row.repo_id.clone(), row.blob_sha.clone(), row.path.clone()))
@@ -409,7 +454,7 @@ fn build_semantic_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -
 COALESCE(canonical_kind, COALESCE(language_kind, 'symbol')) AS canonical_kind, \
 COALESCE(language_kind, COALESCE(canonical_kind, 'symbol')) AS language_kind, \
 COALESCE(symbol_fqn, path) AS symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
-FROM artefacts \
+FROM artefacts_historical \
 WHERE repo_id = '{repo_id}' AND blob_sha = '{blob_sha}' AND path = '{path}' \
 ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
         repo_id = esc_pg(repo_id),
@@ -418,13 +463,27 @@ ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
     )
 }
 
+fn build_current_repo_artefacts_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT current.artefact_id, current.symbol_id, current.repo_id, current.content_id AS blob_sha, current.path, current.language, \
+COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS canonical_kind, \
+COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
+COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
+FROM artefacts_current current \
+LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
+WHERE current.repo_id = '{repo_id}' \
+ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
+        repo_id = esc_pg(repo_id),
+    )
+}
+
 fn build_semantic_get_dependencies_sql(repo_id: &str, blob_sha: &str, path: &str) -> String {
     format!(
         "SELECT e.from_artefact_id, LOWER(e.edge_kind) AS edge_kind, \
 COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_artefact_id, '') AS target_ref \
 FROM artefact_edges e \
-JOIN artefacts source ON source.repo_id = e.repo_id AND source.artefact_id = e.from_artefact_id \
-LEFT JOIN artefacts target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
+JOIN artefacts_historical source ON source.repo_id = e.repo_id AND source.artefact_id = e.from_artefact_id AND source.blob_sha = e.blob_sha \
+LEFT JOIN artefacts_historical target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id AND target.blob_sha = e.blob_sha \
 WHERE e.repo_id = '{repo_id}' AND e.blob_sha = '{blob_sha}' AND source.path = '{path}' \
 ORDER BY e.from_artefact_id, e.edge_kind, target_ref",
         repo_id = esc_pg(repo_id),
@@ -486,7 +545,7 @@ fn build_semantic_get_artefacts_by_ids_sql(artefact_ids: &[String]) -> String {
 COALESCE(canonical_kind, COALESCE(language_kind, 'symbol')) AS canonical_kind, \
 COALESCE(language_kind, COALESCE(canonical_kind, 'symbol')) AS language_kind, \
 COALESCE(symbol_fqn, path) AS symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
-FROM artefacts \
+FROM artefacts_historical \
 WHERE artefact_id IN ({artefact_ids}) \
 ORDER BY repo_id, blob_sha, path, coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
     )
@@ -701,6 +760,15 @@ mod semantic_feature_persistence_tests {
         ]);
         assert!(sql.contains("WHERE artefact_id IN ('artefact''1', 'artefact-2')"));
         assert!(sql.contains("ORDER BY repo_id, blob_sha, path"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_builds_current_repo_artefacts_sql_without_id_in_clause() {
+        let sql = build_current_repo_artefacts_sql("repo'1");
+        assert!(sql.contains("FROM artefacts_current current"));
+        assert!(sql.contains("LEFT JOIN artefacts a ON a.repo_id = current.repo_id"));
+        assert!(sql.contains("WHERE current.repo_id = 'repo''1'"));
+        assert!(!sql.contains("WHERE artefact_id IN"));
     }
 
     #[test]

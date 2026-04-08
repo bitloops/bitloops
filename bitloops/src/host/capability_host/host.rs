@@ -9,11 +9,15 @@ use serde_json::Value;
 use crate::capability_packs as capabilities;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
 use super::events::{EventHandlerContext, HostEventHandler};
-use super::gateways::{DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway};
+use super::gateways::{
+    DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway,
+    SqliteRelationalGateway,
+};
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::lifecycle;
 use super::migrations::CapabilityMigration;
@@ -161,22 +165,24 @@ impl DevqlCapabilityHost {
     }
 
     pub fn build_event_handler_context(&self) -> Result<EventHandlerContext> {
-        let sqlite_path = self
-            .runtime
-            .backends
-            .relational
-            .resolve_sqlite_db_path_for_repo(self.repo_root())?;
+        let relational_store = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root(),
+            &self.runtime.backends.relational,
+        )?;
+        let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
 
         let language_services: Arc<dyn LanguageServicesGateway> =
             Arc::new(RuntimeLanguageServicesGateway {
                 inner: self.runtime.languages,
             });
+        let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
         );
 
         Ok(EventHandlerContext {
-            storage: Arc::new(RelationalStorage::local_only(sqlite_path)),
+            storage: Arc::new(relational_store.to_local_inner()),
+            relational,
             language_services,
             host_services,
         })
@@ -549,6 +555,13 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
 
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
     static TEST_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
         id: "knowledge",
         display_name: "Knowledge",
@@ -791,8 +804,7 @@ mod tests {
         assert_eq!(host.schema_modules().len(), 1);
         assert_eq!(host.query_examples().len(), 1);
 
-        let stage = tokio::runtime::Runtime::new()
-            .expect("runtime")
+        let stage = test_runtime()
             .block_on(async {
                 host.invoke_stage("knowledge", "knowledge.stage", json!({ "limit": 4 }))
                     .await
@@ -802,8 +814,7 @@ mod tests {
         assert!(stage.payload["repo_root"].is_string());
         assert!(stage.render_human().contains("\"limit\": 4"));
 
-        let ingest = tokio::runtime::Runtime::new()
-            .expect("runtime")
+        let ingest = test_runtime()
             .block_on(async {
                 host.invoke_ingester(
                     "knowledge",

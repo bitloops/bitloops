@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod checkpoints;
@@ -19,7 +20,6 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub(crate) mod telemetry_consent;
-pub mod testlens;
 pub mod uninstall;
 pub mod versioncheck;
 
@@ -94,8 +94,6 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
-    /// Test harness ingestion for DevQL production artefacts.
-    Testlens(testlens::TestLensArgs),
     /// Manage embedding profiles and caches.
     Embeddings(embeddings::EmbeddingsArgs),
     /// Hidden internal embeddings runtime entry point.
@@ -138,6 +136,14 @@ impl std::fmt::Display for SilentError {
 
 impl std::error::Error for SilentError {}
 
+fn resolve_watcher_autostart_config_root(repo_root: &Path, policy_start: &Path) -> Option<PathBuf> {
+    if !crate::config::settings::is_enabled_for_hooks(policy_start) {
+        return None;
+    }
+
+    crate::config::resolve_daemon_config_root_for_repo(repo_root).ok()
+}
+
 pub async fn run(cli: Cli) -> Result<()> {
     let strategy_registry =
         crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
@@ -175,10 +181,9 @@ pub async fn run(cli: Cli) -> Result<()> {
     if root::should_attempt_watcher_autostart(&command)
         && let Ok(repo_root) = crate::utils::paths::repo_root()
         && let Ok(policy_start) = std::env::current_dir()
-        && let Ok(policy) = crate::config::discover_repo_policy_optional(&policy_start)
-        && let Some(config_root) = policy.root.as_deref()
-        && crate::config::settings::is_enabled_for_hooks(&policy_start)
-        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root, config_root)
+        && let Some(config_root) = resolve_watcher_autostart_config_root(&repo_root, &policy_start)
+        && let Err(err) =
+            crate::host::devql::watch::ensure_watcher_running(&repo_root, &config_root)
     {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");
     }
@@ -209,7 +214,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
-        Commands::Testlens(args) => testlens::run(args).await,
         Commands::Embeddings(args) => embeddings::run(args),
         Commands::EmbeddingsRuntime(args) => embeddings_runtime::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,

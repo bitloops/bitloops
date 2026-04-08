@@ -260,6 +260,14 @@ pub(crate) fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
     })
 }
 
+pub(crate) fn relational_checkpoints_db_path(repo_root: &Path) -> PathBuf {
+    crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve test store backends")
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .expect("resolve relational sqlite path")
+}
+
 pub(crate) fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
     let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
     sqlite.initialise_checkpoint_schema().ok()?;
@@ -307,8 +315,8 @@ pub(crate) fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> 
 }
 
 pub(crate) fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .ok()?
         .repo_id;
@@ -332,8 +340,8 @@ pub(crate) fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> 
 }
 
 pub(crate) fn query_commit_checkpoint_count(repo_root: &Path, commit_sha: &str) -> i64 {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
-    sqlite.initialise_checkpoint_schema().unwrap();
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_relational_checkpoint_schema().unwrap();
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .unwrap()
         .repo_id;
@@ -382,8 +390,8 @@ pub(crate) fn query_checkpoint_session_content_hash(
     checkpoint_id: &str,
     session_id: &str,
 ) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -406,8 +414,8 @@ pub(crate) fn query_checkpoint_subagent_transcript_path(
     checkpoint_id: &str,
     session_id: &str,
 ) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -430,8 +438,8 @@ pub(crate) fn query_checkpoint_session_content_hash_by_index(
     checkpoint_id: &str,
     session_index: i64,
 ) -> Option<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -455,8 +463,8 @@ pub(crate) fn query_checkpoint_blob_row(
     session_index: i64,
     blob_type: &str,
 ) -> Option<CheckpointBlobRow> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
-    sqlite.initialise_checkpoint_schema().ok()?;
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_relational_checkpoint_schema().ok()?;
     sqlite
         .with_connection(|conn| {
             conn.query_row(
@@ -484,8 +492,8 @@ pub(crate) fn query_checkpoint_file_session_ids(
     repo_root: &Path,
     checkpoint_id: &str,
 ) -> Vec<String> {
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
-    sqlite.initialise_checkpoint_schema().unwrap();
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_relational_checkpoint_schema().unwrap();
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .unwrap()
         .repo_id;

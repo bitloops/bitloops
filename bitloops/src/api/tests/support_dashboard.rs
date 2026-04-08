@@ -26,6 +26,7 @@ pub(super) fn seed_dashboard_repo() -> TempDir {
     let repo_root = dir.path();
 
     init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo_root);
 
     fs::write(repo_root.join("app.rs"), "fn main() {}\n").expect("write app.rs");
     git_ok(repo_root, &["add", "app.rs"]);

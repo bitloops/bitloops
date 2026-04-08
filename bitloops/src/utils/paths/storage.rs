@@ -5,22 +5,53 @@ use crate::utils::platform_dirs::bitloops_state_dir;
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
 #[cfg(not(test))]
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
-#[cfg(not(test))]
 use sha2::{Digest, Sha256};
 
-use super::constants::{BITLOOPS_METADATA_DIR, EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME};
+use super::constants::{
+    EVENTS_DB_FILE_NAME, LEGACY_BITLOOPS_METADATA_DIR, RELATIONAL_DB_FILE_NAME,
+    RUNTIME_DB_FILE_NAME,
+};
 
 fn platform_path_fallback(category: &str) -> PathBuf {
     std::env::temp_dir().join("bitloops").join(category)
 }
 
-pub fn session_metadata_dir_from_session_id(session_id: &str) -> String {
-    format!("{BITLOOPS_METADATA_DIR}/{session_id}")
+pub fn legacy_session_metadata_dir_from_session_id(session_id: &str) -> String {
+    format!("{LEGACY_BITLOOPS_METADATA_DIR}/{session_id}")
 }
 
 #[cfg(test)]
 fn should_use_test_app_dirs(repo_root: &Path) -> bool {
     repo_root.is_relative()
+}
+
+#[cfg(test)]
+fn test_runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
+    if let Some(path) =
+        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
+    {
+        return Some(PathBuf::from(path).join("bitloops").join("daemon"));
+    }
+
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return None;
+    }
+
+    Some(repo_root.join(".bitloops-test-state").join("daemon"))
+}
+
+#[cfg(test)]
+fn test_global_runtime_state_dir() -> PathBuf {
+    if let Some(path) =
+        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
+    {
+        return PathBuf::from(path).join("bitloops").join("daemon");
+    }
+
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("daemon")
 }
 
 #[cfg(test)]
@@ -114,21 +145,41 @@ pub fn default_embedding_model_cache_dir(_repo_root: &Path) -> PathBuf {
         .join("models")
 }
 
+#[cfg(test)]
+pub fn default_runtime_state_dir(repo_root: &Path) -> PathBuf {
+    if let Some(path) = test_runtime_state_dir(repo_root) {
+        return path;
+    }
+    bitloops_state_dir()
+        .unwrap_or_else(|_| platform_path_fallback("state"))
+        .join("daemon")
+}
+
+#[cfg(not(test))]
 pub fn default_runtime_state_dir(_repo_root: &Path) -> PathBuf {
     bitloops_state_dir()
         .unwrap_or_else(|_| platform_path_fallback("state"))
         .join("daemon")
 }
 
-#[cfg(test)]
-pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
-    if should_use_test_app_dirs(repo_root) {
-        return default_runtime_state_dir(repo_root).join("tmp");
-    }
-    repo_root.join(".bitloops").join("tmp")
+pub fn default_repo_runtime_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("runtime")
+        .join(RUNTIME_DB_FILE_NAME)
 }
 
-#[cfg(not(test))]
+pub fn default_global_runtime_db_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        test_global_runtime_state_dir().join(RUNTIME_DB_FILE_NAME)
+    }
+
+    #[cfg(not(test))]
+    default_runtime_state_dir(Path::new(".")).join(RUNTIME_DB_FILE_NAME)
+}
+
 pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
     default_runtime_state_dir(repo_root)
         .join("repos")
@@ -136,7 +187,6 @@ pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
         .join("tmp")
 }
 
-#[cfg(not(test))]
 fn repo_state_key(repo_root: &Path) -> String {
     let canonical = repo_root
         .canonicalize()

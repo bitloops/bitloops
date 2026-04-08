@@ -47,7 +47,7 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
     mode: sync::types::SyncMode,
     observer: Option<&dyn SyncObserver>,
 ) -> Result<(SyncSummary, SyncFileDiff, SyncArtefactDiff)> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql sync`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql sync").await?;
     if matches!(mode, sync::types::SyncMode::Validate) {
@@ -124,14 +124,12 @@ pub(crate) async fn execute_sync_with_observer_and_stats_and_diffs(
     SyncArtefactDiff,
 )> {
     let (parser_version, extractor_version) = resolve_pack_versions()?;
-    let _lock =
-        sync::lock::SyncLock::acquire(&cfg.config_root).context("acquiring DevQL sync lock")?;
 
     ensure_repository_row(cfg, relational)
         .await
         .context("ensuring repository catalog row for DevQL sync")?;
 
-    sync::lock::write_sync_started(
+    sync::state::write_sync_started(
         relational,
         &cfg.repo.repo_id,
         cfg.repo_root.to_string_lossy().as_ref(),
@@ -152,7 +150,7 @@ pub(crate) async fn execute_sync_with_observer_and_stats_and_diffs(
     .await
     {
         Ok((summary, stats, file_diff, artefact_diff)) => {
-            sync::lock::write_sync_completed(
+            sync::state::write_sync_completed(
                 relational,
                 &cfg.repo.repo_id,
                 summary.head_commit_sha.as_deref(),
@@ -166,7 +164,7 @@ pub(crate) async fn execute_sync_with_observer_and_stats_and_diffs(
         }
         Err(err) => {
             if let Err(write_err) =
-                sync::lock::write_sync_failed(relational, &cfg.repo.repo_id).await
+                sync::state::write_sync_failed(relational, &cfg.repo.repo_id).await
             {
                 log::warn!(
                     "failed to mark DevQL sync as failed for repo `{}`: {write_err:#}",
@@ -307,7 +305,7 @@ async fn execute_sync_inner(
         paths_completed,
     );
 
-    let mut writer = SqliteSyncWriter::open(&relational.local.path)
+    let mut writer = SqliteSyncWriter::open(relational.sqlite_path())
         .await
         .context("opening persistent SQLite sync writer")?;
 
@@ -377,7 +375,7 @@ async fn execute_sync_inner(
     if !prepare_inputs.is_empty() {
         let worker_count = sync_prepare_worker_count().min(prepare_inputs.len().max(1));
         stats.prepare_worker_count = worker_count;
-        let pool = SqliteReadConnectionPool::open(&relational.local.path, worker_count)
+        let pool = SqliteReadConnectionPool::open(relational.sqlite_path(), worker_count)
             .await
             .context("opening SQLite read connection pool for sync prepare stage")?;
         let cfg = Arc::new(cfg.clone());

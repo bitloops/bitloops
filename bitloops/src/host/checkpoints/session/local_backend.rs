@@ -19,6 +19,24 @@ use crate::utils::paths;
 use super::backend::SessionBackend;
 use super::state::{PrePromptState, PreTaskState, SessionState};
 
+const GIT_REPO_RESOLUTION_ENV_KEYS: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+];
+
+fn repo_scoped_git_command() -> Command {
+    let mut cmd = Command::new("git");
+    for key in GIT_REPO_RESOLUTION_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
 pub struct LocalFileBackend {
     /// Repository root.
     repo_root: PathBuf,
@@ -55,7 +73,7 @@ impl LocalFileBackend {
 
     /// Resolves the git common dir, falling back to `<repo_root>/.git` on failure.
     fn git_common_dir(&self) -> PathBuf {
-        let output = Command::new("git")
+        let output = repo_scoped_git_command()
             .args(["rev-parse", "--git-common-dir"])
             .current_dir(&self.repo_root)
             .stdin(Stdio::null())
@@ -283,14 +301,36 @@ mod tests {
     use super::*;
     use crate::host::checkpoints::session::phase::SessionPhase;
     use crate::host::checkpoints::session::state::PendingCheckpointState;
+    use crate::test_support::process_state::{
+        ProcessStateGuard, enter_env_vars, isolated_git_command,
+    };
     use tempfile::TempDir;
 
-    fn setup() -> (TempDir, LocalFileBackend) {
-        let dir = tempfile::tempdir().unwrap();
+    const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
+
+    struct TestSetup {
+        _repo_dir: TempDir,
+        state_root: TempDir,
+        _guard: ProcessStateGuard,
+        backend: LocalFileBackend,
+    }
+
+    fn setup() -> TestSetup {
+        let repo_dir = tempfile::tempdir().unwrap();
         // Create .git/ so the backend can resolve paths
-        fs::create_dir_all(dir.path().join(".git")).unwrap();
-        let backend = LocalFileBackend::new(dir.path());
-        (dir, backend)
+        fs::create_dir_all(repo_dir.path().join(".git")).unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let state_root_value = state_root.path().to_string_lossy().to_string();
+        let guard =
+            enter_env_vars(&[(TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str()))]);
+        let backend = LocalFileBackend::new(repo_dir.path());
+
+        TestSetup {
+            _repo_dir: repo_dir,
+            state_root,
+            _guard: guard,
+            backend,
+        }
     }
 
     fn sample_state(session_id: &str) -> SessionState {
@@ -307,20 +347,33 @@ mod tests {
         }
     }
 
+    fn init_git_repo(path: &Path) {
+        let run = |args: &[&str]| {
+            let out = isolated_git_command(path).args(args).output().unwrap();
+            assert!(out.status.success(), "git {:?} failed", args);
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test User"]);
+        fs::write(path.join("tracked.txt"), "tracked\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+    }
+
     #[test]
     fn load_session_returns_none_when_missing() {
-        let (_dir, backend) = setup();
-        let result = backend.load_session("nonexistent").unwrap();
+        let setup = setup();
+        let result = setup.backend.load_session("nonexistent").unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn save_and_load_session_roundtrip() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let state = sample_state("sess-001");
-        backend.save_session(&state).unwrap();
+        setup.backend.save_session(&state).unwrap();
 
-        let loaded = backend.load_session("sess-001").unwrap().unwrap();
+        let loaded = setup.backend.load_session("sess-001").unwrap().unwrap();
         assert_eq!(loaded.session_id, "sess-001");
         assert_eq!(loaded.phase, SessionPhase::Active);
         assert_eq!(loaded.pending.step_count, 3);
@@ -329,29 +382,33 @@ mod tests {
 
     #[test]
     fn session_state_package_functions_roundtrip_for_manual_strategy_equivalent() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let state = SessionState {
             session_id: "manual-s1".to_string(),
             first_prompt: "hello".to_string(),
             ..sample_state("manual-s1")
         };
-        backend.save_session(&state).unwrap();
-        let loaded = backend.load_session("manual-s1").unwrap().unwrap();
+        setup.backend.save_session(&state).unwrap();
+        let loaded = setup.backend.load_session("manual-s1").unwrap().unwrap();
         assert_eq!(loaded.session_id, "manual-s1");
         assert_eq!(loaded.first_prompt, "hello");
     }
 
     #[test]
     fn load_session_with_ended_at_roundtrip() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let state = SessionState {
             session_id: "sess-ended-at".to_string(),
             ended_at: Some("2026-01-01T00:00:00Z".to_string()),
             ..sample_state("sess-ended-at")
         };
-        backend.save_session(&state).unwrap();
+        setup.backend.save_session(&state).unwrap();
 
-        let loaded = backend.load_session("sess-ended-at").unwrap().unwrap();
+        let loaded = setup
+            .backend
+            .load_session("sess-ended-at")
+            .unwrap()
+            .unwrap();
         assert_eq!(
             loaded.ended_at.as_deref(),
             Some("2026-01-01T00:00:00Z"),
@@ -361,15 +418,16 @@ mod tests {
 
     #[test]
     fn load_session_with_last_interaction_time_roundtrip() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let state = SessionState {
             session_id: "sess-last-interaction".to_string(),
             last_interaction_time: Some("2026-01-01T01:23:45Z".to_string()),
             ..sample_state("sess-last-interaction")
         };
-        backend.save_session(&state).unwrap();
+        setup.backend.save_session(&state).unwrap();
 
-        let loaded = backend
+        let loaded = setup
+            .backend
             .load_session("sess-last-interaction")
             .unwrap()
             .unwrap();
@@ -382,8 +440,8 @@ mod tests {
 
     #[test]
     fn load_session_normalizes_legacy_phase_values() {
-        let (_dir, backend) = setup();
-        let sessions_dir = backend.sessions_dir();
+        let setup = setup();
+        let sessions_dir = setup.backend.sessions_dir();
         fs::create_dir_all(&sessions_dir).unwrap();
 
         fs::write(
@@ -392,14 +450,14 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = backend.load_session("sess-legacy").unwrap().unwrap();
+        let loaded = setup.backend.load_session("sess-legacy").unwrap().unwrap();
         assert_eq!(loaded.phase, SessionPhase::Active);
     }
 
     #[test]
     fn load_session_normalizes_unknown_or_malformed_phase_values() {
-        let (_dir, backend) = setup();
-        let sessions_dir = backend.sessions_dir();
+        let setup = setup();
+        let sessions_dir = setup.backend.sessions_dir();
         fs::create_dir_all(&sessions_dir).unwrap();
 
         let cases = [
@@ -413,31 +471,31 @@ mod tests {
             let state_json = format!(r#"{{"session_id":"{session_id}","phase":{phase_json}}}"#);
             fs::write(sessions_dir.join(format!("{session_id}.json")), state_json).unwrap();
 
-            let loaded = backend.load_session(session_id).unwrap().unwrap();
+            let loaded = setup.backend.load_session(session_id).unwrap().unwrap();
             assert_eq!(loaded.phase, SessionPhase::Idle, "{session_id}");
         }
     }
 
     #[test]
     fn save_and_load_pre_prompt_roundtrip() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let state = PrePromptState {
             session_id: "sess-002".to_string(),
             prompt: "Hello world".to_string(),
             transcript_path: "/tmp/t.jsonl".to_string(),
             ..Default::default()
         };
-        backend.save_pre_prompt(&state).unwrap();
+        setup.backend.save_pre_prompt(&state).unwrap();
 
-        let loaded = backend.load_pre_prompt("sess-002").unwrap().unwrap();
+        let loaded = setup.backend.load_pre_prompt("sess-002").unwrap().unwrap();
         assert_eq!(loaded.session_id, "sess-002");
         assert_eq!(loaded.prompt, "Hello world");
     }
 
     #[test]
     fn load_pre_prompt_state_backward_compat_transcript_offset_migration() {
-        let (_dir, backend) = setup();
-        let state_file = backend.pre_prompt_path("test-backward-compat");
+        let setup = setup();
+        let state_file = setup.backend.pre_prompt_path("test-backward-compat");
         fs::create_dir_all(state_file.parent().unwrap()).unwrap();
 
         // Oldest format migrates to transcript_offset.
@@ -452,7 +510,8 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let state = backend
+        let state = setup
+            .backend
             .load_pre_prompt("test-backward-compat")
             .unwrap()
             .unwrap();
@@ -473,7 +532,8 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let state = backend
+        let state = setup
+            .backend
             .load_pre_prompt("test-backward-compat")
             .unwrap()
             .unwrap();
@@ -491,7 +551,8 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let state = backend
+        let state = setup
+            .backend
             .load_pre_prompt("test-backward-compat")
             .unwrap()
             .unwrap();
@@ -512,7 +573,8 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let state = backend
+        let state = setup
+            .backend
             .load_pre_prompt("test-backward-compat")
             .unwrap()
             .unwrap();
@@ -521,65 +583,79 @@ mod tests {
 
     #[test]
     fn delete_pre_prompt_removes_file() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let state = PrePromptState {
             session_id: "sess-003".to_string(),
             prompt: "test".to_string(),
             transcript_path: "/tmp/t.jsonl".to_string(),
             ..Default::default()
         };
-        backend.save_pre_prompt(&state).unwrap();
-        assert!(backend.load_pre_prompt("sess-003").unwrap().is_some());
+        setup.backend.save_pre_prompt(&state).unwrap();
+        assert!(setup.backend.load_pre_prompt("sess-003").unwrap().is_some());
 
-        backend.delete_pre_prompt("sess-003").unwrap();
-        assert!(backend.load_pre_prompt("sess-003").unwrap().is_none());
+        setup.backend.delete_pre_prompt("sess-003").unwrap();
+        assert!(setup.backend.load_pre_prompt("sess-003").unwrap().is_none());
     }
 
     #[test]
     fn create_and_find_active_pre_task() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let marker = PreTaskState {
             tool_use_id: "tool-abc".to_string(),
             session_id: "sess-004".to_string(),
             ..Default::default()
         };
-        backend.create_pre_task_marker(&marker).unwrap();
+        setup.backend.create_pre_task_marker(&marker).unwrap();
 
-        let found = backend.find_active_pre_task().unwrap();
+        let found = setup.backend.find_active_pre_task().unwrap();
         assert_eq!(found, Some("tool-abc".to_string()));
-        assert!(backend.load_pre_task_marker("tool-abc").unwrap().is_some());
+        assert!(
+            setup
+                .backend
+                .load_pre_task_marker("tool-abc")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
     fn delete_pre_task_marker_removes_file() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         let marker = PreTaskState {
             tool_use_id: "tool-xyz".to_string(),
             session_id: "sess-005".to_string(),
             ..Default::default()
         };
-        backend.create_pre_task_marker(&marker).unwrap();
-        assert!(backend.load_pre_task_marker("tool-xyz").unwrap().is_some());
+        setup.backend.create_pre_task_marker(&marker).unwrap();
+        assert!(
+            setup
+                .backend
+                .load_pre_task_marker("tool-xyz")
+                .unwrap()
+                .is_some()
+        );
 
-        backend.delete_pre_task_marker("tool-xyz").unwrap();
-        assert!(backend.load_pre_task_marker("tool-xyz").unwrap().is_none());
+        setup.backend.delete_pre_task_marker("tool-xyz").unwrap();
+        assert!(
+            setup
+                .backend
+                .load_pre_task_marker("tool-xyz")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn pre_task_marker_uses_go_style_filename() {
-        let (dir, backend) = setup();
+        let setup = setup();
         let marker = PreTaskState {
             tool_use_id: "tool-style".to_string(),
             session_id: "sess-style".to_string(),
             ..Default::default()
         };
-        backend.create_pre_task_marker(&marker).unwrap();
+        setup.backend.create_pre_task_marker(&marker).unwrap();
 
-        let expected = dir
-            .path()
-            .join(".bitloops")
-            .join("tmp")
-            .join("pre-task-tool-style.json");
+        let expected = setup.backend.tmp_dir().join("pre-task-tool-style.json");
         assert!(
             expected.exists(),
             "expected marker file at {}",
@@ -589,11 +665,22 @@ mod tests {
 
     #[test]
     fn pre_task_state_file_path_ends_with_expected_suffix() {
-        let (_dir, backend) = setup();
-        let got = backend.pre_task_path("toolu_abc123");
-        let expected_suffix = std::path::Path::new(crate::utils::paths::BITLOOPS_TMP_DIR)
-            .join("pre-task-toolu_abc123.json");
+        let setup = setup();
+        let got = setup.backend.pre_task_path("toolu_abc123");
+        let expected_prefix = setup
+            .state_root
+            .path()
+            .join("bitloops")
+            .join("daemon")
+            .join("repos");
+        let expected_suffix = std::path::Path::new("tmp").join("pre-task-toolu_abc123.json");
         assert!(got.is_absolute());
+        assert!(
+            got.starts_with(&expected_prefix),
+            "path {} should start with {}",
+            got.display(),
+            expected_prefix.display()
+        );
         assert!(
             got.to_string_lossy()
                 .ends_with(expected_suffix.to_string_lossy().as_ref()),
@@ -605,8 +692,9 @@ mod tests {
 
     #[test]
     fn find_active_pre_task_returns_latest_marker() {
-        let (_dir, backend) = setup();
-        backend
+        let setup = setup();
+        setup
+            .backend
             .create_pre_task_marker(&PreTaskState {
                 tool_use_id: "older".to_string(),
                 session_id: "sess".to_string(),
@@ -614,7 +702,8 @@ mod tests {
             })
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
-        backend
+        setup
+            .backend
             .create_pre_task_marker(&PreTaskState {
                 tool_use_id: "newer".to_string(),
                 session_id: "sess".to_string(),
@@ -622,24 +711,30 @@ mod tests {
             })
             .unwrap();
 
-        let found = backend.find_active_pre_task().unwrap();
+        let found = setup.backend.find_active_pre_task().unwrap();
         assert_eq!(found.as_deref(), Some("newer"));
     }
 
     #[test]
     fn find_active_pre_task_returns_none_when_empty() {
-        let (_dir, backend) = setup();
-        let found = backend.find_active_pre_task().unwrap();
+        let setup = setup();
+        let found = setup.backend.find_active_pre_task().unwrap();
         assert!(found.is_none());
     }
 
     #[test]
     fn list_sessions_returns_all_saved_sessions() {
-        let (_dir, backend) = setup();
-        backend.save_session(&sample_state("sess-list-1")).unwrap();
-        backend.save_session(&sample_state("sess-list-2")).unwrap();
+        let setup = setup();
+        setup
+            .backend
+            .save_session(&sample_state("sess-list-1"))
+            .unwrap();
+        setup
+            .backend
+            .save_session(&sample_state("sess-list-2"))
+            .unwrap();
 
-        let sessions = backend.list_sessions().unwrap();
+        let sessions = setup.backend.list_sessions().unwrap();
         assert_eq!(sessions.len(), 2);
     }
 
@@ -647,8 +742,8 @@ mod tests {
     fn list_sessions_normalizes_legacy_and_malformed_phase_values() {
         use std::collections::HashMap;
 
-        let (_dir, backend) = setup();
-        let sessions_dir = backend.sessions_dir();
+        let setup = setup();
+        let sessions_dir = setup.backend.sessions_dir();
         fs::create_dir_all(&sessions_dir).unwrap();
 
         let cases = [
@@ -664,7 +759,7 @@ mod tests {
             fs::write(sessions_dir.join(format!("{session_id}.json")), state_json).unwrap();
         }
 
-        let sessions = backend.list_sessions().unwrap();
+        let sessions = setup.backend.list_sessions().unwrap();
         let phases_by_session: HashMap<String, SessionPhase> = sessions
             .into_iter()
             .map(|state| (state.session_id, state.phase))
@@ -678,20 +773,42 @@ mod tests {
 
     #[test]
     fn list_sessions_returns_empty_when_no_dir() {
-        let (_dir, backend) = setup();
+        let setup = setup();
         // No sessions saved → directory won't exist.
-        let sessions = backend.list_sessions().unwrap();
+        let sessions = setup.backend.list_sessions().unwrap();
         assert!(sessions.is_empty());
     }
 
     #[test]
-    fn delete_session_removes_saved_state() {
-        let (_dir, backend) = setup();
-        let state = sample_state("sess-delete");
-        backend.save_session(&state).unwrap();
-        assert!(backend.load_session("sess-delete").unwrap().is_some());
+    fn git_common_dir_ignores_inherited_git_env() {
+        let repo_a = tempfile::tempdir().unwrap();
+        let repo_b = tempfile::tempdir().unwrap();
+        init_git_repo(repo_a.path());
+        init_git_repo(repo_b.path());
 
-        backend.delete_session("sess-delete").unwrap();
-        assert!(backend.load_session("sess-delete").unwrap().is_none());
+        let git_dir = repo_b.path().join(".git");
+        let work_tree = repo_b.path().to_string_lossy().into_owned();
+        let git_dir = git_dir.to_string_lossy().into_owned();
+        let _guard = enter_env_vars(&[
+            ("GIT_DIR", Some(git_dir.as_str())),
+            ("GIT_WORK_TREE", Some(work_tree.as_str())),
+        ]);
+
+        let backend = LocalFileBackend::new(repo_a.path());
+        assert_eq!(
+            backend.sessions_dir(),
+            repo_a.path().join(".git").join("bitloops-sessions")
+        );
+    }
+
+    #[test]
+    fn delete_session_removes_saved_state() {
+        let setup = setup();
+        let state = sample_state("sess-delete");
+        setup.backend.save_session(&state).unwrap();
+        assert!(setup.backend.load_session("sess-delete").unwrap().is_some());
+
+        setup.backend.delete_session("sess-delete").unwrap();
+        assert!(setup.backend.load_session("sess-delete").unwrap().is_none());
     }
 }

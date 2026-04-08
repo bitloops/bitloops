@@ -75,6 +75,8 @@ pub(super) fn build_clone_input_hash(
             "target_calls": &target.call_targets,
             "source_dependencies": &source.dependency_targets,
             "target_dependencies": &target.dependency_targets,
+            "source_embedding_setup": &source.embedding_setup.setup_fingerprint,
+            "target_embedding_setup": &target.embedding_setup.setup_fingerprint,
             "source_churn": source.churn_count,
             "target_churn": target.churn_count,
         })

@@ -94,11 +94,12 @@ pub(super) fn terminate_process(pid: u32) -> Result<()> {
 }
 
 pub(super) fn wait_for_runtime_cleanup(runtime_path: &Path, timeout: Duration) -> Result<()> {
+    let _ = runtime_path;
     let started = Instant::now();
-    while runtime_path.exists() && started.elapsed() <= timeout {
+    while read_runtime_state(Path::new("."))?.is_some() && started.elapsed() <= timeout {
         std::thread::sleep(Duration::from_millis(100));
     }
-    if runtime_path.exists() {
+    if read_runtime_state(Path::new("."))?.is_some() {
         bail!(
             "Bitloops daemon did not shut down within {} seconds",
             timeout.as_secs()

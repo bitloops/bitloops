@@ -60,6 +60,7 @@ mod tests;
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
+pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
 pub use self::types::{
@@ -69,6 +70,9 @@ pub use self::types::{
     ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
     SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
+pub(crate) use self::types::{
+    ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
+};
 
 use self::process::*;
 use self::server_runtime::*;
@@ -77,20 +81,86 @@ use self::service_manager::*;
 use self::state_store::*;
 use self::supervisor_client::*;
 #[cfg(test)]
+use self::types::RUNTIME_STATE_FILE_NAME;
+#[cfg(test)]
 use self::types::global_daemon_dir_fallback;
 use self::types::{
     GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME, READY_TIMEOUT, STOP_TIMEOUT,
     SupervisorAppState, SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest,
-    global_daemon_dir, supervisor_runtime_state_path, supervisor_service_metadata_path,
-    unix_timestamp_now,
+    global_daemon_dir, supervisor_service_metadata_path, unix_timestamp_now,
 };
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {
     types::runtime_state_path(repo_root)
 }
 
+#[cfg(test)]
+pub(crate) fn repo_local_runtime_state_path_for_tests(repo_root: &Path) -> Option<PathBuf> {
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return None;
+    }
+    Some(
+        repo_root
+            .join(".bitloops-test-state")
+            .join("daemon")
+            .join(RUNTIME_STATE_FILE_NAME),
+    )
+}
+
 pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
     types::service_metadata_path(repo_root)
+}
+
+pub fn current_binary_fingerprint() -> Result<String> {
+    process::current_binary_fingerprint()
+}
+
+pub fn require_current_repo_runtime(
+    repo_root: &Path,
+    operation: &str,
+) -> Result<DaemonRuntimeState> {
+    #[cfg(test)]
+    let runtime = repo_local_runtime_state_path_for_tests(repo_root)
+        .map(|path| state_store::read_json::<DaemonRuntimeState>(&path))
+        .transpose()?
+        .flatten()
+        .filter(|runtime| {
+            runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
+        })
+        .or(
+            state_store::read_runtime_state_legacy(repo_root)?.filter(|runtime| {
+                runtime.pid == std::process::id()
+                    || process_is_running(runtime.pid).unwrap_or(false)
+            }),
+        )
+        .filter(|runtime| {
+            runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
+        })
+        .or(state_store::read_runtime_state(repo_root)?);
+
+    #[cfg(not(test))]
+    let runtime = state_store::read_runtime_state(repo_root)?;
+
+    let runtime = runtime.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Bitloops daemon is not running for this repository. Run `bitloops init` or `bitloops daemon restart` before {operation}."
+        )
+    })?;
+    let current = current_binary_fingerprint().unwrap_or_default();
+    if !runtime.binary_fingerprint.is_empty()
+        && !current.is_empty()
+        && runtime.binary_fingerprint != current
+    {
+        if matches!(runtime.mode, DaemonMode::Foreground) {
+            bail!(
+                "Bitloops daemon is running in foreground with an older CLI binary. Restart it manually and rerun `bitloops init` before {operation}."
+            );
+        }
+        bail!(
+            "Bitloops daemon is stale for this repository. Run `bitloops init` or `bitloops daemon restart` before {operation}."
+        );
+    }
+    Ok(runtime)
 }
 
 pub fn resolve_daemon_config(explicit_config_path: Option<&Path>) -> Result<ResolvedDaemonConfig> {
@@ -249,4 +319,8 @@ pub fn choose_dashboard_launch_mode() -> Result<Option<DaemonMode>> {
 
 pub fn daemon_url() -> Result<Option<String>> {
     graphql_client::daemon_url()
+}
+
+pub(crate) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
+    process::daemon_http_client(url)
 }

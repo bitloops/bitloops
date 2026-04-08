@@ -43,7 +43,14 @@ fn managed_hook_types() -> [&'static str; 8] {
     ]
 }
 
-fn hook_commands(local_dev: bool) -> [(&'static str, String); 8] {
+fn daemon_config_override_from_env() -> Option<PathBuf> {
+    std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE).map(PathBuf::from)
+}
+
+fn hook_commands_with_daemon_config_override(
+    local_dev: bool,
+    daemon_config_override: Option<&Path>,
+) -> [(&'static str, String); 8] {
     let prefix = if local_dev {
         LOCAL_DEV_HOOK_PREFIX
     } else {
@@ -53,58 +60,82 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String); 8] {
     [
         (
             HOOK_TYPE_USER_PROMPT_SUBMITTED,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_SESSION_START,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SESSION_START
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SESSION_START
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_AGENT_STOP,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_AGENT_STOP
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_AGENT_STOP
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_SESSION_END,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SESSION_END
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SESSION_END
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_SUBAGENT_STOP,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_PRE_TOOL_USE,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_POST_TOOL_USE,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE
+                ),
+                daemon_config_override,
             ),
         ),
         (
             HOOK_TYPE_ERROR_OCCURRED,
-            format!(
-                "{prefix}{}",
-                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
+            crate::adapters::agents::managed_hook_command_with_daemon_config(
+                &format!(
+                    "{prefix}{}",
+                    crate::adapters::agents::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
+                ),
+                daemon_config_override,
             ),
         ),
     ]
@@ -140,9 +171,7 @@ fn bash_of(entry: &Value) -> Option<&str> {
 }
 
 fn is_bitloops_hook(command: &str) -> bool {
-    MANAGED_HOOK_PREFIXES
-        .iter()
-        .any(|prefix| command.starts_with(prefix))
+    crate::adapters::agents::is_managed_hook_command(command, &MANAGED_HOOK_PREFIXES)
 }
 
 fn remove_managed_hooks(entries: Vec<Value>) -> Vec<Value> {
@@ -218,6 +247,21 @@ pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Resul
 }
 
 fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    let daemon_config_override = daemon_config_override_from_env();
+    install_hooks_at_path_with_daemon_config_override(
+        path,
+        local_dev,
+        force,
+        daemon_config_override.as_deref(),
+    )
+}
+
+fn install_hooks_at_path_with_daemon_config_override(
+    path: &Path,
+    local_dev: bool,
+    force: bool,
+    daemon_config_override: Option<&Path>,
+) -> Result<usize> {
     let existing_data = fs::read(path).ok();
     let mut raw_file = match existing_data {
         Some(data) => parse_top_level_map(&data)?,
@@ -237,7 +281,9 @@ fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<us
     let mut installed = 0usize;
     let mut changed = false;
 
-    for (hook_type, command) in hook_commands(local_dev) {
+    for (hook_type, command) in
+        hook_commands_with_daemon_config_override(local_dev, daemon_config_override)
+    {
         let existing = parse_hook_entries(&raw_hooks, hook_type);
         let mut normalized = normalize_hook_entries_for_install(existing.clone(), &command, force);
         if !has_command(&normalized, &command) {
@@ -348,7 +394,6 @@ fn are_hooks_installed_at_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::process_state::with_cwd;
     use serde_json::Value;
 
     fn init_repo(path: &std::path::Path) {
@@ -364,24 +409,33 @@ mod tests {
     fn install_hooks_canonical_fresh_and_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let count = install_hooks(false, false).expect("install");
-            assert_eq!(count, 8);
-            assert!(are_hooks_installed());
+        let count = install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            false,
+            false,
+            None,
+        )
+        .expect("install");
+        assert_eq!(count, 8);
+        assert!(are_hooks_installed_at(dir.path()));
 
-            let second = install_hooks(false, false).expect("install second");
-            assert_eq!(second, 0);
-        });
+        let second = install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            false,
+            false,
+            None,
+        )
+        .expect("install second");
+        assert_eq!(second, 0);
     }
 
     #[test]
     fn are_hooks_installed_accepts_missing_optional_hooks() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let hooks_dir = dir.path().join(".github/hooks");
-            std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
-            let content = r#"{
+        let hooks_dir = dir.path().join(".github/hooks");
+        std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
+        let content = r#"{
   "version": 1,
   "hooks": {
     "userPromptSubmitted": [{"type":"command","bash":"bitloops hooks copilot user-prompt-submitted"}],
@@ -391,19 +445,17 @@ mod tests {
   }
 }
 "#;
-            std::fs::write(hooks_dir.join("bitloops.json"), content).expect("write");
-            assert!(are_hooks_installed());
-        });
+        std::fs::write(hooks_dir.join("bitloops.json"), content).expect("write");
+        assert!(are_hooks_installed_at(dir.path()));
     }
 
     #[test]
     fn are_hooks_installed_requires_core_lifecycle_hooks() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let hooks_dir = dir.path().join(".github/hooks");
-            std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
-            let content = r#"{
+        let hooks_dir = dir.path().join(".github/hooks");
+        std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
+        let content = r#"{
   "version": 1,
   "hooks": {
     "userPromptSubmitted": [{"type":"command","bash":"bitloops hooks copilot user-prompt-submitted"}],
@@ -412,35 +464,37 @@ mod tests {
   }
 }
 "#;
-            std::fs::write(hooks_dir.join("bitloops.json"), content).expect("write");
-            assert!(!are_hooks_installed());
-        });
+        std::fs::write(hooks_dir.join("bitloops.json"), content).expect("write");
+        assert!(!are_hooks_installed_at(dir.path()));
     }
 
     #[test]
     fn install_hooks_local_dev_writes_cargo_run_commands() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let installed = install_hooks(true, false).expect("install");
-            assert_eq!(installed, 8);
-            let content =
-                fs::read_to_string(dir.path().join(".github/hooks/bitloops.json")).expect("read");
-            assert!(content.contains("cargo run -- hooks copilot session-start"));
-            assert!(!content.contains("bitloops hooks copilot session-start"));
-        });
+        let installed = install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            true,
+            false,
+            None,
+        )
+        .expect("install");
+        assert_eq!(installed, 8);
+        let content =
+            fs::read_to_string(dir.path().join(".github/hooks/bitloops.json")).expect("read");
+        assert!(content.contains("cargo run -- hooks copilot session-start"));
+        assert!(!content.contains("bitloops hooks copilot session-start"));
     }
 
     #[test]
     fn install_hooks_preserves_unknown_fields() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let hooks_dir = dir.path().join(".github/hooks");
-            fs::create_dir_all(&hooks_dir).expect("mkdir");
-            fs::write(
-                hooks_dir.join("bitloops.json"),
-                r#"{
+        let hooks_dir = dir.path().join(".github/hooks");
+        fs::create_dir_all(&hooks_dir).expect("mkdir");
+        fs::write(
+            hooks_dir.join("bitloops.json"),
+            r#"{
   "version": 1,
   "customField": {"ok": true},
   "hooks": {
@@ -448,59 +502,67 @@ mod tests {
   }
 }
 "#,
-            )
-            .expect("write");
+        )
+        .expect("write");
 
-            install_hooks(false, false).expect("install");
-            let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
-            let value: Value = serde_json::from_str(&content).expect("json");
-            assert!(value.get("customField").is_some());
-            assert!(
-                value
-                    .get("hooks")
-                    .and_then(Value::as_object)
-                    .and_then(|hooks| hooks.get("customHook"))
-                    .is_some()
-            );
-        });
+        install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            false,
+            false,
+            None,
+        )
+        .expect("install");
+        let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
+        let value: Value = serde_json::from_str(&content).expect("json");
+        assert!(value.get("customField").is_some());
+        assert!(
+            value
+                .get("hooks")
+                .and_then(Value::as_object)
+                .and_then(|hooks| hooks.get("customHook"))
+                .is_some()
+        );
     }
 
     #[test]
     fn install_hooks_preserves_user_hooks_alongside_managed_hooks() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let hooks_dir = dir.path().join(".github/hooks");
-            fs::create_dir_all(&hooks_dir).expect("mkdir");
-            fs::write(
-                hooks_dir.join("bitloops.json"),
-                r#"{
+        let hooks_dir = dir.path().join(".github/hooks");
+        fs::create_dir_all(&hooks_dir).expect("mkdir");
+        fs::write(
+            hooks_dir.join("bitloops.json"),
+            r#"{
   "version": 1,
   "hooks": {
     "sessionStart": [{"type":"command","bash":"echo custom-session-start"}]
   }
 }
 "#,
-            )
-            .expect("write");
+        )
+        .expect("write");
 
-            install_hooks(false, false).expect("install");
-            let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
-            assert!(content.contains("echo custom-session-start"));
-            assert!(content.contains("bitloops hooks copilot session-start"));
-        });
+        install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            false,
+            false,
+            None,
+        )
+        .expect("install");
+        let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
+        assert!(content.contains("echo custom-session-start"));
+        assert!(content.contains("bitloops hooks copilot session-start"));
     }
 
     #[test]
     fn install_hooks_recovers_missing_managed_entries_without_duplicating_existing_ones() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let hooks_dir = dir.path().join(".github/hooks");
-            fs::create_dir_all(&hooks_dir).expect("mkdir");
-            fs::write(
-                hooks_dir.join("bitloops.json"),
-                r#"{
+        let hooks_dir = dir.path().join(".github/hooks");
+        fs::create_dir_all(&hooks_dir).expect("mkdir");
+        fs::write(
+            hooks_dir.join("bitloops.json"),
+            r#"{
   "version": 1,
   "hooks": {
     "userPromptSubmitted": [{"type":"command","bash":"bitloops hooks copilot user-prompt-submitted"}],
@@ -509,35 +571,45 @@ mod tests {
   }
 }
 "#,
-            )
-            .expect("write");
+        )
+        .expect("write");
 
-            let installed = install_hooks(false, false).expect("install");
-            assert_eq!(installed, 7);
+        let installed = install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            false,
+            false,
+            None,
+        )
+        .expect("install");
+        assert_eq!(installed, 7);
 
-            let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
-            assert_eq!(
-                content
-                    .matches("bitloops hooks copilot user-prompt-submitted")
-                    .count(),
-                1
-            );
-            assert!(content.contains("echo custom-session-start"));
-            assert!(content.contains("echo custom"));
-            assert!(content.contains("bitloops hooks copilot session-end"));
-        });
+        let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
+        assert_eq!(
+            content
+                .matches("bitloops hooks copilot user-prompt-submitted")
+                .count(),
+            1
+        );
+        assert!(content.contains("echo custom-session-start"));
+        assert!(content.contains("echo custom"));
+        assert!(content.contains("bitloops hooks copilot session-end"));
     }
 
     #[test]
     fn uninstall_preserves_non_bitloops_hooks() {
         let dir = tempfile::tempdir().expect("tempdir");
         init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            install_hooks(false, false).expect("install");
-            let hooks_path = dir.path().join(".github/hooks/bitloops.json");
-            fs::write(
-                &hooks_path,
-                r#"{
+        install_hooks_at_path_with_daemon_config_override(
+            &hooks_file_path_at(dir.path()),
+            false,
+            false,
+            None,
+        )
+        .expect("install");
+        let hooks_path = dir.path().join(".github/hooks/bitloops.json");
+        fs::write(
+            &hooks_path,
+            r#"{
   "version": 1,
   "hooks": {
     "sessionStart": [
@@ -547,13 +619,12 @@ mod tests {
   }
 }
 "#,
-            )
-            .expect("seed");
+        )
+        .expect("seed");
 
-            uninstall_hooks().expect("uninstall");
-            let output = fs::read_to_string(&hooks_path).expect("read");
-            assert!(output.contains("echo custom"));
-            assert!(!output.contains("bitloops hooks copilot session-start"));
-        });
+        uninstall_hooks_at(dir.path()).expect("uninstall");
+        let output = fs::read_to_string(&hooks_path).expect("read");
+        assert!(output.contains("echo custom"));
+        assert!(!output.contains("bitloops hooks copilot session-start"));
     }
 }

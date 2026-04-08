@@ -46,7 +46,7 @@ mod registry_and_resolution;
 fn extension_runtime_cfg() -> DevqlConfig {
     let repo_root = isolated_test_repo_root();
     DevqlConfig {
-        config_root: repo_root.clone(),
+        daemon_config_root: repo_root.clone(),
         repo_root,
         repo: RepoIdentity {
             provider: "github".to_string(),

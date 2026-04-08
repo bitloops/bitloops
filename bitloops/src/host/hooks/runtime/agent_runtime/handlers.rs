@@ -22,8 +22,17 @@ use crate::host::checkpoints::session::phase::Event;
 use crate::host::checkpoints::session::state::{PrePromptState, PreTaskState, SessionState};
 use crate::host::checkpoints::strategy::noop::NoOpStrategy;
 use crate::host::checkpoints::strategy::{StepContext, Strategy, TaskStepContext};
+use crate::host::checkpoints::transcript::metadata::{
+    TaskCheckpointMetadataBundle, build_incremental_checkpoint_payload,
+    build_session_metadata_bundle, build_task_checkpoint_payload,
+    extract_prompts_from_transcript_bytes,
+};
 use crate::host::checkpoints::transcript::utils::get_transcript_position;
 use crate::host::interactions::types::InteractionEventType;
+use crate::host::runtime_store::{
+    RepoSqliteRuntimeStore, RuntimeMetadataBlobType, SessionMetadataSnapshot,
+    TaskCheckpointArtefact,
+};
 use crate::utils::paths;
 
 // ── Handler functions ─────────────────────────────────────────────────────────
@@ -313,6 +322,33 @@ pub fn handle_stop_with_profile_and_model(
         .as_ref()
         .map(|state| state.timestamp.as_str())
         .filter(|value| !value.trim().is_empty());
+    let metadata = std::fs::read(&input.transcript_path)
+        .ok()
+        .filter(|transcript| !transcript.is_empty())
+        .and_then(|transcript| {
+            let derived_prompts = extract_prompts_from_transcript_bytes(&transcript);
+            let last_prompt = derived_prompts.last().cloned().unwrap_or_default();
+            let commit_message = generate_commit_message(&last_prompt);
+            build_session_metadata_bundle(&session_id, &commit_message, &transcript).ok()
+        });
+    if let (Some(root), Some(metadata)) = (repo_root, metadata.as_ref()) {
+        let runtime_store = RepoSqliteRuntimeStore::open(root)
+            .context("opening runtime store for stop metadata snapshot")?;
+        let mut snapshot = SessionMetadataSnapshot::new(session_id.clone(), metadata.clone());
+        snapshot.turn_id = state
+            .as_ref()
+            .map(|value| value.turn_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(generate_turn_id);
+        snapshot.transcript_identifier = pre_prompt
+            .as_ref()
+            .map(|value| value.last_transcript_identifier.clone())
+            .unwrap_or_default();
+        snapshot.transcript_path = input.transcript_path.clone();
+        runtime_store
+            .save_session_metadata_snapshot(&snapshot)
+            .context("saving stop metadata snapshot")?;
+    }
     let token_usage =
         calculate_stop_token_usage(&input.transcript_path, &session_id, transcript_start);
     let all_files: Vec<String> = changes
@@ -337,19 +373,19 @@ pub fn handle_stop_with_profile_and_model(
     });
 
     if total_changes > 0 {
-        let metadata_dir = paths::session_metadata_dir_from_session_id(&session_id);
-        let metadata_dir_abs = repo_root
-            .map(|r| r.join(&metadata_dir).to_string_lossy().into_owned())
-            .unwrap_or_else(|| metadata_dir.clone());
+        let commit_message = metadata
+            .as_ref()
+            .and_then(|bundle| bundle.prompts.last().cloned())
+            .map(|prompt| generate_commit_message(&prompt))
+            .unwrap_or_else(|| generate_commit_message(prompt));
 
         strategy.save_step(&StepContext {
             session_id: session_id.clone(),
             modified_files: changes.modified,
             new_files: changes.new_files,
             deleted_files: changes.deleted,
-            metadata_dir,
-            metadata_dir_abs,
-            commit_message: generate_commit_message(prompt),
+            metadata: metadata.clone(),
+            commit_message,
             transcript_path: input.transcript_path.clone(),
             author_name: String::new(),
             author_email: String::new(),
@@ -573,6 +609,67 @@ pub fn handle_post_task_with_profile_and_model(
     );
 
     if total_changes > 0 {
+        let session_metadata = if let Some(root) = repo_root {
+            std::fs::read(&input.transcript_path)
+                .ok()
+                .and_then(|transcript| {
+                    let prompts = extract_prompts_from_transcript_bytes(&transcript);
+                    let commit_message = generate_commit_message(
+                        prompts.last().map(String::as_str).unwrap_or_default(),
+                    );
+                    let metadata = build_session_metadata_bundle(
+                        &input.session_id,
+                        &commit_message,
+                        &transcript,
+                    )
+                    .ok()?;
+                    let runtime_store = RepoSqliteRuntimeStore::open(root).ok()?;
+                    let mut snapshot =
+                        SessionMetadataSnapshot::new(input.session_id.clone(), metadata.clone());
+                    snapshot.transcript_path = input.transcript_path.clone();
+                    snapshot.transcript_identifier = input.session_id.clone();
+                    runtime_store
+                        .save_session_metadata_snapshot(&snapshot)
+                        .ok()?;
+                    Some(metadata)
+                })
+        } else {
+            None
+        };
+        let checkpoint_json = build_task_checkpoint_payload(
+            &input.session_id,
+            &input.tool_use_id,
+            "",
+            &input.tool_response.agent_id,
+        )?;
+        let subagent_transcript = if subagent_transcript_path.trim().is_empty() {
+            None
+        } else {
+            std::fs::read(&subagent_transcript_path).ok()
+        };
+        if let Some(root) = repo_root {
+            let runtime_store = RepoSqliteRuntimeStore::open(root)
+                .context("opening runtime store for task checkpoint artefacts")?;
+            let mut checkpoint_artefact = TaskCheckpointArtefact::new(
+                input.session_id.clone(),
+                input.tool_use_id.clone(),
+                RuntimeMetadataBlobType::TaskCheckpoint,
+                checkpoint_json.clone(),
+            );
+            checkpoint_artefact.agent_id = input.tool_response.agent_id.clone();
+            runtime_store.save_task_checkpoint_artefact(&checkpoint_artefact)?;
+            if let Some(payload) = subagent_transcript.as_ref() {
+                let mut transcript_artefact = TaskCheckpointArtefact::new(
+                    input.session_id.clone(),
+                    input.tool_use_id.clone(),
+                    RuntimeMetadataBlobType::SubagentTranscript,
+                    payload.clone(),
+                );
+                transcript_artefact.agent_id = input.tool_response.agent_id.clone();
+                runtime_store.save_task_checkpoint_artefact(&transcript_artefact)?;
+            }
+        }
+
         strategy.save_task_step(&TaskStepContext {
             session_id: input.session_id.clone(),
             tool_use_id: input.tool_use_id.clone(),
@@ -580,6 +677,13 @@ pub fn handle_post_task_with_profile_and_model(
             modified_files: changes.modified,
             new_files: changes.new_files,
             deleted_files: changes.deleted,
+            session_metadata,
+            task_metadata: Some(TaskCheckpointMetadataBundle {
+                checkpoint_json: Some(checkpoint_json),
+                subagent_transcript,
+                incremental_checkpoint: None,
+                prompt: None,
+            }),
             transcript_path: input.transcript_path,
             subagent_transcript_path,
             checkpoint_uuid: String::new(),
@@ -659,6 +763,63 @@ pub fn handle_post_todo_with_profile(
         }
     }
 
+    let incremental_sequence = match repo_root {
+        Some(root) => RepoSqliteRuntimeStore::open(root)
+            .and_then(|store| {
+                store.next_task_incremental_sequence(&input.session_id, &task_tool_use_id)
+            })
+            .unwrap_or_else(|_| {
+                next_incremental_sequence(repo_root, &input.session_id, &task_tool_use_id)
+            }),
+        None => next_incremental_sequence(repo_root, &input.session_id, &task_tool_use_id),
+    };
+    let session_metadata = if let Some(root) = repo_root {
+        std::fs::read(&input.transcript_path)
+            .ok()
+            .and_then(|transcript| {
+                let prompts = extract_prompts_from_transcript_bytes(&transcript);
+                let commit_message =
+                    generate_commit_message(prompts.last().map(String::as_str).unwrap_or_default());
+                let metadata =
+                    build_session_metadata_bundle(&input.session_id, &commit_message, &transcript)
+                        .ok()?;
+                let runtime_store = RepoSqliteRuntimeStore::open(root).ok()?;
+                let mut snapshot =
+                    SessionMetadataSnapshot::new(input.session_id.clone(), metadata.clone());
+                snapshot.transcript_path = input.transcript_path.clone();
+                snapshot.transcript_identifier = input.session_id.clone();
+                runtime_store
+                    .save_session_metadata_snapshot(&snapshot)
+                    .ok()?;
+                Some(metadata)
+            })
+    } else {
+        None
+    };
+    let incremental_payload = build_incremental_checkpoint_payload(
+        &task_tool_use_id,
+        &input.tool_name,
+        &now_rfc3339(),
+        input
+            .tool_input
+            .as_ref()
+            .unwrap_or(&serde_json::Value::Null),
+    )?;
+    if let Some(root) = repo_root {
+        let runtime_store = RepoSqliteRuntimeStore::open(root)
+            .context("opening runtime store for incremental checkpoint artefacts")?;
+        let mut artefact = TaskCheckpointArtefact::new(
+            input.session_id.clone(),
+            task_tool_use_id.clone(),
+            RuntimeMetadataBlobType::IncrementalCheckpoint,
+            incremental_payload.clone(),
+        );
+        artefact.incremental_sequence = Some(incremental_sequence);
+        artefact.incremental_type = input.tool_name.clone();
+        artefact.is_incremental = true;
+        runtime_store.save_task_checkpoint_artefact(&artefact)?;
+    }
+
     strategy.save_task_step(&TaskStepContext {
         session_id: input.session_id.clone(),
         tool_use_id: task_tool_use_id.clone(),
@@ -666,6 +827,13 @@ pub fn handle_post_todo_with_profile(
         modified_files: changes.modified,
         new_files: changes.new_files,
         deleted_files: changes.deleted,
+        session_metadata,
+        task_metadata: Some(TaskCheckpointMetadataBundle {
+            checkpoint_json: None,
+            subagent_transcript: None,
+            incremental_checkpoint: Some(incremental_payload),
+            prompt: None,
+        }),
         transcript_path: input.transcript_path,
         subagent_transcript_path: String::new(),
         checkpoint_uuid: String::new(),
@@ -675,11 +843,7 @@ pub fn handle_post_todo_with_profile(
         task_description: String::new(),
         agent_type: profile.agent_name.to_string(),
         is_incremental: true,
-        incremental_sequence: next_incremental_sequence(
-            repo_root,
-            &input.session_id,
-            &task_tool_use_id,
-        ),
+        incremental_sequence,
         incremental_type: input.tool_name.clone(),
         incremental_data: input
             .tool_input

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::config::resolve_repo_runtime_db_path_for_repo;
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_store_backend_config_for_repo};
 use crate::test_support::process_state::git_command;
 
@@ -35,19 +36,49 @@ pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
         .expect("resolve test blob path")
 }
 
-#[allow(dead_code)]
-pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
-    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let config_contents = r#"[stores.relational]
-sqlite_path = "stores/relational/relational.db"
+pub(crate) fn write_test_daemon_config(config_root: &Path) -> PathBuf {
+    let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let daemon_state_root = config_root
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| config_root.to_path_buf())
+        .join(".bitloops-test-state")
+        .join(
+            config_root
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_default(),
+        );
+    let sqlite_path = daemon_state_root
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
+    let duckdb_path = daemon_state_root
+        .join("stores")
+        .join("event")
+        .join("events.duckdb");
+    let blob_path = daemon_state_root.join("stores").join("blob");
+    let config_contents = format!(
+        r#"[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = {sqlite_path:?}
 
 [stores.events]
-duckdb_path = "stores/event/events.duckdb"
+duckdb_path = {duckdb_path:?}
 
 [stores.blob]
-local_path = "stores/blob"
-"#;
+local_path = {blob_path:?}
+"#,
+    );
     std::fs::write(&config_path, config_contents).expect("write test daemon config");
+    config_path
+}
+
+#[allow(dead_code)]
+pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
+    write_test_daemon_config(repo_root);
 
     let backends = resolve_store_backend_config_for_repo(repo_root).expect("resolve test stores");
 
@@ -76,4 +107,17 @@ local_path = "stores/blob"
             .expect("resolve blob store path"),
     )
     .expect("create local blob store directory");
+
+    let runtime_path = resolve_repo_runtime_db_path_for_repo(repo_root)
+        .expect("resolve runtime sqlite path for test store backends");
+    if let Some(parent) = runtime_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("create runtime sqlite parent");
+    }
+    let runtime = crate::storage::SqliteConnectionPool::connect(runtime_path)
+        .expect("create runtime sqlite file");
+    runtime
+        .initialise_runtime_checkpoint_schema()
+        .expect("initialise runtime checkpoint schema");
 }

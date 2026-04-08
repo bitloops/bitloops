@@ -3,7 +3,7 @@ use crate::graphql::ResolverScope;
 use crate::graphql::types::interaction::{
     InteractionEventObject, InteractionSessionObject, InteractionTurnObject,
 };
-use crate::host::interactions::event_sink::create_event_repository;
+use crate::host::interactions::interaction_repository::create_interaction_repository;
 use crate::host::interactions::store::InteractionEventRepository;
 use crate::host::interactions::types::{InteractionEventFilter, InteractionEventType};
 use anyhow::{Context, Result};
@@ -116,7 +116,7 @@ impl DevqlGraphqlContext {
 fn resolve_interaction_repository(
     repo_root: &std::path::Path,
     repo_id: &str,
-) -> Option<impl InteractionEventRepository> {
+) -> Option<impl InteractionEventRepository + use<>> {
     let backends = crate::config::resolve_store_backend_config_for_repo(repo_root).ok()?;
-    create_event_repository(&backends.events, repo_root, repo_id.to_string()).ok()
+    create_interaction_repository(&backends.events, repo_root, repo_id.to_string()).ok()
 }

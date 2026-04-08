@@ -502,7 +502,7 @@ mod route_tests {
     }
 
     #[test]
-    fn route_codex_hooks_persist_interactions_to_event_db_even_if_checkpoint_save_fails()
+    fn route_codex_hooks_persist_interactions_to_event_db_when_relational_store_is_absent()
     -> Result<()> {
         let repo = seed_repo();
         let session_id = "codex-session-1";
@@ -533,21 +533,16 @@ mod route_tests {
                     .relational
                     .resolve_sqlite_db_path_for_repo(repo.path())?;
             std::fs::remove_file(&relational_path).expect("remove relational sqlite");
+            std::fs::create_dir_all(&relational_path)
+                .expect("replace relational sqlite with directory");
 
             let stop_payload = serde_json::json!({
                 "sessionId": session_id,
                 "transcriptPath": transcript_path_str,
             })
             .to_string();
-            let err =
-                route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_STOP, &stop_payload)
-                    .expect_err(
-                        "stop should still fail when the relational checkpoint store is absent",
-                    );
-            assert!(
-                err.to_string().contains("session backend is unavailable"),
-                "unexpected stop error: {err:#}"
-            );
+            route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_STOP, &stop_payload)
+                .expect("stop should still succeed when the runtime checkpoint store is available");
             Ok(())
         })?;
 

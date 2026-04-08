@@ -41,6 +41,7 @@ mod tests {
     use crate::host::checkpoints::session::phase::SessionPhase;
     use crate::host::checkpoints::session::state::PrePromptState;
     use crate::host::checkpoints::strategy::{StepContext, TaskStepContext};
+    use crate::test_support::git_fixtures::write_test_daemon_config;
     use crate::test_support::process_state::git_command;
     use std::fs;
     use std::path::Path;
@@ -151,6 +152,7 @@ mod tests {
         let strategy = RecordingStrategy::default();
         let session_id = "codex-session";
         let transcript_path = repo.path().join("codex.jsonl");
+        write_test_daemon_config(repo.path());
         fs::write(&transcript_path, "").expect("write transcript");
 
         backend

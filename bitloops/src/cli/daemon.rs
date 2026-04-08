@@ -79,6 +79,8 @@ async fn run_start_with_io(
 
     if preflight.create_default_config {
         let _ = bootstrap_default_daemon_environment()?;
+    } else if args.bootstrap_local_stores {
+        let _ = crate::config::ensure_daemon_store_artifacts(args.config.as_deref())?;
     }
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
@@ -133,10 +135,43 @@ fn resolve_start_preflight(
     input: &mut dyn BufRead,
 ) -> Result<StartPreflightDecision> {
     let default_config_missing = args.config.is_none() && !default_daemon_config_exists()?;
+    resolve_start_preflight_with_state(
+        args,
+        out,
+        input,
+        default_config_missing,
+        telemetry_consent::can_prompt_interactively(),
+    )
+}
+
+#[cfg(test)]
+fn resolve_start_preflight_for_tests(
+    args: &DaemonStartArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    default_config_missing: bool,
+    can_prompt_interactively: bool,
+) -> Result<StartPreflightDecision> {
+    resolve_start_preflight_with_state(
+        args,
+        out,
+        input,
+        default_config_missing,
+        can_prompt_interactively,
+    )
+}
+
+fn resolve_start_preflight_with_state(
+    args: &DaemonStartArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    default_config_missing: bool,
+    can_prompt_interactively: bool,
+) -> Result<StartPreflightDecision> {
     let mut create_default_config = args.create_default_config;
 
     if default_config_missing && !create_default_config {
-        if !telemetry_consent::can_prompt_interactively() {
+        if !can_prompt_interactively {
             bail!(missing_default_daemon_bootstrap_message());
         }
         create_default_config = telemetry_consent::prompt_default_config_setup(out, input)?;
@@ -150,6 +185,7 @@ fn resolve_start_preflight(
         args,
         out,
         input,
+        can_prompt_interactively,
     )?;
 
     Ok(StartPreflightDecision {
@@ -163,6 +199,7 @@ fn collect_startup_telemetry_choice(
     args: &DaemonStartArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    can_prompt_interactively: bool,
 ) -> Result<Option<bool>> {
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
@@ -174,7 +211,7 @@ fn collect_startup_telemetry_choice(
         return Ok(Some(choice));
     }
 
-    if !telemetry_consent::can_prompt_interactively() {
+    if !can_prompt_interactively {
         bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
     }
 
@@ -201,6 +238,10 @@ fn send_session_end_for_all_sessions() {
     let Ok(state_dir) = crate::utils::platform_dirs::bitloops_state_dir() else {
         return;
     };
+    send_session_end_for_all_sessions_in(state_dir.as_path());
+}
+
+fn send_session_end_for_all_sessions_in(state_dir: &Path) {
     let session_path = state_dir.join("telemetry_sessions.json");
 
     // Load and end all sessions
@@ -231,7 +272,7 @@ fn send_session_end_for_all_sessions() {
     }
 
     // Clear the session file
-    let _ = crate::telemetry::sessions::SessionStore::default().save(&state_dir);
+    let _ = crate::telemetry::sessions::SessionStore::default().save(state_dir);
 }
 
 pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
@@ -252,34 +293,38 @@ pub async fn run_logs(args: DaemonLogsArgs) -> Result<()> {
 }
 
 async fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
-    run_logs_with_io_and_shutdown(args, out, async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+    run_logs_with_io_and_shutdown_at_path(
+        args,
+        out,
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        },
+        LOG_FOLLOW_POLL_INTERVAL,
+        daemon::daemon_log_file_path(),
+    )
     .await
 }
 
-async fn run_logs_with_io_and_shutdown<S>(
+#[cfg(test)]
+async fn run_logs_with_io_at_path(
     args: DaemonLogsArgs,
     out: &mut dyn Write,
-    shutdown: S,
-) -> Result<()>
-where
-    S: Future<Output = ()>,
-{
-    run_logs_with_io_and_shutdown_and_poll_interval(args, out, shutdown, LOG_FOLLOW_POLL_INTERVAL)
+    log_path: std::path::PathBuf,
+) -> Result<()> {
+    run_logs_with_io_and_shutdown_at_path(args, out, async {}, LOG_FOLLOW_POLL_INTERVAL, log_path)
         .await
 }
 
-async fn run_logs_with_io_and_shutdown_and_poll_interval<S>(
+async fn run_logs_with_io_and_shutdown_at_path<S>(
     args: DaemonLogsArgs,
     out: &mut dyn Write,
     shutdown: S,
     poll_interval: Duration,
+    log_path: std::path::PathBuf,
 ) -> Result<()>
 where
     S: Future<Output = ()>,
 {
-    let log_path = daemon::daemon_log_file_path();
     if args.path {
         writeln!(out, "{}", log_path.display()).context("writing daemon log path")?;
         return Ok(());

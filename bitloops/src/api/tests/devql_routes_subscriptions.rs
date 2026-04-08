@@ -1,5 +1,37 @@
 use super::*;
 
+fn write_current_repo_runtime_state(repo_root: &Path) {
+    let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
+        .unwrap_or_else(|| crate::daemon::runtime_state_path(repo_root));
+    let runtime_state = crate::daemon::DaemonRuntimeState {
+        version: 1,
+        config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        config_root: repo_root.to_path_buf(),
+        pid: std::process::id(),
+        mode: crate::daemon::DaemonMode::Detached,
+        service_name: None,
+        url: "http://127.0.0.1:5667".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 5667,
+        bundle_dir: repo_root.join("bundle"),
+        relational_db_path: repo_root.join("relational.db"),
+        events_db_path: repo_root.join("events.duckdb"),
+        blob_store_path: repo_root.join("blob"),
+        repo_registry_path: repo_root.join("repo-registry.json"),
+        binary_fingerprint: crate::daemon::current_binary_fingerprint().unwrap_or_default(),
+        updated_at_unix: 0,
+    };
+    fs::create_dir_all(
+        runtime_path
+            .parent()
+            .expect("runtime state should have a parent directory"),
+    )
+    .expect("create runtime state parent");
+    let mut bytes = serde_json::to_vec_pretty(&runtime_state).expect("serialise runtime state");
+    bytes.push(b'\n');
+    fs::write(&runtime_path, bytes).expect("write runtime state");
+}
+
 fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
     let fingerprint = crate::config::discover_repo_policy_optional(repo_root)
@@ -558,10 +590,21 @@ async fn devql_post_route_executes_slim_clone_queries() {
         {
           clones(filter: { minScore: 0.75 }, first: 10) {
             totalCount
+            summary {
+              totalCount
+              groups {
+                relationKind
+                count
+              }
+            }
             edges {
               node {
                 relationKind
                 score
+                sourceStartLine
+                sourceEndLine
+                targetStartLine
+                targetEndLine
                 sourceArtefact {
                   symbolFqn
                 }
@@ -583,6 +626,122 @@ async fn devql_post_route_executes_slim_clone_queries() {
         payload.get("errors")
     );
     assert_eq!(payload["data"]["clones"]["totalCount"], 0);
+    assert_eq!(payload["data"]["clones"]["summary"]["totalCount"], 0);
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_clone_summary_queries() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          cloneSummary(
+            filter: { kind: FUNCTION }
+            cloneFilter: { minScore: 0.68 }
+          ) {
+            totalCount
+            groups {
+              relationKind
+              count
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["totalCount"], 3);
+    assert_eq!(
+        payload["data"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["groups"][0]["count"], 2);
+    assert_eq!(
+        payload["data"]["cloneSummary"]["groups"][1]["relationKind"],
+        "contextual_neighbor"
+    );
+    assert_eq!(payload["data"]["cloneSummary"]["groups"][1]["count"], 1);
+}
+
+#[tokio::test]
+async fn devql_post_route_rejects_slim_clone_summary_invalid_inputs_and_temporal_scopes() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (_, payload) = request_slim_query(
+        app,
+        repo.path(),
+        &format!(
+            r#"
+            {{
+              badSummary: cloneSummary(cloneFilter: {{ minScore: 1.5 }}) {{
+                totalCount
+              }}
+              asOf(input: {{ commit: "{commit_sha}" }}) {{
+                project(path: "packages/api") {{
+                  cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                    totalCount
+                  }}
+                }}
+                file(path: "packages/api/src/caller.ts") {{
+                  cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                    totalCount
+                  }}
+                }}
+              }}
+            }}
+            "#,
+        ),
+    )
+    .await;
+
+    let errors = payload["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert_eq!(errors.len(), 3, "unexpected errors: {errors:?}");
+    let messages = errors
+        .iter()
+        .filter_map(|error| error["message"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`minScore` must be between 0 and 1")),
+        "expected minScore validation error, got {messages:?}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message.contains(
+                    "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+                )
+            })
+            .count(),
+        2,
+        "expected temporal cloneSummary errors, got {messages:?}"
+    );
 }
 
 #[tokio::test]
@@ -959,8 +1118,9 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
         subscription {
           ingestionProgress(repoName: "demo") {
             phase
-            checkpointsTotal
-            checkpointsProcessed
+            commitsTotal
+            commitsProcessed
+            checkpointCompanionsProcessed
             currentCheckpointId
             currentCommitSha
           }
@@ -981,42 +1141,39 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
         "other-repo",
         crate::graphql::IngestionProgressEvent {
             phase: crate::graphql::IngestionPhase::Failed,
-            checkpoints_total: 99,
-            checkpoints_processed: 13,
+            commits_total: 99,
+            commits_processed: 13,
+            checkpoint_companions_processed: 8,
             current_checkpoint_id: Some("wrong-repo-checkpoint".to_string()),
             current_commit_sha: Some("wrong-repo-sha".to_string()),
             events_inserted: 8,
             artefacts_upserted: 5,
-            checkpoints_without_commit: 3,
-            temporary_rows_promoted: 2,
         },
     );
     context.subscriptions().publish_progress(
         "demo",
         crate::graphql::IngestionProgressEvent {
             phase: crate::graphql::IngestionPhase::Initializing,
-            checkpoints_total: 1,
-            checkpoints_processed: 0,
+            commits_total: 1,
+            commits_processed: 0,
+            checkpoint_companions_processed: 0,
             current_checkpoint_id: None,
             current_commit_sha: None,
             events_inserted: 0,
             artefacts_upserted: 0,
-            checkpoints_without_commit: 0,
-            temporary_rows_promoted: 0,
         },
     );
     context.subscriptions().publish_progress(
         "demo",
         crate::graphql::IngestionProgressEvent {
             phase: crate::graphql::IngestionPhase::Complete,
-            checkpoints_total: 1,
-            checkpoints_processed: 1,
+            commits_total: 1,
+            commits_processed: 1,
+            checkpoint_companions_processed: 1,
             current_checkpoint_id: Some("aabbccddeeff".to_string()),
             current_commit_sha: Some(git_ok(repo.path(), &["rev-parse", "HEAD"])),
             events_inserted: 1,
             artefacts_upserted: 2,
-            checkpoints_without_commit: 0,
-            temporary_rows_promoted: 0,
         },
     );
 
@@ -1046,17 +1203,17 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
     }
     assert!(phases.iter().any(|phase| phase == "INITIALIZING"));
     assert_eq!(phases.last(), Some(&"COMPLETE".to_string()));
-    assert_eq!(last_payload["checkpointsTotal"], Value::from(1));
-    assert_eq!(last_payload["checkpointsProcessed"], Value::from(1));
+    assert_eq!(last_payload["commitsTotal"], Value::from(1));
+    assert_eq!(last_payload["commitsProcessed"], Value::from(1));
+    assert_eq!(
+        last_payload["checkpointCompanionsProcessed"],
+        Value::from(1)
+    );
 }
 
 #[tokio::test]
 async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subscription_hub() {
     let repo = seed_dashboard_repo();
-    let _guard = enter_process_state(
-        Some(repo.path()),
-        &[("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", Some("disabled"))],
-    );
     write_envelope_config(
         repo.path(),
         json!({
@@ -1102,15 +1259,18 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
         "graphql errors: {:?}",
         init_response.errors
     );
+    let init_json = init_response.data.into_json().expect("init data to json");
+    assert_eq!(init_json["initSchema"]["success"], true);
+    write_current_repo_runtime_state(repo.path());
 
     let response = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { maxCheckpoints: 1 }) {
+              ingest {
                 success
-                checkpointsProcessed
-                temporaryRowsPromoted
+                commitsProcessed
+                checkpointCompanionsProcessed
               }
             }
             "#,
@@ -1123,8 +1283,11 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
         response.errors
     );
     let response_json = response.data.into_json().expect("mutation data to json");
-    assert_eq!(response_json["ingest"]["temporaryRowsPromoted"], 0);
-    if response_json["ingest"]["checkpointsProcessed"].as_i64() == Some(1) {
+    assert!(
+        response_json["ingest"]["checkpointCompanionsProcessed"].is_number(),
+        "expected checkpoint companion counter in ingest response"
+    );
+    if response_json["ingest"]["commitsProcessed"].as_i64() == Some(1) {
         let checkpoint =
             tokio::time::timeout(std::time::Duration::from_secs(5), checkpoint_rx.recv())
                 .await
@@ -1137,7 +1300,6 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
     }
 
     let mut saw_complete = false;
-    let mut complete_temporary_rows_promoted = None;
     for _ in 0..8 {
         let progress = tokio::time::timeout(std::time::Duration::from_secs(5), progress_rx.recv())
             .await
@@ -1145,10 +1307,8 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
             .expect("progress subscription payload");
         if progress.event.phase == crate::graphql::IngestionPhase::Complete {
             saw_complete = true;
-            complete_temporary_rows_promoted = Some(progress.event.temporary_rows_promoted);
             break;
         }
     }
     assert!(saw_complete, "expected a COMPLETE ingestion progress event");
-    assert_eq!(complete_temporary_rows_promoted, Some(0));
 }

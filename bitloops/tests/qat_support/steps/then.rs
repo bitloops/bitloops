@@ -395,7 +395,7 @@ pub(super) fn then_testlens_query_returns_results(
         let view = ctx.matches[2].1.clone();
         let repo_name = ctx.matches[3].1.clone();
         run_step(
-            "TestLens query returns results",
+            "TestHarness query returns results",
             helpers::assert_testlens_query_returns_results(world, &repo_name, &artefact, &view),
         );
     })
@@ -407,7 +407,7 @@ pub(super) fn then_testlens_summary_nonzero(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         run_step(
-            "TestLens summary shows non-zero test count",
+            "TestHarness summary shows non-zero test count",
             helpers::assert_testlens_summary_nonzero(world),
         );
     })
@@ -419,7 +419,7 @@ pub(super) fn then_testlens_tests_have_classification(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         run_step(
-            "TestLens tests include at least 1 test with a classification",
+            "TestHarness tests include at least 1 test with a classification",
             helpers::assert_testlens_tests_have_classification(world),
         );
     })
@@ -431,7 +431,7 @@ pub(super) fn then_testlens_coverage_has_line_pct(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         run_step(
-            "TestLens coverage shows line coverage percentage",
+            "TestHarness coverage shows line coverage percentage",
             helpers::assert_testlens_coverage_has_line_pct(world),
         );
     })
@@ -446,7 +446,7 @@ pub(super) fn then_testlens_query_empty_or_zero(
         let view = ctx.matches[2].1.clone();
         let repo_name = ctx.matches[3].1.clone();
         run_step(
-            "TestLens query returns empty or zero-count",
+            "TestHarness query returns empty or zero-count",
             helpers::assert_testlens_query_empty_or_zero(world, &repo_name, &artefact, &view),
         );
     })
@@ -461,7 +461,7 @@ pub(super) fn then_testlens_includes_failing_test(
         let view = ctx.matches[2].1.clone();
         let repo_name = ctx.matches[3].1.clone();
         run_step(
-            "TestLens query includes a failing test",
+            "TestHarness query includes a failing test",
             helpers::assert_testlens_includes_failing_test(world, &repo_name, &artefact, &view),
         );
     })
@@ -721,6 +721,58 @@ pub(super) fn then_sync_validation_expected_greater_than(
                 );
                 Ok(())
             })(),
+        );
+    })
+}
+
+pub(super) fn then_sync_history_added_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows added > 0 for current HEAD",
+            helpers::assert_sync_history_has_added_for_current_head(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_sync_history_changed_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows changed > 0 for current HEAD",
+            helpers::assert_sync_history_has_changed_for_current_head(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_sync_history_removed_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows removed > 0 for current HEAD",
+            helpers::assert_sync_history_has_removed_for_current_head(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_sync_history_artefacts_for_current_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL sync history shows artefacts indexed for current HEAD",
+            helpers::assert_sync_history_has_artefacts_for_current_head(world, &repo_name),
         );
     })
 }

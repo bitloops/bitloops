@@ -179,26 +179,18 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
         };
         conn.execute(
             "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
-                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, '2026-03-26T10:00:00Z'
+                ?1, ?2, ?3, 'typescript', ?4, ?5, ?6, NULL, ?7, ?8, ?9, '2026-03-26T10:00:00Z'
             )",
             rusqlite::params![
                 artefact_id,
                 symbol_id,
                 repo_id.as_str(),
-                blob_sha,
-                path,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                end_line * 10,
                 if canonical_kind == "file" {
                     "[]"
                 } else {
@@ -212,7 +204,26 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
                 format!("hash-{artefact_id}"),
             ],
         )
-        .expect("insert artefact row");
+        .expect("insert artefact metadata row");
+        conn.execute(
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                blob_sha,
+                path,
+                artefact_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert artefact snapshot row");
         conn.execute(
             "INSERT INTO artefacts_current (
                 repo_id, path, content_id, symbol_id, artefact_id, language,
@@ -398,6 +409,120 @@ pub(super) fn seed_graphql_clone_data(repo_root: &Path) {
     }
 }
 
+pub(super) fn seed_graphql_same_file_method_clone_data(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open method clone sqlite");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .expect("initialise clone sqlite schema");
+
+    let path = "packages/api/src/change-path.ts";
+    let blob_sha = "blob-api-change-path";
+
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, language,
+            head_content_id, index_content_id, worktree_content_id,
+            effective_content_id, effective_source,
+            parser_version, extractor_version,
+            exists_in_head, exists_in_index, exists_in_worktree,
+            last_synced_at
+        ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T10:00:00Z')",
+        rusqlite::params![repo_id.as_str(), path, blob_sha],
+    )
+    .expect("insert method current_file_state row");
+
+    for (
+        symbol_id,
+        artefact_id,
+        symbol_fqn,
+        parent_symbol_id,
+        parent_artefact_id,
+        start_line,
+        end_line,
+    ) in [
+        (
+            "class::change-path",
+            "artefact::class-change-path",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            1_i64,
+            40_i64,
+        ),
+        (
+            "method::execute",
+            "artefact::method-execute",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute",
+            Some("class::change-path"),
+            Some("artefact::class-change-path"),
+            10_i64,
+            24_i64,
+        ),
+        (
+            "method::command",
+            "artefact::method-command",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command",
+            Some("class::change-path"),
+            Some("artefact::class-change-path"),
+            26_i64,
+            34_i64,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                0, ?13, NULL, '[\"public\"]', 'Method docstring', '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                path,
+                blob_sha,
+                symbol_id,
+                artefact_id,
+                if symbol_id == "class::change-path" {
+                    "type"
+                } else {
+                    "method"
+                },
+                if symbol_id == "class::change-path" {
+                    "class_declaration"
+                } else {
+                    "method_definition"
+                },
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert method artefact current row");
+    }
+
+    conn.execute(
+        "INSERT INTO symbol_clone_edges (
+            repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+            relation_kind, score, semantic_score, lexical_score, structural_score,
+            clone_input_hash, explanation_json
+        ) VALUES (
+            ?1, 'method::execute', 'artefact::method-execute', 'method::command', 'artefact::method-command',
+            'weak_clone_candidate', 0.61, 0.58, 0.44, 0.73,
+            'clone-hash-method-same-file', '{\"reason\":\"same file helper overlap\"}'
+        )",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert same-file method clone edge");
+}
+
 pub(super) fn seed_graphql_test_harness_stage_data(
     repo_root: &Path,
     commit_sha: &str,
@@ -408,24 +533,11 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     };
     use crate::models::{
         CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
-        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     };
 
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     let mut repository = open_repository_for_repo(repo_root).expect("open test harness repository");
-    let discovery_run = TestDiscoveryRunRecord {
-        discovery_run_id: format!("discovery:{commit_sha}"),
-        repo_id: repo_id.clone(),
-        commit_sha: commit_sha.to_string(),
-        language: Some("typescript".to_string()),
-        started_at: "2026-03-26T11:00:00Z".to_string(),
-        finished_at: Some("2026-03-26T11:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("complete".to_string()),
-        notes_json: None,
-        stats_json: None,
-    };
-
     let mut test_artefacts = Vec::<TestArtefactCurrentRecord>::new();
     let mut test_edges = Vec::<TestArtefactEdgeCurrentRecord>::new();
     let mut coverage_captures = Vec::<CoverageCaptureRecord>::new();
@@ -444,8 +556,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             artefact_id: suite_artefact_id.clone(),
             symbol_id: suite_symbol_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-suite-{index}"),
+            content_id: format!("test-blob-suite-{index}"),
             path: test_path.clone(),
             language: "typescript".to_string(),
             canonical_kind: "test_suite".to_string(),
@@ -461,18 +572,14 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         test_artefacts.push(TestArtefactCurrentRecord {
             artefact_id: test_artefact_id.clone(),
             symbol_id: test_symbol_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-scenario-{index}"),
+            content_id: format!("test-blob-scenario-{index}"),
             path: test_path.clone(),
             language: "typescript".to_string(),
             canonical_kind: "test_scenario".to_string(),
@@ -488,17 +595,13 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         test_edges.push(TestArtefactEdgeCurrentRecord {
             edge_id: format!("test-edge-{index}"),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-edge-{index}"),
+            content_id: format!("test-blob-edge-{index}"),
             path: test_path,
             from_artefact_id: test_artefact_id.clone(),
             from_symbol_id: test_symbol_id.clone(),
@@ -515,8 +618,6 @@ pub(super) fn seed_graphql_test_harness_stage_data(
                 "linkage_status": "linked"
             })
             .to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         coverage_captures.push(CoverageCaptureRecord {
@@ -564,13 +665,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     }
 
     repository
-        .replace_test_discovery(
-            commit_sha,
-            &test_artefacts,
-            &test_edges,
-            &discovery_run,
-            &[],
-        )
+        .replace_test_discovery(commit_sha, &test_artefacts, &test_edges)
         .expect("replace test discovery");
     for capture in &coverage_captures {
         repository

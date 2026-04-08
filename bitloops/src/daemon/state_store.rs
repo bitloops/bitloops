@@ -1,21 +1,22 @@
 use super::*;
 
 pub(super) fn read_runtime_state(repo_root: &Path) -> Result<Option<DaemonRuntimeState>> {
-    let path = runtime_state_path(repo_root);
-    let state = read_runtime_state_for_path(&path)?;
-    if let Some(state) = state
-        && process_is_running(state.pid)?
+    let _ = repo_root;
+    let state = read_runtime_state_for_path(&runtime_state_path(repo_root))?;
+    if let Some(state_ref) = state.as_ref()
+        && process_is_running(state_ref.pid)?
     {
-        return Ok(Some(state));
+        return Ok(state);
     }
-    if path.exists() {
-        let _ = fs::remove_file(path);
+    if state.is_some() {
+        let _ = delete_runtime_state();
     }
     Ok(None)
 }
 
 pub(super) fn read_runtime_state_for_path(path: &Path) -> Result<Option<DaemonRuntimeState>> {
-    read_json(path)
+    let _ = path;
+    daemon_runtime_store()?.load_runtime_state()
 }
 
 pub(super) fn read_service_metadata(repo_root: &Path) -> Result<Option<DaemonServiceMetadata>> {
@@ -23,35 +24,59 @@ pub(super) fn read_service_metadata(repo_root: &Path) -> Result<Option<DaemonSer
 }
 
 pub(super) fn read_service_metadata_for_path(path: &Path) -> Result<Option<DaemonServiceMetadata>> {
-    read_json(path)
+    let _ = path;
+    daemon_runtime_store()?.load_service_metadata()
 }
 
 pub(super) fn read_supervisor_service_metadata() -> Result<Option<SupervisorServiceMetadata>> {
-    read_json(&supervisor_service_metadata_path()?)
+    daemon_runtime_store()?.load_supervisor_service_metadata()
 }
 
 pub(super) fn read_supervisor_runtime_state() -> Result<Option<SupervisorRuntimeState>> {
-    let path = supervisor_runtime_state_path()?;
-    let state = read_json::<SupervisorRuntimeState>(&path)?;
-    if let Some(state) = state
-        && process_is_running(state.pid)?
+    let state = daemon_runtime_store()?.load_supervisor_runtime_state()?;
+    if let Some(state_ref) = state.as_ref()
+        && process_is_running(state_ref.pid)?
     {
-        return Ok(Some(state));
+        return Ok(state);
     }
-    if path.exists() {
-        let _ = fs::remove_file(path);
+    if state.is_some() {
+        let _ = delete_supervisor_runtime_state();
     }
     Ok(None)
 }
 
 pub(super) fn write_runtime_state(path: &Path, state: &DaemonRuntimeState) -> Result<()> {
-    write_json(path, state)
+    let _ = path;
+    daemon_runtime_store()?.save_runtime_state(state)
 }
 
 pub(super) fn write_service_metadata(path: &Path, state: &DaemonServiceMetadata) -> Result<()> {
-    write_json(path, state)
+    let _ = path;
+    daemon_runtime_store()?.save_service_metadata(state)
 }
 
+pub(super) fn write_supervisor_runtime_state(state: &SupervisorRuntimeState) -> Result<()> {
+    daemon_runtime_store()?.save_supervisor_runtime_state(state)
+}
+
+pub(super) fn write_supervisor_service_metadata(state: &SupervisorServiceMetadata) -> Result<()> {
+    daemon_runtime_store()?.save_supervisor_service_metadata(state)
+}
+
+pub(super) fn delete_runtime_state() -> Result<()> {
+    daemon_runtime_store()?.delete_runtime_state()
+}
+
+pub(super) fn delete_supervisor_runtime_state() -> Result<()> {
+    daemon_runtime_store()?.delete_supervisor_runtime_state()
+}
+
+#[cfg(test)]
+pub(super) fn read_runtime_state_legacy(repo_root: &Path) -> Result<Option<DaemonRuntimeState>> {
+    read_json(&runtime_state_path(repo_root))
+}
+
+#[cfg(test)]
 pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let data = match fs::read(path) {
         Ok(data) => data,
@@ -63,6 +88,7 @@ pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     Ok(Some(value))
 }
 
+#[cfg(test)]
 pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
@@ -76,6 +102,7 @@ pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     atomic_write(path, &bytes)
 }
 
+#[cfg(test)]
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -132,6 +159,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn daemon_runtime_store() -> Result<crate::host::runtime_store::DaemonSqliteRuntimeStore> {
+    crate::host::runtime_store::DaemonSqliteRuntimeStore::open()
 }
 
 #[cfg(test)]

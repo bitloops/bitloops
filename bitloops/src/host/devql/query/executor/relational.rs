@@ -86,11 +86,13 @@ pub(crate) async fn build_relational_clones_query(
         clone_filters.push(format!("ce.score >= {}", min_score.clamp(0.0, 1.0)));
     }
 
-    Ok(format!(
+    let sql = format!(
         "{filtered_cte} \
 SELECT ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json, \
 src.artefact_id AS source_artefact_id, src.path AS source_path, src.symbol_fqn AS source_symbol_fqn, \
 tgt.artefact_id AS target_artefact_id, tgt.path AS target_path, tgt.symbol_fqn AS target_symbol_fqn, \
+src.start_line AS source_start_line, src.end_line AS source_end_line, \
+tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
 tgt.canonical_kind AS target_canonical_kind, tgt.language_kind AS target_language_kind, tgt.language AS target_language, \
 ss.summary AS target_summary \
 FROM symbol_clone_edges ce \
@@ -98,12 +100,15 @@ JOIN filtered src ON src.symbol_id = ce.source_symbol_id AND src.artefact_id = c
 JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.symbol_id = ce.target_symbol_id \
 LEFT JOIN symbol_semantics ss ON ss.artefact_id = tgt.artefact_id \
 WHERE {} \
-ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn \
-LIMIT {}",
+ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn",
         clone_filters.join(" AND "),
-        parsed.limit.max(1),
         filtered_cte = filtered_cte,
-    ))
+    );
+
+    Ok(match has_registered_clone_summary_stage(parsed) {
+        true => sql,
+        false => format!("{sql} LIMIT {}", parsed.limit.max(1)),
+    })
 }
 
 pub(crate) async fn execute_relational_deps_pipeline(

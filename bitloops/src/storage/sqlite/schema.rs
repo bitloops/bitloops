@@ -7,7 +7,7 @@ use super::SqliteConnectionPool;
 use super::current_state::{
     migrate_artefact_edges_current_branch_scope, migrate_artefacts_current_branch_scope,
 };
-use super::introspection::sqlite_table_exists;
+use super::introspection::{sqlite_table_exists, sqlite_table_has_column};
 
 const DEVQL_LEGACY_BOOTSTRAP_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS repositories (
@@ -22,13 +22,20 @@ CREATE TABLE IF NOT EXISTS repositories (
 
 impl SqliteConnectionPool {
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
+        self.initialise_runtime_checkpoint_schema()
+            .context("initialising SQLite runtime checkpoint schema")?;
+        self.initialise_relational_checkpoint_schema()
+            .context("initialising SQLite relational checkpoint schema")
+    }
+
+    pub fn initialise_runtime_checkpoint_schema(&self) -> Result<()> {
         let schema_lock = checkpoint_schema_lock_for(self.db_path());
         let _guard = schema_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        self.execute_batch(crate::host::devql::checkpoint_schema_sql_sqlite())
-            .context("initialising SQLite checkpoint schema")?;
+        self.execute_batch(crate::host::devql::checkpoint_runtime_schema_sql_sqlite())
+            .context("initialising SQLite runtime checkpoint schema")?;
         self.with_connection(|conn| {
             match conn.execute_batch("ALTER TABLE sessions ADD COLUMN ended_at TEXT;") {
                 Ok(()) => Ok(()),
@@ -37,6 +44,16 @@ impl SqliteConnectionPool {
             }
         })
         .context("migrating SQLite checkpoint schema for sessions.ended_at")
+    }
+
+    pub fn initialise_relational_checkpoint_schema(&self) -> Result<()> {
+        let schema_lock = checkpoint_schema_lock_for(self.db_path());
+        let _guard = schema_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        self.execute_batch(crate::host::devql::checkpoint_relational_schema_sql_sqlite())
+            .context("initialising SQLite relational checkpoint schema")
     }
 
     pub fn initialise_devql_schema(&self) -> Result<()> {
@@ -50,8 +67,21 @@ impl SqliteConnectionPool {
             .context("migrating SQLite DevQL current-state branch scope")?;
         self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
             .context("initialising SQLite DevQL schema")?;
+        self.migrate_historical_artefacts_cutover()
+            .context("migrating SQLite historical artefacts cutover")?;
         self.migrate_workspace_revisions_uniqueness()
             .context("migrating SQLite workspace_revisions uniqueness")
+    }
+
+    fn migrate_historical_artefacts_cutover(&self) -> Result<()> {
+        let needs_cutover = self
+            .with_connection(sqlite_artefacts_historical_needs_cutover)
+            .context("inspecting SQLite historical artefacts schema shape")?;
+        if needs_cutover {
+            self.execute_batch(crate::host::devql::historical_artefacts_cutover_sqlite_sql())
+                .context("applying SQLite historical artefacts one-shot cutover")?;
+        }
+        Ok(())
     }
 
     fn migrate_devql_checkpoint_columns(&self) -> Result<()> {
@@ -149,6 +179,26 @@ ON workspace_revisions (repo_id, tree_hash);
             Ok(())
         })
     }
+}
+
+fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Result<bool> {
+    if !sqlite_table_exists(conn, "artefacts")? {
+        return Ok(false);
+    }
+    for column in [
+        "blob_sha",
+        "path",
+        "parent_artefact_id",
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte",
+    ] {
+        if sqlite_table_has_column(conn, "artefacts", column)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn checkpoint_schema_lock_for(db_path: &Path) -> Arc<Mutex<()>> {

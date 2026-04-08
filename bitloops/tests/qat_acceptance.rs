@@ -1,5 +1,6 @@
 mod qat_support;
 
+use anyhow::Result;
 use std::path::PathBuf;
 
 use qat_support::runner::{self, Suite};
@@ -16,6 +17,13 @@ fn resolve_binary() -> PathBuf {
     }
 
     PathBuf::from(env!("CARGO_BIN_EXE_bitloops"))
+}
+
+#[tokio::test]
+#[ignore = "slow E2E: runs QAT onboarding + DevQL sync suites in parallel; use `cargo qat`"]
+async fn qat() {
+    let binary = resolve_binary();
+    run_bundle(binary).await.expect("QAT bundle suite failed");
 }
 
 #[tokio::test]
@@ -37,7 +45,7 @@ async fn qat_devql() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT DevQL sync suite; use `cargo qat-devql-sync`"]
+#[ignore = "slow E2E: runs QAT DevQL sync suite; use `cargo qat-devql-sync` or `cargo qat`"]
 async fn qat_devql_sync() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::DevqlSync)
@@ -55,7 +63,7 @@ async fn qat_claude_code() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT onboarding suite; use `cargo test --test qat_acceptance qat_onboarding -- --ignored`"]
+#[ignore = "slow E2E: runs QAT onboarding suite; use `cargo qat-onboarding` or `cargo qat`"]
 async fn qat_onboarding() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::Onboarding)
@@ -70,4 +78,12 @@ async fn qat_quickstart() {
     runner::run_suite(binary, Suite::Quickstart)
         .await
         .expect("QAT quickstart suite failed");
+}
+
+async fn run_bundle(binary: PathBuf) -> Result<()> {
+    let (onboarding, devql_sync) = tokio::join!(
+        runner::run_suite(binary.clone(), Suite::Onboarding),
+        runner::run_suite(binary, Suite::DevqlSync)
+    );
+    qat_support::bundle::combine_bundle_results(onboarding, devql_sync)
 }

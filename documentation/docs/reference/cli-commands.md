@@ -131,6 +131,7 @@ Starts the Bitloops daemon.
 ```bash
 bitloops start
 bitloops start --create-default-config
+bitloops start --config ./config.toml --bootstrap-local-stores
 bitloops daemon start
 bitloops daemon start -d
 bitloops daemon start --until-stopped
@@ -149,6 +150,7 @@ Key flags:
 | `--bundle-dir` | Override the dashboard bundle directory for this run |
 | `--config` | Use an explicit daemon config file |
 | `--create-default-config` | Create the default global daemon config plus local default store files before starting |
+| `--bootstrap-local-stores` | Create the local SQLite, DuckDB, and blob-store artefacts required by the selected daemon config before starting |
 | `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version |
 
 Notes:
@@ -157,6 +159,8 @@ Notes:
 - On a fresh machine, `bitloops start --create-default-config` remains the explicit non-interactive bootstrap path for the default daemon config plus the default SQLite, DuckDB, and blob-store paths.
 - When you pass `--config` and the file does not exist, `start` fails.
 - `--create-default-config` only works with the default daemon config location. It cannot be combined with `--config`.
+- `--bootstrap-local-stores` is the explicit bootstrap path for an existing custom config. It does not create the config file itself; it only creates the local file-backed store artefacts referenced by that config.
+- `--bootstrap-local-stores` can be combined with `--config`, which makes it useful for repo-scoped test configs and other non-default daemon setups.
 - When `start` creates the default daemon config and no explicit telemetry flag is present, interactive mode prompts for telemetry consent before the daemon continues.
 - In non-interactive mode, creating the default daemon config requires an explicit telemetry flag.
 
@@ -306,6 +310,10 @@ Highlights:
 ### Query and diagnostics
 
 ```bash
+bitloops devql schema
+bitloops devql schema --global
+bitloops devql schema --human > bitloops/schema.slim.graphql
+bitloops devql schema --global --human > bitloops/schema.graphql
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
 bitloops devql query '{ health { relational { backend connected } } }'
 bitloops devql connection-status
@@ -314,6 +322,11 @@ bitloops devql packs --with-health
 
 Highlights:
 
+- `devql schema` is daemon-backed and fetches SDL from the running DevQL daemon
+- `devql schema` without `--global` requires running the command from within a Git repository
+- `devql schema --global` can be used outside a repository
+- `devql schema` defaults to minified SDL so the output is easier to pass to LLMs and other prompt-driven tooling
+- `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
@@ -333,14 +346,13 @@ There is no `bitloops devql knowledge ingest` command in the current CLI.
 ## Test Harness
 
 ```bash
-bitloops testlens init
-bitloops testlens ingest-tests --commit <sha>
-bitloops testlens ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
-bitloops testlens ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
-bitloops testlens ingest-results --jest-json reports/jest.json --commit <sha>
+bitloops devql test-harness ingest-tests --commit <sha>
+bitloops devql test-harness ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
+bitloops devql test-harness ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
+bitloops devql test-harness ingest-results --jest-json reports/jest.json --commit <sha>
 ```
 
-Use `testlens` to initialise and ingest test-linkage, coverage, and results data for the test-harness capability pack.
+Use `devql test-harness` to ingest test-linkage, coverage, and results data for the test-harness capability pack. Schema initialisation is handled automatically by the daemon on `bitloops start`.
 
 ## Embeddings
 

@@ -3,13 +3,21 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
+use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
+
 #[cfg(test)]
 pub(crate) fn capture_temporary_checkpoint_batch(
     cfg: &crate::host::devql::DevqlConfig,
     changed_paths: &[PathBuf],
 ) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new().context("creating watcher capture runtime")?;
-    capture_temporary_checkpoint_batch_with_handle(cfg, changed_paths, runtime.handle())
+    let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating watcher capture runtime")?;
+    runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))
 }
 
 pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
@@ -17,8 +25,25 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     changed_paths: &[PathBuf],
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    if changed_paths.is_empty() {
+    let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
         return Ok(());
+    };
+    handle.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
+
+    Ok(())
+}
+
+struct PreparedCaptureBatch {
+    modified: Vec<String>,
+    deleted: Vec<String>,
+}
+
+fn prepare_capture_temporary_checkpoint_batch(
+    cfg: &crate::host::devql::DevqlConfig,
+    changed_paths: &[PathBuf],
+) -> Result<Option<PreparedCaptureBatch>> {
+    if changed_paths.is_empty() {
+        return Ok(None);
     }
 
     let repo_root = &cfg.repo_root;
@@ -46,7 +71,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     }
 
     if modified.is_empty() && deleted.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let parent_tree = crate::host::checkpoints::strategy::manual_commit::run_git(
@@ -64,18 +89,13 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     )
     .context("building temporary checkpoint tree hash for devql watch")?;
     if parent_tree.as_deref() == Some(tree_hash.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
-    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving store config for watcher capture")?;
-    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
-        repo_root,
-        backend_cfg.relational.sqlite_path.as_deref(),
-    )
-    .context("resolving SQLite path for watcher capture")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.clone())?;
-    sqlite.initialise_devql_schema()?;
+    let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
+        .context("opening local relational store for watcher capture")?;
+    relational.initialise_local_devql_schema()?;
+    let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for watch capture")?
@@ -91,7 +111,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         .map_err(anyhow::Error::from)
     })?;
     if latest_tree_hash.as_deref() == Some(tree_hash.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
     let _row_id = sqlite.with_connection(|conn| {
@@ -106,10 +126,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         )
         .map_err(anyhow::Error::from)
     })?;
-
-    handle.block_on(sync_changed_paths(cfg, &modified, &deleted))?;
-
-    Ok(())
+    Ok(Some(PreparedCaptureBatch { modified, deleted }))
 }
 
 async fn sync_changed_paths(
@@ -155,7 +172,7 @@ mod tests {
 
     use super::*;
     use crate::host::devql::file_symbol_id;
-    use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+    use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
     use rusqlite::Connection;
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
@@ -183,6 +200,7 @@ mod tests {
             "Bitloops Test",
             "bitloops-test@example.com",
         );
+        write_test_daemon_config(dir.path());
         fs::create_dir_all(dir.path().join("src")).expect("create src dir");
         fs::write(
             dir.path().join("src/lib.rs"),
@@ -192,6 +210,18 @@ mod tests {
         git_ok(dir.path(), &["add", "."]);
         git_ok(dir.path(), &["commit", "-m", "initial"]);
         dir
+    }
+
+    fn devql_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
+        let backend = crate::config::resolve_store_backend_config_for_repo(repo_root)
+            .expect("resolve backend config");
+        let sqlite_path = backend
+            .relational
+            .sqlite_path
+            .as_deref()
+            .expect("test daemon config should set sqlite_path");
+        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(sqlite_path))
+            .expect("resolve configured sqlite path")
     }
 
     #[test]
@@ -210,7 +240,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture temporary checkpoint");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let workspace_rows: i64 = conn
@@ -299,7 +329,7 @@ mod tests {
         )
         .expect("capture with mixed dir and file events");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let current_rows: i64 = conn
             .query_row(
@@ -324,7 +354,7 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let sqlite =
             crate::storage::SqliteConnectionPool::connect(db_path.clone()).expect("connect sqlite");
         sqlite
@@ -454,7 +484,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
             .expect("capture second temp batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let materialized_rows: Vec<(String, String)> = {
             let mut stmt = conn
@@ -504,7 +534,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture no-op batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         if !db_path.exists() {
             return;
         }
@@ -540,7 +570,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
             .expect("capture duplicate batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -561,7 +591,11 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create test runtime");
         let target = dir.path().join("src/lib.rs");
 
         fs::write(&target, "pub fn second() -> i32 {\n    2\n}\n").expect("update file");
@@ -580,7 +614,7 @@ mod tests {
         )
         .expect("capture deleted file using runtime handle");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -619,7 +653,11 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create test runtime");
         let target = dir.path().join("src/lib.rs");
         capture_temporary_checkpoint_batch_with_handle(
             &cfg,
@@ -634,7 +672,7 @@ mod tests {
         )
         .expect("capture duplicate batch with runtime handle");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -666,7 +704,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let workspace_id: i64 = conn
@@ -746,7 +784,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         // temporary_checkpoints should not even exist in the DevQL database —
@@ -780,7 +818,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let table_exists: bool = conn

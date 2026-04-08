@@ -117,18 +117,7 @@ impl Agent for GeminiCliAgent {
 
     fn detect_presence(&self) -> Result<bool> {
         let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
-
-        let gemini_dir = repo_root.join(".gemini");
-        if gemini_dir.exists() {
-            return Ok(true);
-        }
-
-        let settings_file = gemini_dir.join(GEMINI_SETTINGS_FILE_NAME);
-        if settings_file.exists() {
-            return Ok(true);
-        }
-
-        Ok(false)
+        self.detect_presence_at(&repo_root)
     }
 
     fn get_session_id(&self, input: &HookInput) -> String {
@@ -339,7 +328,86 @@ impl Agent for GeminiCliAgent {
 
 impl HookSupport for GeminiCliAgent {
     fn install_hooks(&self, local_dev: bool, force: bool) -> Result<usize> {
-        let settings_path = self.settings_path()?;
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.install_hooks_at(&repo_root, local_dev, force)
+    }
+
+    fn uninstall_hooks(&self) -> Result<()> {
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.uninstall_hooks_at(&repo_root)
+    }
+
+    fn are_hooks_installed(&self) -> bool {
+        let repo_root = match crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        }) {
+            Ok(repo_root) => repo_root,
+            Err(_) => return false,
+        };
+        self.are_hooks_installed_at(&repo_root)
+    }
+}
+
+impl TranscriptPositionProvider for GeminiCliAgent {
+    fn get_transcript_position(&self, path: &str) -> Result<usize> {
+        Self::get_transcript_position_impl(path)
+    }
+}
+
+impl TranscriptAnalyzer for GeminiCliAgent {
+    fn get_transcript_position(&self, path: &str) -> Result<usize> {
+        Self::get_transcript_position_impl(path)
+    }
+
+    fn extract_modified_files_from_offset(
+        &self,
+        path: &str,
+        start_offset: usize,
+    ) -> Result<(Vec<String>, usize)> {
+        Self::extract_modified_files_from_offset_impl(self, path, start_offset)
+    }
+
+    fn extract_prompts(&self, session_ref: &str, from_offset: usize) -> Result<Vec<String>> {
+        Self::extract_prompts_impl(self, session_ref, from_offset)
+    }
+
+    fn extract_summary(&self, session_ref: &str) -> Result<String> {
+        Self::extract_summary_impl(self, session_ref)
+    }
+}
+
+impl TokenCalculator for GeminiCliAgent {
+    fn calculate_token_usage(&self, session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
+        Self::calculate_token_usage_impl(self, session_ref, from_offset)
+    }
+}
+
+impl GeminiCliAgent {
+    pub(crate) fn detect_presence_at(&self, repo_root: &Path) -> Result<bool> {
+        let gemini_dir = repo_root.join(".gemini");
+        if gemini_dir.exists() {
+            return Ok(true);
+        }
+
+        let settings_file = gemini_dir.join(GEMINI_SETTINGS_FILE_NAME);
+        if settings_file.exists() {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub(crate) fn install_hooks_at(
+        &self,
+        repo_root: &Path,
+        local_dev: bool,
+        force: bool,
+    ) -> Result<usize> {
+        let settings_path = self.settings_path_at(repo_root);
 
         let mut raw_settings: Map<String, Value> = match std::fs::read(&settings_path) {
             Ok(data) => serde_json::from_slice(&data)
@@ -384,7 +452,9 @@ impl HookSupport for GeminiCliAgent {
 
         if !force {
             let existing_cmd = Self::get_first_bitloops_hook_command(&session_start);
-            let expected_cmd = format!("{cmd_prefix}session-start");
+            let expected_cmd = crate::adapters::agents::managed_hook_command(&format!(
+                "{cmd_prefix}session-start"
+            ));
             if existing_cmd == expected_cmd {
                 return Ok(0);
             }
@@ -406,73 +476,75 @@ impl HookSupport for GeminiCliAgent {
             session_start,
             "",
             "bitloops-session-start",
-            format!("{cmd_prefix}session-start"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-start")),
         );
         session_end = Self::add_gemini_hook(
             session_end,
             "exit",
             "bitloops-session-end-exit",
-            format!("{cmd_prefix}session-end"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-end")),
         );
         session_end = Self::add_gemini_hook(
             session_end,
             "logout",
             "bitloops-session-end-logout",
-            format!("{cmd_prefix}session-end"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}session-end")),
         );
         before_agent = Self::add_gemini_hook(
             before_agent,
             "",
             "bitloops-before-agent",
-            format!("{cmd_prefix}before-agent"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}before-agent")),
         );
         after_agent = Self::add_gemini_hook(
             after_agent,
             "",
             "bitloops-after-agent",
-            format!("{cmd_prefix}after-agent"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}after-agent")),
         );
         before_model = Self::add_gemini_hook(
             before_model,
             "",
             "bitloops-before-model",
-            format!("{cmd_prefix}before-model"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}before-model")),
         );
         after_model = Self::add_gemini_hook(
             after_model,
             "",
             "bitloops-after-model",
-            format!("{cmd_prefix}after-model"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}after-model")),
         );
         before_tool_selection = Self::add_gemini_hook(
             before_tool_selection,
             "",
             "bitloops-before-tool-selection",
-            format!("{cmd_prefix}before-tool-selection"),
+            crate::adapters::agents::managed_hook_command(&format!(
+                "{cmd_prefix}before-tool-selection"
+            )),
         );
         before_tool = Self::add_gemini_hook(
             before_tool,
             "*",
             "bitloops-before-tool",
-            format!("{cmd_prefix}before-tool"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}before-tool")),
         );
         after_tool = Self::add_gemini_hook(
             after_tool,
             "*",
             "bitloops-after-tool",
-            format!("{cmd_prefix}after-tool"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}after-tool")),
         );
         pre_compress = Self::add_gemini_hook(
             pre_compress,
             "",
             "bitloops-pre-compress",
-            format!("{cmd_prefix}pre-compress"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}pre-compress")),
         );
         notification = Self::add_gemini_hook(
             notification,
             "",
             "bitloops-notification",
-            format!("{cmd_prefix}notification"),
+            crate::adapters::agents::managed_hook_command(&format!("{cmd_prefix}notification")),
         );
 
         Self::marshal_gemini_hook_type(&mut raw_hooks, "SessionStart", &session_start);
@@ -508,8 +580,8 @@ impl HookSupport for GeminiCliAgent {
         Ok(12)
     }
 
-    fn uninstall_hooks(&self) -> Result<()> {
-        let settings_path = self.settings_path()?;
+    pub(crate) fn uninstall_hooks_at(&self, repo_root: &Path) -> Result<()> {
+        let settings_path = self.settings_path_at(repo_root);
         let data = match std::fs::read(&settings_path) {
             Ok(data) => data,
             Err(_) => return Ok(()),
@@ -580,12 +652,8 @@ impl HookSupport for GeminiCliAgent {
         Ok(())
     }
 
-    fn are_hooks_installed(&self) -> bool {
-        let settings_path = match self.settings_path() {
-            Ok(path) => path,
-            Err(_) => return false,
-        };
-
+    pub(crate) fn are_hooks_installed_at(&self, repo_root: &Path) -> bool {
+        let settings_path = self.settings_path_at(repo_root);
         let data = match std::fs::read(settings_path) {
             Ok(data) => data,
             Err(_) => return false,
@@ -608,43 +676,6 @@ impl HookSupport for GeminiCliAgent {
             || Self::has_bitloops_hook(&settings.hooks.pre_compress)
             || Self::has_bitloops_hook(&settings.hooks.notification)
     }
-}
-
-impl TranscriptPositionProvider for GeminiCliAgent {
-    fn get_transcript_position(&self, path: &str) -> Result<usize> {
-        Self::get_transcript_position_impl(path)
-    }
-}
-
-impl TranscriptAnalyzer for GeminiCliAgent {
-    fn get_transcript_position(&self, path: &str) -> Result<usize> {
-        Self::get_transcript_position_impl(path)
-    }
-
-    fn extract_modified_files_from_offset(
-        &self,
-        path: &str,
-        start_offset: usize,
-    ) -> Result<(Vec<String>, usize)> {
-        Self::extract_modified_files_from_offset_impl(self, path, start_offset)
-    }
-
-    fn extract_prompts(&self, session_ref: &str, from_offset: usize) -> Result<Vec<String>> {
-        Self::extract_prompts_impl(self, session_ref, from_offset)
-    }
-
-    fn extract_summary(&self, session_ref: &str) -> Result<String> {
-        Self::extract_summary_impl(self, session_ref)
-    }
-}
-
-impl TokenCalculator for GeminiCliAgent {
-    fn calculate_token_usage(&self, session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
-        Self::calculate_token_usage_impl(self, session_ref, from_offset)
-    }
-}
-
-impl GeminiCliAgent {
     pub fn get_project_hash(project_root: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(project_root.as_bytes());
@@ -796,17 +827,12 @@ impl GeminiCliAgent {
         calculate_token_usage_from_file(session_ref, from_offset)
     }
 
-    fn settings_path(&self) -> Result<PathBuf> {
-        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
-            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
-        })?;
-        Ok(repo_root.join(".gemini").join(GEMINI_SETTINGS_FILE_NAME))
+    pub(crate) fn settings_path_at(&self, repo_root: &Path) -> PathBuf {
+        repo_root.join(".gemini").join(GEMINI_SETTINGS_FILE_NAME)
     }
 
     fn is_bitloops_hook(command: &str) -> bool {
-        BITLOOPS_HOOK_PREFIXES
-            .iter()
-            .any(|prefix| command.starts_with(prefix))
+        crate::adapters::agents::is_managed_hook_command(command, &BITLOOPS_HOOK_PREFIXES)
     }
 
     fn parse_gemini_hook_type(

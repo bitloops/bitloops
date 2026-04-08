@@ -147,7 +147,7 @@ fn ensure_scenario_repo(world: &mut DevqlBddWorld) -> PathBuf {
         );
     }
     world.cfg.repo_root = repo_root.clone();
-    world.cfg.config_root = repo_root.clone();
+    world.cfg.daemon_config_root = repo_root.clone();
     world.cfg.repo = RepoIdentity {
         provider: "github".to_string(),
         organization: "bitloops".to_string(),

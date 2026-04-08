@@ -1,33 +1,70 @@
 use super::*;
+use crate::capability_packs::semantic_clones::{
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
+    determine_repo_embedding_sync_action, persist_active_embedding_setup,
+    refresh_current_repo_symbol_embeddings_and_clone_edges,
+};
 use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
 
-pub async fn run_ingest(cfg: &DevqlConfig, max_checkpoints: usize) -> Result<()> {
-    let summary = execute_ingest(cfg, max_checkpoints).await?;
+pub async fn run_ingest(cfg: &DevqlConfig) -> Result<()> {
+    let summary = execute_ingest(cfg).await?;
     println!("{}", format_ingestion_summary(&summary));
     Ok(())
 }
 
-pub(crate) async fn execute_ingest(
+pub(crate) async fn execute_ingest(cfg: &DevqlConfig) -> Result<IngestionCounters> {
+    execute_ingest_with_observer(cfg, false, 0, None, None).await
+}
+
+pub(crate) async fn execute_ingest_with_backfill_window(
     cfg: &DevqlConfig,
-    max_checkpoints: usize,
+    init: bool,
+    backfill_window: usize,
+    observer: Option<&dyn IngestionObserver>,
+    enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
-    execute_ingest_with_observer(cfg, max_checkpoints, None, None).await
+    execute_ingest_inner(
+        cfg,
+        init,
+        0,
+        Some(backfill_window),
+        None,
+        observer,
+        enrichment,
+    )
+    .await
 }
 
 pub(crate) async fn execute_ingest_with_observer(
     cfg: &DevqlConfig,
-    max_checkpoints: usize,
+    init: bool,
+    max_commits: usize,
     observer: Option<&dyn IngestionObserver>,
     enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
-    let mut counters = IngestionCounters::default();
-    let mut checkpoints_total = 0usize;
-    let mut checkpoints_processed = 0usize;
+    execute_ingest_inner(cfg, init, max_commits, None, None, observer, enrichment).await
+}
+
+async fn execute_ingest_inner(
+    cfg: &DevqlConfig,
+    init: bool,
+    max_commits: usize,
+    backfill_window: Option<usize>,
+    explicit_commits: Option<Vec<String>>,
+    observer: Option<&dyn IngestionObserver>,
+    enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
+) -> Result<IngestionCounters> {
+    let mut counters = IngestionCounters {
+        init_requested: init,
+        ..IngestionCounters::default()
+    };
+    let mut commits_total = 0usize;
+    let mut commits_processed = 0usize;
     emit_progress(
         observer,
         IngestionProgressPhase::Initializing,
-        checkpoints_total,
-        checkpoints_processed,
+        commits_total,
+        commits_processed,
         None,
         None,
         &counters,
@@ -35,13 +72,13 @@ pub(crate) async fn execute_ingest_with_observer(
 
     let result: Result<()> = async {
     let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let knowledge_context =
         capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
             .context("resolving knowledge capability ingester owner")?;
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.config_root);
+    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     let semantic_clones = capability.semantic_clones.clone();
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> = if enrichment.is_some()
         || semantic_clones.summary_mode == SemanticSummaryMode::Off
@@ -64,7 +101,6 @@ pub(crate) async fn execute_ingest_with_observer(
     }
     let embedding_outputs_enabled = semantic_clones.embedding_mode != SemanticCloneEmbeddingMode::Off
         && embedding_config.embedding_profile.is_some();
-    let active_branch = active_branch_name(&cfg.repo_root);
     let mut embedding_warning = None;
     let embedding_provider = if enrichment.is_none() && embedding_outputs_enabled {
         match semantic_clones_pack::build_symbol_embedding_provider(
@@ -80,210 +116,246 @@ pub(crate) async fn execute_ingest_with_observer(
     } else {
         None
     };
+
     ensure_repository_row(cfg, &relational).await?;
 
-    let mut checkpoints = list_committed(&cfg.repo_root)?;
-    checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    if max_checkpoints > 0 && checkpoints.len() > max_checkpoints {
-        checkpoints.truncate(max_checkpoints);
+    let mut resolved_embedding_setup = None;
+    let direct_embedding_sync_action = if enrichment.is_none() {
+        if let Some(embedding_provider) = embedding_provider.as_ref() {
+            let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
+            let action =
+                determine_repo_embedding_sync_action(&relational, &cfg.repo.repo_id, &setup)
+                    .await?;
+            resolved_embedding_setup = Some(setup);
+            Some(action)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let head_sha = match run_git(&cfg.repo_root, &["rev-parse", "HEAD"]) {
+        Ok(sha) => sha,
+        Err(err) if is_missing_head_error(&err) => String::new(),
+        Err(err) => return Err(err).context("resolving HEAD for commit history ingest"),
+    };
+    let active_branch = checked_out_branch_name(&cfg.repo_root);
+    let active_branch_for_enqueue = active_branch
+        .clone()
+        .unwrap_or_else(|| active_branch_name(&cfg.repo_root));
+    let mut commits = match explicit_commits {
+        Some(commits) => commits,
+        None => match backfill_window {
+            Some(backfill_window) => {
+                select_recent_branch_commit_backfill_window(
+                    &cfg.repo_root,
+                    &relational,
+                    &cfg.repo.repo_id,
+                    &head_sha,
+                    backfill_window,
+                )
+                .await?
+            }
+            None => {
+                select_missing_branch_commit_segment(
+                    &cfg.repo_root,
+                    &relational,
+                    &cfg.repo.repo_id,
+                    active_branch.as_deref(),
+                    &head_sha,
+                )
+                .await?
+            }
+        },
+    };
+    if max_commits > 0 && commits.len() > max_commits {
+        commits.truncate(max_commits);
     }
-    checkpoints_total = checkpoints.len();
+    commits_total = commits.len();
     emit_progress(
         observer,
         IngestionProgressPhase::Initializing,
-        checkpoints_total,
-        checkpoints_processed,
+        commits_total,
+        commits_processed,
         None,
         None,
         &counters,
     );
 
-    let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
+    let checkpoint_mappings = read_commit_checkpoint_mappings(&cfg.repo_root).unwrap_or_default();
     let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
 
-    for cp in checkpoints {
-        let checkpoint = cp.clone();
-        let commit_info = commit_map.get(&cp.checkpoint_id);
-        let commit_sha = commit_info
-            .map(|info| info.commit_sha.clone())
-            .unwrap_or_default();
-        let commit_sha_option = (!commit_sha.is_empty()).then_some(commit_sha.clone());
+    for commit_sha in commits {
+        let checkpoint_id = checkpoint_mappings.get(&commit_sha).cloned();
         emit_progress(
             observer,
             IngestionProgressPhase::Extracting,
-            checkpoints_total,
-            checkpoints_processed,
-            Some(cp.checkpoint_id.clone()),
-            commit_sha_option.clone(),
+            commits_total,
+            commits_processed,
+            checkpoint_id.clone(),
+            Some(commit_sha.clone()),
             &counters,
         );
-        let event_id = deterministic_uuid(&format!(
-            "{}|{}|{}|checkpoint_committed",
-            cfg.repo.repo_id, cp.checkpoint_id, cp.session_id
-        ));
 
-        if !existing_event_ids.contains(&event_id) {
-            insert_checkpoint_event(cfg, &backends.events, &cp, &event_id, commit_info).await?;
-            existing_event_ids.insert(event_id);
-            counters.events_inserted += 1;
-        }
-
-        if commit_sha.is_empty() {
-            counters.checkpoints_without_commit += 1;
-            checkpoints_processed += 1;
-            emit_checkpoint_ingested(observer, checkpoint, None);
+        let existing_ledger =
+            load_commit_ingest_ledger_entry(&relational, &cfg.repo.repo_id, &commit_sha).await?;
+        if existing_ledger.as_ref().is_some_and(commit_is_fully_ingested) {
+            if uses_local_ingest_watermarks(&relational)
+                && let Some(branch_name) = active_branch.as_deref()
+            {
+                upsert_sync_state_value(
+                    cfg,
+                    &relational,
+                    &historical_branch_watermark_key(branch_name),
+                    &commit_sha,
+                )
+                .await?;
+            }
+            counters.commits_processed += 1;
+            commits_processed += 1;
             emit_progress(
                 observer,
                 IngestionProgressPhase::Persisting,
-                checkpoints_total,
-                checkpoints_processed,
-                Some(cp.checkpoint_id.clone()),
-                None,
+                commits_total,
+                commits_processed,
+                checkpoint_id.clone(),
+                Some(commit_sha.clone()),
                 &counters,
             );
             continue;
         }
 
-        upsert_commit_row(
-            cfg,
-            &relational,
-            &cp,
-            commit_info.expect("commit_info exists when sha exists"),
-        )
-        .await?;
-
-        let checkpoint_event_time = checkpoint_event_time_rfc3339(&cp, commit_info);
-        let provenance_context = crate::host::devql::checkpoint_provenance::CheckpointProvenanceContext {
-            repo_id: &cfg.repo.repo_id,
-            checkpoint_id: &cp.checkpoint_id,
-            session_id: &cp.session_id,
-            event_time: &checkpoint_event_time,
-            agent: &cp.agent,
-            branch: &cp.branch,
-            strategy: &cp.strategy,
-            commit_sha: &commit_sha,
-        };
-        let checkpoint_file_rows =
-            crate::host::devql::checkpoint_provenance::collect_checkpoint_file_provenance_rows(
-                &cfg.repo_root,
-                provenance_context,
-            )?;
-        let mut seen_after_snapshots = std::collections::BTreeSet::new();
-
-        for file_row in &checkpoint_file_rows {
-            let Some(normalized_path) = file_row.path_after.as_deref() else {
-                continue;
-            };
-            let Some(blob_sha) = file_row.blob_sha_after.as_deref() else {
-                continue;
-            };
-            if !seen_after_snapshots.insert((normalized_path.to_string(), blob_sha.to_string())) {
-                continue;
-            };
-            let content = git_blob_content(&cfg.repo_root, blob_sha).unwrap_or_default();
-
-            upsert_file_state_row(
-                &cfg.repo.repo_id,
-                &relational,
-                &commit_sha,
-                normalized_path,
-                blob_sha,
-            )
-            .await?;
-            let file_artefact = upsert_file_artefact_row(
-                &cfg.repo.repo_id,
-                &cfg.repo_root,
-                &relational,
-                normalized_path,
-                blob_sha,
-            )
-            .await?;
-            upsert_language_artefacts(
-                cfg,
-                &relational,
-                &FileRevision {
-                    commit_sha: &commit_sha,
-                    revision: TemporalRevisionRef {
-                        kind: TemporalRevisionKind::Commit,
-                        id: &commit_sha,
-                        temp_checkpoint_id: None,
-                    },
-                    commit_unix: commit_info
-                        .expect("commit_info exists when sha exists")
-                        .commit_unix,
-                    path: normalized_path,
-                    blob_sha,
+        let commit_info =
+            checkpoint_commit_info_from_sha(&cfg.repo_root, &commit_sha).unwrap_or(
+                CheckpointCommitInfo {
+                    commit_sha: commit_sha.clone(),
+                    commit_unix: 0,
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    subject: String::new(),
                 },
-                &file_artefact,
-            )
-            .await?;
-            counters.artefacts_upserted += 1;
-
-            let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
-                &relational,
-                &cfg.repo.repo_id,
-                blob_sha,
-                normalized_path,
-            )
-            .await?;
-            let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
-                &relational,
-                &cfg.repo.repo_id,
-                blob_sha,
-                normalized_path,
-            )
-            .await?;
-            let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(
-                &pre_stage_artefacts,
-                &pre_stage_dependencies,
-                &content,
             );
-            let input_hashes = semantic_feature_inputs
-                .iter()
-                .map(|input| {
-                    (
-                        input.artefact_id.clone(),
-                        semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref()),
-                    )
-                })
-                .collect::<std::collections::BTreeMap<_, _>>();
-            let semantic_feature_stats = upsert_semantic_feature_rows(
-                &relational,
-                &semantic_feature_inputs,
-                Arc::clone(&summary_provider),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "running capability ingester `{}` owned by `{}`",
-                    knowledge_context.ingester_id, knowledge_context.capability_pack_id
-                )
-            })?;
-            if let Some(enrichment) = enrichment.as_ref() {
-                let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                    cfg.config_root.clone(),
-                    cfg.repo_root.clone(),
-                    cfg.repo.repo_id.clone(),
-                    active_branch.clone(),
-                );
-                if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
-                    enrichment
-                        .enqueue_semantic_summaries(
-                            enqueue_target.clone(),
-                            semantic_feature_inputs.clone(),
-                            input_hashes.clone(),
-                            semantic_clones.embedding_mode,
-                        )
-                        .await?;
-                }
+        let mut history_completed = existing_ledger
+            .as_ref()
+            .map(|entry| entry.history_status == "completed")
+            .unwrap_or(false);
 
-                if embedding_outputs_enabled {
-                    match semantic_clones.embedding_mode {
-                        SemanticCloneEmbeddingMode::Off => {}
-                        SemanticCloneEmbeddingMode::Deterministic
-                        | SemanticCloneEmbeddingMode::RefreshOnUpgrade => {
+        let commit_result: Result<()> = async {
+            if !history_completed {
+                upsert_commit_metadata_row(cfg, &relational, &commit_info).await?;
+                let mut changed_files = crate::host::checkpoints::strategy::manual_commit::files_changed_in_commit(
+                    &cfg.repo_root,
+                    &commit_sha,
+                )
+                .with_context(|| format!("listing changed files for commit {commit_sha}"))?
+                .into_iter()
+                .collect::<Vec<_>>();
+                changed_files.sort();
+
+                for path in changed_files {
+                    let normalized_path = normalize_repo_path(&path);
+                    if normalized_path.is_empty()
+                        || resolve_language_id_for_file_path(&normalized_path).is_none()
+                    {
+                        continue;
+                    }
+
+                    let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
+                        .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &path));
+                    let Some(blob_sha) = blob_sha else {
+                        continue;
+                    };
+                    let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+
+                    upsert_file_state_row(
+                        &cfg.repo.repo_id,
+                        &relational,
+                        &commit_sha,
+                        &normalized_path,
+                        &blob_sha,
+                    )
+                    .await?;
+                    let file_artefact = upsert_file_artefact_row(
+                        &cfg.repo.repo_id,
+                        &cfg.repo_root,
+                        &relational,
+                        &normalized_path,
+                        &blob_sha,
+                    )
+                    .await?;
+                    upsert_language_artefacts(
+                        cfg,
+                        &relational,
+                        &FileRevision {
+                            commit_sha: &commit_sha,
+                            revision: TemporalRevisionRef {
+                                kind: TemporalRevisionKind::Commit,
+                                id: &commit_sha,
+                                temp_checkpoint_id: None,
+                            },
+                            commit_unix: commit_info.commit_unix,
+                            path: &normalized_path,
+                            blob_sha: &blob_sha,
+                        },
+                        &file_artefact,
+                    )
+                    .await?;
+
+                    let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
+                        &relational,
+                        &cfg.repo.repo_id,
+                        &blob_sha,
+                        &normalized_path,
+                    )
+                    .await?;
+                    let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
+                        &relational,
+                        &cfg.repo.repo_id,
+                        &blob_sha,
+                        &normalized_path,
+                    )
+                    .await?;
+                    let semantic_feature_inputs =
+                        semantic_clones_pack::build_semantic_feature_inputs(
+                            &pre_stage_artefacts,
+                            &pre_stage_dependencies,
+                            &content,
+                        );
+                    let input_hashes = semantic_feature_inputs
+                        .iter()
+                        .map(|input| {
+                            (
+                                input.artefact_id.clone(),
+                                semantic::build_semantic_feature_input_hash(
+                                    input,
+                                    summary_provider.as_ref(),
+                                ),
+                            )
+                        })
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    let semantic_feature_stats = upsert_semantic_feature_rows(
+                        &relational,
+                        &semantic_feature_inputs,
+                        Arc::clone(&summary_provider),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "running capability ingester `{}` owned by `{}`",
+                            knowledge_context.ingester_id, knowledge_context.capability_pack_id
+                        )
+                    })?;
+                    if let Some(enrichment) = enrichment.as_ref() {
+                        let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
+                            cfg.daemon_config_root.clone(),
+                            cfg.repo_root.clone(),
+                            cfg.repo.repo_id.clone(),
+                            active_branch_for_enqueue.clone(),
+                        );
+                        if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
                             enrichment
-                                .enqueue_symbol_embeddings(
+                                .enqueue_semantic_summaries(
                                     enqueue_target.clone(),
                                     semantic_feature_inputs.clone(),
                                     input_hashes.clone(),
@@ -291,54 +363,147 @@ pub(crate) async fn execute_ingest_with_observer(
                                 )
                                 .await?;
                         }
-                        SemanticCloneEmbeddingMode::SemanticAwareOnce => {
-                            if semantic_clones.summary_mode == SemanticSummaryMode::Off {
-                                enrichment
-                                    .enqueue_symbol_embeddings(
-                                        enqueue_target.clone(),
-                                        semantic_feature_inputs.clone(),
-                                        input_hashes.clone(),
-                                        semantic_clones.embedding_mode,
-                                    )
-                                    .await?;
+
+                        if embedding_outputs_enabled {
+                            match semantic_clones.embedding_mode {
+                                SemanticCloneEmbeddingMode::Off => {}
+                                SemanticCloneEmbeddingMode::Deterministic
+                                | SemanticCloneEmbeddingMode::RefreshOnUpgrade => {
+                                    enrichment
+                                        .enqueue_symbol_embeddings(
+                                            enqueue_target.clone(),
+                                            semantic_feature_inputs.clone(),
+                                            input_hashes.clone(),
+                                            semantic_clones.embedding_mode,
+                                        )
+                                        .await?;
+                                }
+                                SemanticCloneEmbeddingMode::SemanticAwareOnce => {
+                                    if semantic_clones.summary_mode == SemanticSummaryMode::Off {
+                                        enrichment
+                                            .enqueue_symbol_embeddings(
+                                                enqueue_target.clone(),
+                                                semantic_feature_inputs.clone(),
+                                                input_hashes.clone(),
+                                                semantic_clones.embedding_mode,
+                                            )
+                                            .await?;
+                                    }
+                                }
                             }
                         }
+                    } else if let Some(embedding_provider) = embedding_provider.as_ref() {
+                        let embedding_stats = upsert_symbol_embedding_rows(
+                            &relational,
+                            &semantic_feature_inputs,
+                            Arc::clone(embedding_provider),
+                        )
+                        .await?;
+                        counters.symbol_embedding_rows_upserted += embedding_stats.upserted;
+                        counters.symbol_embedding_rows_skipped += embedding_stats.skipped;
                     }
+                    counters.artefacts_upserted += 1;
+                    counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+                    counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
                 }
-            } else if let Some(embedding_provider) = embedding_provider.as_ref() {
-                let embedding_stats = upsert_symbol_embedding_rows(
+
+                mark_commit_history_completed(
                     &relational,
-                    &semantic_feature_inputs,
-                    Arc::clone(embedding_provider),
+                    &cfg.repo.repo_id,
+                    &commit_sha,
+                    checkpoint_id.as_deref(),
                 )
                 .await?;
-                counters.symbol_embedding_rows_upserted += embedding_stats.upserted;
-                counters.symbol_embedding_rows_skipped += embedding_stats.skipped;
+                history_completed = true;
             }
-            counters.artefacts_upserted += 1;
-            counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
-            counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
+
+            if let Some(checkpoint_id) = checkpoint_id.as_deref() {
+                let checkpoint_completed = existing_ledger
+                    .as_ref()
+                    .map(|entry| entry.checkpoint_status == "completed")
+                    .unwrap_or(false);
+                if !checkpoint_completed {
+                    let checkpoint = crate::host::checkpoints::strategy::manual_commit::read_committed_info(
+                        &cfg.repo_root,
+                        checkpoint_id,
+                    )?
+                    .ok_or_else(|| anyhow!("checkpoint mapping exists but metadata is missing for `{checkpoint_id}`"))?;
+                    let event_id = deterministic_uuid(&format!(
+                        "{}|{}|{}|checkpoint_committed",
+                        cfg.repo.repo_id, checkpoint.checkpoint_id, checkpoint.session_id
+                    ));
+                    if !existing_event_ids.contains(&event_id) {
+                        insert_checkpoint_event(
+                            cfg,
+                            &backends.events,
+                            &checkpoint,
+                            &event_id,
+                            Some(&commit_info),
+                        )
+                        .await?;
+                        existing_event_ids.insert(event_id);
+                        counters.events_inserted += 1;
+                    }
+
+                    let _projected_rows = upsert_checkpoint_file_snapshot_rows(
+                        cfg,
+                        &relational,
+                        &checkpoint,
+                        &commit_sha,
+                        Some(&commit_info),
+                    )
+                    .await?;
+
+                    mark_commit_checkpoint_completed(
+                        &relational,
+                        &cfg.repo.repo_id,
+                        &commit_sha,
+                        Some(checkpoint_id),
+                    )
+                    .await?;
+                    counters.checkpoint_companions_processed += 1;
+                    emit_checkpoint_ingested(observer, checkpoint, Some(commit_sha.clone()));
+                }
+            }
+
+            if uses_local_ingest_watermarks(&relational)
+                && let Some(branch_name) = active_branch.as_deref()
+            {
+                upsert_sync_state_value(
+                    cfg,
+                    &relational,
+                    &historical_branch_watermark_key(branch_name),
+                    &commit_sha,
+                )
+                .await?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = commit_result {
+            let _ = mark_commit_ingest_failed(
+                &relational,
+                &cfg.repo.repo_id,
+                &commit_sha,
+                checkpoint_id.as_deref(),
+                history_completed,
+                &format!("{err:#}"),
+            )
+            .await;
+            return Err(err);
         }
 
-        let _projected_rows = upsert_checkpoint_file_snapshot_rows(
-            cfg,
-            &relational,
-            &cp,
-            &commit_sha,
-            commit_info,
-        )
-        .await?;
-
-        counters.checkpoints_processed += 1;
-        checkpoints_processed += 1;
-        emit_checkpoint_ingested(observer, checkpoint, commit_sha_option.clone());
+        counters.commits_processed += 1;
+        commits_processed += 1;
         emit_progress(
             observer,
             IngestionProgressPhase::Persisting,
-            checkpoints_total,
-            checkpoints_processed,
-            Some(cp.checkpoint_id.clone()),
-            commit_sha_option,
+            commits_total,
+            commits_processed,
+            checkpoint_id,
+            Some(commit_sha),
             &counters,
         );
     }
@@ -349,29 +514,57 @@ pub(crate) async fn execute_ingest_with_observer(
         log::warn!("semantic_clones embeddings degraded; skipping embedding and clone stages: {warning}");
     }
 
-    if enrichment.is_none() && embedding_provider.is_some() {
-        let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
-        let clone_ingest = capability_host
-            .invoke_ingester_with_relational(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-                json!({}),
-                Some(&relational),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+    if let (None, Some(embedding_provider)) = (enrichment.as_ref(), embedding_provider.as_ref()) {
+        match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo => {
+                let refresh = refresh_current_repo_symbol_embeddings_and_clone_edges(
+                    &relational,
+                    &cfg.repo_root,
+                    &cfg.repo.repo_id,
+                    Arc::clone(embedding_provider),
                 )
-            })?;
-        counters.symbol_clone_edges_upserted += clone_ingest.payload["symbol_clone_edges_upserted"]
-            .as_u64()
-            .unwrap_or_default() as usize;
-        counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
-            .as_u64()
-            .unwrap_or_default() as usize;
+                .await?;
+                counters.symbol_embedding_rows_upserted += refresh.embedding_stats.upserted;
+                counters.symbol_embedding_rows_skipped += refresh.embedding_stats.skipped;
+                counters.symbol_clone_edges_upserted += refresh.clone_build.edges.len();
+                counters.symbol_clone_sources_scored += refresh.clone_build.sources_considered;
+            }
+            RepoEmbeddingSyncAction::Incremental | RepoEmbeddingSyncAction::AdoptExisting => {
+                if matches!(
+                    direct_embedding_sync_action,
+                    Some(RepoEmbeddingSyncAction::AdoptExisting)
+                ) && let Some(setup) = resolved_embedding_setup.as_ref()
+                {
+                    persist_active_embedding_setup(&relational, &cfg.repo.repo_id, setup).await?;
+                }
+
+                let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+                let clone_ingest = capability_host
+                    .invoke_ingester_with_relational(
+                        SEMANTIC_CLONES_CAPABILITY_ID,
+                        SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+                        json!({}),
+                        Some(&relational),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+                        )
+                    })?;
+                counters.symbol_clone_edges_upserted += clone_ingest.payload
+                    ["symbol_clone_edges_upserted"]
+                    .as_u64()
+                    .unwrap_or_default() as usize;
+                counters.symbol_clone_sources_scored += clone_ingest.payload
+                    ["symbol_clone_sources_scored"]
+                    .as_u64()
+                    .unwrap_or_default() as usize;
+            }
+        }
     } else if !embedding_outputs_enabled || (enrichment.is_none() && embedding_provider.is_none()) {
         clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
+        clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
         crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
             &relational,
             &cfg.repo.repo_id,
@@ -382,8 +575,8 @@ pub(crate) async fn execute_ingest_with_observer(
     emit_progress(
         observer,
         IngestionProgressPhase::Complete,
-        checkpoints_total,
-        checkpoints_processed,
+        commits_total,
+        commits_processed,
         None,
         None,
         &counters,
@@ -398,8 +591,8 @@ pub(crate) async fn execute_ingest_with_observer(
             emit_progress(
                 observer,
                 IngestionProgressPhase::Failed,
-                checkpoints_total,
-                checkpoints_processed,
+                commits_total,
+                commits_processed,
                 None,
                 None,
                 &counters,
@@ -410,13 +603,7 @@ pub(crate) async fn execute_ingest_with_observer(
 }
 
 fn active_branch_name(repo_root: &Path) -> String {
-    crate::host::checkpoints::strategy::manual_commit::run_git(
-        repo_root,
-        &["branch", "--show-current"],
-    )
-    .ok()
-    .filter(|value| !value.trim().is_empty())
-    .unwrap_or_else(|| "main".to_string())
+    checked_out_branch_name(repo_root).unwrap_or_else(|| "main".to_string())
 }
 
 async fn promote_temporary_current_rows_for_head_commit(
@@ -431,8 +618,8 @@ async fn promote_temporary_current_rows_for_head_commit(
 fn emit_progress(
     observer: Option<&dyn IngestionObserver>,
     phase: IngestionProgressPhase,
-    checkpoints_total: usize,
-    checkpoints_processed: usize,
+    commits_total: usize,
+    commits_processed: usize,
     current_checkpoint_id: Option<String>,
     current_commit_sha: Option<String>,
     counters: &IngestionCounters,
@@ -442,8 +629,8 @@ fn emit_progress(
     };
     observer.on_progress(IngestionProgressUpdate {
         phase,
-        checkpoints_total,
-        checkpoints_processed,
+        commits_total,
+        commits_processed,
         current_checkpoint_id,
         current_commit_sha,
         counters: counters.clone(),

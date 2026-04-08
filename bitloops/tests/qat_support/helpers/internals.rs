@@ -317,7 +317,7 @@ fn repo_has_head(world: &QatWorld) -> Result<bool> {
     let output = run_command_capture(
         world,
         "git rev-parse HEAD",
-        build_git_command(world.repo_dir(), &["rev-parse", "--verify", "HEAD"], &[]),
+        build_git_command(world, &["rev-parse", "--verify", "HEAD"], &[]),
     )?;
     Ok(output.status.success())
 }
@@ -667,7 +667,7 @@ fn run_git_success(
     env: &[(&str, OsString)],
     label: &str,
 ) -> Result<()> {
-    let output = run_command_capture(world, label, build_git_command(world.repo_dir(), args, env))?;
+    let output = run_command_capture(world, label, build_git_command(world, args, env))?;
     ensure_success(&output, label)
 }
 
@@ -700,6 +700,8 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env("ACCESSIBLE", "1")
         .env("BITLOOPS_QAT_ACTIVE", "1")
         .env("BITLOOPS_TEST_TTY", "0")
+        .env(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV, "1")
+        .env(bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV, "1")
         .env("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", "disabled")
         .env("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", "disabled")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
@@ -710,9 +712,33 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
     Ok(command)
 }
 
-fn build_git_command(repo_dir: &Path, args: &[&str], env: &[(&str, OsString)]) -> Command {
+fn build_git_command(world: &QatWorld, args: &[&str], env: &[(&str, OsString)]) -> Command {
     let mut command = Command::new("git");
-    command.args(args).current_dir(repo_dir);
+    command.args(args).current_dir(world.repo_dir());
+
+    // Set HOME and XDG dirs so that git hooks (post-commit, post-checkout,
+    // post-merge) invoked by this git process resolve daemon state paths to
+    // the scenario-isolated directory instead of the system HOME.  Without
+    // this, hook-triggered sync tasks are routed to the system daemon and
+    // can race against the scenario daemon on the same SQLite database.
+    let run_dir = world.run_dir();
+    let home_dir = run_dir.join("home");
+    command
+        .env("HOME", &home_dir)
+        .env("USERPROFILE", &home_dir)
+        .env("XDG_STATE_HOME", home_dir.join("xdg-state"));
+
+    if let Some(binary_dir) = world.run_config().binary_path.parent() {
+        let mut paths = Vec::new();
+        paths.push(binary_dir.to_path_buf());
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+            command.env("PATH", joined);
+        }
+    }
+
     for (key, value) in env {
         command.env(key, value);
     }

@@ -251,6 +251,7 @@ fn knowledge_config_providers_product_overrides_win_over_shared_atlassian() {
 #[test]
 fn knowledge_config_providers_defaults_when_repo_config_missing() {
     let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = enter_process_state(None, &[]);
 
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
 
@@ -275,6 +276,7 @@ fn knowledge_config_providers_reads_values_from_repo_config_file() {
             }
         }),
     );
+    let _guard = enter_process_state(None, &[]);
 
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
 
@@ -347,6 +349,7 @@ fn knowledge_config_providers_reads_shared_atlassian_values_from_repo_config_fil
             }
         }),
     );
+    let _guard = enter_process_state(None, &[]);
 
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
 

@@ -43,66 +43,66 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String); 9] {
     [
         (
             HOOK_TYPE_SESSION_START,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SESSION_START
-            ),
+            )),
         ),
         (
             HOOK_TYPE_SESSION_END,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SESSION_END
-            ),
+            )),
         ),
         (
             HOOK_TYPE_BEFORE_SUBMIT_PROMPT,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SUBMIT_PROMPT
-            ),
+            )),
         ),
         (
             HOOK_TYPE_BEFORE_SHELL_EXECUTION,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_BEFORE_SHELL_EXECUTION
-            ),
+            )),
         ),
         (
             HOOK_TYPE_AFTER_SHELL_EXECUTION,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_AFTER_SHELL_EXECUTION
-            ),
+            )),
         ),
         (
             HOOK_TYPE_STOP,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_STOP
-            ),
+            )),
         ),
         (
             HOOK_TYPE_PRE_COMPACT,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_PRE_COMPACT
-            ),
+            )),
         ),
         (
             HOOK_TYPE_SUBAGENT_START,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_START
-            ),
+            )),
         ),
         (
             HOOK_TYPE_SUBAGENT_STOP,
-            format!(
+            crate::adapters::agents::managed_hook_command(&format!(
                 "{prefix}{}",
                 crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_STOP
-            ),
+            )),
         ),
     ]
 }
@@ -135,9 +135,7 @@ fn command_of(entry: &Value) -> Option<&str> {
 }
 
 fn is_bitloops_hook(command: &str) -> bool {
-    MANAGED_HOOK_PREFIXES
-        .iter()
-        .any(|prefix| command.starts_with(prefix))
+    crate::adapters::agents::is_managed_hook_command(command, &MANAGED_HOOK_PREFIXES)
 }
 
 fn is_bitloops_hook_entry(entry: &Value) -> bool {
@@ -342,16 +340,11 @@ fn are_hooks_installed_at_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::process_state::with_cwd;
+    use crate::test_support::process_state::with_env_var;
     use std::path::{Path, PathBuf};
 
-    fn init_repo(path: &std::path::Path) {
-        let output = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(path)
-            .output()
-            .expect("git init");
-        assert!(output.status.success(), "git init failed");
+    fn with_managed_hook_env_cleared<T>(f: impl FnOnce() -> T) -> T {
+        with_env_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, f)
     }
 
     fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -372,24 +365,22 @@ mod tests {
 
     #[test]
     fn install_hooks_canonical_fresh_and_idempotent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let count = install_hooks(false, false).expect("install");
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let count = install_hooks_at(dir.path(), false, false).expect("install");
             assert_eq!(count, 9);
-            assert!(are_hooks_installed());
+            assert!(are_hooks_installed_at(dir.path()));
 
-            let second = install_hooks(false, false).expect("install second");
+            let second = install_hooks_at(dir.path(), false, false).expect("install second");
             assert_eq!(second, 0);
         });
     }
 
     #[test]
     fn install_hooks_local_dev_writes_cargo_run_commands() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            let installed = install_hooks(true, false).expect("install local-dev");
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let installed = install_hooks_at(dir.path(), true, false).expect("install local-dev");
             assert_eq!(installed, 9);
 
             let output = fs::read_to_string(dir.path().join(".cursor").join("hooks.json"))
@@ -402,12 +393,11 @@ mod tests {
 
     #[test]
     fn install_hooks_force_reinstalls_managed_hooks() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            install_hooks(false, false).expect("initial install");
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            install_hooks_at(dir.path(), false, false).expect("initial install");
 
-            let installed = install_hooks(false, true).expect("force install");
+            let installed = install_hooks_at(dir.path(), false, true).expect("force install");
             assert_eq!(installed, 9);
 
             let output = fs::read_to_string(dir.path().join(".cursor").join("hooks.json"))
@@ -432,9 +422,8 @@ mod tests {
 
     #[test]
     fn are_hooks_installed_false_when_shell_hooks_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
             let cursor_dir = dir.path().join(".cursor");
             fs::create_dir_all(&cursor_dir).expect("create .cursor");
             fs::write(
@@ -456,21 +445,20 @@ mod tests {
             .expect("seed hooks");
 
             assert!(
-                !are_hooks_installed(),
+                !are_hooks_installed_at(dir.path()),
                 "legacy 7-hook install should be treated as incomplete"
             );
 
-            let installed = install_hooks(false, false).expect("install");
+            let installed = install_hooks_at(dir.path(), false, false).expect("install");
             assert_eq!(installed, 2, "should add missing shell hooks only");
-            assert!(are_hooks_installed());
+            assert!(are_hooks_installed_at(dir.path()));
         });
     }
 
     #[test]
     fn install_hooks_preserves_unknown_fields() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
             let cursor_dir = dir.path().join(".cursor");
             fs::create_dir_all(&cursor_dir).expect("create .cursor");
             fs::write(
@@ -484,7 +472,7 @@ mod tests {
             )
             .expect("seed hooks");
 
-            install_hooks(false, false).expect("install");
+            install_hooks_at(dir.path(), false, false).expect("install");
             let output =
                 fs::read_to_string(cursor_dir.join("hooks.json")).expect("read written hooks.json");
             let parsed: Value = serde_json::from_str(&output).expect("json parse");
@@ -501,10 +489,9 @@ mod tests {
 
     #[test]
     fn uninstall_preserves_non_bitloops_hooks() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
-            install_hooks(false, false).expect("install");
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            install_hooks_at(dir.path(), false, false).expect("install");
             let hooks_path = dir.path().join(".cursor").join("hooks.json");
             let seeded = r#"{
   "version": 1,
@@ -515,7 +502,7 @@ mod tests {
 "#;
             fs::write(&hooks_path, seeded).expect("seed");
 
-            uninstall_hooks().expect("uninstall");
+            uninstall_hooks_at(dir.path()).expect("uninstall");
             let output = fs::read_to_string(hooks_path).expect("read");
             assert!(output.contains("echo custom"));
             assert!(!output.contains("bitloops hooks cursor session-start"));
@@ -524,9 +511,8 @@ mod tests {
 
     #[test]
     fn install_hooks_migrates_local_dev_commands_without_force() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
             let cursor_dir = dir.path().join(".cursor");
             fs::create_dir_all(&cursor_dir).expect("create .cursor");
             fs::write(
@@ -541,7 +527,7 @@ mod tests {
             )
             .expect("seed hooks");
 
-            let installed = install_hooks(false, false).expect("install");
+            let installed = install_hooks_at(dir.path(), false, false).expect("install");
             assert_eq!(installed, 9);
 
             let output =
@@ -553,9 +539,8 @@ mod tests {
 
     #[test]
     fn install_hooks_removes_non_target_managed_when_canonical_already_exists() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-        with_cwd(dir.path(), || {
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
             let cursor_dir = dir.path().join(".cursor");
             fs::create_dir_all(&cursor_dir).expect("create .cursor");
             fs::write(
@@ -573,7 +558,7 @@ mod tests {
             )
             .expect("seed hooks");
 
-            let installed = install_hooks(false, false).expect("install");
+            let installed = install_hooks_at(dir.path(), false, false).expect("install");
             assert_eq!(installed, 8);
 
             let output =
