@@ -28,10 +28,10 @@ dev-coverage-html = "llvm-cov --manifest-path bitloops/Cargo.toml --workspace --
 
 # QAT aliases from workspace root.
 qat = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance -- --exact qat --ignored"
-qat-smoke = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_smoke -- --ignored"
-qat-devql = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_devql -- --ignored"
-qat-devql-sync = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_devql_sync -- --ignored"
-qat-onboarding = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_onboarding -- --ignored"
+qat-smoke = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_smoke -- --ignored --exact"
+qat-devql-capabilities = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_devql_capabilities -- --ignored --exact"
+qat-devql-sync = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_devql_sync -- --ignored --exact"
+qat-onboarding = "test --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance qat_onboarding -- --ignored --exact"
 
 # Explicit bundled-DuckDB aliases for release/offline/exotic targets.
 dev-check-bundled = "check --manifest-path bitloops/Cargo.toml --features duckdb-bundled"

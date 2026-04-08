@@ -37,12 +37,12 @@ async fn qat_smoke() {
 }
 
 #[tokio::test]
-#[ignore = "slow E2E: runs QAT DevQL suite; use `cargo qat-devql`"]
-async fn qat_devql() {
+#[ignore = "slow E2E: runs QAT DevQL capabilities suite; use `cargo qat-devql-capabilities`"]
+async fn qat_devql_capabilities() {
     let binary = resolve_binary();
     runner::run_suite(binary, Suite::Devql)
         .await
-        .expect("QAT DevQL suite failed");
+        .expect("QAT DevQL capabilities suite failed");
 }
 
 #[tokio::test]
