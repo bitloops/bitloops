@@ -3,6 +3,10 @@ use super::*;
 #[test]
 fn devql_extension_host_resolves_built_in_language_pack_ownership() {
     assert_eq!(
+        resolve_language_pack_owner("csharp"),
+        Some(CSHARP_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
         resolve_language_pack_owner("rust"),
         Some(RUST_LANGUAGE_PACK_ID)
     );
@@ -44,6 +48,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/Main.java"),
         Some("java")
     );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.cs"),
+        Some("csharp")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -53,6 +61,7 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     assert_eq!(
         registry.registered_pack_ids(),
         vec![
+            CSHARP_LANGUAGE_PACK_ID,
             GO_LANGUAGE_PACK_ID,
             JAVA_LANGUAGE_PACK_ID,
             PYTHON_LANGUAGE_PACK_ID,
@@ -60,6 +69,7 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
             TS_JS_LANGUAGE_PACK_ID
         ]
     );
+    assert!(registry.get(CSHARP_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(GO_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(JAVA_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(RUST_LANGUAGE_PACK_ID).is_some());
@@ -69,8 +79,81 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
 }
 
 #[test]
-fn devql_language_adapter_registry_executes_rust_ts_js_python_go_and_java_built_ins() {
+fn devql_language_adapter_registry_executes_rust_ts_js_python_go_java_and_csharp_built_ins() {
     let registry = language_adapter_registry().expect("initialize language adapter registry");
+    let csharp_pack = registry
+        .get(CSHARP_LANGUAGE_PACK_ID)
+        .expect("resolve csharp built-in language adapter pack");
+    let csharp_content = r#"using System.Collections.Generic;
+
+namespace Acme.Services;
+
+public interface IRepository {}
+
+public class BaseService {}
+
+public class UserService : BaseService, IRepository
+{
+    private readonly Helper _helper;
+
+    public UserService(Helper helper)
+    {
+        _helper = helper;
+    }
+
+    public User GetUser()
+    {
+        return _helper.Load();
+    }
+}
+
+public class Helper
+{
+    public User Load()
+    {
+        return new User();
+    }
+}
+
+public class User {}
+"#;
+    let csharp_artefacts = csharp_pack
+        .extract_artefacts(csharp_content, "src/UserService.cs")
+        .expect("extract csharp artefacts via language adapter registry");
+    assert!(
+        csharp_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "UserService"),
+        "csharp built-in registry pack should surface type artefacts"
+    );
+    let csharp_edges = csharp_pack
+        .extract_dependency_edges(csharp_content, "src/UserService.cs", &csharp_artefacts)
+        .expect("extract csharp dependency edges via language adapter registry");
+    assert!(
+        csharp_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
+        "csharp built-in registry pack should emit call edges"
+    );
+    assert!(
+        csharp_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Imports),
+        "csharp built-in registry pack should emit import edges"
+    );
+    assert!(
+        csharp_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Extends),
+        "csharp built-in registry pack should emit extends edges"
+    );
+    assert!(
+        csharp_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Implements),
+        "csharp built-in registry pack should emit implements edges"
+    );
+
     let rust_pack = registry
         .get(RUST_LANGUAGE_PACK_ID)
         .expect("resolve rust built-in language adapter pack");

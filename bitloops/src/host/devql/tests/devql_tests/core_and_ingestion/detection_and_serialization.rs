@@ -19,6 +19,7 @@ fn detect_language_prefers_registered_language_pack_profiles() {
     assert_eq!(detect_language("src/lib.rs"), "rust");
     assert_eq!(detect_language("src/main.py"), "python");
     assert_eq!(detect_language("src/Main.java"), "java");
+    assert_eq!(detect_language("src/main.cs"), "csharp");
     assert_eq!(detect_language("src/readme.custom"), "custom");
     assert_eq!(detect_language("README"), "text");
 }
@@ -157,4 +158,92 @@ class Greeter extends Base implements Runner {
         )
         .expect("count java edges");
     assert!(edge_count >= 4);
+}
+
+#[tokio::test]
+async fn upsert_current_state_for_csharp_persists_symbols_and_edges() {
+    let cfg = test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("relational.db");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let path = "src/UserService.cs";
+    let content = r#"using System.Collections.Generic;
+
+public interface IRepository {}
+public class BaseService {}
+public class User {}
+
+public class UserService : BaseService, IRepository
+{
+    private readonly Helper _helper;
+    private readonly List<User> _users;
+
+    public UserService(Helper helper)
+    {
+        _helper = helper;
+        _users = new List<User>();
+    }
+
+    public User GetUser()
+    {
+        return _helper.Load();
+    }
+}
+
+public class Helper
+{
+    public User Load()
+    {
+        return new User();
+    }
+}
+"#;
+
+    upsert_current_state_for_content(
+        &cfg,
+        &relational,
+        &FileRevision {
+            commit_sha: "commit-csharp",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
+                id: "commit-csharp",
+                temp_checkpoint_id: None,
+            },
+            commit_unix: 100,
+            path,
+            blob_sha: "blob-csharp",
+        },
+        content,
+    )
+    .await
+    .expect("upsert csharp current state");
+
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    let file_row: (String, String) = conn
+        .query_row(
+            "SELECT language, canonical_kind FROM artefacts_current WHERE repo_id = ?1 AND symbol_id = ?2",
+            rusqlite::params![cfg.repo.repo_id, file_symbol_id(path)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read current csharp file row");
+    assert_eq!(file_row.0, "csharp");
+    assert_eq!(file_row.1, "file");
+
+    let symbol_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2 AND symbol_id != ?3",
+            rusqlite::params![cfg.repo.repo_id, path, file_symbol_id(path)],
+            |row| row.get(0),
+        )
+        .expect("count csharp symbols");
+    assert!(symbol_count >= 6);
+
+    let edge_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![cfg.repo.repo_id, path],
+            |row| row.get(0),
+        )
+        .expect("count csharp edges");
+    assert!(edge_count >= 3);
 }
