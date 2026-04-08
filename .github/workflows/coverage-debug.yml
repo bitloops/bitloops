@@ -3,7 +3,7 @@ name: Coverage Debug
 on:
   push:
     branches:
-      - antonis/coverage-debug
+      - CLI-1614-specific-tests-fail-in-the-ci
 
 permissions:
   contents: read
