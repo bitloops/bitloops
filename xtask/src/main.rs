@@ -1316,11 +1316,22 @@ mod tests {
         let config = fs::read_to_string(&config_path)
             .unwrap_or_else(|err| panic!("reading {} failed: {err}", config_path.display()));
 
-        for alias in ["qat = ", "qat-smoke = ", "qat-devql-sync = ", "qat-onboarding = "] {
+        for alias in [
+            "qat = ",
+            "qat-smoke = ",
+            "qat-devql-sync = ",
+            "qat-onboarding = ",
+        ] {
             let line = config
                 .lines()
                 .find(|line| line.starts_with(alias))
-                .unwrap_or_else(|| panic!("missing cargo alias `{}` in {}", alias, config_path.display()));
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing cargo alias `{}` in {}",
+                        alias,
+                        config_path.display()
+                    )
+                });
             assert!(
                 line.contains("--features qat-tests"),
                 "cargo alias should enable the dedicated qat-tests feature: {line}"
