@@ -100,42 +100,131 @@ impl ArtefactSelection {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CheckpointStageData {
+    summary: Value,
+    schema: Option<String>,
+    items: Vec<Checkpoint>,
+}
+
+#[derive(Debug, Clone)]
+struct CloneStageData {
+    summary: Value,
+    schema: Option<String>,
+    items: Vec<super::SemanticClone>,
+}
+
+#[derive(Debug, Clone)]
+struct DependencyStageData {
+    summary: Value,
+    schema: Option<String>,
+    items: Vec<DependencyEdge>,
+}
+
+#[derive(Debug, Clone)]
+struct TestsStageData {
+    summary: Value,
+    schema: Option<String>,
+    items: Vec<TestHarnessTestsResult>,
+}
+
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
 pub struct CheckpointStageResult {
     pub summary: JsonScalar,
     pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<Checkpoint>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
 pub struct CloneStageResult {
     pub summary: JsonScalar,
     pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<super::SemanticClone>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
 pub struct DependencyStageResult {
     pub summary: JsonScalar,
     pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<DependencyEdge>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
 pub struct TestsStageResult {
     pub summary: JsonScalar,
     pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<TestHarnessTestsResult>,
+}
+
+impl From<CheckpointStageData> for CheckpointStageResult {
+    fn from(data: CheckpointStageData) -> Self {
+        Self {
+            summary: Json(data.summary),
+            schema: data.schema,
+            items: data.items,
+        }
+    }
+}
+
+impl From<CloneStageData> for CloneStageResult {
+    fn from(data: CloneStageData) -> Self {
+        Self {
+            summary: Json(data.summary),
+            schema: data.schema,
+            items: data.items,
+        }
+    }
+}
+
+impl From<DependencyStageData> for DependencyStageResult {
+    fn from(data: DependencyStageData) -> Self {
+        Self {
+            summary: Json(data.summary),
+            schema: data.schema,
+            items: data.items,
+        }
+    }
+}
+
+impl From<TestsStageData> for TestsStageResult {
+    fn from(data: TestsStageData) -> Self {
+        Self {
+            summary: Json(data.summary),
+            schema: data.schema,
+            items: data.items,
+        }
+    }
 }
 
 #[ComplexObject]
 impl ArtefactSelection {
+    async fn summary(&self, ctx: &Context<'_>) -> Result<JsonScalar> {
+        let checkpoints = self.resolve_checkpoint_stage_data(ctx, None, None).await?;
+        let clones = self.resolve_clone_stage_data(ctx, None).await?;
+        let deps = self
+            .resolve_dependency_stage_data(ctx, None, DepsDirection::Both, false)
+            .await?;
+        let tests = self.resolve_tests_stage_data(ctx, None, None).await?;
+
+        Ok(Json(build_selection_summary(
+            self.artefacts.len(),
+            &checkpoints,
+            &clones,
+            &deps,
+            &tests,
+        )))
+    }
+
     async fn artefacts(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<Artefact>> {
-        if first <= 0 {
-            return Err(bad_user_input_error("`first` must be greater than 0"));
-        }
-        Ok(self
-            .artefacts
-            .iter()
-            .take(first as usize)
-            .cloned()
-            .collect())
+        take_stage_items(&self.artefacts, first)
     }
 
     async fn checkpoints(
@@ -144,22 +233,10 @@ impl ArtefactSelection {
         agent: Option<String>,
         since: Option<DateTimeScalar>,
     ) -> Result<CheckpointStageResult> {
-        let checkpoints = ctx
-            .data_unchecked::<DevqlGraphqlContext>()
-            .list_selected_symbol_checkpoints(
-                &self.scope,
-                &self.symbol_ids(),
-                agent.as_deref(),
-                since.as_ref(),
-            )
-            .await
-            .map_err(|err| {
-                backend_error(format!("failed to resolve selected checkpoints: {err:#}"))
-            })?;
-        Ok(CheckpointStageResult {
-            summary: Json(build_checkpoint_summary(&checkpoints)),
-            schema: (!checkpoints.is_empty()).then(|| CHECKPOINT_STAGE_SCHEMA.to_string()),
-        })
+        Ok(self
+            .resolve_checkpoint_stage_data(ctx, agent.as_deref(), since.as_ref())
+            .await?
+            .into())
     }
 
     async fn clones(
@@ -172,16 +249,10 @@ impl ArtefactSelection {
             relation_kind,
             min_score,
         };
-        filter.validate()?;
-        let clones = ctx
-            .data_unchecked::<DevqlGraphqlContext>()
-            .list_selected_clones(&self.artefact_ids(), Some(&filter), &self.scope)
-            .await
-            .map_err(|err| backend_error(format!("failed to resolve selected clones: {err:#}")))?;
-        Ok(CloneStageResult {
-            summary: Json(build_clone_summary(&clones)),
-            schema: (!clones.is_empty()).then(|| CLONE_STAGE_SCHEMA.to_string()),
-        })
+        Ok(self
+            .resolve_clone_stage_data(ctx, Some(&filter))
+            .await?
+            .into())
     }
 
     async fn deps(
@@ -191,6 +262,79 @@ impl ArtefactSelection {
         #[graphql(default_with = "DepsDirection::Both")] direction: DepsDirection,
         #[graphql(name = "includeUnresolved", default = false)] include_unresolved: bool,
     ) -> Result<DependencyStageResult> {
+        Ok(self
+            .resolve_dependency_stage_data(ctx, kind, direction, include_unresolved)
+            .await?
+            .into())
+    }
+
+    async fn tests(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "minConfidence")] min_confidence: Option<f64>,
+        #[graphql(name = "linkageSource")] linkage_source: Option<String>,
+    ) -> Result<TestsStageResult> {
+        Ok(self
+            .resolve_tests_stage_data(ctx, min_confidence, linkage_source)
+            .await?
+            .into())
+    }
+}
+
+impl ArtefactSelection {
+    async fn resolve_checkpoint_stage_data(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<&str>,
+        since: Option<&DateTimeScalar>,
+    ) -> Result<CheckpointStageData> {
+        let checkpoints = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_selected_symbol_checkpoints(&self.scope, &self.symbol_ids(), agent, since)
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to resolve selected checkpoints: {err:#}"))
+            })?;
+        Ok(CheckpointStageData {
+            summary: build_checkpoint_summary(&checkpoints),
+            schema: (!checkpoints.is_empty()).then(|| CHECKPOINT_STAGE_SCHEMA.to_string()),
+            items: checkpoints,
+        })
+    }
+
+    async fn resolve_clone_stage_data(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<&ClonesFilterInput>,
+    ) -> Result<CloneStageData> {
+        if let Some(filter) = filter {
+            filter.validate()?;
+        }
+        let mut clones = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_selected_clones(&self.artefact_ids(), filter, &self.scope)
+            .await
+            .map_err(|err| backend_error(format!("failed to resolve selected clones: {err:#}")))?;
+        clones.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.id.as_ref().cmp(right.id.as_ref()))
+        });
+        Ok(CloneStageData {
+            summary: build_clone_summary(&clones),
+            schema: (!clones.is_empty()).then(|| CLONE_STAGE_SCHEMA.to_string()),
+            items: clones,
+        })
+    }
+
+    async fn resolve_dependency_stage_data(
+        &self,
+        ctx: &Context<'_>,
+        kind: Option<EdgeKind>,
+        direction: DepsDirection,
+        include_unresolved: bool,
+    ) -> Result<DependencyStageData> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let filter = super::DepsFilterInput {
             kind,
@@ -242,24 +386,35 @@ impl ArtefactSelection {
 
         let outgoing_edges = dedup_dependency_edges(outgoing.into_values().flatten().collect());
         let incoming_edges = dedup_dependency_edges(incoming.into_values().flatten().collect());
-        let has_results = !outgoing_edges.is_empty() || !incoming_edges.is_empty();
-        Ok(DependencyStageResult {
-            summary: Json(build_dependency_summary(
+        let mut items = incoming_edges.clone();
+        items.extend(outgoing_edges.clone());
+        items = dedup_dependency_edges(items);
+        items.sort_by(|left, right| {
+            left.to_symbol_ref
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.to_symbol_ref.as_deref().unwrap_or(""))
+                .then_with(|| left.id.as_ref().cmp(right.id.as_ref()))
+        });
+
+        Ok(DependencyStageData {
+            summary: build_dependency_summary(
                 &incoming_edges,
                 &outgoing_edges,
                 self.artefacts.len(),
-            )),
-            schema: has_results.then(|| DEPENDENCY_STAGE_SCHEMA.to_string()),
+            ),
+            schema: (!items.is_empty()).then(|| DEPENDENCY_STAGE_SCHEMA.to_string()),
+            items,
         })
     }
 
-    async fn tests(
+    async fn resolve_tests_stage_data(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "minConfidence")] min_confidence: Option<f64>,
-        #[graphql(name = "linkageSource")] linkage_source: Option<String>,
-    ) -> Result<TestsStageResult> {
-        let rows = decode_stage_rows(
+        min_confidence: Option<f64>,
+        linkage_source: Option<String>,
+    ) -> Result<TestsStageData> {
+        let rows: Vec<TestHarnessTestsResult> = decode_stage_rows(
             "tests",
             StageResolverAdapter::new(ctx.data_unchecked::<DevqlGraphqlContext>().clone(), "tests")
                 .resolve(
@@ -276,10 +431,52 @@ impl ArtefactSelection {
                     backend_error(format!("failed to resolve selected tests: {err:#}"))
                 })?,
         )?;
-        Ok(TestsStageResult {
-            summary: Json(build_tests_summary(&rows, self.artefacts.len())),
+        let mut rows = rows;
+        rows.sort_by(|left, right| {
+            left.artefact
+                .file_path
+                .cmp(&right.artefact.file_path)
+                .then_with(|| left.artefact.name.cmp(&right.artefact.name))
+        });
+        Ok(TestsStageData {
+            summary: build_tests_summary(&rows, self.artefacts.len()),
             schema: (!rows.is_empty()).then(|| TESTS_STAGE_SCHEMA.to_string()),
+            items: rows,
         })
+    }
+}
+
+#[ComplexObject]
+impl CheckpointStageResult {
+    async fn items(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<Checkpoint>> {
+        take_stage_items(&self.items, first)
+    }
+}
+
+#[ComplexObject]
+impl CloneStageResult {
+    async fn items(
+        &self,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<super::SemanticClone>> {
+        take_stage_items(&self.items, first)
+    }
+}
+
+#[ComplexObject]
+impl DependencyStageResult {
+    async fn items(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<DependencyEdge>> {
+        take_stage_items(&self.items, first)
+    }
+}
+
+#[ComplexObject]
+impl TestsStageResult {
+    async fn items(
+        &self,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<TestHarnessTestsResult>> {
+        take_stage_items(&self.items, first)
     }
 }
 
@@ -437,6 +634,29 @@ fn build_tests_summary(rows: &[TestHarnessTestsResult], selected_artefact_count:
     })
 }
 
+fn build_selection_summary(
+    selected_artefact_count: usize,
+    checkpoints: &CheckpointStageData,
+    clones: &CloneStageData,
+    deps: &DependencyStageData,
+    tests: &TestsStageData,
+) -> Value {
+    json!({
+        "selectedArtefactCount": selected_artefact_count,
+        "checkpoints": selection_stage_entry(&checkpoints.summary, checkpoints.schema.as_deref()),
+        "clones": selection_stage_entry(&clones.summary, clones.schema.as_deref()),
+        "deps": selection_stage_entry(&deps.summary, deps.schema.as_deref()),
+        "tests": selection_stage_entry(&tests.summary, tests.schema.as_deref()),
+    })
+}
+
+fn selection_stage_entry(summary: &Value, schema: Option<&str>) -> Value {
+    json!({
+        "summary": summary,
+        "schema": schema,
+    })
+}
+
 fn dedup_strings<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
     values
         .map(str::trim)
@@ -473,6 +693,13 @@ fn saturating_i32(value: usize) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
 
+fn take_stage_items<T: Clone>(items: &[T], first: i32) -> Result<Vec<T>> {
+    if first <= 0 {
+        return Err(bad_user_input_error("`first` must be greater than 0"));
+    }
+    Ok(items.iter().take(first as usize).cloned().collect())
+}
+
 const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
   checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 }
@@ -480,6 +707,7 @@ const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 type CheckpointStageResult {
   summary: JSON!
   schema: String
+  items(first: Int! = 20): [Checkpoint!]!
 }
 
 type Checkpoint {
@@ -503,6 +731,7 @@ const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 type CloneStageResult {
   summary: JSON!
   schema: String
+  items(first: Int! = 20): [Clone!]!
 }
 
 type Clone {
@@ -523,6 +752,7 @@ const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 type DependencyStageResult {
   summary: JSON!
   schema: String
+  items(first: Int! = 20): [DependencyEdge!]!
 }
 
 type DependencyEdge {
@@ -545,6 +775,7 @@ const TESTS_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 type TestsStageResult {
   summary: JSON!
   schema: String
+  items(first: Int! = 20): [TestHarnessTestsResult!]!
 }
 
 type TestHarnessTestsResult {

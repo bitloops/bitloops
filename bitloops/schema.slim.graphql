@@ -81,6 +81,7 @@ input ArtefactFilterInput {
 
 type ArtefactSelection {
 	count: Int!
+	summary: JSON!
 	artefacts(first: Int! = 20): [Artefact!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 	clones(relationKind: String, minScore: Float): CloneStageResult!
@@ -210,6 +211,7 @@ type CheckpointFileRelation {
 type CheckpointStageResult {
 	summary: JSON!
 	schema: String
+	items(first: Int! = 20): [Checkpoint!]!
 }
 
 type CheckpointTokenUsage {
@@ -250,6 +252,7 @@ type CloneEdge {
 type CloneStageResult {
 	summary: JSON!
 	schema: String
+	items(first: Int! = 20): [Clone!]!
 }
 
 type CloneSummary {
@@ -320,6 +323,7 @@ type DependencyEdgeConnection {
 type DependencyStageResult {
 	summary: JSON!
 	schema: String
+	items(first: Int! = 20): [DependencyEdge!]!
 }
 
 enum DepsDirection {
@@ -862,6 +866,7 @@ type TestHarnessTestsSummary {
 type TestsStageResult {
 	summary: JSON!
 	schema: String
+	items(first: Int! = 20): [TestHarnessTestsResult!]!
 }
 
 type UpdateCliTelemetryConsentResult {
