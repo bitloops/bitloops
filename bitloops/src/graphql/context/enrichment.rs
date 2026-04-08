@@ -8,9 +8,8 @@ use crate::host::checkpoints::strategy::manual_commit::{
     SessionContentView, list_committed, read_session_content_by_id,
 };
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
-use crate::host::devql::{
-    RelationalStorage, esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape,
-};
+use crate::host::devql::{esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape};
+use crate::host::relational_store::DefaultRelationalStore;
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
 use chrono::{TimeZone, Utc};
@@ -67,7 +66,10 @@ impl DevqlGraphqlContext {
             else {
                 return Ok(Vec::new());
             };
-            let relational = RelationalStorage::local_only(self.devql_sqlite_path()?);
+            let relational_store =
+                DefaultRelationalStore::open_local_for_repo_root(&self.config_root)
+                    .context("opening relational store for GraphQL clone neighbors query")?;
+            let relational = relational_store.to_local_inner();
             let mut edges = crate::capability_packs::semantic_clones::pipeline::score_symbol_clone_edges_for_source_with_options(
                 &relational,
                 &repo_id,

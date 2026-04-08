@@ -240,6 +240,7 @@ type CloneSummaryGroup {
 input ClonesFilterInput {
 	relationKind: String
 	minScore: Float
+	neighbors: Int
 }
 
 type Commit {
