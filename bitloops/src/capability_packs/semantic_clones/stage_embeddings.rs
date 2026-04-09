@@ -250,22 +250,22 @@ pub(crate) async fn determine_repo_embedding_sync_action(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     setup: &embeddings::EmbeddingSetup,
 ) -> Result<RepoEmbeddingSyncAction> {
-    let current_coverage_complete =
-        current_repo_semantic_clone_rows_are_complete(
-            relational,
-            repo_id,
-            representation_kind,
-            setup,
-        )
-        .await?;
-    if let Some(active) = load_active_embedding_setup(relational, repo_id).await? {
-        if active.representation_kind == representation_kind && active.setup == *setup {
-            return Ok(if current_coverage_complete {
-                RepoEmbeddingSyncAction::Incremental
-            } else {
-                RepoEmbeddingSyncAction::RefreshCurrentRepo
-            });
-        }
+    let current_coverage_complete = current_repo_semantic_clone_rows_are_complete(
+        relational,
+        repo_id,
+        representation_kind,
+        setup,
+    )
+    .await?;
+    if let Some(active) = load_active_embedding_setup(relational, repo_id).await?
+        && active.representation_kind == representation_kind
+        && active.setup == *setup
+    {
+        return Ok(if current_coverage_complete {
+            RepoEmbeddingSyncAction::Incremental
+        } else {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo
+        });
     }
 
     let current_states =
