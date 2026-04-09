@@ -737,7 +737,10 @@ request_timeout_secs = 5
 
         with_process_state(
             Some(repo.path()),
-            &[("BITLOOPS_TEST_CONFIG_DIR_OVERRIDE", Some(config_root_value.as_str()))],
+            &[(
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_value.as_str()),
+            )],
             || {
                 assert!(matches!(
                     inspect_embeddings_install_state(repo.path()),
