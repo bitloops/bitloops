@@ -158,7 +158,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             let args = parse_named_args(inner)?;
             if !parsed.has_deps_stage {
                 parsed.deps.direction = DepsDirection::Both;
-                parsed.deps.include_unresolved = false;
+                parsed.deps.include_unresolved = true;
             }
             parsed.select_artefacts = Some(SelectArtefactsFilter {
                 symbol_fqn: args.get("symbol_fqn").cloned(),

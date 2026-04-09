@@ -116,9 +116,14 @@ pub(super) fn compile_selection_deps_args(parsed: &ParsedDevqlQuery) -> Vec<Grap
             enum_literal(parsed.deps.direction.as_str()),
         ));
     }
-    if parsed.deps.include_unresolved {
-        args.push(GraphqlArgument::new("includeUnresolved", "true"));
-    }
+    args.push(GraphqlArgument::new(
+        "includeUnresolved",
+        if parsed.deps.include_unresolved {
+            "true"
+        } else {
+            "false"
+        },
+    ));
     args
 }
 
@@ -295,9 +300,14 @@ pub(super) fn compile_deps_filter_input(parsed: &ParsedDevqlQuery) -> Option<Str
         "direction: {}",
         enum_literal(parsed.deps.direction.as_str())
     ));
-    if parsed.deps.include_unresolved {
-        fields.push("includeUnresolved: true".to_string());
-    }
+    fields.push(format!(
+        "includeUnresolved: {}",
+        if parsed.deps.include_unresolved {
+            "true"
+        } else {
+            "false"
+        }
+    ));
 
     (!fields.is_empty()).then(|| format!("{{ {} }}", fields.join(", ")))
 }
