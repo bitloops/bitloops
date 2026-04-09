@@ -394,21 +394,22 @@ pub(super) async fn request_json_with_method_content_type_and_headers(
     (status, parsed)
 }
 
-pub(super) const DASHBOARD_CDN_BASE_URL_ENV: &str = "BITLOOPS_DASHBOARD_CDN_BASE_URL";
-pub(super) const DASHBOARD_MANIFEST_URL_ENV: &str = "BITLOOPS_DASHBOARD_MANIFEST_URL";
-
-pub(super) fn with_dashboard_cdn_base_url(base_url: &str) -> ProcessStateGuard {
-    enter_env_vars(&[
-        (DASHBOARD_MANIFEST_URL_ENV, None),
-        (DASHBOARD_CDN_BASE_URL_ENV, Some(base_url)),
-    ])
+pub(super) fn dashboard_bundle_source_overrides_for_cdn(
+    base_url: &str,
+) -> crate::api::DashboardBundleSourceOverrides {
+    crate::api::DashboardBundleSourceOverrides {
+        cdn_base_url: Some(base_url.to_string()),
+        manifest_url: None,
+    }
 }
 
-pub(super) fn with_dashboard_manifest_url(manifest_url: &str) -> ProcessStateGuard {
-    enter_env_vars(&[
-        (DASHBOARD_CDN_BASE_URL_ENV, None),
-        (DASHBOARD_MANIFEST_URL_ENV, Some(manifest_url)),
-    ])
+pub(super) fn dashboard_bundle_source_overrides_for_manifest(
+    manifest_url: &str,
+) -> crate::api::DashboardBundleSourceOverrides {
+    crate::api::DashboardBundleSourceOverrides {
+        cdn_base_url: None,
+        manifest_url: Some(manifest_url.to_string()),
+    }
 }
 
 pub(super) fn build_bundle_archive(version: &str) -> Vec<u8> {

@@ -168,6 +168,12 @@ struct LocalDashboardDiscovery {
     tls: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DashboardBundleSourceOverrides {
+    pub(super) cdn_base_url: Option<String>,
+    pub(super) manifest_url: Option<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct DashboardState {
     pub(super) config_root: PathBuf,
@@ -176,6 +182,7 @@ pub(crate) struct DashboardState {
     pub(super) mode: ServeMode,
     pub(super) db: db::DashboardDbPools,
     pub(super) bundle_dir: PathBuf,
+    pub(super) bundle_source_overrides: DashboardBundleSourceOverrides,
     pub(super) subscription_hub: Arc<SubscriptionHub>,
     pub(super) devql_schema: graphql::DevqlSchema,
     pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
@@ -200,6 +207,15 @@ impl DashboardState {
 
     pub(crate) fn subscription_hub(&self) -> Arc<SubscriptionHub> {
         Arc::clone(&self.subscription_hub)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_bundle_source_overrides(
+        mut self,
+        overrides: DashboardBundleSourceOverrides,
+    ) -> Self {
+        self.bundle_source_overrides = overrides;
+        self
     }
 }
 

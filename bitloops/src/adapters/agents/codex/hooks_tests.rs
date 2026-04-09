@@ -18,6 +18,10 @@ fn hooks_file(path: &Path) -> PathBuf {
     path.join(".codex").join("hooks.json")
 }
 
+fn config_file(path: &Path) -> PathBuf {
+    path.join(".codex").join("config.toml")
+}
+
 fn read_hooks(path: &Path) -> String {
     fs::read_to_string(hooks_file(path)).expect("read hooks.json")
 }
@@ -47,6 +51,21 @@ fn commands_for_hook(doc: &Value, hook_key: &str) -> Vec<String> {
         .collect()
 }
 
+fn matchers_for_hook(doc: &Value, hook_key: &str) -> Vec<String> {
+    doc.get("hooks")
+        .and_then(|hooks| hooks.get(hook_key))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|matcher| {
+            matcher
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(|matcher| matcher.to_string())
+        })
+        .collect()
+}
+
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -69,19 +88,35 @@ fn install_hooks_fresh_and_idempotent() {
     init_repo(dir.path());
 
     let installed = install_hooks_at(dir.path(), false, false).expect("install");
-    assert_eq!(installed, 2);
+    assert_eq!(installed, 5);
     assert!(are_hooks_installed_at(dir.path()));
+    assert!(config_file(dir.path()).exists());
 
     let second = install_hooks_at(dir.path(), false, false).expect("install second");
     assert_eq!(second, 0);
 
     let output = read_hooks_json(dir.path());
     let session_commands = commands_for_hook(&output, "SessionStart");
+    let user_prompt_commands = commands_for_hook(&output, "UserPromptSubmit");
+    let pre_tool_commands = commands_for_hook(&output, "PreToolUse");
+    let post_tool_commands = commands_for_hook(&output, "PostToolUse");
     let stop_commands = commands_for_hook(&output, "Stop");
 
     assert_eq!(
         session_commands,
         vec!["bitloops hooks codex session-start".to_string()]
+    );
+    assert_eq!(
+        user_prompt_commands,
+        vec!["bitloops hooks codex user-prompt-submit".to_string()]
+    );
+    assert_eq!(
+        pre_tool_commands,
+        vec!["bitloops hooks codex pre-tool-use".to_string()]
+    );
+    assert_eq!(
+        post_tool_commands,
+        vec!["bitloops hooks codex post-tool-use".to_string()]
     );
     assert_eq!(stop_commands, vec!["bitloops hooks codex stop".to_string()]);
 
@@ -107,15 +142,47 @@ fn install_hooks_fresh_and_idempotent() {
 }
 
 #[test]
+fn installed_hooks_require_repo_local_codex_feature_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    install_hooks_at(dir.path(), false, false).expect("install");
+    fs::remove_file(config_file(dir.path())).expect("remove config");
+
+    assert!(
+        !are_hooks_installed_at(dir.path()),
+        "hooks should not be considered installed without .codex/config.toml enabling codex_hooks"
+    );
+}
+
+#[test]
+fn installed_hooks_require_enabled_repo_local_codex_feature_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    install_hooks_at(dir.path(), false, false).expect("install");
+    fs::write(config_file(dir.path()), "[features]\ncodex_hooks = false\n")
+        .expect("disable codex hooks");
+
+    assert!(
+        !are_hooks_installed_at(dir.path()),
+        "hooks should not be considered installed when codex_hooks is disabled"
+    );
+}
+
+#[test]
 fn install_hooks_local_dev_writes_cargo_run_commands() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
     let installed = install_hooks_at(dir.path(), true, false).expect("install local-dev");
-    assert_eq!(installed, 2);
+    assert_eq!(installed, 5);
 
     let output = read_hooks(dir.path());
     assert!(output.contains("cargo run -- hooks codex session-start"));
+    assert!(output.contains("cargo run -- hooks codex user-prompt-submit"));
+    assert!(output.contains("cargo run -- hooks codex pre-tool-use"));
+    assert!(output.contains("cargo run -- hooks codex post-tool-use"));
     assert!(output.contains("cargo run -- hooks codex stop"));
     assert!(!output.contains("bitloops hooks codex session-start"));
 }
@@ -128,7 +195,7 @@ fn install_hooks_force_reinstalls_managed_hooks() {
     install_hooks_at(dir.path(), false, false).expect("initial install");
 
     let installed = install_hooks_at(dir.path(), false, true).expect("force install");
-    assert_eq!(installed, 2);
+    assert_eq!(installed, 5);
 
     let output = read_hooks(dir.path());
     let count = output.matches("bitloops hooks codex stop").count();
@@ -169,6 +236,7 @@ fn install_hooks_preserves_unknown_fields() {
     let output = read_hooks(dir.path());
     assert!(output.contains("\"profile\": \"strict\""));
     assert!(output.contains("echo future"));
+    assert!(config_file(dir.path()).exists());
 }
 
 #[test]
@@ -206,6 +274,38 @@ fn uninstall_preserves_non_bitloops_hooks() {
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bitloops hooks codex user-prompt-submit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bitloops hooks codex pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bitloops hooks codex post-tool-use"
+          }
+        ]
+      }
     ]
   }
 }
@@ -217,6 +317,9 @@ fn uninstall_preserves_non_bitloops_hooks() {
     let output = read_hooks(dir.path());
     assert!(output.contains("echo custom"));
     assert!(!output.contains("bitloops hooks codex session-start"));
+    assert!(!output.contains("bitloops hooks codex user-prompt-submit"));
+    assert!(!output.contains("bitloops hooks codex pre-tool-use"));
+    assert!(!output.contains("bitloops hooks codex post-tool-use"));
     assert!(!output.contains("bitloops hooks codex stop"));
 }
 
@@ -251,6 +354,38 @@ fn install_hooks_migrates_local_dev_commands_without_force() {
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo run -- hooks codex user-prompt-submit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo run -- hooks codex pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo run -- hooks codex post-tool-use"
+          }
+        ]
+      }
     ]
   }
 }
@@ -259,12 +394,18 @@ fn install_hooks_migrates_local_dev_commands_without_force() {
     .expect("seed config");
 
     let installed = install_hooks_at(dir.path(), false, false).expect("install");
-    assert_eq!(installed, 2);
+    assert_eq!(installed, 5);
 
     let output = read_hooks(dir.path());
     assert!(!output.contains("cargo run -- hooks codex session-start"));
+    assert!(!output.contains("cargo run -- hooks codex user-prompt-submit"));
+    assert!(!output.contains("cargo run -- hooks codex pre-tool-use"));
+    assert!(!output.contains("cargo run -- hooks codex post-tool-use"));
     assert!(!output.contains("cargo run -- hooks codex stop"));
     assert!(output.contains("bitloops hooks codex session-start"));
+    assert!(output.contains("bitloops hooks codex user-prompt-submit"));
+    assert!(output.contains("bitloops hooks codex pre-tool-use"));
+    assert!(output.contains("bitloops hooks codex post-tool-use"));
     assert!(output.contains("bitloops hooks codex stop"));
 }
 
@@ -277,7 +418,25 @@ fn uninstall_hooks_without_config_is_noop() {
 }
 
 #[test]
-fn are_hooks_installed_requires_session_start_and_stop() {
+fn install_hooks_sets_bash_matcher_for_tool_hooks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    install_hooks_at(dir.path(), false, false).expect("install");
+
+    let output = read_hooks_json(dir.path());
+    assert_eq!(
+        matchers_for_hook(&output, "PreToolUse"),
+        vec!["Bash".to_string()]
+    );
+    assert_eq!(
+        matchers_for_hook(&output, "PostToolUse"),
+        vec!["Bash".to_string()]
+    );
+}
+
+#[test]
+fn are_hooks_installed_requires_all_five_managed_hooks() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
@@ -294,6 +453,48 @@ fn are_hooks_installed_requires_session_start_and_stop() {
           {
             "type": "command",
             "command": "bitloops hooks codex session-start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bitloops hooks codex stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bitloops hooks codex user-prompt-submit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bitloops hooks codex pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo custom post"
           }
         ]
       }

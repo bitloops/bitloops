@@ -44,10 +44,87 @@ async fn sqlite_relational_with_schema(sql: &str) -> RelationalStorage {
 
 async fn sqlite_relational_with_embedding_state_schema() -> RelationalStorage {
     sqlite_relational_with_schema(&format!(
-        "{}\nCREATE TABLE artefacts_current (repo_id TEXT NOT NULL, artefact_id TEXT PRIMARY KEY, path TEXT, start_line INTEGER, symbol_id TEXT);",
+        "{}\nCREATE TABLE symbol_semantics (artefact_id TEXT PRIMARY KEY, summary TEXT);
+CREATE TABLE symbol_features (artefact_id TEXT PRIMARY KEY);
+CREATE TABLE artefacts_current (
+    repo_id TEXT NOT NULL,
+    artefact_id TEXT PRIMARY KEY,
+    path TEXT,
+    start_line INTEGER,
+    symbol_id TEXT,
+    canonical_kind TEXT,
+    language_kind TEXT
+);",
         schema::semantic_embeddings_sqlite_schema_sql()
     ))
     .await
+}
+
+async fn insert_fully_indexed_current_artefact(
+    relational: &RelationalStorage,
+    artefact_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    provider: &str,
+    model: &str,
+    dimension: usize,
+) {
+    insert_fully_indexed_current_artefact_with_stored_representation(
+        relational,
+        artefact_id,
+        &representation_kind.to_string(),
+        provider,
+        model,
+        dimension,
+    )
+    .await;
+}
+
+async fn insert_fully_indexed_current_artefact_with_stored_representation(
+    relational: &RelationalStorage,
+    artefact_id: &str,
+    stored_representation_kind: &str,
+    provider: &str,
+    model: &str,
+    dimension: usize,
+) {
+    let setup_fingerprint = test_setup_fingerprint(provider, model, dimension);
+    relational
+        .exec(&format!(
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id, canonical_kind, language_kind)
+             VALUES ('repo-1', '{artefact_id}', 'src/a.ts', 1, 'sym-{artefact_id}', 'function', 'function')",
+            artefact_id = esc_pg(artefact_id),
+        ))
+        .await
+        .expect("insert current artefact");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_semantics (artefact_id, summary)
+             VALUES ('{artefact_id}', 'Function summary.')",
+            artefact_id = esc_pg(artefact_id),
+        ))
+        .await
+        .expect("insert semantic row");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_features (artefact_id)
+             VALUES ('{artefact_id}')",
+            artefact_id = esc_pg(artefact_id),
+        ))
+        .await
+        .expect("insert feature row");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
+             VALUES ('{artefact_id}', 'repo-1', 'blob-1', '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, 'hash-{artefact_id}', '[0.1,0.2,0.3]')",
+            artefact_id = esc_pg(artefact_id),
+            representation_kind = esc_pg(stored_representation_kind),
+            setup_fingerprint = esc_pg(&setup_fingerprint),
+            provider = esc_pg(provider),
+            model = esc_pg(model),
+            dimension = dimension,
+        ))
+        .await
+        .expect("insert embedding row");
 }
 
 #[test]
@@ -415,20 +492,80 @@ async fn semantic_embedding_schema_ensure_creates_sqlite_table() {
 #[tokio::test]
 async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
     let relational = sqlite_relational_with_embedding_state_schema().await;
+    insert_fully_indexed_current_artefact(
+        &relational,
+        "artefact-1",
+        embeddings::EmbeddingRepresentationKind::Code,
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+    )
+    .await;
+
+    let action = determine_repo_embedding_sync_action(
+        &relational,
+        "repo-1",
+        embeddings::EmbeddingRepresentationKind::Code,
+        &embeddings::EmbeddingSetup::new(
+            "local_fastembed",
+            "jinaai/jina-embeddings-v2-base-code",
+            3,
+        ),
+    )
+    .await
+    .expect("sync action");
+
+    assert_eq!(action, RepoEmbeddingSyncAction::AdoptExisting);
+}
+
+#[tokio::test]
+async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_partial() {
+    let relational = sqlite_relational_with_embedding_state_schema().await;
+    insert_fully_indexed_current_artefact(
+        &relational,
+        "artefact-1",
+        embeddings::EmbeddingRepresentationKind::Code,
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+    )
+    .await;
     relational
         .exec(
-            "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id)
-             VALUES ('repo-1', 'artefact-1', 'src/a.ts', 1, 'sym-1')",
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id, canonical_kind, language_kind)
+             VALUES ('repo-1', 'artefact-2', 'src/b.ts', 2, 'sym-2', 'function', 'function')",
         )
         .await
-        .expect("insert current artefact");
-    relational
-        .exec(
-            "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
-             VALUES ('artefact-1', 'repo-1', 'blob-1', 'baseline', 'provider=local_fastembed|model=jinaai/jina-embeddings-v2-base-code|dimension=3', 'local_fastembed', 'jinaai/jina-embeddings-v2-base-code', 3, 'hash-1', '[0.1,0.2,0.3]')",
-        )
-        .await
-        .expect("insert embedding row");
+        .expect("insert uncovered current artefact");
+
+    let action = determine_repo_embedding_sync_action(
+        &relational,
+        "repo-1",
+        embeddings::EmbeddingRepresentationKind::Code,
+        &embeddings::EmbeddingSetup::new(
+            "local_fastembed",
+            "jinaai/jina-embeddings-v2-base-code",
+            3,
+        ),
+    )
+    .await
+    .expect("sync action");
+
+    assert_eq!(action, RepoEmbeddingSyncAction::RefreshCurrentRepo);
+}
+
+#[tokio::test]
+async fn semantic_embedding_sync_action_adopts_existing_when_legacy_representation_exists() {
+    let relational = sqlite_relational_with_embedding_state_schema().await;
+    insert_fully_indexed_current_artefact_with_stored_representation(
+        &relational,
+        "artefact-1",
+        "enriched",
+        "local_fastembed",
+        "jinaai/jina-embeddings-v2-base-code",
+        3,
+    )
+    .await;
 
     let action = determine_repo_embedding_sync_action(
         &relational,

@@ -1,57 +1,33 @@
-Feature: Cross-capability change-planning smoke
+Feature: Cross-capability deterministic smoke
 
-  This is the integrated acceptance test for the core product promise:
-  Bitloops helps developers and agents make safer changes by combining
-  blast radius, test harness, semantic clones, and knowledge in a
-  coherent workflow.
+  This is the integrated offline smoke for the hardened DevQL surfaces:
+  agent queryability, blast radius, TestHarness, and semantic clones
+  should all remain queryable in the same repository after a real
+  agent-driven change.
 
-  @devql @claude-code @testlens @integration
-  Scenario: Full change-planning workflow with Claude Code
-    # Setup: create a rich project with tests, coverage, and knowledge
+  Background:
     Given I run CleanStart for flow "CrossCapabilitySmoke"
     And I start the daemon in bitloops
     And I create a TypeScript project with tests and coverage in bitloops
+    And I add semantic clone fixtures in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
     And I run EnableCLI for bitloops
-    And I ensure Claude Code auth in bitloops
+    And I configure semantic clones with fake embeddings runtime in bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And DevQL pack health for semantic clones is ready in bitloops
+    And I make a first change using Claude Code to bitloops
+    And I committed today in bitloops
+    And I run DevQL semantic clones rebuild in bitloops
     And I run TestHarness ingest-tests for latest commit in bitloops
     And I run TestHarness ingest-coverage for latest commit in bitloops
 
-    # Step 1: Inspect impact before making a change
-    Then DevQL artefacts query returns results in bitloops
-    And DevQL deps query for "UserService.createUser" with direction "in" returns at least 1 result in bitloops
-
-    # Step 2: Inspect verification state
-    And TestHarness query for "createUser" at current workspace state with view "summary" returns results in bitloops
-
-    # Step 3: Make the change with Claude Code and commit
-    Given I make a first change using Claude Code to bitloops
-    And I committed today in bitloops
-    And I run DevQL ingest in bitloops
-
-    # Step 4: Verify all surfaces return coherent answers post-change
-    Then bitloops stores exist in bitloops
-    And checkpoint mapping exists in bitloops
+  @devql @integration
+  Scenario: Hardened DevQL capability surfaces compose in one offline workflow
+    Then checkpoint mapping exists in bitloops
     And claude-code session exists in bitloops
-    And DevQL artefacts query returns results in bitloops
     And DevQL checkpoints query returns results for "claude-code" in bitloops
-
-  @devql @semantic-clones @integration
-  Scenario: Capability surfaces are independently queryable in same repo
-    Given I run CleanStart for flow "CapabilitySurfaceCoherence"
-    And I start the daemon in bitloops
-    And I create a TypeScript project with similar implementations in bitloops
-    And I run InitCommit for bitloops
-    And I init bitloops in bitloops
-    And I run EnableCLI for bitloops
-    And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
-    And I run DevQL semantic clones rebuild in bitloops
-
-    # All capability surfaces should work without interfering
-    Then DevQL artefacts query returns results in bitloops
-    And DevQL clones query for "OrderService.create" returns at least 1 result in bitloops
-    And DevQL knowledge query returns 0 items in bitloops
+    And DevQL artefacts query returns results in bitloops
+    And DevQL deps query for "UserService.createUser" with direction "in" and asOf latest commit returns at least 1 result in bitloops
+    And TestHarness query for "UserService.createUser" at current workspace state with view "summary" returns results in bitloops
+    And DevQL clones query for "UserService.createUser" returns at least 1 result in bitloops

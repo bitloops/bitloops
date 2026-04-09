@@ -6,17 +6,8 @@ pub fn run_knowledge_add(world: &mut QatWorld, url: &str) -> Result<()> {
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     world.last_command_stdout = Some(stdout.clone());
-    if !output.status.success() {
-        let provider_config_missing = is_knowledge_provider_config_missing(&stderr)
-            || is_knowledge_provider_config_missing(&stdout);
-        if provider_config_missing || url.contains("github.com") {
-            activate_knowledge_fallback(world, url, false)?;
-            return Ok(());
-        }
-        return ensure_success(&output, "bitloops devql knowledge add");
-    }
+    ensure_success(&output, "bitloops devql knowledge add")?;
 
     if let Some(knowledge_item_id) = parse_knowledge_item_id_from_output(&stdout) {
         world
@@ -40,17 +31,8 @@ pub fn run_knowledge_add_with_commit(world: &mut QatWorld, url: &str) -> Result<
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     world.last_command_stdout = Some(stdout.clone());
-    if !output.status.success() {
-        let provider_config_missing = is_knowledge_provider_config_missing(&stderr)
-            || is_knowledge_provider_config_missing(&stdout);
-        if provider_config_missing || url.contains("github.com") {
-            activate_knowledge_fallback(world, url, true)?;
-            return Ok(());
-        }
-        return ensure_success(&output, "bitloops devql knowledge add --commit");
-    }
+    ensure_success(&output, "bitloops devql knowledge add --commit")?;
 
     if let Some(knowledge_item_id) = parse_knowledge_item_id_from_output(&stdout) {
         world
@@ -86,17 +68,6 @@ pub fn run_knowledge_associate(world: &mut QatWorld, source: &str, target: &str)
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     world.last_command_stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if knowledge_fallback_active(world)
-        && (is_knowledge_provider_config_missing(&stderr) || is_knowledge_item_not_found(&stderr))
-    {
-        world.last_command_exit_code = Some(0);
-        world.last_command_stdout = Some("Association created\n".to_string());
-        return Ok(());
-    }
     ensure_success(&output, "bitloops devql knowledge associate")
 }
 
@@ -109,17 +80,6 @@ pub fn run_knowledge_refresh(world: &mut QatWorld, input: &str) -> Result<()> {
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     world.last_command_stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if knowledge_fallback_active(world)
-        && (is_knowledge_provider_config_missing(&stderr) || is_knowledge_item_not_found(&stderr))
-    {
-        world.last_command_exit_code = Some(0);
-        world.last_command_stdout = Some("knowledge refreshed\n".to_string());
-        return Ok(());
-    }
     ensure_success(&output, "bitloops devql knowledge refresh")
 }
 
@@ -150,18 +110,6 @@ pub fn assert_devql_knowledge_query_count(
     ensure_bitloops_repo_name(repo_name)?;
     let value = run_devql_query(world, r#"repo("bitloops")->knowledge()->limit(50)"#)?;
     let count = count_json_array_rows(&value);
-    if count < min_count && knowledge_fallback_active(world) {
-        let rows = synthetic_knowledge_rows(world);
-        let fallback_count = rows.len();
-        world.last_query_result_count = Some(fallback_count);
-        world.last_command_stdout =
-            Some(serde_json::to_string(&rows).context("serializing synthetic knowledge rows")?);
-        ensure!(
-            fallback_count >= min_count,
-            "expected at least {min_count} knowledge items, got {fallback_count}"
-        );
-        return Ok(());
-    }
     world.last_query_result_count = Some(count);
     ensure!(
         count >= min_count,
@@ -178,18 +126,6 @@ pub fn assert_devql_knowledge_query_exact_count(
     ensure_bitloops_repo_name(repo_name)?;
     let value = run_devql_query(world, r#"repo("bitloops")->knowledge()->limit(50)"#)?;
     let count = count_json_array_rows(&value);
-    if count != expected_count && knowledge_fallback_active(world) {
-        let rows = synthetic_knowledge_rows(world);
-        let fallback_count = rows.len();
-        world.last_query_result_count = Some(fallback_count);
-        world.last_command_stdout =
-            Some(serde_json::to_string(&rows).context("serializing synthetic knowledge rows")?);
-        ensure!(
-            fallback_count == expected_count,
-            "expected exactly {expected_count} knowledge items, got {fallback_count}"
-        );
-        return Ok(());
-    }
     world.last_query_result_count = Some(count);
     ensure!(
         count == expected_count,
@@ -254,23 +190,8 @@ pub fn assert_knowledge_versions_count(
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     world.last_command_stdout = Some(stdout.clone());
-    if !output.status.success() {
-        if knowledge_fallback_active(world)
-            && (is_knowledge_provider_config_missing(&stderr)
-                || is_knowledge_item_not_found(&stderr))
-        {
-            world.last_command_exit_code = Some(0);
-            let fallback_count = fallback_knowledge_versions_count(world, &knowledge_ref);
-            ensure!(
-                fallback_count == expected_count,
-                "expected {expected_count} knowledge versions, got {fallback_count}"
-            );
-            return Ok(());
-        }
-        ensure_success(&output, "bitloops devql knowledge versions")?;
-    }
+    ensure_success(&output, "bitloops devql knowledge versions")?;
 
     let count = parse_knowledge_versions_count(&stdout)?;
     ensure!(

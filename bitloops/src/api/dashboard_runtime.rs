@@ -227,6 +227,7 @@ pub(super) async fn run(
         mode: serve_mode,
         db: db_init.pools,
         bundle_dir,
+        bundle_source_overrides: super::DashboardBundleSourceOverrides::default(),
         subscription_hub: graphql::SubscriptionHub::new_arc(),
         devql_schema,
         devql_slim_schema,

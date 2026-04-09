@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
@@ -336,6 +337,195 @@ fn normalise_smoke_agent_name_supports_canonical_agents_and_aliases() {
 }
 
 #[test]
+fn checkpoint_agent_candidates_expand_claude_aliases() {
+    assert_eq!(
+        checkpoint_agent_candidates("claude-code"),
+        vec!["claude-code".to_string(), "claude".to_string()]
+    );
+    assert_eq!(
+        checkpoint_agent_candidates("claude"),
+        vec!["claude".to_string(), "claude-code".to_string()]
+    );
+    assert_eq!(
+        checkpoint_agent_candidates("codex"),
+        vec!["codex".to_string()]
+    );
+}
+
+#[test]
+fn build_chat_history_query_targets_specific_file() {
+    let query = build_chat_history_query("my-app/src/App.tsx");
+    assert_eq!(
+        query,
+        r#"repo("bitloops")->file("my-app/src/App.tsx")->artefacts()->chatHistory()->limit(10)"#
+    );
+}
+
+#[test]
+fn count_chat_history_edges_for_agent_only_counts_matching_agent_rows() {
+    let payload = serde_json::json!([
+        {
+            "chatHistory": {
+                "edges": [
+                    { "node": { "agent": "claude-code", "content": "one" } },
+                    { "node": { "agent": "cursor", "content": "two" } }
+                ]
+            }
+        },
+        {
+            "chatHistory": {
+                "edges": [
+                    { "node": { "agent": "claude-code", "content": "three" } }
+                ]
+            }
+        }
+    ]);
+
+    assert_eq!(
+        count_chat_history_edges_for_agent(&payload, "claude-code"),
+        2
+    );
+    assert_eq!(count_chat_history_edges_for_agent(&payload, "cursor"), 1);
+    assert_eq!(count_chat_history_edges_for_agent(&payload, "codex"), 0);
+}
+
+#[test]
+fn semantic_clone_health_is_ready_requires_runtime_checks_to_be_healthy() {
+    let healthy = serde_json::json!({
+        "health": [
+            { "check_id": "semantic_clones.profile_resolution", "healthy": true, "message": "ok" },
+            { "check_id": "semantic_clones.runtime_command", "healthy": true, "message": "ok" },
+            { "check_id": "semantic_clones.runtime_handshake", "healthy": true, "message": "ok" }
+        ]
+    });
+    let unhealthy = serde_json::json!({
+        "health": [
+            { "check_id": "semantic_clones.profile_resolution", "healthy": true, "message": "ok" },
+            { "check_id": "semantic_clones.runtime_command", "healthy": false, "message": "missing" },
+            { "check_id": "semantic_clones.runtime_handshake", "healthy": true, "message": "ok" }
+        ]
+    });
+
+    assert!(semantic_clone_health_is_ready(&healthy));
+    assert!(!semantic_clone_health_is_ready(&unhealthy));
+}
+
+#[test]
+fn semantic_clone_store_evidence_accepts_persisted_edges_when_cli_metric_is_zero() {
+    let evidence = SemanticCloneStoreEvidence {
+        current_artefacts: 6,
+        embeddings: 5,
+        clone_edges: 6,
+    };
+
+    assert!(semantic_clone_store_evidence_proves_rebuild(
+        Some(0),
+        evidence
+    ));
+}
+
+#[test]
+fn semantic_clone_store_evidence_requires_persisted_rows_even_when_cli_metric_is_positive() {
+    assert!(!semantic_clone_store_evidence_proves_rebuild(
+        Some(3),
+        SemanticCloneStoreEvidence {
+            current_artefacts: 0,
+            embeddings: 0,
+            clone_edges: 0,
+        }
+    ));
+}
+
+#[test]
+fn semantic_clone_store_evidence_rejects_missing_embeddings_or_edges() {
+    assert!(!semantic_clone_store_evidence_proves_rebuild(
+        Some(0),
+        SemanticCloneStoreEvidence {
+            current_artefacts: 6,
+            embeddings: 0,
+            clone_edges: 6,
+        }
+    ));
+    assert!(!semantic_clone_store_evidence_proves_rebuild(
+        None,
+        SemanticCloneStoreEvidence {
+            current_artefacts: 6,
+            embeddings: 5,
+            clone_edges: 0,
+        }
+    ));
+}
+
+#[test]
+fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
+    let rows = serde_json::json!([
+        {
+            "from": "src/render-invoice.ts::renderInvoice",
+            "to": "src/render-invoice-document.ts::renderInvoiceDocument",
+            "relationKind": "shared_logic_candidate",
+            "score": 0.97
+        }
+    ]);
+
+    assert_eq!(
+        extract_clone_nodes(&rows),
+        rows.as_array().cloned().unwrap_or_default()
+    );
+}
+
+#[test]
+fn wait_for_semantic_clone_condition_retries_until_ready() {
+    let mut attempts = 0_usize;
+
+    let value = wait_for_semantic_clone_condition(
+        StdDuration::from_millis(25),
+        StdDuration::from_millis(1),
+        "clone rows to become visible",
+        || {
+            attempts += 1;
+            Ok(attempts)
+        },
+        |attempt| *attempt >= 3,
+        |attempt| format!("attempt={attempt}"),
+    )
+    .expect("eventual wait should succeed");
+
+    assert_eq!(value, 3);
+    assert_eq!(attempts, 3);
+}
+
+#[test]
+fn wait_for_semantic_clone_condition_times_out_with_last_observation() {
+    let err = wait_for_semantic_clone_condition(
+        StdDuration::from_millis(5),
+        StdDuration::from_millis(1),
+        "clone rows to become visible",
+        || Ok(0_usize),
+        |count| *count > 0,
+        |count| format!("rows={count}"),
+    )
+    .expect_err("eventual wait should time out");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("clone rows to become visible"));
+    assert!(message.contains("last observation=value: rows=0"));
+}
+
+#[test]
+fn clone_query_wait_condition_any_response_accepts_empty_rows() {
+    let rows: Vec<serde_json::Value> = Vec::new();
+
+    assert!(clone_query_meets_wait_condition(
+        rows.as_slice(),
+        &CloneQueryWaitCondition::AnyResponse
+    ));
+    assert!(!clone_query_meets_wait_condition(
+        rows.as_slice(),
+        &CloneQueryWaitCondition::NonEmptyResults
+    ));
+}
+
+#[test]
 fn smoke_session_id_uses_agent_and_run_slug() {
     let temp = tempfile::tempdir().expect("tempdir");
     let run_dir = temp.path().join("First Agent Smoke/Run");
@@ -425,4 +615,24 @@ fn command_env_value(command: &std::process::Command, key: &str) -> Option<std::
             None
         }
     })
+}
+
+#[test]
+fn semantic_clone_store_evidence_proves_rebuild_when_store_has_current_rows() {
+    assert!(semantic_clone_store_evidence_proves_rebuild(
+        Some(0),
+        SemanticCloneStoreEvidence {
+            current_artefacts: 4,
+            embeddings: 4,
+            clone_edges: 2,
+        }
+    ));
+    assert!(!semantic_clone_store_evidence_proves_rebuild(
+        Some(0),
+        SemanticCloneStoreEvidence {
+            current_artefacts: 4,
+            embeddings: 4,
+            clone_edges: 0,
+        }
+    ));
 }

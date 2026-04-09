@@ -56,6 +56,9 @@ pub const COPILOT_HOOK_POST_TOOL_USE: &str = "post-tool-use";
 pub const COPILOT_HOOK_ERROR_OCCURRED: &str = "error-occurred";
 
 pub const CODEX_HOOK_SESSION_START: &str = "session-start";
+pub const CODEX_HOOK_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
+pub const CODEX_HOOK_PRE_TOOL_USE: &str = "pre-tool-use";
+pub const CODEX_HOOK_POST_TOOL_USE: &str = "post-tool-use";
 pub const CODEX_HOOK_STOP: &str = "stop";
 
 #[derive(Default)]
@@ -403,7 +406,13 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
-        vec![CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP]
+        vec![
+            CODEX_HOOK_SESSION_START,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            CODEX_HOOK_PRE_TOOL_USE,
+            CODEX_HOOK_POST_TOOL_USE,
+            CODEX_HOOK_STOP,
+        ]
     }
 
     fn format_resume_command(&self, session_id: &str) -> String {

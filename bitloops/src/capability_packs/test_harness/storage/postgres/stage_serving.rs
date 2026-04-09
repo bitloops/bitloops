@@ -7,37 +7,69 @@ use crate::models::{
     StageLineCoverageRecord,
 };
 
-use super::helpers::{get, get_i64};
+use super::helpers::{get, get_i64, get_opt_i64};
 
 pub(super) async fn load_stage_covering_tests(
     client: &mut tokio_postgres::Client,
     repo_id: String,
     production_symbol_id: String,
+    commit_sha: Option<String>,
     linkage_source_owned: Option<String>,
     min_confidence: Option<f64>,
     limit: usize,
 ) -> Result<Vec<StageCoveringTestRecord>> {
     let limit = limit.max(1);
-    let mut sql = String::from(
-        "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
-         parent.name AS suite_name, ts.path AS file_path, \
-         ts.start_line, ts.end_line, \
-         COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) AS confidence, \
-         ts.discovery_source, \
-         COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') AS linkage_source, \
-         COALESCE(te.metadata::jsonb ->> 'linkage_status', 'unknown') AS linkage_status \
-         FROM test_artefact_edges_current te \
-         JOIN test_artefacts_current ts \
-           ON ts.repo_id = te.repo_id \
-          AND ts.symbol_id = te.from_symbol_id \
-         LEFT JOIN test_artefacts_current parent \
-           ON parent.repo_id = ts.repo_id \
-          AND parent.symbol_id = ts.parent_symbol_id \
-         WHERE te.repo_id = $1 \
-           AND (te.to_symbol_id = $2 OR te.to_artefact_id = $2) \
-           AND ts.canonical_kind = 'test_scenario'",
-    );
-    let mut next_param = 3usize;
+    let mut sql = if commit_sha.is_some() {
+        String::from(
+            "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
+             parent.name AS suite_name, ts.path AS file_path, \
+             ts.start_line, ts.end_line, \
+             COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) AS confidence, \
+             ts.discovery_source, \
+             COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') AS linkage_source, \
+             COALESCE(te.metadata::jsonb ->> 'linkage_status', 'unknown') AS linkage_status, \
+             tc.classification, \
+             tc.classification_source, \
+             tc.fan_out \
+             FROM test_artefact_edges_current te \
+             JOIN test_artefacts_current ts \
+               ON ts.repo_id = te.repo_id \
+              AND ts.symbol_id = te.from_symbol_id \
+             LEFT JOIN test_artefacts_current parent \
+               ON parent.repo_id = ts.repo_id \
+              AND parent.symbol_id = ts.parent_symbol_id \
+             LEFT JOIN test_classifications tc \
+               ON tc.test_symbol_id = ts.symbol_id \
+              AND tc.commit_sha = $3 \
+             WHERE te.repo_id = $1 \
+               AND (te.to_symbol_id = $2 OR te.to_artefact_id = $2) \
+               AND ts.canonical_kind = 'test_scenario'",
+        )
+    } else {
+        String::from(
+            "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
+             parent.name AS suite_name, ts.path AS file_path, \
+             ts.start_line, ts.end_line, \
+             COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) AS confidence, \
+             ts.discovery_source, \
+             COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') AS linkage_source, \
+             COALESCE(te.metadata::jsonb ->> 'linkage_status', 'unknown') AS linkage_status, \
+             NULL::TEXT AS classification, \
+             NULL::TEXT AS classification_source, \
+             NULL::BIGINT AS fan_out \
+             FROM test_artefact_edges_current te \
+             JOIN test_artefacts_current ts \
+               ON ts.repo_id = te.repo_id \
+              AND ts.symbol_id = te.from_symbol_id \
+             LEFT JOIN test_artefacts_current parent \
+               ON parent.repo_id = ts.repo_id \
+              AND parent.symbol_id = ts.parent_symbol_id \
+             WHERE te.repo_id = $1 \
+               AND (te.to_symbol_id = $2 OR te.to_artefact_id = $2) \
+               AND ts.canonical_kind = 'test_scenario'",
+        )
+    };
+    let mut next_param = if commit_sha.is_some() { 4usize } else { 3usize };
     if min_confidence.is_some() {
         sql.push_str(&format!(
             " AND COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) >= ${next_param}"
@@ -53,23 +85,50 @@ pub(super) async fn load_stage_covering_tests(
         " ORDER BY confidence DESC, ts.path, ts.name LIMIT {limit}"
     ));
 
-    let rows = match (min_confidence, linkage_source_owned.as_deref()) {
-        (Some(mc), Some(ls)) => {
+    let rows = match (
+        commit_sha.as_deref(),
+        min_confidence,
+        linkage_source_owned.as_deref(),
+    ) {
+        (Some(commit_sha), Some(mc), Some(ls)) => {
+            client
+                .query(
+                    &sql,
+                    &[&repo_id, &production_symbol_id, &commit_sha, &mc, &ls],
+                )
+                .await
+        }
+        (Some(commit_sha), Some(mc), None) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &commit_sha, &mc])
+                .await
+        }
+        (Some(commit_sha), None, Some(ls)) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &commit_sha, &ls])
+                .await
+        }
+        (Some(commit_sha), None, None) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &commit_sha])
+                .await
+        }
+        (None, Some(mc), Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &mc, &ls])
                 .await
         }
-        (Some(mc), None) => {
+        (None, Some(mc), None) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &mc])
                 .await
         }
-        (None, Some(ls)) => {
+        (None, None, Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &ls])
                 .await
         }
-        (None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
+        (None, None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
     }
     .context("failed querying stage covering tests")?;
 
@@ -86,6 +145,13 @@ pub(super) async fn load_stage_covering_tests(
                 discovery_source: get(&row, 7, "discovery_source")?,
                 linkage_source: get(&row, 8, "linkage_source")?,
                 linkage_status: get(&row, 9, "linkage_status")?,
+                classification: row
+                    .try_get::<_, Option<String>>(10)
+                    .context("classification")?,
+                classification_source: row
+                    .try_get::<_, Option<String>>(11)
+                    .context("classification_source")?,
+                fan_out: get_opt_i64(&row, 12, "fan_out")?,
             })
         })
         .collect()

@@ -391,6 +391,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             )
             .unwrap();
             codex_hooks::install_hooks_at(repo.path(), false, false).unwrap();
+            assert!(repo.path().join(".codex/config.toml").exists());
             git_hooks::install_git_hooks(repo.path(), false).unwrap();
 
             let registry_path = bitloops_state_dir()
@@ -425,6 +426,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
 
             assert!(service_called.load(std::sync::atomic::Ordering::SeqCst));
             assert!(!codex_hooks::are_hooks_installed_at(repo.path()));
+            assert!(repo.path().join(".codex/config.toml").exists());
             assert!(!git_hooks::is_git_hook_installed(repo.path()));
             assert!(!repo.path().join(SETTINGS_DIR).exists());
             assert!(!bitloops_config_dir().unwrap().exists());
