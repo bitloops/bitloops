@@ -4,10 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.0.13] - 2026-04-09
+## [Unreleased]
 
 ### Added
 
+- **Expanded Codex hook support**: Codex now supports the full currently documented hook surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
+- **Repo-local Codex hooks config bootstrap**: `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
+- **Codex Bash hook installation/parsing**: Codex Bash tool hooks are now installed and parsed, but remain non-mutating/no-op in Bitloops until dedicated Bash-level checkpoint capture is added.
 - **Embeddings enablement in `enable` and default-daemon init**: added `bitloops enable --install-embeddings` plus `bitloops daemon enable` as an alias to the same implementation. Interactive `enable` now offers recommended embeddings setup with a default-yes `[Y/n]` prompt when embeddings are not configured, while `bitloops init --install-default-daemon` auto-applies the same default local embeddings configuration before any init-triggered sync. The flow targets the effective daemon config (`BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, nearest repo `config.toml`, then the global config), reuses the existing runtime warm/bootstrap path, preserves existing non-local profiles, and rolls back only newly added embeddings config when bootstrap fails.
 - **QAT tests**: Added a new QAT (Quality Acceptance Tests) suite under bitloops/qat/features.
 - **Repo-scoped slim artefact selection stages**: added slim-root `selectArtefacts(by: ArtefactSelectorInput!)` for selecting current artefact sets by `symbolFqn`, `path`, or `path + lines`, together with a matching DevQL DSL/compiler path (`selectArtefacts(symbol_fqn:...)`, `selectArtefacts(path:...,lines:...)`, `selectArtefacts(path:...)`) that compiles only against the slim DevQL endpoint. The new `ArtefactSelection` surface exposes default stage summaries for `checkpoints`, `clones`, `deps`, and `tests`, plus an aggregate `summary` field that returns all available categories in one response for agent-oriented tool calls.
@@ -195,9 +198,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [0.0.10] - 2026-03-12
 
-- Expanded Codex hook support to the full currently documented surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
-- `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
-- Codex Bash tool hooks are now installed and parsed, but remain non-mutating/no-op in Bitloops until dedicated Bash-level checkpoint capture is added.
+- Added first-class Codex support (current hook parity: SessionStart and Stop), including bitloops init --agent codex, lifecycle/runtime dispatch wiring, and managed Codex hook installation in .codex/hooks.json (Codex matcher format) with idempotent install/uninstall that preserves user-defined hook entries.
 - Dashboard `/api/commits` now returns all checkpoint session agents via `checkpoint.agents` and no longer exposes a singular `checkpoint.agent` value.
 - Dashboard `/api/commits` now includes `checkpoint.first_prompt_preview` with the first 160 characters from the first prompt of the first checkpoint session, after stripping leading `<tag>...</tag>` blocks and trimming leading whitespace.
 - Dashboard agent filtering/aggregation now evaluates all session agents per checkpoint, so `/api/commits` agent filters, `/api/agents`, and KPI agent counts reflect multi-session checkpoints correctly.
