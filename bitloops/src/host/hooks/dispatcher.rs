@@ -451,15 +451,15 @@ fn track_hook_action(
     );
 }
 
-pub(crate) fn run_agent_hook_with_logging<F>(
+pub(crate) fn run_agent_hook_with_logging<F, T>(
     repo_root: &Path,
     agent_name: &str,
     hook_name: &str,
     strategy_name: &str,
     handler: F,
-) -> Result<()>
+) -> Result<T>
 where
-    F: FnOnce() -> Result<()>,
+    F: FnOnce() -> Result<T>,
 {
     init_hook_logging(repo_root);
 
@@ -522,6 +522,15 @@ where
     result
 }
 
+fn emit_hook_stdout_if_present(
+    outcome: &crate::host::checkpoints::lifecycle::adapters::HookCommandOutcome,
+) -> Result<()> {
+    if let Some(stdout) = &outcome.stdout {
+        print!("{stdout}");
+    }
+    Ok(())
+}
+
 pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Result<()> {
     let agent = match args.agent {
         HooksAgent::Git(git_args) => return git::run(git_args, strategy_registry).await,
@@ -553,7 +562,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CLAUDE_CODE,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(AGENT_NAME_CLAUDE_CODE, hook_name, &stdin),
+                || {
+                    route_hook_command_to_lifecycle(
+                        &repo_root,
+                        AGENT_NAME_CLAUDE_CODE,
+                        hook_name,
+                        &stdin,
+                    )
+                },
             );
             track_hook_action(
                 &repo_root,
@@ -563,7 +579,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 result.is_ok(),
                 started.elapsed().as_millis(),
             );
-            result
+            result.and_then(|outcome| emit_hook_stdout_if_present(&outcome))
         }
         HooksAgent::Codex(codex) => {
             let hook_name = codex.verb.hook_name();
@@ -574,7 +590,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CODEX,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(AGENT_NAME_CODEX, hook_name, &stdin),
+                || route_hook_command_to_lifecycle(&repo_root, AGENT_NAME_CODEX, hook_name, &stdin),
             );
             track_hook_action(
                 &repo_root,
@@ -584,7 +600,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 result.is_ok(),
                 started.elapsed().as_millis(),
             );
-            result
+            result.and_then(|outcome| emit_hook_stdout_if_present(&outcome))
         }
         HooksAgent::Gemini(gemini) => {
             let hook_name = gemini.verb.hook_name();
@@ -595,7 +611,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_GEMINI,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(AGENT_NAME_GEMINI, hook_name, &stdin),
+                || {
+                    route_hook_command_to_lifecycle(
+                        &repo_root,
+                        AGENT_NAME_GEMINI,
+                        hook_name,
+                        &stdin,
+                    )
+                },
             );
             track_hook_action(
                 &repo_root,
@@ -605,7 +628,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 result.is_ok(),
                 started.elapsed().as_millis(),
             );
-            result
+            result.and_then(|outcome| emit_hook_stdout_if_present(&outcome))
         }
         HooksAgent::Cursor(cursor) => {
             let hook_name = cursor.verb.hook_name();
@@ -616,7 +639,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_CURSOR,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(AGENT_NAME_CURSOR, hook_name, &stdin),
+                || {
+                    route_hook_command_to_lifecycle(
+                        &repo_root,
+                        AGENT_NAME_CURSOR,
+                        hook_name,
+                        &stdin,
+                    )
+                },
             );
             track_hook_action(
                 &repo_root,
@@ -626,7 +656,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 result.is_ok(),
                 started.elapsed().as_millis(),
             );
-            result
+            result.and_then(|outcome| emit_hook_stdout_if_present(&outcome))
         }
         HooksAgent::Copilot(copilot) => {
             let hook_name = copilot.verb.hook_name();
@@ -637,7 +667,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_COPILOT,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(AGENT_NAME_COPILOT, hook_name, &stdin),
+                || {
+                    route_hook_command_to_lifecycle(
+                        &repo_root,
+                        AGENT_NAME_COPILOT,
+                        hook_name,
+                        &stdin,
+                    )
+                },
             );
             track_hook_action(
                 &repo_root,
@@ -647,7 +684,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 result.is_ok(),
                 started.elapsed().as_millis(),
             );
-            result
+            result.and_then(|outcome| emit_hook_stdout_if_present(&outcome))
         }
         HooksAgent::OpenCode(opencode) => {
             let hook_name = opencode.verb.hook_name();
@@ -658,7 +695,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 AGENT_NAME_OPEN_CODE,
                 hook_name,
                 &strategy_name,
-                || route_hook_command_to_lifecycle(AGENT_NAME_OPEN_CODE, hook_name, &stdin),
+                || {
+                    route_hook_command_to_lifecycle(
+                        &repo_root,
+                        AGENT_NAME_OPEN_CODE,
+                        hook_name,
+                        &stdin,
+                    )
+                },
             );
             track_hook_action(
                 &repo_root,
@@ -668,7 +712,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 result.is_ok(),
                 started.elapsed().as_millis(),
             );
-            result
+            result.and_then(|outcome| emit_hook_stdout_if_present(&outcome))
         }
         HooksAgent::Git(_) => unreachable!(),
     }
@@ -871,7 +915,8 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::PreCompact
         | CursorHookVerb::SubagentStart
         | CursorHookVerb::SubagentStop => {
-            route_hook_command_to_lifecycle(AGENT_NAME_CURSOR, hook_name, stdin)
+            route_hook_command_to_lifecycle(repo_root, AGENT_NAME_CURSOR, hook_name, stdin)
+                .map(|_| ())
         }
     }
 }

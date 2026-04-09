@@ -114,19 +114,19 @@ bitloops uninstall --config --data --caching
 
 Key flags:
 
-| Flag | Meaning |
-| --- | --- |
-| `--full` | Remove all Bitloops-managed artefacts, including repository-local cleanup |
-| `--binaries` | Remove recognised `bitloops` binaries |
-| `--service` | Remove the daemon service and daemon state metadata |
-| `--data` | Remove global data and repo-local `.bitloops/` data |
-| `--caching` | Remove the global cache directory |
-| `--config` | Remove the global config directory and TLS artefacts |
-| `--agent-hooks` | Remove supported agent hooks |
-| `--git-hooks` | Remove Bitloops git hooks |
-| `--shell` | Remove managed shell completion integration |
-| `--only-current-project` | Limit hook removal to the current repository |
-| `--force` | Skip confirmation |
+| Flag                     | Meaning                                                                   |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `--full`                 | Remove all Bitloops-managed artefacts, including repository-local cleanup |
+| `--binaries`             | Remove recognised `bitloops` binaries                                     |
+| `--service`              | Remove the daemon service and daemon state metadata                       |
+| `--data`                 | Remove global data and repo-local `.bitloops/` data                       |
+| `--caching`              | Remove the global cache directory                                         |
+| `--config`               | Remove the global config directory and TLS artefacts                      |
+| `--agent-hooks`          | Remove supported agent hooks                                              |
+| `--git-hooks`            | Remove Bitloops git hooks                                                 |
+| `--shell`                | Remove managed shell completion integration                               |
+| `--only-current-project` | Limit hook removal to the current repository                              |
+| `--force`                | Skip confirmation                                                         |
 
 Notes:
 
@@ -154,19 +154,19 @@ bitloops daemon start --until-stopped
 
 Key flags:
 
-| Flag | Meaning |
-| --- | --- |
-| `-d`, `--detached` | Start the daemon in the background without installing an always-on service |
-| `--until-stopped` | Install or refresh the global user service and start it |
-| `--host` | Override the bind host |
-| `--port` | Override the bind port |
-| `--http` | Force local HTTP instead of HTTPS |
-| `--recheck-local-dashboard-net` | Re-run local dashboard TLS and network checks |
-| `--bundle-dir` | Override the dashboard bundle directory for this run |
-| `--config` | Use an explicit daemon config file |
-| `--create-default-config` | Create the default global daemon config plus local default store files before starting |
-| `--bootstrap-local-stores` | Create the local SQLite, DuckDB, and blob-store artefacts required by the selected daemon config before starting |
-| `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version |
+| Flag                                                 | Meaning                                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `-d`, `--detached`                                   | Start the daemon in the background without installing an always-on service                                       |
+| `--until-stopped`                                    | Install or refresh the global user service and start it                                                          |
+| `--host`                                             | Override the bind host                                                                                           |
+| `--port`                                             | Override the bind port                                                                                           |
+| `--http`                                             | Force local HTTP instead of HTTPS                                                                                |
+| `--recheck-local-dashboard-net`                      | Re-run local dashboard TLS and network checks                                                                    |
+| `--bundle-dir`                                       | Override the dashboard bundle directory for this run                                                             |
+| `--config`                                           | Use an explicit daemon config file                                                                               |
+| `--create-default-config`                            | Create the default global daemon config plus local default store files before starting                           |
+| `--bootstrap-local-stores`                           | Create the local SQLite, DuckDB, and blob-store artefacts required by the selected daemon config before starting |
+| `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version                                                            |
 
 Notes:
 
@@ -344,6 +344,8 @@ Highlights:
 - `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
+- that injected hook guidance is instruction-only; Bitloops does not run DevQL queries on the agent's behalf in the hook path
+- GitHub currently documents Copilot CLI `sessionStart` output as ignored, so Bitloops can emit the session-start payload there without claiming the Copilot runtime will surface it to the model yet
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
 
 ### Knowledge
