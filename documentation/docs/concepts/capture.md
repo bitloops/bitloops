@@ -51,7 +51,9 @@ Local overrides live in `.bitloops.local.toml`, which can also stand on its own 
 For DevQL indexing scope, capture now also honours:
 
 - `[scope].exclude` inline glob patterns
-- `[scope].exclude_from` files (for example `.bitloopsignore`)
+- `[scope].exclude_from` files (for example `.gitignore` or `config/devql.ignore`)
+
+`exclude_from` files are not generated automatically. Create any ignore-pattern file under the repo-policy root and reference it from `exclude_from`. Use one glob pattern per line, with optional `#` comments.
 
 These rules are evaluated before sync/ingest/watch path discovery. Missing or unreadable `exclude_from` files fail the indexing run before processing starts.
 

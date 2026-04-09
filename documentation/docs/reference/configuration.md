@@ -247,7 +247,7 @@ watch_poll_fallback_ms = 2500
 project_root = "packages/app"
 include = ["src/**", "tests/**"]
 exclude = ["dist/**", "coverage/**"]
-exclude_from = [".bitloopsignore"]
+exclude_from = [".gitignore", "config/devql.ignore"]
 
 [agents]
 default = "claude-code"
@@ -284,9 +284,31 @@ watch_debounce_ms = 1500
 `[scope]` exclusions are evaluated relative to the repo-policy root:
 
 - `exclude = ["glob/**"]` keeps inline glob patterns in policy
-- `exclude_from = [".bitloopsignore"]` loads additional patterns from files
+- `exclude_from = ["path/to/ignore-file"]` loads additional patterns from files
 
 `exclude_from` files use one glob per line. Blank lines are ignored. Lines beginning with `#` are comments.
+
+Example:
+
+```toml title=".bitloops.local.toml"
+[scope]
+exclude = ["dist/**", "coverage/**"]
+exclude_from = [".gitignore", "config/devql.ignore"]
+```
+
+```text title="config/devql.ignore"
+# One glob per line
+**/*.generated.ts
+**/third_party/**
+docs/**
+```
+
+Notes:
+
+- `exclude_from` can reference any ignore-pattern file under the repo-policy root (for example `.gitignore` or `config/devql.ignore`)
+- paths in `exclude_from` must resolve under that same repo-policy root
+- you can list multiple files in `exclude_from`
+- missing or unreadable `exclude_from` files fail sync/ingest/watch startup before indexing begins
 
 Merge behavior for exclusions is special:
 
