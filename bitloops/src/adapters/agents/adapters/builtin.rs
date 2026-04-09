@@ -16,8 +16,10 @@ use crate::adapters::agents::codex::agent::CodexAgent;
 use crate::adapters::agents::codex::hook_output as codex_hook_output;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
+use crate::adapters::agents::copilot::hook_output as copilot_hook_output;
 use crate::adapters::agents::copilot::hooks as copilot_hooks;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::adapters::agents::cursor::hook_output as cursor_hook_output;
 use crate::adapters::agents::cursor::hooks as cursor_hooks;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::gemini::hook_output as gemini_hook_output;
@@ -150,6 +152,8 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_COPILOT,
                 aliases: &["copilot", "copilot-cli", "github-copilot"],
                 is_default: false,
+                // Copilot CLI currently documents session-start output as ignored, so keep the
+                // advertised capability surface conservative until end-to-end visibility is proven.
                 capabilities: ANALYTICS_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -179,7 +183,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     format!("copilot --resume {session_id}")
                 }
             },
-            None,
+            Some(copilot_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {
@@ -226,6 +230,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_CURSOR,
                 aliases: &[],
                 is_default: false,
+                // Cursor native hooks now emit session-start augmentation from Bitloops, but we
+                // keep the advertised capability surface conservative until live model visibility
+                // is validated outside repo tests.
                 capabilities: BASE_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -249,7 +256,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             cursor_hooks::install_hooks_at,
             cursor_hooks::uninstall_hooks_at,
             |_session_id| "Open this project in Cursor to continue the session.".to_string(),
-            None,
+            Some(cursor_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {

@@ -6,6 +6,15 @@ pub struct HookAugmentation {
     pub targeted: bool,
 }
 
+pub fn build_devql_session_start_augmentation() -> HookAugmentation {
+    HookAugmentation {
+        additional_context: String::from(
+            "DevQL is available in this repo. Start with `bitloops devql query '{ selectArtefacts(by: { path: \"src/main.rs\" }) { summary } }'` for a compact summary, read stage `schema` only if needed, then query `items(first: ...)` for typed rows. Use `bitloops devql schema` or `bitloops devql schema --global` for SDL discovery.",
+        ),
+        targeted: false,
+    }
+}
+
 pub fn build_devql_hook_augmentation(target: Option<&PromptTarget>) -> HookAugmentation {
     let query = match target {
         Some(target) => targeted_summary_query(target),
@@ -39,6 +48,24 @@ fn targeted_summary_query(target: &PromptTarget) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_start_guidance_uses_current_devql_surface() {
+        let augmentation = build_devql_session_start_augmentation();
+
+        assert!(!augmentation.targeted);
+        assert!(augmentation.additional_context.contains("selectArtefacts"));
+        assert!(augmentation.additional_context.contains("summary"));
+        assert!(augmentation.additional_context.contains("schema"));
+        assert!(augmentation.additional_context.contains("items(first:"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("bitloops devql schema")
+        );
+        assert!(!augmentation.additional_context.contains("availableInfo"));
+        assert!(!augmentation.additional_context.contains("menu"));
+    }
 
     #[test]
     fn generic_guidance_uses_current_devql_surface() {

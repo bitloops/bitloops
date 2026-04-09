@@ -8,7 +8,9 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
-use crate::host::hooks::augmentation::builder::build_devql_hook_augmentation;
+use crate::host::hooks::augmentation::builder::{
+    build_devql_hook_augmentation, build_devql_session_start_augmentation,
+};
 use crate::host::hooks::augmentation::prompt_target::extract_primary_prompt_target;
 
 use super::{
@@ -439,12 +441,15 @@ fn build_prompt_augmentation_stdout(
     event: &LifecycleEvent,
     registration: &crate::adapters::agents::AgentAdapterRegistration,
 ) -> Option<String> {
-    if event.event_type != Some(LifecycleEventType::TurnStart) || event.prompt.trim().is_empty() {
-        return None;
-    }
+    let augmentation = match event.event_type {
+        Some(LifecycleEventType::SessionStart) => build_devql_session_start_augmentation(),
+        Some(LifecycleEventType::TurnStart) if !event.prompt.trim().is_empty() => {
+            let target = extract_primary_prompt_target(repo_root, &event.prompt);
+            build_devql_hook_augmentation(target.as_ref())
+        }
+        _ => return None,
+    };
 
-    let target = extract_primary_prompt_target(repo_root, &event.prompt);
-    let augmentation = build_devql_hook_augmentation(target.as_ref());
     registration.render_prompt_augmentation(hook_name, &augmentation)
 }
 
@@ -502,7 +507,9 @@ pub fn route_hook_command_to_lifecycle(
 #[cfg(test)]
 mod route_tests {
     use super::*;
-    use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
+    use crate::adapters::agents::{
+        AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
+    };
     use crate::host::interactions::db_store::interaction_spool_db_path;
     use crate::test_support::process_state::{git_command, with_process_state};
     use anyhow::Result;
@@ -757,6 +764,78 @@ mod route_tests {
     }
 
     #[test]
+    fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_id = "claude-session-start";
+        let transcript_path = repo.path().join("claude-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(&transcript_path, "").expect("write transcript");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+                CLAUDE_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .expect("additionalContext");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                serde_json::Value::String("SessionStart".to_string())
+            );
+            assert!(context.contains("selectArtefacts"));
+            assert!(!context.contains("tracked.txt"));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_id = "codex-session-start";
+        let transcript_path = repo.path().join("codex-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(&transcript_path, "").expect("write transcript");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_CODEX,
+                CODEX_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .expect("additionalContext");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                serde_json::Value::String("SessionStart".to_string())
+            );
+            assert!(context.contains("selectArtefacts"));
+            assert!(!context.contains("tracked.txt"));
+            Ok(())
+        })
+    }
+
+    #[test]
     fn route_gemini_before_agent_returns_additional_context_stdout() -> Result<()> {
         let repo = seed_repo();
         let session_id = "gemini-session-prompt";
@@ -807,6 +886,114 @@ mod route_tests {
             assert!(context.contains("tracked.txt"));
             Ok(())
         })
+    }
+
+    #[test]
+    fn route_gemini_session_start_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_id = "gemini-session-start";
+        let transcript_path = repo.path().join("gemini-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(&transcript_path, "").expect("write transcript");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_GEMINI,
+                GEMINI_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .expect("additionalContext");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                serde_json::Value::String("SessionStart".to_string())
+            );
+            assert!(context.contains("selectArtefacts"));
+            assert!(!context.contains("tracked.txt"));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn route_cursor_session_start_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let transcript_path = repo.path().join("cursor-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(&transcript_path, "").expect("write transcript");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "conversation_id": "cursor-session-start",
+                "transcript_path": transcript_path_str,
+                "modelSlug": "gpt-5.4-mini",
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_CURSOR,
+                CURSOR_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["additional_context"]
+                .as_str()
+                .expect("additional_context");
+            assert!(context.contains("selectArtefacts"));
+            assert!(!context.contains("tracked.txt"));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn route_copilot_session_start_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_dir = repo.path().join("copilot-session-state");
+        std::fs::create_dir_all(&session_dir).expect("create copilot session dir");
+        let session_dir_str = session_dir.to_string_lossy().to_string();
+
+        with_process_state(
+            Some(repo.path()),
+            &[(
+                "BITLOOPS_TEST_COPILOT_SESSION_DIR",
+                Some(session_dir_str.as_str()),
+            )],
+            || -> Result<()> {
+                let session_payload = serde_json::json!({
+                    "sessionId": "copilot-session-start",
+                    "source": "new",
+                    "initialPrompt": "bootstrap devql",
+                    "modelSlug": "gpt-5.4",
+                })
+                .to_string();
+                let outcome = route_hook_command_to_lifecycle(
+                    repo.path(),
+                    AGENT_NAME_COPILOT,
+                    COPILOT_HOOK_SESSION_START,
+                    &session_payload,
+                )?;
+
+                let stdout = outcome.stdout.expect("stdout");
+                let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+                let context = json["additionalContext"]
+                    .as_str()
+                    .expect("additionalContext");
+                assert!(context.contains("selectArtefacts"));
+                assert!(!context.contains("tracked.txt"));
+                Ok(())
+            },
+        )
     }
 }
 

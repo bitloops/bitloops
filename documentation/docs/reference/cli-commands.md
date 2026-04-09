@@ -344,8 +344,9 @@ Highlights:
 - `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
-- when Bitloops-managed hooks are installed for Claude Code, Codex, or Gemini, supported pre-turn hooks inject a short DevQL reminder that points the agent at `selectArtefacts(by: ...) { summary }`, stage `schema`, stage `items(first: ...)`, and `bitloops devql schema`
+- when Bitloops-managed hooks are installed, Claude Code, Codex, and Gemini inject a generic DevQL bootstrap on `session-start`; Claude Code, Codex, and Gemini also keep their supported per-turn DevQL reminder hooks, and Cursor/Copilot now emit repo-side `session-start` guidance through the same Bitloops hook path for validation
 - that injected hook guidance is instruction-only; Bitloops does not run DevQL queries on the agent's behalf in the hook path
+- GitHub currently documents Copilot CLI `sessionStart` output as ignored, so Bitloops can emit the session-start payload there without claiming the Copilot runtime will surface it to the model yet
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
 
 ### Knowledge
