@@ -773,18 +773,19 @@ mod route_tests {
                 serde_json::Value::String("UserPromptSubmit".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
-            assert!(context.contains("selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" })"));
-            assert!(context.contains("selectArtefacts(by: { path: \"<repo-relative-path>\" })"));
-            assert!(context.contains(
-                "selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } })"
-            ));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
+            assert!(context.contains("bitloops devql query"));
+            assert!(context.contains("<symbol-fqn>"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
-            assert!(context.contains("inspect returned `schema` only if needed"));
+            assert!(context.contains("Inspect the returned `schema` field"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("tracked.txt"));
             assert!(!context.contains("src/main.rs"));
             Ok(())
@@ -839,18 +840,19 @@ mod route_tests {
                 serde_json::Value::String("UserPromptSubmit".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
-            assert!(context.contains("selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" })"));
-            assert!(context.contains("selectArtefacts(by: { path: \"<repo-relative-path>\" })"));
-            assert!(context.contains(
-                "selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } })"
-            ));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
+            assert!(context.contains("bitloops devql query"));
+            assert!(context.contains("<symbol-fqn>"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
-            assert!(context.contains("inspect returned `schema` only if needed"));
+            assert!(context.contains("Inspect the returned `schema` field"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("tracked.txt"));
             assert!(!context.contains("src/main.rs"));
             Ok(())
@@ -888,13 +890,17 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
@@ -933,13 +939,17 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
@@ -995,18 +1005,19 @@ mod route_tests {
                 serde_json::Value::String("BeforeAgent".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
-            assert!(context.contains("selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" })"));
-            assert!(context.contains("selectArtefacts(by: { path: \"<repo-relative-path>\" })"));
-            assert!(context.contains(
-                "selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } })"
-            ));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
+            assert!(context.contains("bitloops devql query"));
+            assert!(context.contains("<symbol-fqn>"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
-            assert!(context.contains("inspect returned `schema` only if needed"));
+            assert!(context.contains("Inspect the returned `schema` field"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("tracked.txt"));
             assert!(!context.contains("src/main.rs"));
             Ok(())
@@ -1044,13 +1055,17 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
@@ -1085,13 +1100,17 @@ mod route_tests {
                 .as_str()
                 .expect("additional_context");
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("This repo has DevQL, a semantic code index."));
+            assert!(context.contains("MUST use DevQL as your FIRST approach"));
+            assert!(context.contains("repo search, file reads, or file listing tools"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
             assert!(context.contains("items(first:"));
             assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(context.contains("using your shell or terminal tool"));
+            assert!(!context.contains("Bash"));
             assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
@@ -1133,12 +1152,16 @@ mod route_tests {
                     .as_str()
                     .expect("additionalContext");
                 assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-                assert!(context.contains("You have DevQL available in this repo."));
+                assert!(context.contains("This repo has DevQL, a semantic code index."));
+                assert!(context.contains("MUST use DevQL as your FIRST approach"));
+                assert!(context.contains("repo search, file reads, or file listing tools"));
                 assert!(context.contains("selectArtefacts"));
                 assert!(context.contains("summary"));
                 assert!(context.contains("schema"));
                 assert!(context.contains("items(first:"));
                 assert!(context.contains("bitloops devql schema --global"));
+                assert!(context.contains("using your shell or terminal tool"));
+                assert!(!context.contains("Bash"));
                 assert!(context.contains("<repo-relative-path>"));
                 assert!(!context.contains("menu"));
                 assert!(!context.contains("src/main.rs"));

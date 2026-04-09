@@ -236,7 +236,8 @@ mod tests {
         std::fs::create_dir_all(&src_dir).expect("create src");
         std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").expect("write file");
 
-        let target = extract_primary_prompt_target(repo_root, "explain src/main.rs::").expect("target");
+        let target =
+            extract_primary_prompt_target(repo_root, "explain src/main.rs::").expect("target");
 
         assert_eq!(
             target,

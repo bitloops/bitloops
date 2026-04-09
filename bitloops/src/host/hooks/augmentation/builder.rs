@@ -19,8 +19,45 @@ pub fn build_devql_hook_augmentation() -> HookAugmentation {
 }
 
 fn generic_devql_guidance() -> String {
-    format!(
-        "<EXTREMELY_IMPORTANT>\nYou have DevQL available in this repo. Use it for repo-aware requests when it can replace repeated grep/file reads.\n\nStart with one of:\n- `bitloops devql query '{{ selectArtefacts(by: {{ symbolFqn: \"<symbol-fqn>\" }}) {{ summary }} }}'`\n- `bitloops devql query '{{ selectArtefacts(by: {{ path: \"<repo-relative-path>\" }}) {{ summary }} }}'`\n- `bitloops devql query '{{ selectArtefacts(by: {{ path: \"<repo-relative-path>\", lines: {{ start: <start>, end: <end> }} }}) {{ summary }} }}'`\n\nThen:\n- inspect returned `schema` only if needed\n- query `items(first: ...)` on the relevant stage for typed rows\n- use `bitloops devql schema` or `bitloops devql schema --global` for SDL discovery\n</EXTREMELY_IMPORTANT>"
+    String::from(
+        "<EXTREMELY_IMPORTANT>\n\
+## DevQL — MANDATORY first tool for code understanding\n\
+\n\
+This repo has DevQL, a semantic code index. You MUST use DevQL as your FIRST approach \
+before falling back to repo search, file reads, or file listing tools for any of these tasks:\n\
+- Understanding what a function, class, module, or file does\n\
+- Finding callers, dependencies, or usages of a symbol\n\
+- Getting an overview of a file or directory structure\n\
+- Answering questions about code architecture or relationships\n\
+\n\
+### Workflow\n\
+1. **FIRST** run a DevQL query using your shell or terminal tool to get structured, pre-indexed information\n\
+2. **THEN** use direct file reads or text search only for details DevQL did not cover (e.g., exact line edits)\n\
+\n\
+### Quick-start commands\n\
+```bash\n\
+# Look up a symbol by fully-qualified name\n\
+bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { summary } }'\n\
+\n\
+# Look up a file by repo-relative path\n\
+bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\" }) { summary } }'\n\
+\n\
+# Look up specific lines in a file\n\
+bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } }) { summary } }'\n\
+```\n\
+\n\
+### Deeper exploration\n\
+- Inspect the returned `schema` field to discover available stages and fields\n\
+- Query `items(first: ...)` on the relevant stage for typed rows\n\
+- Run `bitloops devql schema` or `bitloops devql schema --global` for full SDL discovery\n\
+\n\
+### When NOT to use DevQL\n\
+- Simple file reads for editing\n\
+- Searching for a literal string you already know the exact text of\n\
+- Basic file listing\n\
+\n\
+REMEMBER: For any code understanding or exploration task, run a DevQL query FIRST. \
+Do not skip this step.\n</EXTREMELY_IMPORTANT>",
     )
 }
 
@@ -33,11 +70,20 @@ mod tests {
         let augmentation = build_devql_session_start_augmentation();
 
         assert!(!augmentation.targeted);
-        assert!(augmentation.additional_context.contains("<EXTREMELY_IMPORTANT>"));
         assert!(
             augmentation
                 .additional_context
-                .contains("You have DevQL available in this repo. Use it for repo-aware requests when it can replace repeated grep/file reads.")
+                .contains("<EXTREMELY_IMPORTANT>")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("MUST use DevQL as your FIRST approach")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("repo search, file reads, or file listing tools")
         );
         assert!(
             augmentation
@@ -57,10 +103,20 @@ mod tests {
         assert!(
             augmentation
                 .additional_context
-                .contains("inspect returned `schema` only if needed")
+                .contains("Inspect the returned `schema` field")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("using your shell or terminal tool")
         );
         assert!(augmentation.additional_context.contains("items(first:"));
-        assert!(augmentation.additional_context.contains("bitloops devql schema --global"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("bitloops devql schema --global")
+        );
+        assert!(!augmentation.additional_context.contains("Bash"));
         assert!(!augmentation.additional_context.contains("src/main.rs"));
         assert!(!augmentation.additional_context.contains("tracked.txt"));
     }
@@ -70,11 +126,20 @@ mod tests {
         let augmentation = build_devql_hook_augmentation();
 
         assert!(!augmentation.targeted);
-        assert!(augmentation.additional_context.contains("<EXTREMELY_IMPORTANT>"));
         assert!(
             augmentation
                 .additional_context
-                .contains("You have DevQL available in this repo. Use it for repo-aware requests when it can replace repeated grep/file reads.")
+                .contains("<EXTREMELY_IMPORTANT>")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("MUST use DevQL as your FIRST approach")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("repo search, file reads, or file listing tools")
         );
         assert!(
             augmentation
@@ -94,10 +159,20 @@ mod tests {
         assert!(
             augmentation
                 .additional_context
-                .contains("inspect returned `schema` only if needed")
+                .contains("Inspect the returned `schema` field")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("using your shell or terminal tool")
         );
         assert!(augmentation.additional_context.contains("items(first:"));
-        assert!(augmentation.additional_context.contains("bitloops devql schema --global"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("bitloops devql schema --global")
+        );
+        assert!(!augmentation.additional_context.contains("Bash"));
         assert!(!augmentation.additional_context.contains("src/main.rs"));
         assert!(!augmentation.additional_context.contains("tracked.txt"));
     }

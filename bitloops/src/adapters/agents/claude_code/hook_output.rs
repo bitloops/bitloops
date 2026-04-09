@@ -38,8 +38,8 @@ mod tests {
     #[test]
     fn user_prompt_submit_renders_additional_context_json() {
         let targeted_augmentation = HookAugmentation {
-            additional_context:
-                "You should leverage DevQL for this repo-aware request.".to_string(),
+            additional_context: "You should leverage DevQL for this repo-aware request."
+                .to_string(),
             targeted: true,
         };
         let rendered = render_hook_output(

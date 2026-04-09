@@ -36,8 +36,8 @@ mod tests {
     #[test]
     fn before_agent_renders_additional_context_json() {
         let targeted_augmentation = HookAugmentation {
-            additional_context:
-                "You should leverage DevQL for this repo-aware request.".to_string(),
+            additional_context: "You should leverage DevQL for this repo-aware request."
+                .to_string(),
             targeted: true,
         };
         let rendered = render_hook_output(
