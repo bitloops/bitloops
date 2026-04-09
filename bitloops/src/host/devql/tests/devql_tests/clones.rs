@@ -710,15 +710,17 @@ async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_orderin
 
         conn.execute(
             "INSERT INTO symbol_embeddings_current (
-                artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension,
-                embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 artefact_id,
                 repo_id,
                 path,
                 format!("blob-{symbol_id}"),
                 symbol_id,
+                "code",
+                "provider=local|model=jinaai/jina-embeddings-v2-base-code|dimension=3",
                 "local",
                 "jinaai/jina-embeddings-v2-base-code",
                 3,

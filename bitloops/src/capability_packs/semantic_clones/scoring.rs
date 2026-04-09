@@ -21,6 +21,11 @@ const PREFERRED_LOCAL_PATTERN_SCORE_CAP: f32 = 0.98;
 const CLONE_SCORE_WEIGHT_SEMANTIC: f32 = 0.55;
 const CLONE_SCORE_WEIGHT_LEXICAL: f32 = 0.25;
 const CLONE_SCORE_WEIGHT_STRUCTURAL: f32 = 0.20;
+const SEMANTIC_WEIGHT_CODE_EMBEDDING: f32 = 0.50;
+const SEMANTIC_WEIGHT_SUMMARY_EMBEDDING: f32 = 0.50;
+const MULTI_VIEW_HIGH_SIMILARITY_THRESHOLD: f32 = 0.72;
+const MULTI_VIEW_LOW_SIMILARITY_THRESHOLD: f32 = 0.45;
+const MULTI_VIEW_SIMILARITY_GAP_THRESHOLD: f32 = 0.20;
 
 const LEXICAL_WEIGHT_IDENTIFIER_OVERLAP: f32 = 0.30;
 const LEXICAL_WEIGHT_BODY_OVERLAP: f32 = 0.25;
@@ -135,23 +140,34 @@ impl CloneScoringOptions {
         self
     }
 
-    fn apply_env_overrides(mut self) -> Self {
-        if ann_disabled_from_env() {
+    #[cfg(test)]
+    fn apply_ann_override_raw(mut self, raw: Option<&str>) -> Self {
+        if raw.is_some_and(ann_disabled_from_raw) {
             self.ann_enabled = false;
         }
         self
     }
+
+    fn apply_env_overrides(self) -> Self {
+        if ann_disabled_from_env() {
+            self.with_ann_enabled(false)
+        } else {
+            self
+        }
+    }
+}
+
+fn ann_disabled_from_raw(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn ann_disabled_from_env() -> bool {
     std::env::var(DISABLE_ANN_ENV)
         .ok()
-        .map(|raw| {
-            matches!(
-                raw.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
+        .map(|raw| ann_disabled_from_raw(&raw))
         .unwrap_or(false)
 }
 
@@ -172,9 +188,17 @@ pub struct SymbolCloneCandidateInput {
     pub context_tokens: Vec<String>,
     pub embedding_setup: EmbeddingSetup,
     pub embedding: Vec<f32>,
+    pub summary_embedding_setup: Option<EmbeddingSetup>,
+    pub summary_embedding: Vec<f32>,
     pub call_targets: Vec<String>,
     pub dependency_targets: Vec<String>,
     pub churn_count: usize,
+}
+
+impl SymbolCloneCandidateInput {
+    fn has_summary_embedding(&self) -> bool {
+        self.summary_embedding_setup.is_some() && !self.summary_embedding.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -203,9 +227,8 @@ pub struct SymbolCloneBuildResult {
 struct CandidateGroupKey {
     repo_id: String,
     effective_kind: String,
-    embedding_provider: String,
-    embedding_model: String,
-    embedding_dimension: usize,
+    representation_kind: String,
+    setup_fingerprint: String,
 }
 
 #[derive(Debug)]
@@ -261,15 +284,35 @@ fn build_symbol_clone_edges_for_sources(
     let options = options.apply_env_overrides();
 
     let mut group_indices = HashMap::<CandidateGroupKey, Vec<usize>>::new();
+    let mut summary_group_indices = HashMap::<CandidateGroupKey, Vec<usize>>::new();
     for (idx, candidate) in candidates.iter().enumerate() {
         group_indices
             .entry(candidate_group_key(candidate))
             .or_default()
             .push(idx);
+        if let Some(summary_group_key) = summary_candidate_group_key(candidate) {
+            summary_group_indices
+                .entry(summary_group_key)
+                .or_default()
+                .push(idx);
+        }
     }
 
     let group_ann_indexes = if options.ann_enabled {
-        build_group_ann_indexes(candidates, &group_indices)
+        build_group_ann_indexes(candidates, &group_indices, |candidate| {
+            Some(candidate.embedding.as_slice())
+        })
+    } else {
+        HashMap::new()
+    };
+    let summary_group_ann_indexes = if options.ann_enabled {
+        build_group_ann_indexes(candidates, &summary_group_indices, |candidate| {
+            if candidate.has_summary_embedding() {
+                Some(candidate.summary_embedding.as_slice())
+            } else {
+                None
+            }
+        })
     } else {
         HashMap::new()
     };
@@ -295,6 +338,21 @@ fn build_symbol_clone_edges_for_sources(
 
         if options.ann_enabled {
             if let Some(group_ann_index) = group_ann_indexes.get(&group_key)
+                && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
+            {
+                let ann_local = group_ann_index
+                    .index
+                    .nearest(*source_local_idx, options.ann_neighbors.saturating_add(1));
+                for local_idx in ann_local {
+                    if let Some(global_idx) = group_ann_index.global_indices.get(local_idx).copied()
+                        && global_idx != source_idx
+                    {
+                        target_indices.insert(global_idx);
+                    }
+                }
+            }
+            if let Some(summary_group_key) = summary_candidate_group_key(source)
+                && let Some(group_ann_index) = summary_group_ann_indexes.get(&summary_group_key)
                 && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
             {
                 let ann_local = group_ann_index
@@ -358,27 +416,37 @@ fn build_symbol_clone_edges_for_sources(
     }
 }
 
-fn build_group_ann_indexes(
+fn build_group_ann_indexes<F>(
     candidates: &[&SymbolCloneCandidateInput],
     group_indices: &HashMap<CandidateGroupKey, Vec<usize>>,
-) -> HashMap<CandidateGroupKey, GroupAnnIndex> {
+    embedding_of: F,
+) -> HashMap<CandidateGroupKey, GroupAnnIndex>
+where
+    F: Fn(&SymbolCloneCandidateInput) -> Option<&[f32]>,
+{
     let mut out = HashMap::with_capacity(group_indices.len());
     for (group_key, global_indices) in group_indices {
-        if global_indices.len() < 2 {
-            continue;
+        let mut indexed_global_indices = Vec::with_capacity(global_indices.len());
+        let mut vectors = Vec::with_capacity(global_indices.len());
+        for global_idx in global_indices {
+            let Some(candidate) = candidates.get(*global_idx).copied() else {
+                continue;
+            };
+            let Some(embedding) = embedding_of(candidate) else {
+                continue;
+            };
+            if embedding.is_empty() {
+                continue;
+            }
+            indexed_global_indices.push(*global_idx);
+            vectors.push(embedding.to_vec());
         }
-
-        let vectors = global_indices
-            .iter()
-            .filter_map(|idx| candidates.get(*idx))
-            .map(|candidate| candidate.embedding.clone())
-            .collect::<Vec<_>>();
-        if vectors.is_empty() {
+        if indexed_global_indices.len() < 2 {
             continue;
         }
 
         let index = ann::HnswLikeIndex::build(&vectors);
-        let local_by_global = global_indices
+        let local_by_global = indexed_global_indices
             .iter()
             .enumerate()
             .map(|(local, global)| (*global, local))
@@ -386,7 +454,7 @@ fn build_group_ann_indexes(
         out.insert(
             group_key.clone(),
             GroupAnnIndex {
-                global_indices: global_indices.clone(),
+                global_indices: indexed_global_indices,
                 local_by_global,
                 index,
             },
@@ -423,16 +491,27 @@ fn build_duplicate_buckets(
 }
 
 fn candidate_group_key(candidate: &SymbolCloneCandidateInput) -> CandidateGroupKey {
+    candidate_group_key_for_setup(candidate, "code", &candidate.embedding_setup)
+}
+
+fn summary_candidate_group_key(candidate: &SymbolCloneCandidateInput) -> Option<CandidateGroupKey> {
+    let setup = candidate.summary_embedding_setup.as_ref()?;
+    if !candidate.has_summary_embedding() {
+        return None;
+    }
+    Some(candidate_group_key_for_setup(candidate, "summary", setup))
+}
+
+fn candidate_group_key_for_setup(
+    candidate: &SymbolCloneCandidateInput,
+    representation_kind: &str,
+    setup: &EmbeddingSetup,
+) -> CandidateGroupKey {
     CandidateGroupKey {
         repo_id: candidate.repo_id.clone(),
         effective_kind: candidate.canonical_kind.trim().to_ascii_lowercase(),
-        embedding_provider: candidate
-            .embedding_setup
-            .provider
-            .trim()
-            .to_ascii_lowercase(),
-        embedding_model: candidate.embedding_setup.model.trim().to_ascii_lowercase(),
-        embedding_dimension: candidate.embedding_setup.dimension,
+        representation_kind: representation_kind.to_string(),
+        setup_fingerprint: setup.setup_fingerprint.trim().to_ascii_lowercase(),
     }
 }
 
@@ -444,13 +523,23 @@ fn build_symbol_clone_edge(
         return None;
     }
 
-    let semantic_score = semantic_similarity(source, target);
+    let code_embedding_similarity = semantic_similarity(source, target);
+    let summary_embedding_similarity = summary_embedding_similarity(source, target);
+    let semantic_score =
+        combined_semantic_similarity(code_embedding_similarity, summary_embedding_similarity);
     let lexical = lexical_signals(source, target);
     let structural = structural_signals(source, target, lexical.name_match);
+    let derived = derived_clone_signals(
+        source,
+        target,
+        code_embedding_similarity,
+        summary_embedding_similarity,
+        &lexical,
+        &structural,
+    );
     let base_score = (CLONE_SCORE_WEIGHT_SEMANTIC * semantic_score)
         + (CLONE_SCORE_WEIGHT_LEXICAL * lexical.score)
         + (CLONE_SCORE_WEIGHT_STRUCTURAL * structural.score);
-    let derived = derived_clone_signals(source, target, semantic_score, &lexical, &structural);
     let mut score = penalized_candidate_score(base_score, &derived);
 
     let duplicate_body_hash_match = normalized_body_hash(source) == normalized_body_hash(target)

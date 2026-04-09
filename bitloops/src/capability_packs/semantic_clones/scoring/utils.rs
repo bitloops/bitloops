@@ -77,6 +77,8 @@ pub(super) fn build_clone_input_hash(
             "target_dependencies": &target.dependency_targets,
             "source_embedding_setup": &source.embedding_setup.setup_fingerprint,
             "target_embedding_setup": &target.embedding_setup.setup_fingerprint,
+            "source_summary_embedding_setup": source.summary_embedding_setup.as_ref().map(|setup| &setup.setup_fingerprint),
+            "target_summary_embedding_setup": target.summary_embedding_setup.as_ref().map(|setup| &setup.setup_fingerprint),
             "source_churn": source.churn_count,
             "target_churn": target.churn_count,
         })

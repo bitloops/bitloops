@@ -26,6 +26,8 @@ fn sample_input(symbol_id: &str, name: &str) -> SymbolCloneCandidateInput {
             3,
         ),
         embedding: vec![0.9, 0.1, 0.0],
+        summary_embedding_setup: None,
+        summary_embedding: Vec::new(),
         call_targets: vec!["db.fetchOrder".to_string()],
         dependency_targets: vec!["references:order_repository::entity".to_string()],
         churn_count: 1,
@@ -57,20 +59,14 @@ fn clone_scoring_options_clamp_neighbors() {
 
 #[test]
 fn clone_scoring_options_disable_ann_env_turns_off_prefilter() {
-    crate::test_support::process_state::with_env_var(DISABLE_ANN_ENV, Some("true"), || {
-        let options = CloneScoringOptions::new(5).apply_env_overrides();
-        assert!(!options.ann_enabled);
-    });
+    let options = CloneScoringOptions::new(5).apply_ann_override_raw(Some("true"));
+    assert!(!options.ann_enabled);
 }
 
 #[test]
 fn clone_scoring_options_disable_ann_env_is_case_insensitive() {
-    crate::test_support::process_state::with_env_var(DISABLE_ANN_ENV, Some("YeS"), || {
-        assert!(ann_disabled_from_env());
-    });
-    crate::test_support::process_state::with_env_var(DISABLE_ANN_ENV, Some("0"), || {
-        assert!(!ann_disabled_from_env());
-    });
+    assert!(ann_disabled_from_raw("YeS"));
+    assert!(!ann_disabled_from_raw("0"));
 }
 
 #[test]
@@ -387,6 +383,82 @@ fn build_symbol_clone_edges_for_source_respects_ann_neighbors_prefilter() {
         .filter(|edge| edge.source_symbol_id == "source")
         .collect::<Vec<_>>();
     assert!(source_edges.len() <= 1);
+}
+
+#[test]
+fn build_symbol_clone_edges_for_source_unions_code_and_summary_ann_neighbors() {
+    let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
+
+    let mut source = sample_input("source", "normalize_checkout");
+    source.summary_embedding_setup = Some(summary_setup.clone());
+    source.summary_embedding = vec![1.0, 0.0, 0.0];
+
+    let mut code_neighbor = sample_input("code", "normalize_checkout_fast");
+    code_neighbor.path = "src/services/code_neighbor.ts".to_string();
+    code_neighbor.symbol_fqn = "src/services/code_neighbor.ts::normalize_checkout_fast".to_string();
+    code_neighbor.embedding = vec![0.99, 0.01, 0.0];
+    code_neighbor.summary_embedding_setup = Some(summary_setup.clone());
+    code_neighbor.summary_embedding = vec![-1.0, 0.0, 0.0];
+
+    let mut summary_neighbor = sample_input("summary", "normalize_checkout_alt");
+    summary_neighbor.path = "src/services/summary_neighbor.ts".to_string();
+    summary_neighbor.symbol_fqn =
+        "src/services/summary_neighbor.ts::normalize_checkout_alt".to_string();
+    summary_neighbor.embedding = vec![-1.0, 0.0, 0.0];
+    summary_neighbor.summary_embedding_setup = Some(summary_setup);
+    summary_neighbor.summary_embedding = vec![0.99, 0.01, 0.0];
+
+    let result = build_symbol_clone_edges_for_source_with_options(
+        &[source, code_neighbor, summary_neighbor],
+        "source",
+        CloneScoringOptions::new(1),
+    );
+
+    let source_targets = result
+        .edges
+        .iter()
+        .filter(|edge| edge.source_symbol_id == "source")
+        .map(|edge| edge.target_symbol_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(source_targets.contains(&"code"));
+    assert!(source_targets.contains(&"summary"));
+}
+
+#[test]
+fn build_symbol_clone_edges_exposes_multi_view_similarity_pattern() {
+    let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
+
+    let mut source = sample_input("source", "normalize_checkout");
+    source.summary_embedding_setup = Some(summary_setup.clone());
+    source.summary_embedding = vec![1.0, 0.0, 0.0];
+
+    let mut target = sample_input("target", "normalize_checkout_copy");
+    target.path = "src/services/target.ts".to_string();
+    target.symbol_fqn = "src/services/target.ts::normalize_checkout_copy".to_string();
+    target.summary = "Function archive draft invoice.".to_string();
+    target.embedding = vec![0.99, 0.01, 0.0];
+    target.summary_embedding_setup = Some(summary_setup);
+    target.summary_embedding = vec![-1.0, 0.0, 0.0];
+
+    let result = build_symbol_clone_edges(&[source, target]);
+    let edge = result
+        .edges
+        .iter()
+        .find(|edge| edge.target_symbol_id == "target")
+        .expect("multi-view clone edge");
+
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["match_pattern"],
+        Value::String("high_low".to_string())
+    );
+    assert!(
+        edge.explanation_json["scores"]["code_embedding"]
+            .as_f64()
+            .expect("code embedding score")
+            > edge.explanation_json["scores"]["summary_embedding"]
+                .as_f64()
+                .expect("summary embedding score")
+    );
 }
 
 #[test]
