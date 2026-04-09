@@ -140,6 +140,284 @@ fn enter_isolated_app_process_state(
     (app_root, guard)
 }
 
+fn seed_graphql_rust_select_artefacts_repo() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    fs::write(
+        repo_root.join("treleas.rs"),
+        r#"mod greeting;
+mod log;
+
+const APP_VERSION: &str = "0.1.0";
+
+fn treleas() {
+    log::banner();
+    println!("{}", greeting::greet());
+    println!("Version: {}", APP_VERSION);
+}
+"#,
+    )
+    .expect("write treleas.rs");
+    git_ok(repo_root, &["add", "."]);
+    git_ok(
+        repo_root,
+        &["commit", "-m", "Seed GraphQL Rust selectArtefacts repo"],
+    );
+    let commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+
+    let sqlite_path = repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("graphql-rust.sqlite");
+    crate::storage::init::init_database(&sqlite_path, false, &commit_sha)
+        .expect("initialise GraphQL sqlite store");
+    write_envelope_config(
+        repo_root,
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            }
+        }),
+    );
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL sqlite store");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES (?1, 'local', 'local', 'demo', 'main')",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert repository row");
+    conn.execute(
+        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at)
+         VALUES (?1, ?2, 'Alice', 'alice@example.com', 'Seed GraphQL Rust selectArtefacts repo', '2026-04-09T09:00:00Z')",
+        rusqlite::params![commit_sha.as_str(), repo_id.as_str()],
+    )
+    .expect("insert commit row");
+
+    conn.execute(
+        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha)
+         VALUES (?1, ?2, 'treleas.rs', 'blob-treleas')",
+        rusqlite::params![repo_id.as_str(), commit_sha.as_str()],
+    )
+    .expect("insert file_state row");
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, language,
+            head_content_id, index_content_id, worktree_content_id,
+            effective_content_id, effective_source,
+            parser_version, extractor_version,
+            exists_in_head, exists_in_index, exists_in_worktree,
+            last_synced_at
+        ) VALUES (?1, 'treleas.rs', 'rust', 'blob-treleas', 'blob-treleas', 'blob-treleas', 'blob-treleas', 'head', 'test', 'test', 1, 1, 1, '2026-04-09T09:00:00Z')",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert current_file_state row");
+
+    let artefacts = [
+        (
+            "file::treleas",
+            "artefact::file-treleas",
+            "file",
+            "source_file",
+            "treleas.rs",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            1_i64,
+            10_i64,
+        ),
+        (
+            "sym::app_version",
+            "artefact::app-version",
+            "value",
+            "const_item",
+            "treleas.rs::APP_VERSION",
+            Some("file::treleas"),
+            Some("artefact::file-treleas"),
+            4_i64,
+            4_i64,
+        ),
+        (
+            "sym::treleas",
+            "artefact::treleas",
+            "function",
+            "function_item",
+            "treleas.rs::treleas",
+            Some("file::treleas"),
+            Some("artefact::file-treleas"),
+            6_i64,
+            10_i64,
+        ),
+    ];
+
+    for (
+        symbol_id,
+        artefact_id,
+        canonical_kind,
+        language_kind,
+        symbol_fqn,
+        parent_symbol_id,
+        parent_artefact_id,
+        start_line,
+        end_line,
+    ) in artefacts
+    {
+        conn.execute(
+            "INSERT INTO artefacts (
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
+            ) VALUES (
+                ?1, ?2, ?3, 'rust', ?4,
+                ?5, ?6, NULL, ?7, NULL, ?8, '2026-04-09T09:00:00Z'
+            )",
+            rusqlite::params![
+                artefact_id,
+                symbol_id,
+                repo_id.as_str(),
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                if canonical_kind == "file" {
+                    "[]"
+                } else {
+                    "[\"pub\"]"
+                },
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert artefact metadata row");
+        conn.execute(
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, created_at
+            ) VALUES (
+                ?1, 'blob-treleas', 'treleas.rs', ?2, ?3,
+                ?4, ?5, 0, ?6, '2026-04-09T09:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                artefact_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert artefact snapshot row");
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id,
+                language, canonical_kind, language_kind,
+                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
+                start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (
+                ?1, 'treleas.rs', 'blob-treleas', ?2, ?3,
+                'rust', ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10,
+                0, ?11, NULL, ?12, NULL, '2026-04-09T09:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                symbol_id,
+                artefact_id,
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                if canonical_kind == "file" {
+                    "[]"
+                } else {
+                    "[\"pub\"]"
+                },
+            ],
+        )
+        .expect("insert artefact current row");
+    }
+
+    for (
+        edge_id,
+        edge_kind,
+        from_symbol_id,
+        from_artefact_id,
+        to_symbol_id,
+        to_artefact_id,
+        to_symbol_ref,
+        line,
+        metadata,
+    ) in [
+        (
+            "edge-call-log",
+            "calls",
+            "sym::treleas",
+            "artefact::treleas",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            Some("log::banner"),
+            7_i64,
+            "{\"resolution\":\"import\",\"call_form\":\"associated\"}",
+        ),
+        (
+            "edge-call-greet",
+            "calls",
+            "sym::treleas",
+            "artefact::treleas",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            Some("greeting::greet"),
+            8_i64,
+            "{\"resolution\":\"import\",\"call_form\":\"associated\"}",
+        ),
+        (
+            "edge-ref-app-version",
+            "references",
+            "sym::treleas",
+            "artefact::treleas",
+            Some("sym::app_version"),
+            Some("artefact::app-version"),
+            Some("treleas.rs::APP_VERSION"),
+            9_i64,
+            "{\"resolution\":\"local\",\"ref_kind\":\"value\"}",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefact_edges_current (
+                edge_id, repo_id, path, content_id,
+                from_symbol_id, from_artefact_id,
+                to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
+                start_line, end_line, metadata, updated_at
+            ) VALUES (
+                ?1, ?2, 'treleas.rs', 'blob-treleas',
+                ?3, ?4,
+                ?5, ?6, ?7, ?8, 'rust',
+                ?9, ?9, ?10, '2026-04-09T09:00:00Z'
+            )",
+            rusqlite::params![
+                edge_id,
+                repo_id.as_str(),
+                from_symbol_id,
+                from_artefact_id,
+                to_symbol_id,
+                to_artefact_id,
+                to_symbol_ref,
+                edge_kind,
+                line,
+                metadata,
+            ],
+        )
+        .expect("insert edge current row");
+    }
+
+    dir
+}
+
 #[tokio::test]
 async fn devql_schema_builds_and_executes_in_process() {
     let temp = TempDir::new().expect("temp dir");
@@ -1448,5 +1726,137 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     assert_eq!(
         deps_items[1]["toSymbolRef"],
         "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() {
+    let repo = seed_graphql_rust_select_artefacts_repo();
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response_false = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
+                deps(includeUnresolved: false) {
+                  items(first: 10) {
+                    edgeKind
+                    toSymbolRef
+                    toArtefact {
+                      symbolFqn
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        response_false.errors.is_empty(),
+        "graphql errors: {:?}",
+        response_false.errors
+    );
+
+    let json_false = response_false
+        .data
+        .into_json()
+        .expect("graphql data (false) to json");
+    let items_false = json_false["selectArtefacts"]["deps"]["items"]
+        .as_array()
+        .expect("deps false items array");
+    assert_eq!(items_false.len(), 1);
+    assert_eq!(items_false[0]["edgeKind"], "REFERENCES");
+    assert_eq!(
+        items_false[0]["toArtefact"]["symbolFqn"],
+        "treleas.rs::APP_VERSION"
+    );
+
+    let response_true = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
+                deps(includeUnresolved: true) {
+                  items(first: 10) {
+                    edgeKind
+                    toSymbolRef
+                    toArtefact {
+                      symbolFqn
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        response_true.errors.is_empty(),
+        "graphql errors: {:?}",
+        response_true.errors
+    );
+
+    let json_true = response_true
+        .data
+        .into_json()
+        .expect("graphql data (true) to json");
+    let items_true = json_true["selectArtefacts"]["deps"]["items"]
+        .as_array()
+        .expect("deps true items array");
+    assert_eq!(items_true.len(), 3);
+    assert!(
+        items_true
+            .iter()
+            .any(|item| item["edgeKind"] == "CALLS" && item["toSymbolRef"] == "log::banner")
+    );
+    assert!(
+        items_true
+            .iter()
+            .any(|item| item["edgeKind"] == "CALLS" && item["toSymbolRef"] == "greeting::greet")
+    );
+    assert!(items_true.iter().any(|item| {
+        item["edgeKind"] == "REFERENCES"
+            && item["toArtefact"]["symbolFqn"] == "treleas.rs::APP_VERSION"
+    }));
+
+    let response_default = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
+                deps {
+                  items(first: 10) {
+                    edgeKind
+                    toSymbolRef
+                    toArtefact {
+                      symbolFqn
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        response_default.errors.is_empty(),
+        "graphql errors: {:?}",
+        response_default.errors
+    );
+
+    let json_default = response_default
+        .data
+        .into_json()
+        .expect("graphql data (default) to json");
+    let items_default = json_default["selectArtefacts"]["deps"]["items"]
+        .as_array()
+        .expect("deps default items array");
+
+    assert_eq!(items_default.len(), items_true.len());
+    assert_eq!(
+        items_default, items_true,
+        "default includeUnresolved behaviour should match includeUnresolved: true"
     );
 }

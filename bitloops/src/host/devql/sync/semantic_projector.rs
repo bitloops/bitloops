@@ -75,7 +75,7 @@ pub(crate) async fn project_path(
             &desired.path,
             &desired.effective_content_id,
             &inputs,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
             Arc::clone(&embedding_provider),
         )
         .await?;
@@ -84,7 +84,7 @@ pub(crate) async fn project_path(
             &desired.path,
             &desired.effective_content_id,
             &inputs,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
             embedding_provider,
         )
         .await?;

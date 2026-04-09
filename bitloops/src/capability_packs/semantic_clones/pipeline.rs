@@ -370,38 +370,40 @@ async fn resolve_active_embedding_setup_for_clone_rebuild(
     projection: CloneProjection,
 ) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
     if projection == CloneProjection::Current {
-        let current_states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+        let current_states = load_current_repo_embedding_states(
+            relational,
+            repo_id,
+            Some(embeddings::EmbeddingRepresentationKind::Code),
+        )
+        .await?;
         return choose_current_projection_embedding_state(&current_states);
     }
 
-    if let Some(active_state) = load_active_embedding_setup(relational, repo_id).await? {
+    if let Some(active_state) = load_active_embedding_setup(
+        relational,
+        repo_id,
+        embeddings::EmbeddingRepresentationKind::Code,
+    )
+    .await?
+    {
         return Ok(Some(active_state));
     }
 
-    let current_states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+    let current_states = load_current_repo_embedding_states(
+        relational,
+        repo_id,
+        Some(embeddings::EmbeddingRepresentationKind::Code),
+    )
+    .await?;
     match current_states.as_slice() {
         [state] => {
             persist_active_embedding_setup(relational, repo_id, state).await?;
             Ok(Some(state.clone()))
         }
         [] => Ok(None),
-        _ if current_states
-            .iter()
-            .all(|state| state.setup == current_states[0].setup) =>
-        {
-            let chosen = current_states
-                .iter()
-                .find(|state| {
-                    state.representation_kind == embeddings::EmbeddingRepresentationKind::Enriched
-                })
-                .unwrap_or(&current_states[0])
-                .clone();
-            persist_active_embedding_setup(relational, repo_id, &chosen).await?;
-            Ok(Some(chosen))
-        }
         _ => {
             log::warn!(
-                "semantic_clones clone rebuild skipped for repo {}: multiple embedding representations or setups exist but no active state is persisted",
+                "semantic_clones clone rebuild skipped for repo {}: multiple code embedding setups exist but no active state is persisted",
                 repo_id
             );
             Ok(None)
@@ -415,21 +417,6 @@ fn choose_current_projection_embedding_state(
     match current_states {
         [] => Ok(None),
         [state] => Ok(Some(state.clone())),
-        _ if current_states
-            .iter()
-            .all(|state| state.setup == current_states[0].setup) =>
-        {
-            Ok(Some(
-                current_states
-                    .iter()
-                    .find(|state| {
-                        state.representation_kind
-                            == embeddings::EmbeddingRepresentationKind::Enriched
-                    })
-                    .unwrap_or(&current_states[0])
-                    .clone(),
-            ))
-        }
         _ => Ok(None),
     }
 }
@@ -577,29 +564,59 @@ fn build_symbol_clone_candidate_lookup_sql(
     let features_table = projection.features_table();
     let embeddings_table = projection.embeddings_table();
     let snapshot_column = projection.blob_column();
+    let representation_predicate = representation_kind_sql_predicate(
+        "e.representation_kind",
+        active_state.representation_kind,
+    );
     format!(
-        "SELECT a.repo_id, a.symbol_id, a.artefact_id, a.path, \
+        "SELECT repo_id, symbol_id, artefact_id, path, canonical_kind, symbol_fqn, summary, \
+normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens, \
+embedding_provider, embedding_model, embedding_dimension, embedding \
+FROM ( \
+SELECT a.repo_id, a.symbol_id, a.artefact_id, a.path, \
 LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) AS canonical_kind, \
 COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, ss.summary, \
 sf.normalized_name, sf.normalized_signature, sf.identifier_tokens, sf.normalized_body_tokens, sf.parent_kind, sf.context_tokens, \
-e.provider AS embedding_provider, e.model AS embedding_model, e.dimension AS embedding_dimension, e.embedding \
+e.provider AS embedding_provider, e.model AS embedding_model, e.dimension AS embedding_dimension, e.embedding, \
+ROW_NUMBER() OVER ( \
+    PARTITION BY e.artefact_id, e.setup_fingerprint \
+    ORDER BY CASE e.representation_kind \
+        WHEN 'code' THEN 0 \
+        WHEN 'enriched' THEN 1 \
+        WHEN 'baseline' THEN 2 \
+        ELSE 3 \
+    END \
+) AS representation_rank \
 FROM {embeddings_table} e \
 JOIN {semantics_table} ss ON ss.repo_id = e.repo_id AND ss.artefact_id = e.artefact_id AND ss.{snapshot_column} = e.{snapshot_column} \
 JOIN {features_table} sf ON sf.repo_id = e.repo_id AND sf.artefact_id = e.artefact_id AND sf.{snapshot_column} = e.{snapshot_column} \
 JOIN {artefacts_table} a ON a.repo_id = e.repo_id AND a.artefact_id = e.artefact_id AND a.{snapshot_column} = e.{snapshot_column} \
-WHERE e.repo_id = '{}' AND e.provider = '{}' AND e.model = '{}' AND e.dimension = {} \
-AND e.representation_kind = '{}' \
-ORDER BY a.path, a.start_line, a.symbol_id",
+WHERE e.repo_id = '{}' AND e.setup_fingerprint = '{}' AND {} \
+) ranked \
+WHERE representation_rank = 1 \
+ORDER BY path, symbol_id",
         esc_pg(repo_id),
-        esc_pg(&active_state.setup.provider),
-        esc_pg(&active_state.setup.model),
-        active_state.setup.dimension,
-        esc_pg(&active_state.representation_kind.to_string()),
+        esc_pg(&active_state.setup.setup_fingerprint),
+        representation_predicate,
         artefacts_table = artefacts_table,
         semantics_table = semantics_table,
         features_table = features_table,
         embeddings_table = embeddings_table,
+        snapshot_column = snapshot_column,
     )
+}
+
+fn representation_kind_sql_predicate(
+    column: &str,
+    kind: embeddings::EmbeddingRepresentationKind,
+) -> String {
+    let values = kind
+        .storage_values()
+        .iter()
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{column} IN ({values})")
 }
 
 pub(crate) async fn delete_repo_symbol_clone_edges(
@@ -742,7 +759,7 @@ mod semantic_clone_pipeline_tests {
             "repo'1",
             CloneProjection::Current,
             &super::embeddings::ActiveEmbeddingRepresentationState::new(
-                super::embeddings::EmbeddingRepresentationKind::Baseline,
+                super::embeddings::EmbeddingRepresentationKind::Code,
                 super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
             ),
         );
@@ -752,8 +769,8 @@ mod semantic_clone_pipeline_tests {
         assert!(sql.contains("e.provider AS embedding_provider"));
         assert!(sql.contains("e.model AS embedding_model"));
         assert!(sql.contains("repo''1"));
-        assert!(sql.contains("test-model"));
-        assert!(!sql.contains(" IN ("));
+        assert!(sql.contains("representation_rank = 1"));
+        assert!(sql.contains("setup_fingerprint"));
     }
 
     #[tokio::test]
@@ -818,23 +835,19 @@ mod semantic_clone_pipeline_tests {
     }
 
     #[test]
-    fn current_projection_prefers_enriched_representation_when_setups_match() {
+    fn current_projection_returns_none_when_multiple_code_setups_exist() {
         let chosen = choose_current_projection_embedding_state(&[
             super::embeddings::ActiveEmbeddingRepresentationState::new(
-                super::embeddings::EmbeddingRepresentationKind::Baseline,
+                super::embeddings::EmbeddingRepresentationKind::Code,
                 super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
             ),
             super::embeddings::ActiveEmbeddingRepresentationState::new(
-                super::embeddings::EmbeddingRepresentationKind::Enriched,
-                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+                super::embeddings::EmbeddingRepresentationKind::Code,
+                super::embeddings::EmbeddingSetup::new("voyage", "voyage-code-3", 3),
             ),
         ])
-        .expect("choose current projection setup")
-        .expect("current projection setup");
+        .expect("choose current projection setup");
 
-        assert_eq!(
-            chosen.representation_kind,
-            super::embeddings::EmbeddingRepresentationKind::Enriched
-        );
+        assert!(chosen.is_none());
     }
 }

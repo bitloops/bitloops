@@ -600,3 +600,39 @@ fn boot() {
         "AppServer::new() call should not also emit a references edge for AppServer (duplicate)"
     );
 }
+
+#[test]
+fn extract_rust_dependency_edges_emit_two_calls_for_module_qualified_main_calls() {
+    let content = r#"mod greeting;
+mod log;
+
+const APP_VERSION: &str = "0.1.0";
+
+fn main() {
+    log::banner();
+    println!("{}", greeting::greet());
+    println!("Version: {}", APP_VERSION);
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "rust-app/src/main.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "rust-app/src/main.rs", &artefacts).unwrap();
+
+    let call_edges = edges
+        .iter()
+        .filter(|edge| edge.edge_kind == "calls")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        call_edges.len(),
+        2,
+        "expected calls edges for log::banner and greeting::greet"
+    );
+
+    assert!(call_edges.iter().any(|edge| {
+        edge.from_symbol_fqn == "rust-app/src/main.rs::main"
+            && edge.to_symbol_ref.as_deref() == Some("log::banner")
+    }));
+    assert!(call_edges.iter().any(|edge| {
+        edge.from_symbol_fqn == "rust-app/src/main.rs::main"
+            && edge.to_symbol_ref.as_deref() == Some("greeting::greet")
+    }));
+}

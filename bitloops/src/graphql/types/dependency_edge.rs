@@ -40,7 +40,7 @@ pub struct DepsFilterInput {
     pub kind: Option<EdgeKind>,
     #[graphql(default)]
     pub direction: DepsDirection,
-    #[graphql(default)]
+    #[graphql(default = true)]
     pub include_unresolved: bool,
 }
 
@@ -49,8 +49,21 @@ impl Default for DepsFilterInput {
         Self {
             kind: None,
             direction: DepsDirection::Out,
-            include_unresolved: false,
+            include_unresolved: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DepsFilterInput;
+
+    #[test]
+    fn deps_filter_default_includes_unresolved_edges() {
+        assert!(
+            DepsFilterInput::default().include_unresolved,
+            "default deps filter should include unresolved edges"
+        );
     }
 }
 

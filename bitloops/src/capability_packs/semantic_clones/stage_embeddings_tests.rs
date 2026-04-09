@@ -28,6 +28,10 @@ impl EmbeddingProvider for TestEmbeddingProvider {
     }
 }
 
+fn test_setup_fingerprint(provider: &str, model: &str, dimension: usize) -> String {
+    embeddings::EmbeddingSetup::new(provider, model, dimension).setup_fingerprint
+}
+
 async fn sqlite_relational_with_schema(sql: &str) -> RelationalStorage {
     let temp = tempdir().expect("temp dir");
     let db_path = temp.path().join("semantic-embeddings.sqlite");
@@ -64,6 +68,26 @@ async fn insert_fully_indexed_current_artefact(
     model: &str,
     dimension: usize,
 ) {
+    insert_fully_indexed_current_artefact_with_stored_representation(
+        relational,
+        artefact_id,
+        &representation_kind.to_string(),
+        provider,
+        model,
+        dimension,
+    )
+    .await;
+}
+
+async fn insert_fully_indexed_current_artefact_with_stored_representation(
+    relational: &RelationalStorage,
+    artefact_id: &str,
+    stored_representation_kind: &str,
+    provider: &str,
+    model: &str,
+    dimension: usize,
+) {
+    let setup_fingerprint = test_setup_fingerprint(provider, model, dimension);
     relational
         .exec(&format!(
             "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id, canonical_kind, language_kind)
@@ -90,10 +114,11 @@ async fn insert_fully_indexed_current_artefact(
         .expect("insert feature row");
     relational
         .exec(&format!(
-            "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, provider, model, dimension, embedding_input_hash, embedding)
-             VALUES ('{artefact_id}', 'repo-1', 'blob-1', '{representation_kind}', '{provider}', '{model}', {dimension}, 'hash-{artefact_id}', '[0.1,0.2,0.3]')",
+            "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
+             VALUES ('{artefact_id}', 'repo-1', 'blob-1', '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, 'hash-{artefact_id}', '[0.1,0.2,0.3]')",
             artefact_id = esc_pg(artefact_id),
-            representation_kind = esc_pg(&representation_kind.to_string()),
+            representation_kind = esc_pg(stored_representation_kind),
+            setup_fingerprint = esc_pg(&setup_fingerprint),
             provider = esc_pg(provider),
             model = esc_pg(model),
             dimension = dimension,
@@ -134,7 +159,8 @@ fn semantic_embedding_postgres_persist_sql_contains_vector_literal() {
         artefact_id: "artefact-1".to_string(),
         repo_id: "repo-1".to_string(),
         blob_sha: "blob-1".to_string(),
-        representation_kind: embeddings::EmbeddingRepresentationKind::Baseline,
+        representation_kind: embeddings::EmbeddingRepresentationKind::Code,
+        setup_fingerprint: test_setup_fingerprint("voyage", "voyage-code-3", 3),
         provider: "voyage".to_string(),
         model: "voyage-code-3".to_string(),
         dimension: 3,
@@ -152,7 +178,12 @@ fn semantic_embedding_sqlite_persist_sql_contains_json_literal() {
         artefact_id: "artefact-1".to_string(),
         repo_id: "repo-1".to_string(),
         blob_sha: "blob-1".to_string(),
-        representation_kind: embeddings::EmbeddingRepresentationKind::Baseline,
+        representation_kind: embeddings::EmbeddingRepresentationKind::Code,
+        setup_fingerprint: test_setup_fingerprint(
+            "local",
+            "jinaai/jina-embeddings-v2-base-code",
+            3,
+        ),
         provider: "local".to_string(),
         model: "jinaai/jina-embeddings-v2-base-code".to_string(),
         dimension: 3,
@@ -202,11 +233,15 @@ fn semantic_embedding_index_state_sql_filters_by_artefact_id() {
     let sql = build_symbol_embedding_index_state_sql(
         "artefact-'1",
         "symbol_embeddings",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
+        "provider=voyage|model=voyage-code-3|dimension=1024",
     );
     assert!(sql.contains("FROM symbol_embeddings"));
     assert!(sql.contains("WHERE artefact_id = 'artefact-''1'"));
-    assert!(sql.contains("representation_kind = 'baseline'"));
+    assert!(sql.contains("representation_kind = 'code'"));
+    assert!(
+        sql.contains("setup_fingerprint = 'provider=voyage|model=voyage-code-3|dimension=1024'")
+    );
 }
 
 #[test]
@@ -222,29 +257,24 @@ fn semantic_embedding_summary_lookup_sql_uses_all_ids() {
 
 #[tokio::test]
 async fn semantic_embedding_loads_index_state_from_relational_storage() {
-    let relational = sqlite_relational_with_schema(
-        "CREATE TABLE symbol_embeddings (
-            artefact_id TEXT NOT NULL,
-            repo_id TEXT NOT NULL,
-            representation_kind TEXT NOT NULL,
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            dimension INTEGER NOT NULL,
-            embedding_input_hash TEXT NOT NULL,
-            PRIMARY KEY (artefact_id, representation_kind)
-        );
+    let setup_fingerprint = test_setup_fingerprint("voyage", "voyage-code-3", 1024);
+    let relational = sqlite_relational_with_schema(&format!(
+        "{schema}
         INSERT INTO symbol_embeddings (
-            artefact_id, repo_id, representation_kind, provider, model, dimension, embedding_input_hash
+            artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
         ) VALUES (
-            'artefact-1', 'repo-1', 'baseline', 'voyage', 'voyage-code-3', 1024, 'hash-1'
+            'artefact-1', 'repo-1', 'blob-1', 'code', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'hash-1', '[0.1,0.2,0.3]'
         );",
-    )
+        schema = schema::semantic_embeddings_sqlite_schema_sql(),
+        setup_fingerprint = setup_fingerprint,
+    ))
     .await;
 
     let state = load_symbol_embedding_index_state(
         &relational,
         "artefact-1",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
+        &setup_fingerprint,
     )
     .await
     .expect("load embedding state");
@@ -253,96 +283,7 @@ async fn semantic_embedding_loads_index_state_from_relational_storage() {
 }
 
 #[tokio::test]
-async fn sqlite_embedding_schema_upgrade_preserves_legacy_rows() {
-    let temp = tempdir().expect("temp dir");
-    let db_path = temp.path().join("semantic-embeddings-legacy.sqlite");
-    sqlite_exec_path_allow_create(
-        &db_path,
-        r#"
-CREATE TABLE symbol_embeddings (
-    artefact_id TEXT PRIMARY KEY,
-    repo_id TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimension INTEGER NOT NULL,
-    embedding_input_hash TEXT NOT NULL,
-    embedding TEXT NOT NULL
-);
-CREATE TABLE symbol_embeddings_current (
-    artefact_id TEXT PRIMARY KEY,
-    repo_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    content_id TEXT NOT NULL,
-    symbol_id TEXT,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimension INTEGER NOT NULL,
-    embedding_input_hash TEXT NOT NULL,
-    embedding TEXT NOT NULL
-);
-CREATE TABLE semantic_clone_embedding_setup_state (
-    repo_id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    dimension INTEGER NOT NULL,
-    setup_fingerprint TEXT NOT NULL
-);
-INSERT INTO symbol_embeddings (
-    artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding
-) VALUES (
-    'artefact-historical', 'repo-1', 'blob-1', 'local', 'test-model', 3, 'hash-historical', '[0.1,0.2,0.3]'
-);
-INSERT INTO symbol_embeddings_current (
-    artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding
-) VALUES (
-    'artefact-current', 'repo-1', 'src/a.ts', 'blob-1', 'sym::a', 'local', 'test-model', 3, 'hash-current', '[0.1,0.2,0.3]'
-);
-INSERT INTO semantic_clone_embedding_setup_state (
-    repo_id, provider, model, dimension, setup_fingerprint
-) VALUES (
-    'repo-1', 'local', 'test-model', 3, 'fingerprint-1'
-);
-"#,
-    )
-    .await
-    .expect("create legacy embedding schema");
-
-    let relational = RelationalStorage::local_only(db_path.clone());
-    ensure_semantic_embeddings_schema(&relational)
-        .await
-        .expect("upgrade legacy embedding schema");
-
-    let conn = rusqlite::Connection::open(&db_path).expect("open upgraded sqlite");
-    let historical = conn
-        .query_row(
-            "SELECT representation_kind FROM symbol_embeddings WHERE artefact_id = 'artefact-historical'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .expect("read upgraded historical embedding row");
-    let current = conn
-        .query_row(
-            "SELECT representation_kind FROM symbol_embeddings_current WHERE artefact_id = 'artefact-current'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .expect("read upgraded current embedding row");
-    let setup = conn
-        .query_row(
-            "SELECT representation_kind FROM semantic_clone_embedding_setup_state WHERE repo_id = 'repo-1'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .expect("read upgraded embedding setup state");
-
-    assert_eq!(historical, "baseline");
-    assert_eq!(current, "baseline");
-    assert_eq!(setup, "baseline");
-}
-
-#[tokio::test]
-async fn current_embedding_upsert_reuses_matching_rows_and_keeps_enriched_variant() {
+async fn current_embedding_upsert_reuses_matching_rows_and_keeps_summary_variant() {
     let relational = sqlite_relational_with_schema(&format!(
         "{}\nCREATE TABLE symbol_semantics_current (
             artefact_id TEXT PRIMARY KEY,
@@ -415,41 +356,41 @@ async fn current_embedding_upsert_reuses_matching_rows_and_keeps_enriched_varian
     ];
     let provider: Arc<dyn EmbeddingProvider> = Arc::new(TestEmbeddingProvider);
 
-    let baseline_first = upsert_current_symbol_embedding_rows(
+    let code_first = upsert_current_symbol_embedding_rows(
         &relational,
         "src/a.ts",
         "blob-1",
         &inputs,
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         Arc::clone(&provider),
     )
     .await
-    .expect("upsert baseline current embeddings");
-    let baseline_second = upsert_current_symbol_embedding_rows(
+    .expect("upsert code current embeddings");
+    let code_second = upsert_current_symbol_embedding_rows(
         &relational,
         "src/a.ts",
         "blob-1",
         &inputs,
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         Arc::clone(&provider),
     )
     .await
-    .expect("reuse baseline current embeddings");
-    let enriched = upsert_current_symbol_embedding_rows(
+    .expect("reuse code current embeddings");
+    let summary = upsert_current_symbol_embedding_rows(
         &relational,
         "src/a.ts",
         "blob-1",
         &inputs,
-        embeddings::EmbeddingRepresentationKind::Enriched,
+        embeddings::EmbeddingRepresentationKind::Summary,
         provider,
     )
     .await
-    .expect("upsert enriched current embeddings");
+    .expect("upsert summary current embeddings");
 
-    assert_eq!(baseline_first.upserted, 2);
-    assert_eq!(baseline_second.skipped, 2);
-    assert_eq!(enriched.eligible, 1);
-    assert_eq!(enriched.upserted, 1);
+    assert_eq!(code_first.upserted, 2);
+    assert_eq!(code_second.skipped, 2);
+    assert_eq!(summary.eligible, 2);
+    assert_eq!(summary.upserted, 2);
 
     let rows = relational
         .query_rows(
@@ -475,9 +416,10 @@ async fn current_embedding_upsert_reuses_matching_rows_and_keeps_enriched_varian
     assert_eq!(
         rendered,
         vec![
-            ("artefact-1".to_string(), "baseline".to_string()),
-            ("artefact-1".to_string(), "enriched".to_string()),
-            ("artefact-2".to_string(), "baseline".to_string()),
+            ("artefact-1".to_string(), "code".to_string()),
+            ("artefact-1".to_string(), "summary".to_string()),
+            ("artefact-2".to_string(), "code".to_string()),
+            ("artefact-2".to_string(), "summary".to_string()),
         ]
     );
 }
@@ -509,7 +451,7 @@ async fn semantic_embedding_loads_summary_map_from_relational_storage() {
             "artefact-2".to_string(),
             "artefact-3".to_string(),
         ],
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
     )
     .await
     .expect("load summary map");
@@ -555,7 +497,7 @@ async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
     insert_fully_indexed_current_artefact(
         &relational,
         "artefact-1",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         "local_fastembed",
         "jinaai/jina-embeddings-v2-base-code",
         3,
@@ -565,7 +507,7 @@ async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
     let action = determine_repo_embedding_sync_action(
         &relational,
         "repo-1",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         &embeddings::EmbeddingSetup::new(
             "local_fastembed",
             "jinaai/jina-embeddings-v2-base-code",
@@ -584,7 +526,7 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
     insert_fully_indexed_current_artefact(
         &relational,
         "artefact-1",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         "local_fastembed",
         "jinaai/jina-embeddings-v2-base-code",
         3,
@@ -601,7 +543,7 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
     let action = determine_repo_embedding_sync_action(
         &relational,
         "repo-1",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         &embeddings::EmbeddingSetup::new(
             "local_fastembed",
             "jinaai/jina-embeddings-v2-base-code",
@@ -615,36 +557,22 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
 }
 
 #[tokio::test]
-async fn semantic_embedding_sync_action_adopts_existing_when_requested_representation_exists() {
+async fn semantic_embedding_sync_action_adopts_existing_when_legacy_representation_exists() {
     let relational = sqlite_relational_with_embedding_state_schema().await;
-    insert_fully_indexed_current_artefact(
+    insert_fully_indexed_current_artefact_with_stored_representation(
         &relational,
         "artefact-1",
-        embeddings::EmbeddingRepresentationKind::Enriched,
+        "enriched",
         "local_fastembed",
         "jinaai/jina-embeddings-v2-base-code",
         3,
     )
     .await;
-    persist_active_embedding_setup(
-        &relational,
-        "repo-1",
-        &embeddings::ActiveEmbeddingRepresentationState::new(
-            embeddings::EmbeddingRepresentationKind::Baseline,
-            embeddings::EmbeddingSetup::new(
-                "local_fastembed",
-                "jinaai/jina-embeddings-v2-base-code",
-                3,
-            ),
-        ),
-    )
-    .await
-    .expect("persist active baseline setup");
 
     let action = determine_repo_embedding_sync_action(
         &relational,
         "repo-1",
-        embeddings::EmbeddingRepresentationKind::Enriched,
+        embeddings::EmbeddingRepresentationKind::Code,
         &embeddings::EmbeddingSetup::new(
             "local_fastembed",
             "jinaai/jina-embeddings-v2-base-code",
@@ -664,7 +592,7 @@ async fn semantic_embedding_sync_action_refreshes_when_active_setup_changes() {
         &relational,
         "repo-1",
         &embeddings::ActiveEmbeddingRepresentationState::new(
-            embeddings::EmbeddingRepresentationKind::Baseline,
+            embeddings::EmbeddingRepresentationKind::Code,
             embeddings::EmbeddingSetup::new(
                 "local_fastembed",
                 "jinaai/jina-embeddings-v2-base-code",
@@ -678,7 +606,7 @@ async fn semantic_embedding_sync_action_refreshes_when_active_setup_changes() {
     let action = determine_repo_embedding_sync_action(
         &relational,
         "repo-1",
-        embeddings::EmbeddingRepresentationKind::Baseline,
+        embeddings::EmbeddingRepresentationKind::Code,
         &embeddings::EmbeddingSetup::new("voyage", "voyage-code-3", 1024),
     )
     .await
