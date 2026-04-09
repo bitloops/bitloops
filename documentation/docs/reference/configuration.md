@@ -198,6 +198,13 @@ Interactive `bitloops init` can also ask whether you want to queue an initial De
 
 When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup before any init-triggered sync if embeddings are not already configured.
 
+`bitloops init` also accepts repeatable repo-policy exclusion flags:
+
+- `--exclude <glob>` adds entries to `[scope].exclude`
+- `--exclude-from <path>` adds entries to `[scope].exclude_from`
+
+`--exclude-from` paths must stay under the discovered repo-policy root. Init persists these values to `.bitloops.local.toml` before any init-triggered sync/ingest begins.
+
 Use DevQL commands separately for ingestion and for any later explicit sync or validation runs. `bitloops init` does not perform DevQL ingest.
 
 The thin CLI and hook layer resolve project policy by walking upwards from the current working directory towards the enclosing `.git` root.
@@ -240,6 +247,7 @@ watch_poll_fallback_ms = 2500
 project_root = "packages/app"
 include = ["src/**", "tests/**"]
 exclude = ["dist/**", "coverage/**"]
+exclude_from = [".gitignore", "config/devql.ignore"]
 
 [agents]
 default = "claude-code"
@@ -270,6 +278,43 @@ enabled = false
 [watch]
 watch_debounce_ms = 1500
 ```
+
+### Scope Exclusions
+
+`[scope]` exclusions are evaluated relative to the repo-policy root:
+
+- `exclude = ["glob/**"]` keeps inline glob patterns in policy
+- `exclude_from = ["path/to/ignore-file"]` loads additional patterns from files
+
+`exclude_from` files use one glob per line. Blank lines are ignored. Lines beginning with `#` are comments.
+
+Example:
+
+```toml title=".bitloops.local.toml"
+[scope]
+exclude = ["dist/**", "coverage/**"]
+exclude_from = [".gitignore", "config/devql.ignore"]
+```
+
+```text title="config/devql.ignore"
+# One glob per line
+**/*.generated.ts
+**/third_party/**
+docs/**
+```
+
+Notes:
+
+- `exclude_from` can reference any ignore-pattern file under the repo-policy root (for example `.gitignore` or `config/devql.ignore`)
+- paths in `exclude_from` must resolve under that same repo-policy root
+- you can list multiple files in `exclude_from`
+- missing or unreadable `exclude_from` files fail sync/ingest/watch startup before indexing begins
+
+Merge behavior for exclusions is special:
+
+- if `.bitloops.local.toml` defines either `scope.exclude` or `scope.exclude_from`, local exclusion config replaces shared exclusion config from `.bitloops.toml`
+- if local exclusion keys are absent, shared exclusion config applies
+- non-exclusion `[scope]` keys keep normal merge behavior
 
 ## Knowledge Imports
 

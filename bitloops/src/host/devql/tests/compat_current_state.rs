@@ -43,6 +43,7 @@ pub(crate) async fn upsert_current_state_for_content(
     let extraction = match crate::host::devql::sync::extraction::extract_to_cache_format(
         cfg,
         rev.path,
+        &language,
         &content_id,
         COMPAT_PARSER_VERSION,
         COMPAT_EXTRACTOR_VERSION,

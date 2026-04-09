@@ -149,7 +149,6 @@ pub(super) fn seed_workspace_repo() -> tempfile::TempDir {
         "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
     )
     .expect("write rust source");
-    fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
 
     crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
     crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
@@ -189,7 +188,6 @@ pub(super) fn seed_full_sync_repo() -> tempfile::TempDir {
         "def helper() -> int:\n    return 1\n\n\ndef run() -> int:\n    return helper()\n",
     )
     .expect("write Python source");
-    fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
 
     crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
     crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);

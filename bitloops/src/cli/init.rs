@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -12,7 +12,9 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::cli::embeddings::install_or_bootstrap_embeddings;
 use crate::cli::telemetry_consent;
-use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
+use crate::config::settings::{
+    DEFAULT_STRATEGY, load_settings, set_scope_exclusions, write_project_bootstrap_settings,
+};
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
 };
@@ -79,6 +81,14 @@ pub struct InitArgs {
         value_parser = parse_backfill_value
     )]
     pub backfill: Option<usize>,
+
+    /// Exclude repo-relative paths/globs from DevQL indexing (repeatable).
+    #[arg(long = "exclude")]
+    pub exclude: Vec<String>,
+
+    /// Load additional exclusion globs from files under the repo-policy root (repeatable).
+    #[arg(long = "exclude-from")]
+    pub exclude_from: Vec<String>,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {
@@ -180,11 +190,16 @@ async fn run_with_io_async_for_project_root(
     } else {
         detect_or_select_agent(project_root, out, select_fn)?
     };
+    let scope_exclude = normalize_cli_exclusions(&args.exclude);
+    let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
     write_project_bootstrap_settings(&local_policy_path, &strategy, &selected_agents)?;
+    if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
+        set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
+    }
 
     let settings = load_settings(project_root).unwrap_or_default();
     let git_count = git_hooks::install_git_hooks(&git_root, settings.local_dev)?;
@@ -306,6 +321,71 @@ fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {
         return Err("`--backfill` must be greater than zero".to_string());
     }
     Ok(parsed)
+}
+
+fn normalize_cli_exclusions(values: &[String]) -> Vec<String> {
+    let mut normalized = values
+        .iter()
+        .map(|value| value.trim().replace('\\', "/"))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn normalize_exclude_from_paths(policy_root: &Path, values: &[String]) -> Result<Vec<String>> {
+    let policy_root = policy_root
+        .canonicalize()
+        .unwrap_or_else(|_| policy_root.to_path_buf());
+    let mut normalized = Vec::new();
+
+    for raw_value in values {
+        let raw_value = raw_value.trim();
+        if raw_value.is_empty() {
+            continue;
+        }
+        let candidate = PathBuf::from(raw_value);
+        let absolute = if candidate.is_absolute() {
+            candidate
+        } else {
+            policy_root.join(candidate)
+        };
+        let absolute = normalize_lexical_path(&absolute);
+        if !absolute.starts_with(&policy_root) {
+            bail!(
+                "`--exclude-from` path `{}` must be under repo-policy root {}",
+                raw_value,
+                policy_root.display()
+            );
+        }
+        let relative = absolute
+            .strip_prefix(&policy_root)
+            .unwrap_or(absolute.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !relative.is_empty() {
+            normalized.push(relative);
+        }
+    }
+
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {

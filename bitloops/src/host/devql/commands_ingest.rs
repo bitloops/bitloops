@@ -59,6 +59,7 @@ async fn execute_ingest_inner(
         init_requested: init,
         ..IngestionCounters::default()
     };
+    let mut encountered_commit_failures = false;
     let mut commits_total = 0usize;
     let mut commits_processed = 0usize;
     emit_progress(
@@ -121,6 +122,8 @@ async fn execute_ingest_inner(
     };
 
     ensure_repository_row(cfg, &relational).await?;
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for `devql ingest`")?;
 
     let mut resolved_embedding_setup = None;
     let direct_embedding_sync_action = if enrichment.is_none() {
@@ -263,7 +266,7 @@ async fn execute_ingest_inner(
                 for path in changed_files {
                     let normalized_path = normalize_repo_path(&path);
                     if normalized_path.is_empty()
-                        || resolve_language_id_for_file_path(&normalized_path).is_none()
+                        || exclusion_matcher.excludes_repo_relative_path(&normalized_path)
                     {
                         continue;
                     }
@@ -274,6 +277,13 @@ async fn execute_ingest_inner(
                         continue;
                     };
                     let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+                    let language = indexing_language_for_path(&normalized_path);
+                    if language == PLAIN_TEXT_LANGUAGE_ID
+                        && (should_skip_plain_text_fallback_path(&normalized_path)
+                            || !plain_text_content_is_allowed(&content))
+                    {
+                        continue;
+                    }
 
                     upsert_file_state_row(
                         &cfg.repo.repo_id,
@@ -498,7 +508,23 @@ async fn execute_ingest_inner(
                 &format!("{err:#}"),
             )
             .await;
-            return Err(err);
+            encountered_commit_failures = true;
+            log::warn!(
+                "devql ingest skipping failed commit `{}` and continuing: {err:#}",
+                commit_sha
+            );
+            counters.commits_processed += 1;
+            commits_processed += 1;
+            emit_progress(
+                observer,
+                IngestionProgressPhase::Persisting,
+                commits_total,
+                commits_processed,
+                checkpoint_id,
+                Some(commit_sha),
+                &counters,
+            );
+            continue;
         }
 
         counters.commits_processed += 1;
@@ -651,7 +677,7 @@ async fn execute_ingest_inner(
         )
         .await?;
     }
-    counters.success = true;
+    counters.success = !encountered_commit_failures;
     emit_progress(
         observer,
         IngestionProgressPhase::Complete,

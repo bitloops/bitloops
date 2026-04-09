@@ -48,6 +48,17 @@ strategy = "manual-commit"
 
 Local overrides live in `.bitloops.local.toml`, which can also stand on its own without a sibling shared file.
 
+For DevQL indexing scope, capture now also honours:
+
+- `[scope].exclude` inline glob patterns
+- `[scope].exclude_from` files (for example `.gitignore` or `config/devql.ignore`)
+
+`exclude_from` files are not generated automatically. Create any ignore-pattern file under the repo-policy root and reference it from `exclude_from`. Use one glob pattern per line, with optional `#` comments.
+
+These rules are evaluated before sync/ingest/watch path discovery. Missing or unreadable `exclude_from` files fail the indexing run before processing starts.
+
+Non-language files that pass plain-text guardrails (UTF-8, non-binary, bounded size) are indexed as file-level `plain_text` artefacts.
+
 ## What Capture Does Not Configure
 
 Capture policy does not define:

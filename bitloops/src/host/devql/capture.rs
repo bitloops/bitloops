@@ -47,6 +47,8 @@ fn prepare_capture_temporary_checkpoint_batch(
     }
 
     let repo_root = &cfg.repo_root;
+    let exclusion_matcher = crate::host::devql::load_repo_exclusion_matcher(repo_root)
+        .context("loading repo policy exclusions for watcher capture")?;
     let base_commit = crate::host::checkpoints::strategy::manual_commit::run_git(
         repo_root,
         &["rev-parse", "HEAD"],
@@ -59,6 +61,9 @@ fn prepare_capture_temporary_checkpoint_batch(
         let rel = path.strip_prefix(repo_root).unwrap_or(path.as_path());
         let rel = rel.to_string_lossy().to_string();
         if rel.is_empty() {
+            continue;
+        }
+        if exclusion_matcher.excludes_repo_relative_path(&rel) {
             continue;
         }
         if path.exists() {
@@ -134,12 +139,15 @@ async fn sync_changed_paths(
     modified: &[String],
     deleted: &[String],
 ) -> Result<()> {
+    let exclusion_matcher = crate::host::devql::load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for watcher capture sync")?;
     let mut paths = modified
         .iter()
         .chain(deleted.iter())
         .map(|path| crate::host::devql::normalize_repo_path(path))
         .filter(|path| !path.is_empty())
         .collect::<Vec<_>>();
+    paths.retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
     paths.sort();
     paths.dedup();
     if paths.is_empty() {

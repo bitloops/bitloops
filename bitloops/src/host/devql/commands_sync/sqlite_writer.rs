@@ -59,6 +59,7 @@ pub(crate) struct PreparedSyncOutcome {
     pub(crate) cache_hit: bool,
     pub(crate) cache_miss: bool,
     pub(crate) parse_error: bool,
+    pub(crate) error_message: Option<String>,
     pub(crate) stats: PreparedPathStats,
 }
 
@@ -426,8 +427,9 @@ pub(crate) async fn prepare_sync_item(
     index: usize,
     parser_version: Arc<String>,
     extractor_version: Arc<String>,
-) -> Result<PreparedSyncOutcome> {
-    tokio::task::spawn_blocking(move || {
+) -> PreparedSyncOutcome {
+    let path_for_error = desired.path.clone();
+    let joined = tokio::task::spawn_blocking(move || {
         let pooled_connection = pool.checkout()?;
         prepare_sync_item_with_connection(
             pooled_connection.connection(),
@@ -438,8 +440,28 @@ pub(crate) async fn prepare_sync_item(
             extractor_version.as_str(),
         )
     })
-    .await
-    .context("joining sync prepare worker task")?
+    .await;
+
+    match joined {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(err)) => prepare_failure_outcome(path_for_error, format!("{err:#}")),
+        Err(err) => prepare_failure_outcome(
+            path_for_error,
+            format!("joining sync prepare worker task failed: {err}"),
+        ),
+    }
+}
+
+fn prepare_failure_outcome(path: String, error_message: String) -> PreparedSyncOutcome {
+    PreparedSyncOutcome {
+        path,
+        prepared_item: None,
+        cache_hit: false,
+        cache_miss: true,
+        parse_error: true,
+        error_message: Some(error_message),
+        stats: PreparedPathStats::default(),
+    }
 }
 
 fn prepare_sync_item_with_connection(
@@ -464,8 +486,24 @@ fn prepare_sync_item_with_connection(
 
     let retention_class = determine_retention_class(&desired);
     let path = desired.path.clone();
-    let content = read_effective_content(cfg, &desired)
-        .with_context(|| format!("reading effective content for `{}`", desired.path))?;
+    let content = match read_effective_content(cfg, &desired) {
+        Ok(content) => content,
+        Err(_err) if desired.language == crate::host::devql::PLAIN_TEXT_LANGUAGE_ID => {
+            return Ok(PreparedSyncOutcome {
+                path,
+                prepared_item: None,
+                cache_hit: false,
+                cache_miss: true,
+                parse_error: true,
+                error_message: None,
+                stats,
+            });
+        }
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("reading effective content for `{}`", desired.path));
+        }
+    };
 
     let (
         extraction,
@@ -497,6 +535,7 @@ fn prepare_sync_item_with_connection(
             let Some(extraction) = crate::host::devql::sync::extraction::extract_to_cache_format(
                 cfg,
                 &desired.path,
+                &desired.language,
                 &desired.effective_content_id,
                 parser_version,
                 extractor_version,
@@ -511,6 +550,7 @@ fn prepare_sync_item_with_connection(
                     cache_hit: false,
                     cache_miss: true,
                     parse_error: true,
+                    error_message: None,
                     stats,
                 });
             };
@@ -544,6 +584,7 @@ fn prepare_sync_item_with_connection(
         cache_hit,
         cache_miss,
         parse_error,
+        error_message: None,
         stats,
     })
 }

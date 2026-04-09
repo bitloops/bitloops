@@ -52,6 +52,7 @@ mod commands_refresh;
 mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+mod plain_text;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
 mod types;
@@ -82,6 +83,10 @@ pub use self::commands_sync::{
     run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
+pub(crate) use self::plain_text::{
+    PLAIN_TEXT_LANGUAGE_ID, indexing_language_for_path, plain_text_content_is_allowed,
+    should_skip_plain_text_fallback_path,
+};
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
@@ -811,6 +816,8 @@ mod ingestion_artefact_persistence;
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
+#[path = "devql/exclusions.rs"]
+mod exclusions;
 #[path = "devql/query/dsl_compiler.rs"]
 mod query_dsl_compiler;
 #[path = "devql/query/executor.rs"]
@@ -829,6 +836,7 @@ pub(crate) use self::db_utils::{
     sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
+use self::exclusions::*;
 use self::ingestion_artefact_identity::*;
 use self::ingestion_artefact_persistence::*;
 use self::ingestion_artefact_persistence_edges::*;

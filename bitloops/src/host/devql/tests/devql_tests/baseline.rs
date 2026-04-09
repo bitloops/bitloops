@@ -11,7 +11,7 @@ fn count_rows(conn: &rusqlite::Connection, sql: &str, repo_id: &str) -> i64 {
 }
 
 #[test]
-fn discover_baseline_files_keeps_supported_extensions_only() {
+fn discover_baseline_files_keeps_all_tracked_non_excluded_files() {
     let repo = seed_git_repo();
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
     std::fs::write(repo.path().join("src/lib.rs"), "pub fn run() {}\n").expect("write rust file");
@@ -41,6 +41,8 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
     assert_eq!(
         files,
         vec![
+            "README.md".to_string(),
+            "config.toml".to_string(),
             "src/component.jsx".to_string(),
             "src/index.ts".to_string(),
             "src/lib.rs".to_string(),
@@ -85,7 +87,10 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
             |row| row.get(0),
         )
         .expect("count current_file_state rows");
-    assert_eq!(current_file_state_count, 2);
+    let tracked_files_count = discover_baseline_files(repo.path())
+        .expect("discover tracked files")
+        .len() as i64;
+    assert_eq!(current_file_state_count, tracked_files_count);
 
     let current_count = count_rows(
         &conn,

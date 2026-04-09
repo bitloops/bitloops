@@ -93,11 +93,15 @@ async fn sync_changed_paths(
     changed_files: &[String],
     source_hook: &str,
 ) -> Result<PostCommitArtefactRefreshStats> {
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root).with_context(|| {
+        format!("loading repo policy exclusions for {source_hook} path refresh")
+    })?;
     let mut paths = changed_files
         .iter()
         .map(|raw| normalize_repo_path(raw))
         .filter(|path| !path.is_empty())
         .collect::<Vec<_>>();
+    paths.retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
     paths.sort();
     paths.dedup();
 

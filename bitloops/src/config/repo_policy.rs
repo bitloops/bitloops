@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::de::from_str;
@@ -21,6 +22,21 @@ pub struct RepoPolicySnapshot {
     pub knowledge_import_paths: Vec<String>,
     pub imported_knowledge: Vec<ImportedKnowledgeConfig>,
     pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoPolicyScopeExclusions {
+    pub exclude: Vec<String>,
+    pub exclude_from: Vec<String>,
+    pub referenced_files: Vec<RepoPolicyExclusionFileReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoPolicyExclusionFileReference {
+    pub configured_path: String,
+    pub resolved_path: PathBuf,
+    pub content: String,
+    pub patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +116,7 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         shared.as_ref().and_then(|value| value.watch.clone()),
         local.as_ref().and_then(|value| value.watch.clone()),
     );
-    let scope = merge_optional_values(
+    let scope = merge_scope_values(
         shared.as_ref().and_then(|value| value.scope.clone()),
         local.as_ref().and_then(|value| value.scope.clone()),
     );
@@ -128,11 +144,13 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         .iter()
         .map(|import_path| load_imported_knowledge(&location.root, import_path))
         .collect::<Result<Vec<_>>>()?;
+    let scope_exclusions = resolve_repo_policy_scope_exclusions(&scope, &location.root)?;
 
     let fingerprint = fingerprint_repo_policy(
         &capture,
         &watch,
         &scope,
+        &scope_exclusions,
         &agents,
         &knowledge_import_paths,
         &imported_knowledge,
@@ -159,10 +177,16 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
     let agents = Value::Object(Map::new());
     let imported_knowledge = Vec::new();
     let knowledge_import_paths = Vec::new();
+    let exclusions = RepoPolicyScopeExclusions {
+        exclude: Vec::new(),
+        exclude_from: Vec::new(),
+        referenced_files: Vec::new(),
+    };
     let fingerprint = fingerprint_repo_policy(
         &capture,
         &watch,
         &scope,
+        &exclusions,
         &agents,
         &knowledge_import_paths,
         &imported_knowledge,
@@ -272,8 +296,140 @@ fn resolve_import_path(root: &Path, import_path: &str) -> PathBuf {
 }
 
 fn parse_policy_text(raw: &str, path: &Path) -> Result<RepoPolicyTomlFile> {
-    from_str::<RepoPolicyTomlFile>(raw)
-        .with_context(|| format!("parsing Bitloops repo policy {}", path.display()))
+    match from_str::<RepoPolicyTomlFile>(raw) {
+        Ok(parsed) => Ok(parsed),
+        Err(primary_err) => {
+            if let Some(normalized) = normalize_scope_exclusion_array_literals(raw)
+                && let Ok(parsed) = from_str::<RepoPolicyTomlFile>(&normalized)
+            {
+                return Ok(parsed);
+            }
+            Err(primary_err)
+                .with_context(|| format!("parsing Bitloops repo policy {}", path.display()))
+        }
+    }
+}
+
+fn normalize_scope_exclusion_array_literals(raw: &str) -> Option<String> {
+    let mut changed = false;
+    let mut lines = Vec::new();
+
+    for line in raw.lines() {
+        let normalized = normalize_scope_exclusion_array_line(line);
+        if normalized != line {
+            changed = true;
+        }
+        lines.push(normalized);
+    }
+
+    if !changed {
+        return None;
+    }
+
+    let mut out = lines.join("\n");
+    if raw.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
+}
+
+fn normalize_scope_exclusion_array_line(line: &str) -> String {
+    if line.contains('#') {
+        return line.to_string();
+    }
+
+    let Some((lhs, rhs)) = line.split_once('=') else {
+        return line.to_string();
+    };
+    let key = lhs.trim();
+    if key != "exclude" && key != "exclude_from" {
+        return line.to_string();
+    }
+
+    let rhs = rhs.trim();
+    if !(rhs.starts_with('[') && rhs.ends_with(']')) {
+        return line.to_string();
+    }
+
+    let body = &rhs[1..rhs.len().saturating_sub(1)];
+    let values = split_array_values(body);
+    if values.is_empty() {
+        return line.to_string();
+    }
+
+    let mut changed = false;
+    let mut normalized_values = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if is_quoted_string_literal(value) {
+            normalized_values.push(value.to_string());
+            continue;
+        }
+
+        normalized_values.push(format!("\"{}\"", escape_toml_basic_string(value)));
+        changed = true;
+    }
+
+    if !changed {
+        return line.to_string();
+    }
+
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    format!("{indent}{key} = [{}]", normalized_values.join(", "))
+}
+
+fn split_array_values(input: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quotes = false;
+    let mut in_double_quotes = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if in_double_quotes && ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+
+        match ch {
+            '\'' if !in_double_quotes => {
+                in_single_quotes = !in_single_quotes;
+                current.push(ch);
+            }
+            '"' if !in_single_quotes => {
+                in_double_quotes = !in_double_quotes;
+                current.push(ch);
+            }
+            ',' if !in_single_quotes && !in_double_quotes => {
+                values.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    values.push(current);
+    values
+}
+
+fn is_quoted_string_literal(value: &str) -> bool {
+    value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+}
+
+fn escape_toml_basic_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn merge_optional_values(base: Option<Value>, overlay: Option<Value>) -> Value {
@@ -283,6 +439,123 @@ fn merge_optional_values(base: Option<Value>, overlay: Option<Value>) -> Value {
         (None, Some(overlay)) => overlay,
         (None, None) => Value::Object(Map::new()),
     }
+}
+
+fn merge_scope_values(base: Option<Value>, overlay: Option<Value>) -> Value {
+    match (base, overlay) {
+        (Some(base), Some(overlay)) => {
+            if scope_overlay_replaces_exclusions(&overlay) {
+                deep_merge_value(remove_scope_exclusion_keys(base), overlay)
+            } else {
+                deep_merge_value(base, overlay)
+            }
+        }
+        (Some(base), None) => base,
+        (None, Some(overlay)) => overlay,
+        (None, None) => Value::Object(Map::new()),
+    }
+}
+
+fn scope_overlay_replaces_exclusions(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|map| map.contains_key("exclude") || map.contains_key("exclude_from"))
+}
+
+fn remove_scope_exclusion_keys(value: Value) -> Value {
+    if let Value::Object(mut map) = value {
+        map.remove("exclude");
+        map.remove("exclude_from");
+        Value::Object(map)
+    } else {
+        value
+    }
+}
+
+pub fn resolve_repo_policy_scope_exclusions(
+    scope: &Value,
+    root: &Path,
+) -> Result<RepoPolicyScopeExclusions> {
+    let exclude = parse_scope_string_list(scope, "exclude")?;
+    let exclude_from = parse_scope_string_list(scope, "exclude_from")?;
+    let referenced_files = load_scope_exclusion_file_references(root, &exclude_from)?;
+    Ok(RepoPolicyScopeExclusions {
+        exclude,
+        exclude_from,
+        referenced_files,
+    })
+}
+
+fn parse_scope_string_list(scope: &Value, key: &str) -> Result<Vec<String>> {
+    let Some(scope_map) = scope.as_object() else {
+        return Ok(Vec::new());
+    };
+    let Some(raw) = scope_map.get(key) else {
+        return Ok(Vec::new());
+    };
+
+    let raw_values = raw
+        .as_array()
+        .with_context(|| format!("`scope.{key}` must be an array of strings"))?;
+    let mut values = Vec::new();
+    for item in raw_values {
+        let value = item
+            .as_str()
+            .with_context(|| format!("`scope.{key}` values must be strings"))?
+            .trim()
+            .to_string();
+        if !value.is_empty() {
+            values.push(value);
+        }
+    }
+    Ok(values)
+}
+
+fn load_scope_exclusion_file_references(
+    root: &Path,
+    configured_paths: &[String],
+) -> Result<Vec<RepoPolicyExclusionFileReference>> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    for configured_path in configured_paths {
+        let resolved = resolve_import_path(root, configured_path);
+        let canonical = resolved.canonicalize().unwrap_or(resolved.clone());
+        if !canonical.starts_with(&canonical_root) {
+            bail!(
+                "scope.exclude_from path `{}` resolves outside repo-policy root {}",
+                configured_path,
+                canonical_root.display()
+            );
+        }
+        if !seen.insert(canonical.clone()) {
+            continue;
+        }
+
+        let content = fs::read_to_string(&resolved).with_context(|| {
+            format!(
+                "reading scope.exclude_from patterns from {}",
+                resolved.display()
+            )
+        })?;
+        let patterns = parse_exclusion_patterns(&content);
+        out.push(RepoPolicyExclusionFileReference {
+            configured_path: configured_path.clone(),
+            resolved_path: canonical,
+            content,
+            patterns,
+        });
+    }
+    Ok(out)
+}
+
+pub fn parse_exclusion_patterns(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect()
 }
 
 fn deep_merge_value(base: Value, overlay: Value) -> Value {
@@ -310,6 +583,7 @@ fn fingerprint_repo_policy(
     capture: &Value,
     watch: &Value,
     scope: &Value,
+    scope_exclusions: &RepoPolicyScopeExclusions,
     agents: &Value,
     knowledge_import_paths: &[String],
     imported_knowledge: &[ImportedKnowledgeConfig],
@@ -318,6 +592,65 @@ fn fingerprint_repo_policy(
     root.insert("capture".into(), canonicalize_value(capture));
     root.insert("watch".into(), canonicalize_value(watch));
     root.insert("scope".into(), canonicalize_value(scope));
+    root.insert(
+        "scope_exclusions".into(),
+        Value::Object(Map::from_iter([
+            (
+                "exclude".into(),
+                Value::Array(
+                    scope_exclusions
+                        .exclude
+                        .iter()
+                        .map(|value| Value::String(value.clone()))
+                        .collect(),
+                ),
+            ),
+            (
+                "exclude_from".into(),
+                Value::Array(
+                    scope_exclusions
+                        .exclude_from
+                        .iter()
+                        .map(|value| Value::String(value.clone()))
+                        .collect(),
+                ),
+            ),
+            (
+                "exclude_from_files".into(),
+                Value::Array(
+                    scope_exclusions
+                        .referenced_files
+                        .iter()
+                        .map(|entry| {
+                            Value::Object(Map::from_iter([
+                                (
+                                    "configured_path".into(),
+                                    Value::String(entry.configured_path.clone()),
+                                ),
+                                (
+                                    "resolved_path".into(),
+                                    Value::String(
+                                        entry.resolved_path.to_string_lossy().to_string(),
+                                    ),
+                                ),
+                                ("content".into(), Value::String(entry.content.clone())),
+                                (
+                                    "patterns".into(),
+                                    Value::Array(
+                                        entry
+                                            .patterns
+                                            .iter()
+                                            .map(|value| Value::String(value.clone()))
+                                            .collect(),
+                                    ),
+                                ),
+                            ]))
+                        })
+                        .collect(),
+                ),
+            ),
+        ])),
+    );
     root.insert("agents".into(), canonicalize_value(agents));
     root.insert(
         "imports".into(),
@@ -370,5 +703,161 @@ fn canonicalize_value(value: &Value) -> Value {
         }
         Value::Array(values) => Value::Array(values.iter().map(canonicalize_value).collect()),
         _ => value.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_scope_exclusions_replace_shared_values() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[scope]
+project_root = "packages/api"
+include = ["src/**"]
+exclude = ["dist/**"]
+exclude_from = ["shared.ignore"]
+"#,
+        )
+        .expect("write shared policy");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            r#"
+[scope]
+exclude_from = ["local.ignore"]
+"#,
+        )
+        .expect("write local policy");
+        std::fs::write(temp.path().join("shared.ignore"), "vendor/**\n").expect("write shared");
+        std::fs::write(temp.path().join("local.ignore"), "tmp/**\n").expect("write local");
+
+        let snapshot = discover_repo_policy(temp.path()).expect("discover policy");
+        let scope = snapshot.scope.as_object().expect("scope object");
+        assert_eq!(
+            scope.get("include"),
+            Some(&serde_json::json!(["src/**"])),
+            "non-exclusion keys should still inherit from shared"
+        );
+        assert!(
+            scope.get("exclude").is_none(),
+            "shared scope.exclude should be cleared when local defines exclusion keys"
+        );
+        assert_eq!(
+            scope.get("exclude_from"),
+            Some(&serde_json::json!(["local.ignore"]))
+        );
+    }
+
+    #[test]
+    fn shared_scope_exclusions_apply_when_local_exclusion_keys_absent() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[scope]
+exclude = ["dist/**"]
+exclude_from = ["shared.ignore"]
+"#,
+        )
+        .expect("write shared policy");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            r#"
+[scope]
+project_root = "packages/app"
+"#,
+        )
+        .expect("write local policy");
+        std::fs::write(temp.path().join("shared.ignore"), "vendor/**\n").expect("write shared");
+
+        let snapshot = discover_repo_policy(temp.path()).expect("discover policy");
+        let scope = snapshot.scope.as_object().expect("scope object");
+        assert_eq!(scope.get("exclude"), Some(&serde_json::json!(["dist/**"])));
+        assert_eq!(
+            scope.get("exclude_from"),
+            Some(&serde_json::json!(["shared.ignore"]))
+        );
+    }
+
+    #[test]
+    fn policy_fingerprint_changes_when_exclude_from_file_content_changes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[scope]
+exclude_from = [".bitloopsignore"]
+"#,
+        )
+        .expect("write shared policy");
+        let ignore_path = temp.path().join(".bitloopsignore");
+        std::fs::write(&ignore_path, "vendor/**\n").expect("write ignore");
+        let first = discover_repo_policy(temp.path())
+            .expect("discover policy")
+            .fingerprint;
+
+        std::fs::write(&ignore_path, "vendor/**\nbuild/**\n").expect("rewrite ignore");
+        let second = discover_repo_policy(temp.path())
+            .expect("discover policy")
+            .fingerprint;
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn exclude_from_paths_outside_policy_root_are_rejected() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let outside = tempfile::tempdir().expect("outside temp dir");
+        std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+        std::fs::write(outside.path().join("outside.ignore"), "vendor/**\n")
+            .expect("write outside ignore");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_FILE_NAME),
+            format!(
+                r#"
+[scope]
+exclude_from = ["{}"]
+"#,
+                outside.path().join("outside.ignore").display()
+            ),
+        )
+        .expect("write policy");
+
+        let err = discover_repo_policy(temp.path()).expect_err("outside-root paths should fail");
+        assert!(
+            err.to_string().contains("outside repo-policy root"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn discover_policy_accepts_unquoted_scope_exclusion_array_values() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+        std::fs::write(
+            temp.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            r#"
+[scope]
+exclude = [docs/**]
+exclude_from = [.bitloopsignore]
+"#,
+        )
+        .expect("write local policy");
+        std::fs::write(temp.path().join(".bitloopsignore"), "vendor/**\n")
+            .expect("write ignore file");
+
+        let snapshot = discover_repo_policy(temp.path()).expect("discover policy");
+        let scope = snapshot.scope.as_object().expect("scope object");
+        assert_eq!(scope.get("exclude"), Some(&serde_json::json!(["docs/**"])));
+        assert_eq!(
+            scope.get("exclude_from"),
+            Some(&serde_json::json!([".bitloopsignore"]))
+        );
     }
 }

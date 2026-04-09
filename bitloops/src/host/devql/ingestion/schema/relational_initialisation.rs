@@ -17,6 +17,20 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite
         .initialise_devql_schema()
         .context("creating SQLite relational DevQL tables")?;
+    let repository_columns = sqlite
+        .with_connection(|conn| sqlite_table_columns(conn, "repositories"))
+        .context("inspecting SQLite repositories table shape")?;
+    if !repository_columns
+        .iter()
+        .any(|column| column == "metadata_json")
+    {
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            "ALTER TABLE repositories ADD COLUMN metadata_json TEXT;",
+        )
+        .await
+        .context("adding SQLite repositories.metadata_json column")?;
+    }
     let historical_cutover_needed = sqlite
         .with_connection(sqlite_artefacts_historical_needs_cutover)
         .context("inspecting SQLite historical artefacts schema shape")?;
@@ -291,6 +305,12 @@ async fn init_postgres_schema_with_policy(
     postgres_exec(pg_client, sql)
         .await
         .context("creating Postgres DevQL tables")?;
+    postgres_exec(
+        pg_client,
+        "ALTER TABLE repositories ADD COLUMN IF NOT EXISTS metadata_json TEXT;",
+    )
+    .await
+    .context("adding Postgres repositories.metadata_json column")?;
 
     let artefacts_alter_sql = artefacts_upgrade_sql();
     postgres_exec(pg_client, artefacts_alter_sql)
