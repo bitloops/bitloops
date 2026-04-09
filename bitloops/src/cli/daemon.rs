@@ -47,6 +47,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Stop(args) => run_stop(args).await,
         DaemonCommand::Status(args) => run_status(args).await,
         DaemonCommand::Restart(args) => run_restart(args).await,
+        DaemonCommand::Enable(args) => crate::cli::enable::run(args).await,
         DaemonCommand::Enrichments(args) => run_enrichments(args).await,
         DaemonCommand::Logs(args) => run_logs(args).await,
     }
@@ -280,8 +281,24 @@ pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
         let _ = daemon::resolve_daemon_config(Some(config_path))?;
     }
     let report = daemon::status().await?;
-    for line in status_lines(&report) {
-        println!("{line}");
+    let mut out = io::stdout().lock();
+    write_status_output(&report, args.json, &mut out)
+}
+
+fn write_status_output(
+    report: &daemon::DaemonStatusReport,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    if json {
+        serde_json::to_writer_pretty(&mut *out, report)
+            .context("serializing daemon status as JSON")?;
+        writeln!(out)?;
+        return Ok(());
+    }
+
+    for line in status_lines(report) {
+        writeln!(out, "{line}")?;
     }
     Ok(())
 }

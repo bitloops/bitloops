@@ -84,6 +84,22 @@ pub(crate) async fn build_relational_clones_query(
 ) -> Result<String> {
     let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
+    let use_historical_tables = spec.temporal_scope.use_historical_tables();
+    let clone_edges_table = if use_historical_tables {
+        "symbol_clone_edges"
+    } else {
+        "symbol_clone_edges_current"
+    };
+    let target_artefacts_table = if use_historical_tables {
+        "artefacts"
+    } else {
+        "artefacts_current"
+    };
+    let target_semantics_table = if use_historical_tables {
+        "symbol_semantics"
+    } else {
+        "symbol_semantics_current"
+    };
 
     let mut clone_filters = vec![format!("ce.repo_id = '{}'", esc_pg(repo_id))];
     if let Some(relation_kind) = parsed.clones.relation_kind.as_deref() {
@@ -102,13 +118,16 @@ src.start_line AS source_start_line, src.end_line AS source_end_line, \
 tgt.start_line AS target_start_line, tgt.end_line AS target_end_line, \
 tgt.canonical_kind AS target_canonical_kind, tgt.language_kind AS target_language_kind, tgt.language AS target_language, \
 ss.summary AS target_summary \
-FROM symbol_clone_edges ce \
-JOIN filtered src ON src.symbol_id = ce.source_symbol_id AND src.artefact_id = ce.source_artefact_id \
-JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.symbol_id = ce.target_symbol_id \
-LEFT JOIN symbol_semantics ss ON ss.artefact_id = tgt.artefact_id \
+FROM {clone_edges_table} ce \
+JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
+JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id AND tgt.artefact_id = ce.target_artefact_id \
+LEFT JOIN {target_semantics_table} ss ON ss.artefact_id = tgt.artefact_id \
 WHERE {} \
-ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn",
+	ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn",
         clone_filters.join(" AND "),
+        clone_edges_table = clone_edges_table,
+        target_artefacts_table = target_artefacts_table,
+        target_semantics_table = target_semantics_table,
         filtered_cte = filtered_cte,
     );
 

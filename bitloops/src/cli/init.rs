@@ -3,11 +3,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+#[cfg(test)]
+use std::{cell::RefCell, rc::Rc};
 
 mod agent_hooks;
 mod agent_selection;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::cli::embeddings::install_or_bootstrap_embeddings;
 use crate::cli::telemetry_consent;
 use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
 use crate::config::{
@@ -19,6 +22,15 @@ pub use agent_selection::detect_or_select_agent;
 
 pub type AgentSelector = dyn Fn(&[String]) -> std::result::Result<Vec<String>, String>;
 const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
+
+#[cfg(test)]
+type InstallDefaultDaemonHook = dyn Fn(bool) -> Result<()> + 'static;
+
+#[cfg(test)]
+thread_local! {
+    static INSTALL_DEFAULT_DAEMON_HOOK: RefCell<Option<Rc<InstallDefaultDaemonHook>>> =
+        RefCell::new(None);
+}
 
 #[derive(Args)]
 pub struct InitArgs {
@@ -171,6 +183,19 @@ async fn run_with_io_async(
         out,
     )?;
 
+    if args.install_default_daemon {
+        match install_or_bootstrap_embeddings(&project_root) {
+            Ok(lines) => {
+                for line in lines {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            Err(err) => {
+                bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
+            }
+        }
+    }
+
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
     if should_sync || should_ingest {
@@ -267,6 +292,11 @@ fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {
 }
 
 async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {
+    #[cfg(test)]
+    if let Some(result) = maybe_run_install_default_daemon_hook(install_default_daemon) {
+        return result;
+    }
+
     if !install_default_daemon {
         return Ok(());
     }
@@ -288,6 +318,34 @@ async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()
     };
     let _ = crate::daemon::start_service(&daemon_config, config, None).await?;
     Ok(())
+}
+
+#[cfg(test)]
+fn maybe_run_install_default_daemon_hook(install_default_daemon: bool) -> Option<Result<()>> {
+    INSTALL_DEFAULT_DAEMON_HOOK.with(|cell: &RefCell<Option<Rc<InstallDefaultDaemonHook>>>| {
+        cell.borrow()
+            .as_ref()
+            .map(|hook| hook(install_default_daemon))
+    })
+}
+
+#[cfg(test)]
+pub(super) fn with_install_default_daemon_hook<T>(
+    hook: impl Fn(bool) -> Result<()> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    INSTALL_DEFAULT_DAEMON_HOOK.with(|cell: &RefCell<Option<Rc<InstallDefaultDaemonHook>>>| {
+        assert!(
+            cell.borrow().is_none(),
+            "install default daemon hook already installed"
+        );
+        *cell.borrow_mut() = Some(Rc::new(hook));
+    });
+    let result = f();
+    INSTALL_DEFAULT_DAEMON_HOOK.with(|cell: &RefCell<Option<Rc<InstallDefaultDaemonHook>>>| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }
 
 fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Result<()> {

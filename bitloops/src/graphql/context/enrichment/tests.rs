@@ -3,6 +3,7 @@ use crate::artefact_query_planner::{
     ArtefactQuerySpec, ArtefactScope, ArtefactStructuralFilter, ArtefactTemporalScope,
 };
 use crate::capability_packs::semantic_clones::scoring::SymbolCloneEdgeRow;
+use crate::graphql::types::ClonesFilterInput;
 use serde_json::json;
 
 fn clone_summary_spec() -> ArtefactQuerySpec {
@@ -132,7 +133,7 @@ fn clone_summary_sql_aggregates_filtered_sources_by_relation_kind() {
 
     assert!(sql.contains("WITH filtered AS"));
     assert!(sql.contains("FROM filtered fa"));
-    assert!(sql.contains("JOIN symbol_clone_edges ce"));
+    assert!(sql.contains("JOIN symbol_clone_edges_current ce"));
     assert!(sql.contains("ce.source_artefact_id = fa.artefact_id"));
     assert!(sql.contains("ce.relation_kind = 'similar_implementation'"));
     assert!(sql.contains("ce.score >= 0.75"));

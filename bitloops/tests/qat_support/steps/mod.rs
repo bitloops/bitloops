@@ -58,6 +58,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(
+                r"^I run bitloops init --agent (\S+) --sync=false --ingest=true --backfill=(\d+) in (\S+)$",
+            ),
+            step_fn(given_init_bitloops_with_agent_sync_false_ingest_true_backfill),
+        )
+        .given(
+            None,
             regex(r"^I run EnableCLI for (\S+)$"),
             step_fn(given_enable_cli),
         )
@@ -130,6 +137,56 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run DevQL ingest in (\S+)$"),
             step_fn(given_devql_ingest),
+        )
+        .when(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
+        .then(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
+        .given(
+            None,
+            regex(r"^I snapshot ingest DB state in (\S+)$"),
+            step_fn(given_snapshot_ingest_db_state),
+        )
+        .given(
+            None,
+            regex(r"^I create (\d+) ingest commits in (\S+)$"),
+            step_fn(given_create_ingest_commits),
+        )
+        .given(
+            None,
+            regex(r"^I create a non-FF merge with 2 feature commits in (\S+)$"),
+            step_fn(given_non_ff_merge_with_two_feature_commits),
+        )
+        .given(
+            None,
+            regex(r"^I create an FF merge with 2 feature commits in (\S+)$"),
+            step_fn(given_ff_merge_with_two_feature_commits),
+        )
+        .given(
+            None,
+            regex(r"^I cherry-pick 2 commits in (\S+)$"),
+            step_fn(given_cherry_pick_two_commits),
+        )
+        .given(
+            None,
+            regex(r"^I capture top (\d+) reachable SHAs before rewrite in (\S+)$"),
+            step_fn(given_capture_top_reachable_before_rewrite),
+        )
+        .given(
+            None,
+            regex(r"^I rewrite last (\d+) commits with rebase edit in (\S+)$"),
+            step_fn(given_rebase_edit_rewrite_last_commits),
+        )
+        .given(
+            None,
+            regex(r"^I reset last (\d+) commits and create replacement commits in (\S+)$"),
+            step_fn(given_reset_and_rewrite_last_commits),
         )
         .given(
             None,
@@ -443,6 +500,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^daemon capability-event status shows TestHarness sync handler completed in (\S+)$"),
+            step_fn(then_daemon_capability_event_status_test_harness_completed),
+        )
+        .then(
+            None,
             regex(r#"^DevQL clones query for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
             step_fn(then_devql_clones_returns_at_least),
         )
@@ -535,6 +597,83 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL sync history shows artefacts indexed for current HEAD in (\S+)$"),
             step_fn(then_sync_history_artefacts_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^all reachable SHAs are completed in commit_ingest_ledger in (\S+)$"),
+            step_fn(then_all_reachable_shas_completed_in_ledger),
+        )
+        .then(
+            None,
+            regex(r"^artefacts_current has rows in (\S+)$"),
+            step_fn(then_artefacts_current_has_rows),
+        )
+        .then(
+            None,
+            regex(r"^expected SHAs are completed in commit_ingest_ledger in (\S+)$"),
+            step_fn(then_expected_shas_completed_in_ledger),
+        )
+        .then(
+            None,
+            regex(r"^expected SHAs have file_state rows in (\S+)$"),
+            step_fn(then_expected_shas_have_file_state_rows),
+        )
+        .then(
+            None,
+            regex(r"^exact expected SHAs were newly completed since snapshot in (\S+)$"),
+            step_fn(then_exact_expected_shas_newly_completed_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^no new SHAs were completed since snapshot in (\S+)$"),
+            step_fn(then_no_new_completed_shas_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^completed ledger count is unchanged since snapshot in (\S+)$"),
+            step_fn(then_ledger_completed_count_unchanged_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^artefacts_current count is unchanged since snapshot in (\S+)$"),
+            step_fn(then_artefacts_current_count_unchanged_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^artefacts_current count increased since snapshot in (\S+)$"),
+            step_fn(then_artefacts_current_count_increased_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current contains path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_contains_path),
+        )
+        .then(
+            None,
+            regex(
+                r"^only latest (\d+) reachable SHAs are completed in commit_ingest_ledger in (\S+)$",
+            ),
+            step_fn(then_only_latest_reachable_shas_completed),
+        )
+        .then(
+            None,
+            regex(r"^DevQL ingest summary shows (\d+) ([a-z_]+) in (\S+)$"),
+            step_fn(then_ingest_summary_field_exact),
+        )
+        .then(
+            None,
+            regex(r"^rewrite introduces exactly (\d+) new reachable SHAs in (\S+)$"),
+            step_fn(then_rewrite_new_shas_count),
+        )
+        .then(
+            None,
+            regex(r"^old rewritten SHAs are absent from post-rewrite reachable segment in (\S+)$"),
+            step_fn(then_pre_rewrite_shas_absent_from_post_segment),
+        )
+        .then(
+            None,
+            regex(r"^rewritten new SHAs are completed in commit_ingest_ledger in (\S+)$"),
+            step_fn(then_rewrite_new_shas_completed_in_ledger),
         )
         .then(
             None,

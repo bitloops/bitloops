@@ -12,6 +12,7 @@ Bitloops prefers daemon config and repo policy over environment variables. The l
 | Variable | Meaning |
 | --- | --- |
 | `BITLOOPS_TELEMETRY_OPTOUT` | Disables telemetry dispatch at runtime. It does not answer the CLI consent prompt or rewrite stored daemon-config consent. |
+| `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE` | Forces repo-scoped commands to use the specified daemon `config.toml` path. This also controls which config `bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` mutate and bootstrap. |
 | `BITLOOPS_DISABLE_VERSION_CHECK` | Skips update checks |
 | `BITLOOPS_LOG_LEVEL` | Sets the log level for both the daemon log (`daemon.log`) and the telemetry file logger |
 | `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |

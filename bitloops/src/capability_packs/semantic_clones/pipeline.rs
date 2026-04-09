@@ -20,13 +20,13 @@ use crate::host::devql::{
 };
 
 use super::embeddings;
-use super::ensure_semantic_embeddings_schema;
 use super::features as semantic;
 use super::scoring;
+use super::{ensure_semantic_embeddings_schema, ensure_semantic_features_schema};
 
 use super::schema::{semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql};
 use super::{
-    load_active_embedding_setup, load_current_repo_embedding_setups, persist_active_embedding_setup,
+    load_active_embedding_setup, load_current_repo_embedding_states, persist_active_embedding_setup,
 };
 
 async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
@@ -51,7 +51,103 @@ async fn ensure_semantic_clones_schema(relational: &RelationalStorage) -> Result
     Ok(())
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloneProjection {
+    Historical,
+    Current,
+}
+
+impl CloneProjection {
+    fn artefacts_table(self) -> &'static str {
+        match self {
+            Self::Historical => "artefacts_historical",
+            Self::Current => "artefacts_current",
+        }
+    }
+
+    fn semantics_table(self) -> &'static str {
+        match self {
+            Self::Historical => "symbol_semantics",
+            Self::Current => "symbol_semantics_current",
+        }
+    }
+
+    fn features_table(self) -> &'static str {
+        match self {
+            Self::Historical => "symbol_features",
+            Self::Current => "symbol_features_current",
+        }
+    }
+
+    fn embeddings_table(self) -> &'static str {
+        match self {
+            Self::Historical => "symbol_embeddings",
+            Self::Current => "symbol_embeddings_current",
+        }
+    }
+
+    fn clone_edges_table(self) -> &'static str {
+        match self {
+            Self::Historical => "symbol_clone_edges",
+            Self::Current => "symbol_clone_edges_current",
+        }
+    }
+
+    fn dependency_edges_table(self) -> &'static str {
+        match self {
+            Self::Historical => "artefact_edges",
+            Self::Current => "artefact_edges_current",
+        }
+    }
+
+    fn dependency_source_symbol_expr(self) -> &'static str {
+        match self {
+            Self::Historical => "source.symbol_id",
+            Self::Current => "e.from_symbol_id",
+        }
+    }
+
+    fn dependency_source_join(self) -> &'static str {
+        match self {
+            Self::Historical => {
+                "JOIN artefacts_historical source \
+ON source.repo_id = e.repo_id AND source.artefact_id = e.from_artefact_id AND source.blob_sha = e.blob_sha"
+            }
+            Self::Current => "",
+        }
+    }
+
+    fn dependency_target_join(self) -> &'static str {
+        match self {
+            Self::Historical => {
+                "LEFT JOIN artefacts_historical target \
+ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id AND target.blob_sha = e.blob_sha"
+            }
+            Self::Current => {
+                "LEFT JOIN artefacts_current target \
+ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id"
+            }
+        }
+    }
+
+    fn dependency_target_ref_expr(self) -> &'static str {
+        match self {
+            Self::Historical => {
+                "COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_artefact_id, '')"
+            }
+            Self::Current => {
+                "COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_symbol_id, '')"
+            }
+        }
+    }
+
+    fn blob_column(self) -> &'static str {
+        match self {
+            Self::Historical => "blob_sha",
+            Self::Current => "content_id",
+        }
+    }
+}
 pub(crate) async fn rebuild_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -69,13 +165,55 @@ pub(crate) async fn rebuild_symbol_clone_edges_with_options(
     repo_id: &str,
     options: scoring::CloneScoringOptions,
 ) -> Result<scoring::SymbolCloneBuildResult> {
+    let historical = rebuild_symbol_clone_edges_for_projection(
+        relational,
+        repo_id,
+        CloneProjection::Historical,
+        options,
+    )
+    .await?;
+    // Keep current projection in sync with the default historical rebuild path used by
+    // ingestion/fixtures, even when Stage 1/2 current tables are not populated.
+    delete_repo_symbol_clone_edges_for_projection(relational, repo_id, CloneProjection::Current)
+        .await?;
+    persist_symbol_clone_edges_for_projection(
+        relational,
+        CloneProjection::Current,
+        &historical.edges,
+    )
+    .await?;
+    Ok(historical)
+}
+
+#[allow(dead_code)]
+pub(crate) async fn rebuild_current_symbol_clone_edges(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<scoring::SymbolCloneBuildResult> {
+    rebuild_symbol_clone_edges_for_projection(
+        relational,
+        repo_id,
+        CloneProjection::Current,
+        scoring::CloneScoringOptions::default(),
+    )
+    .await
+}
+
+async fn rebuild_symbol_clone_edges_for_projection(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    projection: CloneProjection,
+    options: scoring::CloneScoringOptions,
+) -> Result<scoring::SymbolCloneBuildResult> {
     ensure_semantic_clones_schema(relational).await?;
+    ensure_semantic_features_schema(relational).await?;
     ensure_semantic_embeddings_schema(relational).await?;
-    let active_setup =
-        resolve_active_embedding_setup_for_clone_rebuild(relational, repo_id).await?;
-    let candidates = match active_setup.as_ref() {
-        Some(active_setup) => {
-            load_symbol_clone_candidate_inputs(relational, repo_id, active_setup).await?
+    let active_state =
+        resolve_active_embedding_setup_for_clone_rebuild(relational, repo_id, projection).await?;
+    let candidates = match active_state.as_ref() {
+        Some(active_state) => {
+            load_symbol_clone_candidate_inputs(relational, repo_id, projection, active_state)
+                .await?
         }
         None => Vec::new(),
     };
@@ -85,8 +223,8 @@ pub(crate) async fn rebuild_symbol_clone_edges_with_options(
     .await
     .context("building semantic clone edges on blocking worker")?;
 
-    delete_repo_symbol_clone_edges(relational, repo_id).await?;
-    persist_symbol_clone_edges(relational, &build_result.edges).await?;
+    delete_repo_symbol_clone_edges_for_projection(relational, repo_id, projection).await?;
+    persist_symbol_clone_edges_for_projection(relational, projection, &build_result.edges).await?;
     Ok(build_result)
 }
 
@@ -97,12 +235,15 @@ pub(crate) async fn score_symbol_clone_edges_for_source_with_options(
     options: scoring::CloneScoringOptions,
 ) -> Result<scoring::SymbolCloneBuildResult> {
     ensure_semantic_clones_schema(relational).await?;
+    ensure_semantic_features_schema(relational).await?;
     ensure_semantic_embeddings_schema(relational).await?;
-    let active_setup =
-        resolve_active_embedding_setup_for_clone_rebuild(relational, repo_id).await?;
-    let candidates = match active_setup.as_ref() {
-        Some(active_setup) => {
-            load_symbol_clone_candidate_inputs(relational, repo_id, active_setup).await?
+    let projection = CloneProjection::Current;
+    let active_state =
+        resolve_active_embedding_setup_for_clone_rebuild(relational, repo_id, projection).await?;
+    let candidates = match active_state.as_ref() {
+        Some(active_state) => {
+            load_symbol_clone_candidate_inputs(relational, repo_id, projection, active_state)
+                .await?
         }
         None => Vec::new(),
     };
@@ -121,16 +262,19 @@ pub(crate) async fn score_symbol_clone_edges_for_source_with_options(
 async fn load_symbol_clone_candidate_inputs(
     relational: &RelationalStorage,
     repo_id: &str,
-    active_setup: &embeddings::EmbeddingSetup,
+    projection: CloneProjection,
+    active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> Result<Vec<scoring::SymbolCloneCandidateInput>> {
-    let churn_by_symbol_id = load_symbol_churn_counts(relational, repo_id).await?;
-    let call_targets_by_symbol_id = load_symbol_call_targets(relational, repo_id).await?;
+    let churn_by_symbol_id = load_symbol_churn_counts(relational, repo_id, projection).await?;
+    let call_targets_by_symbol_id =
+        load_symbol_call_targets(relational, repo_id, projection).await?;
     let dependency_targets_by_symbol_id =
-        load_symbol_dependency_targets(relational, repo_id).await?;
+        load_symbol_dependency_targets(relational, repo_id, projection).await?;
     let rows = relational
         .query_rows(&build_symbol_clone_candidate_lookup_sql(
             repo_id,
-            active_setup,
+            projection,
+            active_state,
         ))
         .await?;
 
@@ -202,7 +346,7 @@ async fn load_symbol_clone_candidate_inputs(
                     .unwrap_or_default(),
                 row.get("embedding_dimension")
                     .and_then(value_as_usize)
-                    .unwrap_or(active_setup.dimension),
+                    .unwrap_or(active_state.setup.dimension),
             ),
             embedding,
             call_targets: call_targets_by_symbol_id
@@ -223,21 +367,41 @@ async fn load_symbol_clone_candidate_inputs(
 async fn resolve_active_embedding_setup_for_clone_rebuild(
     relational: &RelationalStorage,
     repo_id: &str,
-) -> Result<Option<embeddings::EmbeddingSetup>> {
-    if let Some(active_setup) = load_active_embedding_setup(relational, repo_id).await? {
-        return Ok(Some(active_setup));
+    projection: CloneProjection,
+) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
+    if projection == CloneProjection::Current {
+        let current_states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+        return choose_current_projection_embedding_state(&current_states);
     }
 
-    let current_setups = load_current_repo_embedding_setups(relational, repo_id).await?;
-    match current_setups.as_slice() {
-        [setup] => {
-            persist_active_embedding_setup(relational, repo_id, setup).await?;
-            Ok(Some(setup.clone()))
+    if let Some(active_state) = load_active_embedding_setup(relational, repo_id).await? {
+        return Ok(Some(active_state));
+    }
+
+    let current_states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+    match current_states.as_slice() {
+        [state] => {
+            persist_active_embedding_setup(relational, repo_id, state).await?;
+            Ok(Some(state.clone()))
         }
         [] => Ok(None),
+        _ if current_states
+            .iter()
+            .all(|state| state.setup == current_states[0].setup) =>
+        {
+            let chosen = current_states
+                .iter()
+                .find(|state| {
+                    state.representation_kind == embeddings::EmbeddingRepresentationKind::Enriched
+                })
+                .unwrap_or(&current_states[0])
+                .clone();
+            persist_active_embedding_setup(relational, repo_id, &chosen).await?;
+            Ok(Some(chosen))
+        }
         _ => {
             log::warn!(
-                "semantic_clones clone rebuild skipped for repo {}: multiple embedding setups exist but no active setup is persisted",
+                "semantic_clones clone rebuild skipped for repo {}: multiple embedding representations or setups exist but no active state is persisted",
                 repo_id
             );
             Ok(None)
@@ -245,9 +409,35 @@ async fn resolve_active_embedding_setup_for_clone_rebuild(
     }
 }
 
+fn choose_current_projection_embedding_state(
+    current_states: &[embeddings::ActiveEmbeddingRepresentationState],
+) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
+    match current_states {
+        [] => Ok(None),
+        [state] => Ok(Some(state.clone())),
+        _ if current_states
+            .iter()
+            .all(|state| state.setup == current_states[0].setup) =>
+        {
+            Ok(Some(
+                current_states
+                    .iter()
+                    .find(|state| {
+                        state.representation_kind
+                            == embeddings::EmbeddingRepresentationKind::Enriched
+                    })
+                    .unwrap_or(&current_states[0])
+                    .clone(),
+            ))
+        }
+        _ => Ok(None),
+    }
+}
+
 async fn load_symbol_churn_counts(
     relational: &RelationalStorage,
     repo_id: &str,
+    _projection: CloneProjection,
 ) -> Result<HashMap<String, usize>> {
     let sql = format!(
         "SELECT a.symbol_id, COUNT(DISTINCT s.blob_sha) AS churn_count \
@@ -275,14 +465,25 @@ GROUP BY a.symbol_id",
 async fn load_symbol_call_targets(
     relational: &RelationalStorage,
     repo_id: &str,
+    projection: CloneProjection,
 ) -> Result<HashMap<String, Vec<String>>> {
+    let from_symbol_expr = projection.dependency_source_symbol_expr();
+    let source_join = projection.dependency_source_join();
+    let target_join = projection.dependency_target_join();
+    let target_ref_expr = projection.dependency_target_ref_expr();
     let sql = format!(
-        "SELECT e.from_symbol_id, COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_symbol_id, '') AS target_ref \
-FROM artefact_edges_current e \
-LEFT JOIN artefacts_current target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
+        "SELECT {from_symbol_expr} AS from_symbol_id, {target_ref_expr} AS target_ref \
+FROM {edges_table} e \
+{source_join} \
+{target_join} \
 WHERE e.repo_id = '{}' AND e.edge_kind = '{}'",
         esc_pg(repo_id),
         esc_pg(EDGE_KIND_CALLS),
+        edges_table = projection.dependency_edges_table(),
+        from_symbol_expr = from_symbol_expr,
+        source_join = source_join,
+        target_join = target_join,
+        target_ref_expr = target_ref_expr,
     );
     let rows = relational.query_rows(&sql).await?;
     let mut out = HashMap::<String, HashSet<String>>::new();
@@ -314,16 +515,27 @@ WHERE e.repo_id = '{}' AND e.edge_kind = '{}'",
 async fn load_symbol_dependency_targets(
     relational: &RelationalStorage,
     repo_id: &str,
+    projection: CloneProjection,
 ) -> Result<HashMap<String, Vec<String>>> {
+    let from_symbol_expr = projection.dependency_source_symbol_expr();
+    let source_join = projection.dependency_source_join();
+    let target_join = projection.dependency_target_join();
+    let target_ref_expr = projection.dependency_target_ref_expr();
     let sql = format!(
-        "SELECT e.from_symbol_id, LOWER(e.edge_kind) AS edge_kind, \
-COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_symbol_id, '') AS target_ref \
-FROM artefact_edges_current e \
-LEFT JOIN artefacts_current target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
+        "SELECT {from_symbol_expr} AS from_symbol_id, LOWER(e.edge_kind) AS edge_kind, \
+{target_ref_expr} AS target_ref \
+FROM {edges_table} e \
+{source_join} \
+{target_join} \
 WHERE e.repo_id = '{}' AND e.edge_kind <> '{}' AND e.edge_kind <> '{}'",
         esc_pg(repo_id),
         esc_pg(EDGE_KIND_CALLS),
         esc_pg(EDGE_KIND_EXPORTS),
+        edges_table = projection.dependency_edges_table(),
+        from_symbol_expr = from_symbol_expr,
+        source_join = source_join,
+        target_join = target_join,
+        target_ref_expr = target_ref_expr,
     );
     let rows = relational.query_rows(&sql).await?;
     let mut out = HashMap::<String, HashSet<String>>::new();
@@ -357,24 +569,36 @@ WHERE e.repo_id = '{}' AND e.edge_kind <> '{}' AND e.edge_kind <> '{}'",
 
 fn build_symbol_clone_candidate_lookup_sql(
     repo_id: &str,
-    active_setup: &embeddings::EmbeddingSetup,
+    projection: CloneProjection,
+    active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> String {
+    let artefacts_table = projection.artefacts_table();
+    let semantics_table = projection.semantics_table();
+    let features_table = projection.features_table();
+    let embeddings_table = projection.embeddings_table();
+    let snapshot_column = projection.blob_column();
     format!(
         "SELECT a.repo_id, a.symbol_id, a.artefact_id, a.path, \
 LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) AS canonical_kind, \
 COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, ss.summary, \
 sf.normalized_name, sf.normalized_signature, sf.identifier_tokens, sf.normalized_body_tokens, sf.parent_kind, sf.context_tokens, \
 e.provider AS embedding_provider, e.model AS embedding_model, e.dimension AS embedding_dimension, e.embedding \
-FROM artefacts_current a \
-JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
-JOIN symbol_features sf ON sf.artefact_id = a.artefact_id \
-JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
-WHERE a.repo_id = '{}' AND e.provider = '{}' AND e.model = '{}' AND e.dimension = {} \
+FROM {embeddings_table} e \
+JOIN {semantics_table} ss ON ss.repo_id = e.repo_id AND ss.artefact_id = e.artefact_id AND ss.{snapshot_column} = e.{snapshot_column} \
+JOIN {features_table} sf ON sf.repo_id = e.repo_id AND sf.artefact_id = e.artefact_id AND sf.{snapshot_column} = e.{snapshot_column} \
+JOIN {artefacts_table} a ON a.repo_id = e.repo_id AND a.artefact_id = e.artefact_id AND a.{snapshot_column} = e.{snapshot_column} \
+WHERE e.repo_id = '{}' AND e.provider = '{}' AND e.model = '{}' AND e.dimension = {} \
+AND e.representation_kind = '{}' \
 ORDER BY a.path, a.start_line, a.symbol_id",
         esc_pg(repo_id),
-        esc_pg(&active_setup.provider),
-        esc_pg(&active_setup.model),
-        active_setup.dimension,
+        esc_pg(&active_state.setup.provider),
+        esc_pg(&active_state.setup.model),
+        active_state.setup.dimension,
+        esc_pg(&active_state.representation_kind.to_string()),
+        artefacts_table = artefacts_table,
+        semantics_table = semantics_table,
+        features_table = features_table,
+        embeddings_table = embeddings_table,
     )
 }
 
@@ -382,24 +606,46 @@ pub(crate) async fn delete_repo_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<()> {
+    delete_repo_symbol_clone_edges_for_projection(relational, repo_id, CloneProjection::Historical)
+        .await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn delete_repo_current_symbol_clone_edges(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<()> {
+    delete_repo_symbol_clone_edges_for_projection(relational, repo_id, CloneProjection::Current)
+        .await
+}
+
+async fn delete_repo_symbol_clone_edges_for_projection(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    projection: CloneProjection,
+) -> Result<()> {
+    ensure_semantic_clones_schema(relational).await?;
     let sql = format!(
-        "DELETE FROM symbol_clone_edges WHERE repo_id = '{}'",
+        "DELETE FROM {} WHERE repo_id = '{}'",
+        projection.clone_edges_table(),
         esc_pg(repo_id),
     );
     relational.exec(&sql).await
 }
 
-async fn persist_symbol_clone_edges(
+async fn persist_symbol_clone_edges_for_projection(
     relational: &RelationalStorage,
+    projection: CloneProjection,
     rows: &[scoring::SymbolCloneEdgeRow],
 ) -> Result<()> {
     for row in rows {
         let explanation_expr = sql_json_value(relational, &row.explanation_json);
         let generated_at = sql_now(relational);
         let sql = format!(
-            "INSERT INTO symbol_clone_edges (repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id, relation_kind, score, semantic_score, lexical_score, structural_score, clone_input_hash, explanation_json) \
+            "INSERT INTO {table} (repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id, relation_kind, score, semantic_score, lexical_score, structural_score, clone_input_hash, explanation_json) \
 VALUES ('{repo_id}', '{source_symbol_id}', '{source_artefact_id}', '{target_symbol_id}', '{target_artefact_id}', '{relation_kind}', {score}, {semantic_score}, {lexical_score}, {structural_score}, '{clone_input_hash}', {explanation_json}) \
 ON CONFLICT (repo_id, source_symbol_id, target_symbol_id) DO UPDATE SET source_artefact_id = EXCLUDED.source_artefact_id, target_artefact_id = EXCLUDED.target_artefact_id, relation_kind = EXCLUDED.relation_kind, score = EXCLUDED.score, semantic_score = EXCLUDED.semantic_score, lexical_score = EXCLUDED.lexical_score, structural_score = EXCLUDED.structural_score, clone_input_hash = EXCLUDED.clone_input_hash, explanation_json = EXCLUDED.explanation_json, generated_at = {generated_at}",
+            table = projection.clone_edges_table(),
             repo_id = esc_pg(&row.repo_id),
             source_symbol_id = esc_pg(&row.source_symbol_id),
             source_artefact_id = esc_pg(&row.source_artefact_id),
@@ -472,7 +718,8 @@ mod semantic_clone_pipeline_tests {
         init_sqlite_semantic_embeddings_schema, init_sqlite_semantic_features_schema,
     };
     use super::{
-        build_symbol_clone_candidate_lookup_sql, rebuild_symbol_clone_edges,
+        CloneProjection, build_symbol_clone_candidate_lookup_sql,
+        choose_current_projection_embedding_state, rebuild_symbol_clone_edges,
         rebuild_symbol_clone_edges_with_options,
     };
     use crate::capability_packs::semantic_clones::scoring::CloneScoringOptions;
@@ -484,6 +731,8 @@ mod semantic_clone_pipeline_tests {
 
         assert!(pg.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));
         assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));
+        assert!(pg.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current"));
+        assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current"));
         assert!(pg.contains("PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)"));
     }
 
@@ -491,11 +740,15 @@ mod semantic_clone_pipeline_tests {
     fn semantic_clone_candidate_lookup_sql_loads_all_indexed_candidates() {
         let sql = build_symbol_clone_candidate_lookup_sql(
             "repo'1",
-            &super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            CloneProjection::Current,
+            &super::embeddings::ActiveEmbeddingRepresentationState::new(
+                super::embeddings::EmbeddingRepresentationKind::Baseline,
+                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            ),
         );
 
-        assert!(sql.contains("FROM artefacts_current a"));
-        assert!(sql.contains("JOIN symbol_embeddings e"));
+        assert!(sql.contains("FROM symbol_embeddings_current e"));
+        assert!(sql.contains("JOIN artefacts_current a"));
         assert!(sql.contains("e.provider AS embedding_provider"));
         assert!(sql.contains("e.model AS embedding_model"));
         assert!(sql.contains("repo''1"));
@@ -561,6 +814,27 @@ mod semantic_clone_pipeline_tests {
                 "explanation_json",
                 "generated_at",
             ]
+        );
+    }
+
+    #[test]
+    fn current_projection_prefers_enriched_representation_when_setups_match() {
+        let chosen = choose_current_projection_embedding_state(&[
+            super::embeddings::ActiveEmbeddingRepresentationState::new(
+                super::embeddings::EmbeddingRepresentationKind::Baseline,
+                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            ),
+            super::embeddings::ActiveEmbeddingRepresentationState::new(
+                super::embeddings::EmbeddingRepresentationKind::Enriched,
+                super::embeddings::EmbeddingSetup::new("local_fastembed", "test-model", 3),
+            ),
+        ])
+        .expect("choose current projection setup")
+        .expect("current projection setup");
+
+        assert_eq!(
+            chosen.representation_kind,
+            super::embeddings::EmbeddingRepresentationKind::Enriched
         );
     }
 }

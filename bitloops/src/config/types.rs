@@ -92,6 +92,7 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
     }
 }
 
+pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 1;
 pub const DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 5;
 pub const MIN_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 1;
 pub const MAX_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 50;
@@ -102,6 +103,7 @@ pub struct SemanticClonesConfig {
     pub embedding_mode: SemanticCloneEmbeddingMode,
     pub embedding_profile: Option<String>,
     pub ann_neighbors: usize,
+    pub enrichment_workers: usize,
 }
 
 impl Default for SemanticClonesConfig {
@@ -111,6 +113,7 @@ impl Default for SemanticClonesConfig {
             embedding_mode: SemanticCloneEmbeddingMode::default(),
             embedding_profile: None,
             ann_neighbors: DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+            enrichment_workers: DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
         }
     }
 }

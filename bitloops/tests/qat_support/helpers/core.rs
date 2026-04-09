@@ -324,11 +324,48 @@ pub fn run_init_bitloops_with_agent(
     force: bool,
     sync: Option<bool>,
 ) -> Result<()> {
+    run_init_bitloops_with_agent_config(world, repo_name, agent_name, force, sync, None, None)
+}
+
+pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    sync: bool,
+    ingest: bool,
+    backfill: usize,
+) -> Result<()> {
+    run_init_bitloops_with_agent_config(
+        world,
+        repo_name,
+        agent_name,
+        false,
+        Some(sync),
+        Some(ingest),
+        Some(backfill),
+    )
+}
+
+fn run_init_bitloops_with_agent_config(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    force: bool,
+    sync: Option<bool>,
+    ingest: Option<bool>,
+    backfill: Option<usize>,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
     world.agent_name = Some(normalised_agent_name.to_string());
 
-    let args_owned = build_init_bitloops_args(normalised_agent_name, force, sync);
+    let args_owned = build_init_bitloops_args_with_options(
+        normalised_agent_name,
+        force,
+        sync,
+        ingest,
+        backfill,
+    );
     let label = format!("bitloops {}", args_owned.join(" "));
     let mut attempts = 0_u8;
 
@@ -354,6 +391,16 @@ pub fn run_init_bitloops_with_agent(
 }
 
 fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -> Vec<String> {
+    build_init_bitloops_args_with_options(agent_name, force, sync, None, None)
+}
+
+fn build_init_bitloops_args_with_options(
+    agent_name: &str,
+    force: bool,
+    sync: Option<bool>,
+    ingest: Option<bool>,
+    backfill: Option<usize>,
+) -> Vec<String> {
     let mut args = vec![
         "init".to_string(),
         "--agent".to_string(),
@@ -361,8 +408,16 @@ fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -
     ];
 
     let sync_choice = sync.unwrap_or(false);
+    let ingest_choice = if backfill.is_some() {
+        true
+    } else {
+        ingest.unwrap_or(false)
+    };
     args.push(format!("--sync={sync_choice}"));
-    args.push("--ingest=false".to_string());
+    args.push(format!("--ingest={ingest_choice}"));
+    if let Some(backfill_window) = backfill {
+        args.push(format!("--backfill={backfill_window}"));
+    }
 
     if force {
         args.push("--force".to_string());
@@ -1000,6 +1055,11 @@ fn run_change_using_agent_for_repo(
 
 // ── DevQL sync helpers ───────────────────────────────────────
 
+const DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV: &str =
+    "BITLOOPS_QAT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS";
+const DEFAULT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS: u64 = 60;
+const DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS: u64 = 250;
+
 pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
@@ -1175,6 +1235,91 @@ pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout);
     ensure_success(&output, "bitloops devql sync --validate --status")
+}
+
+pub fn wait_for_test_harness_capability_event_completion_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let timeout = parse_timeout_seconds(
+        std::env::var(DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV)
+            .ok()
+            .as_deref(),
+        DEFAULT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS,
+    );
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+    let mut last_payload = serde_json::json!({});
+
+    loop {
+        attempts += 1;
+        let output = run_command_capture(
+            world,
+            "bitloops daemon status --json",
+            build_bitloops_command(world, &["daemon", "status", "--json"])?,
+        )?;
+        world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        world.last_command_stdout = Some(stdout.clone());
+        ensure_success(&output, "bitloops daemon status --json")?;
+
+        let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+            .context("parsing bitloops daemon status --json output")?;
+        if let Some(current_repo_run) = payload
+            .get("capability_events")
+            .and_then(|value| value.get("current_repo_run"))
+            .filter(|current_repo_run| {
+                current_repo_run
+                    .get("capability_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("test_harness")
+            })
+        {
+            match current_repo_run
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("completed") => return Ok(()),
+                Some("failed") => {
+                    let run_id = current_repo_run
+                        .get("run_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let handler_id = current_repo_run
+                        .get("handler_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let event_kind = current_repo_run
+                        .get("event_kind")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let error = current_repo_run
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<no error>");
+                    bail!(
+                        "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        last_payload = payload;
+        if started.elapsed() >= timeout {
+            let last_payload = serde_json::to_string(&last_payload)
+                .unwrap_or_else(|_| "<failed to serialize payload>".to_string());
+            bail!(
+                "timed out after {}s waiting for test_harness capability-event completion in {}; attempts={attempts}; last payload={last_payload}",
+                timeout.as_secs(),
+                repo_name
+            );
+        }
+        std::thread::sleep(StdDuration::from_millis(
+            DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS,
+        ));
+    }
 }
 
 fn resolve_qat_sync_state_path(
@@ -1736,6 +1881,852 @@ pub fn assert_devql_chat_history_returns_results(
     ensure!(
         count >= 1,
         "expected at least 1 chat history result, got {count}"
+    );
+    Ok(())
+}
+
+// ── DevQL ingest DB-first assertions and git topology helpers ───────────────
+
+/// Parse a numeric field from the ingest summary output.
+/// Format: "DevQL ingest complete: commits_processed=1, ...".
+pub fn parse_ingest_summary_field(stdout: &str, field: &str) -> Option<usize> {
+    let needle = format!("{field}=");
+    let suffix = stdout.split(&needle).nth(1)?;
+    let raw = suffix
+        .split([',', '\n', ' '])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    raw.parse::<usize>().ok()
+}
+
+fn relational_db_path_for_world(world: &QatWorld) -> Result<std::path::PathBuf> {
+    with_scenario_app_env(world, || {
+        let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
+            .context("resolving store backend config for ingest DB assertions")?;
+        resolve_sqlite_db_path_for_repo(world.repo_dir(), cfg.relational.sqlite_path.as_deref())
+            .context("resolving relational store path for ingest DB assertions")
+    })
+}
+
+fn open_relational_connection(world: &QatWorld) -> Result<rusqlite::Connection> {
+    let relational_db_path = relational_db_path_for_world(world)?;
+    rusqlite::Connection::open(&relational_db_path).with_context(|| {
+        format!(
+            "opening relational store for ingest assertions at {}",
+            relational_db_path.display()
+        )
+    })
+}
+
+fn query_repo_id_optional(conn: &rusqlite::Connection, sql: &str) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    match conn.query_row(sql, [], |row| row.get::<_, String>(0)).optional() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("no such table") || message.contains("no such column") {
+                return Ok(None);
+            }
+            Err(err).with_context(|| format!("querying repo id with `{sql}`"))
+        }
+    }
+}
+
+fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
+    for sql in [
+        "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
+        "SELECT repo_id FROM commits ORDER BY committed_at DESC LIMIT 1",
+        "SELECT repo_id FROM commit_ingest_ledger ORDER BY updated_at DESC LIMIT 1",
+        "SELECT repo_id FROM artefacts_current LIMIT 1",
+        "SELECT repo_id FROM current_file_state LIMIT 1",
+    ] {
+        if let Some(repo_id) = query_repo_id_optional(conn, sql)? {
+            return Ok(repo_id);
+        }
+    }
+    bail!("unable to resolve repo_id from relational store for ingest assertions")
+}
+
+fn git_reachable_shas(world: &QatWorld, max_count: Option<usize>) -> Result<Vec<String>> {
+    let mut args_owned = vec!["rev-list".to_string()];
+    if let Some(limit) = max_count {
+        args_owned.push(format!("--max-count={limit}"));
+    }
+    args_owned.push("HEAD".to_string());
+    let args: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+    let output = run_command_capture(
+        world,
+        "git rev-list HEAD",
+        build_git_command(world, &args, &[]),
+    )?;
+    ensure_success(&output, "git rev-list HEAD")?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect())
+}
+
+fn completed_ledger_shas(world: &QatWorld) -> Result<Vec<String>> {
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT commit_sha \
+             FROM commit_ingest_ledger \
+             WHERE repo_id = ?1 AND history_status = 'completed'",
+        )
+        .context("preparing completed ledger SHA query")?;
+    let rows = stmt
+        .query_map(rusqlite::params![repo_id], |row| row.get::<_, String>(0))
+        .context("querying completed ledger SHAs")?;
+    let mut shas = Vec::new();
+    for row in rows {
+        shas.push(row.context("reading completed ledger SHA row")?);
+    }
+    Ok(shas)
+}
+
+fn completed_ledger_count(world: &QatWorld) -> Result<usize> {
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) \
+             FROM commit_ingest_ledger \
+             WHERE repo_id = ?1 AND history_status = 'completed'",
+            rusqlite::params![repo_id],
+            |row| row.get(0),
+        )
+        .context("counting completed commit_ingest_ledger rows")?;
+    usize::try_from(count).context("converting completed ledger count to usize")
+}
+
+fn artefacts_current_count(world: &QatWorld) -> Result<usize> {
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
+            rusqlite::params![repo_id],
+            |row| row.get(0),
+        )
+        .context("counting artefacts_current rows")?;
+    usize::try_from(count).context("converting artefacts_current row count to usize")
+}
+
+fn artefacts_current_count_for_path(world: &QatWorld, path: &str) -> Result<usize> {
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id, path],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("counting artefacts_current rows for path `{path}`"))?;
+    usize::try_from(count).context("converting artefacts_current path count to usize")
+}
+
+fn file_state_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![repo_id, commit_sha],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("counting file_state rows for commit `{commit_sha}`"))?;
+    usize::try_from(count).context("converting file_state count to usize")
+}
+
+fn commit_has_changed_files(world: &QatWorld, commit_sha: &str) -> Result<bool> {
+    let has_parent = run_command_capture(
+        world,
+        "git rev-parse <sha>^",
+        build_git_command(world, &["rev-parse", &format!("{commit_sha}^")], &[]),
+    )?
+    .status
+    .success();
+
+    let command_label = if has_parent {
+        "git diff-tree --no-commit-id --name-only -r <sha>"
+    } else {
+        "git show --name-only --pretty=format: <sha>"
+    };
+
+    let command_args: Vec<String> = if has_parent {
+        vec![
+            "diff-tree".to_string(),
+            "--no-commit-id".to_string(),
+            "--name-only".to_string(),
+            "-r".to_string(),
+            commit_sha.to_string(),
+        ]
+    } else {
+        vec![
+            "show".to_string(),
+            "--name-only".to_string(),
+            "--pretty=format:".to_string(),
+            commit_sha.to_string(),
+        ]
+    };
+    let command_args_ref: Vec<&str> = command_args.iter().map(String::as_str).collect();
+    let output = run_command_capture(
+        world,
+        command_label,
+        build_git_command(world, &command_args_ref, &[]),
+    )?;
+    ensure_success(&output, command_label)?;
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .any(|line| !line.is_empty()))
+}
+
+fn current_branch_name(world: &QatWorld) -> Result<String> {
+    let output = run_command_capture(
+        world,
+        "git rev-parse --abbrev-ref HEAD",
+        build_git_command(world, &["rev-parse", "--abbrev-ref", "HEAD"], &[]),
+    )?;
+    ensure_success(&output, "git rev-parse --abbrev-ref HEAD")?;
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    ensure!(!branch.is_empty(), "current git branch name is empty");
+    Ok(branch)
+}
+
+fn post_commit_devql_refresh_disabled_env() -> [(&'static str, OsString); 1] {
+    [("BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH", OsString::from("1"))]
+}
+
+fn write_and_commit_rust_file(
+    world: &mut QatWorld,
+    relative_path: &str,
+    function_name: &str,
+    body_value: usize,
+    env: &[(&str, OsString)],
+    commit_message: &str,
+) -> Result<String> {
+    let path = world.repo_dir().join(relative_path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("path `{relative_path}` has no parent directory"))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    fs::write(
+        &path,
+        format!(
+            "pub fn {function_name}() -> usize {{\n    {body_value}\n}}\n"
+        ),
+    )
+    .with_context(|| format!("writing {}", path.display()))?;
+    run_git_success(world, &["add", "-A"], env, "git add -A")?;
+    run_git_success(
+        world,
+        &["commit", "-m", commit_message],
+        env,
+        "git commit ingest topology",
+    )?;
+    capture_head_sha(world)
+}
+
+fn set_expected_commits_and_paths(world: &mut QatWorld, shas: Vec<String>, paths: Vec<String>) {
+    world.expected_commit_shas = shas;
+    world.expected_paths = paths;
+}
+
+fn refresh_rewrite_delta(world: &mut QatWorld, expected_segment_len: usize) -> Result<()> {
+    let post = git_reachable_shas(world, Some(expected_segment_len))?;
+    world.post_rewrite_shas = post.clone();
+    let pre: std::collections::BTreeSet<String> = world.pre_rewrite_shas.iter().cloned().collect();
+    world.rewrite_new_shas = post
+        .into_iter()
+        .filter(|sha| !pre.contains(sha))
+        .collect();
+    Ok(())
+}
+
+pub fn snapshot_ingest_db_state_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let shas = completed_ledger_shas(world)?;
+    world.completed_ledger_count_snapshot = Some(shas.len());
+    world.completed_ledger_shas_snapshot = shas;
+    world.artefacts_current_count_snapshot = Some(artefacts_current_count(world)?);
+    Ok(())
+}
+
+pub fn create_ingest_commits_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(count > 0, "commit batch size must be greater than zero");
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let mut shas = Vec::with_capacity(count);
+    let mut paths = Vec::with_capacity(count);
+    for index in 0..count {
+        let seq = world.captured_commit_shas.len() + 1;
+        let relative_path = format!("src/ingest_batch_{seq}.rs");
+        let function_name = format!("ingest_batch_{seq}");
+        let commit_message = format!("feat: ingest batch commit {}", index + 1);
+        let sha = write_and_commit_rust_file(
+            world,
+            &relative_path,
+            &function_name,
+            seq,
+            &disable_refresh_env,
+            &commit_message,
+        )?;
+        shas.push(sha);
+        paths.push(relative_path);
+    }
+    set_expected_commits_and_paths(world, shas, paths);
+    Ok(())
+}
+
+pub fn create_non_ff_merge_with_two_feature_commits_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let base_branch = current_branch_name(world)?;
+    let feature_branch = "qat-non-ff-feature";
+    run_git_success(
+        world,
+        &["checkout", "-b", feature_branch],
+        &[],
+        "git checkout -b non-ff feature branch",
+    )?;
+
+    let first_path = "src/non_ff_feature_one.rs".to_string();
+    let first_sha = write_and_commit_rust_file(
+        world,
+        &first_path,
+        "non_ff_feature_one",
+        1,
+        &disable_refresh_env,
+        "feat: non-ff feature commit 1",
+    )?;
+    let second_path = "src/non_ff_feature_two.rs".to_string();
+    let second_sha = write_and_commit_rust_file(
+        world,
+        &second_path,
+        "non_ff_feature_two",
+        2,
+        &disable_refresh_env,
+        "feat: non-ff feature commit 2",
+    )?;
+
+    run_git_success(
+        world,
+        &["checkout", base_branch.as_str()],
+        &[],
+        "git checkout base branch for non-ff merge",
+    )?;
+    run_git_success(
+        world,
+        &[
+            "merge",
+            "--no-ff",
+            feature_branch,
+            "-m",
+            "merge: non-ff feature branch",
+        ],
+        &disable_refresh_env,
+        "git merge --no-ff",
+    )?;
+    let merge_sha = capture_head_sha(world)?;
+    set_expected_commits_and_paths(
+        world,
+        vec![first_sha, second_sha, merge_sha],
+        vec![first_path, second_path],
+    );
+    Ok(())
+}
+
+pub fn create_ff_merge_with_two_feature_commits_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let base_branch = current_branch_name(world)?;
+    let feature_branch = "qat-ff-feature";
+    run_git_success(
+        world,
+        &["checkout", "-b", feature_branch],
+        &[],
+        "git checkout -b ff feature branch",
+    )?;
+
+    let first_path = "src/ff_feature_one.rs".to_string();
+    let first_sha = write_and_commit_rust_file(
+        world,
+        &first_path,
+        "ff_feature_one",
+        11,
+        &disable_refresh_env,
+        "feat: ff feature commit 1",
+    )?;
+    let second_path = "src/ff_feature_two.rs".to_string();
+    let second_sha = write_and_commit_rust_file(
+        world,
+        &second_path,
+        "ff_feature_two",
+        22,
+        &disable_refresh_env,
+        "feat: ff feature commit 2",
+    )?;
+
+    run_git_success(
+        world,
+        &["checkout", base_branch.as_str()],
+        &[],
+        "git checkout base branch for ff merge",
+    )?;
+    run_git_success(
+        world,
+        &["merge", "--ff-only", feature_branch],
+        &disable_refresh_env,
+        "git merge --ff-only",
+    )?;
+    let _ = capture_head_sha(world)?;
+    set_expected_commits_and_paths(
+        world,
+        vec![first_sha, second_sha],
+        vec![first_path, second_path],
+    );
+    Ok(())
+}
+
+pub fn cherry_pick_two_commits_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let base_branch = current_branch_name(world)?;
+    let source_branch = "qat-cherry-source";
+    run_git_success(
+        world,
+        &["checkout", "-b", source_branch],
+        &[],
+        "git checkout -b cherry-pick source",
+    )?;
+
+    let first_path = "src/cherry_source_one.rs".to_string();
+    let source_sha_one = write_and_commit_rust_file(
+        world,
+        &first_path,
+        "cherry_source_one",
+        101,
+        &disable_refresh_env,
+        "feat: cherry source commit 1",
+    )?;
+    let second_path = "src/cherry_source_two.rs".to_string();
+    let source_sha_two = write_and_commit_rust_file(
+        world,
+        &second_path,
+        "cherry_source_two",
+        202,
+        &disable_refresh_env,
+        "feat: cherry source commit 2",
+    )?;
+
+    run_git_success(
+        world,
+        &["checkout", base_branch.as_str()],
+        &[],
+        "git checkout base branch for cherry-pick",
+    )?;
+    run_git_success(
+        world,
+        &["cherry-pick", source_sha_one.as_str()],
+        &disable_refresh_env,
+        "git cherry-pick source commit 1",
+    )?;
+    let cherry_sha_one = capture_head_sha(world)?;
+    run_git_success(
+        world,
+        &["cherry-pick", source_sha_two.as_str()],
+        &disable_refresh_env,
+        "git cherry-pick source commit 2",
+    )?;
+    let cherry_sha_two = capture_head_sha(world)?;
+    run_git_success(
+        world,
+        &["branch", "-D", source_branch],
+        &[],
+        "git branch -D cherry-pick source",
+    )?;
+
+    set_expected_commits_and_paths(
+        world,
+        vec![cherry_sha_one, cherry_sha_two],
+        vec![first_path, second_path],
+    );
+    Ok(())
+}
+
+pub fn capture_top_reachable_shas_before_rewrite_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(count > 0, "rewrite capture count must be greater than zero");
+    let pre = git_reachable_shas(world, Some(count))?;
+    ensure!(
+        pre.len() == count,
+        "expected to capture {count} pre-rewrite SHAs, got {}",
+        pre.len()
+    );
+    world.pre_rewrite_shas = pre;
+    world.post_rewrite_shas.clear();
+    world.rewrite_new_shas.clear();
+    Ok(())
+}
+
+pub fn rewrite_last_commits_with_rebase_edit_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(count > 0, "rebase rewrite count must be greater than zero");
+    ensure!(
+        world.pre_rewrite_shas.len() == count,
+        "pre-rewrite SHAs must be captured for exactly {count} commits before rebase rewrite"
+    );
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let script = "echo '// qat rebase edit marker' >> src/main.rs && git add src/main.rs && git commit --amend --no-edit";
+    let upstream = format!("HEAD~{count}");
+    run_git_success(
+        world,
+        &["rebase", "-x", script, upstream.as_str()],
+        &disable_refresh_env,
+        "git rebase -x amend",
+    )?;
+    let _ = capture_head_sha(world)?;
+    refresh_rewrite_delta(world, count)?;
+    world.expected_commit_shas = world.rewrite_new_shas.clone();
+    Ok(())
+}
+
+pub fn reset_and_rewrite_last_commits_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(count > 0, "reset rewrite count must be greater than zero");
+    ensure!(
+        world.pre_rewrite_shas.len() == count,
+        "pre-rewrite SHAs must be captured for exactly {count} commits before reset rewrite"
+    );
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let target = format!("HEAD~{count}");
+    run_git_success(
+        world,
+        &["reset", "--hard", target.as_str()],
+        &[],
+        "git reset --hard for rewrite",
+    )?;
+
+    let mut replacement_shas = Vec::with_capacity(count);
+    let mut replacement_paths = Vec::with_capacity(count);
+    for index in 0..count {
+        let seq = world.captured_commit_shas.len() + 1;
+        let relative_path = format!("src/reset_rewrite_{seq}.rs");
+        let function_name = format!("reset_rewrite_{seq}");
+        let sha = write_and_commit_rust_file(
+            world,
+            &relative_path,
+            &function_name,
+            500 + index,
+            &disable_refresh_env,
+            &format!("feat: reset rewrite replacement {}", index + 1),
+        )?;
+        replacement_shas.push(sha);
+        replacement_paths.push(relative_path);
+    }
+    set_expected_commits_and_paths(world, replacement_shas, replacement_paths);
+    refresh_rewrite_delta(world, count)?;
+    Ok(())
+}
+
+pub fn assert_all_reachable_shas_completed_in_ledger(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let reachable = git_reachable_shas(world, None)?;
+    let completed: std::collections::BTreeSet<String> =
+        completed_ledger_shas(world)?.into_iter().collect();
+    let missing: Vec<String> = reachable
+        .iter()
+        .filter(|sha| !completed.contains(*sha))
+        .cloned()
+        .collect();
+    ensure!(
+        missing.is_empty(),
+        "reachable commits missing completed ledger rows: {}",
+        missing.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_has_rows(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let count = artefacts_current_count(world)?;
+    ensure!(
+        count > 0,
+        "expected artefacts_current to contain rows, got {count}"
+    );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_contains_path(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let count = artefacts_current_count_for_path(world, path)?;
+    ensure!(
+        count > 0,
+        "expected artefacts_current rows for `{path}`, got {count}"
+    );
+    Ok(())
+}
+
+pub fn assert_expected_shas_completed_in_ledger(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !world.expected_commit_shas.is_empty(),
+        "no expected commit SHAs captured for this scenario"
+    );
+    let completed: std::collections::BTreeSet<String> =
+        completed_ledger_shas(world)?.into_iter().collect();
+    let missing: Vec<String> = world
+        .expected_commit_shas
+        .iter()
+        .filter(|sha| !completed.contains(*sha))
+        .cloned()
+        .collect();
+    ensure!(
+        missing.is_empty(),
+        "expected commit SHAs missing from completed ledger: {}",
+        missing.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_expected_shas_have_file_state_rows(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !world.expected_commit_shas.is_empty(),
+        "no expected commit SHAs captured for file_state assertion"
+    );
+    let mut missing = Vec::new();
+    for sha in &world.expected_commit_shas {
+        if file_state_count_for_commit(world, sha)? == 0 && commit_has_changed_files(world, sha)? {
+            missing.push(sha.clone());
+        }
+    }
+    ensure!(
+        missing.is_empty(),
+        "expected file_state rows for commit SHAs, but none found for: {}",
+        missing.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_no_new_completed_shas_since_snapshot(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let before: std::collections::BTreeSet<String> =
+        world.completed_ledger_shas_snapshot.iter().cloned().collect();
+    let after: std::collections::BTreeSet<String> =
+        completed_ledger_shas(world)?.into_iter().collect();
+    let new_shas: Vec<String> = after.difference(&before).cloned().collect();
+    ensure!(
+        new_shas.is_empty(),
+        "expected no new completed ledger SHAs, got: {}",
+        new_shas.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_exact_expected_shas_newly_completed_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !world.expected_commit_shas.is_empty(),
+        "no expected commit SHAs captured for new-ledger assertion"
+    );
+    let before: std::collections::BTreeSet<String> =
+        world.completed_ledger_shas_snapshot.iter().cloned().collect();
+    let after: std::collections::BTreeSet<String> =
+        completed_ledger_shas(world)?.into_iter().collect();
+    let actual_new: std::collections::BTreeSet<String> = after.difference(&before).cloned().collect();
+    let expected_new: std::collections::BTreeSet<String> =
+        world.expected_commit_shas.iter().cloned().collect();
+    ensure!(
+        actual_new == expected_new,
+        "expected newly completed SHAs {:?}, got {:?}",
+        expected_new,
+        actual_new
+    );
+    Ok(())
+}
+
+pub fn assert_ledger_completed_count_unchanged_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let before = world
+        .completed_ledger_count_snapshot
+        .ok_or_else(|| anyhow!("completed ledger count snapshot is missing"))?;
+    let after = completed_ledger_count(world)?;
+    ensure!(
+        before == after,
+        "expected completed ledger count to stay {before}, got {after}"
+    );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_count_unchanged_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let before = world
+        .artefacts_current_count_snapshot
+        .ok_or_else(|| anyhow!("artefacts_current count snapshot is missing"))?;
+    let after = artefacts_current_count(world)?;
+    ensure!(
+        before == after,
+        "expected artefacts_current count to stay {before}, got {after}"
+    );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_count_increased_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let before = world
+        .artefacts_current_count_snapshot
+        .ok_or_else(|| anyhow!("artefacts_current count snapshot is missing"))?;
+    let after = artefacts_current_count(world)?;
+    ensure!(
+        after > before,
+        "expected artefacts_current count to increase from {before}, got {after}"
+    );
+    Ok(())
+}
+
+pub fn assert_only_latest_reachable_shas_completed_in_ledger(
+    world: &QatWorld,
+    repo_name: &str,
+    latest_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        latest_count > 0,
+        "latest reachable SHA count must be greater than zero"
+    );
+    let reachable = git_reachable_shas(world, None)?;
+    ensure!(
+        reachable.len() >= latest_count,
+        "expected at least {latest_count} reachable commits, found {}",
+        reachable.len()
+    );
+    let expected_latest: std::collections::BTreeSet<String> = reachable
+        .iter()
+        .take(latest_count)
+        .cloned()
+        .collect();
+    let completed_set: std::collections::BTreeSet<String> =
+        completed_ledger_shas(world)?.into_iter().collect();
+    let reachable_set: std::collections::BTreeSet<String> = reachable.into_iter().collect();
+    let completed_reachable: std::collections::BTreeSet<String> =
+        completed_set.intersection(&reachable_set).cloned().collect();
+    ensure!(
+        completed_reachable == expected_latest,
+        "expected completed reachable SHAs {:?}, got {:?}",
+        expected_latest,
+        completed_reachable
+    );
+    Ok(())
+}
+
+pub fn assert_rewrite_new_shas_count(
+    world: &QatWorld,
+    repo_name: &str,
+    expected_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        world.rewrite_new_shas.len() == expected_count,
+        "expected {expected_count} rewritten SHAs, got {} (new={:?}, pre={:?}, post={:?})",
+        world.rewrite_new_shas.len(),
+        world.rewrite_new_shas,
+        world.pre_rewrite_shas,
+        world.post_rewrite_shas
+    );
+    Ok(())
+}
+
+pub fn assert_pre_rewrite_shas_absent_from_post_segment(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !world.pre_rewrite_shas.is_empty() && !world.post_rewrite_shas.is_empty(),
+        "pre/post rewrite SHA segments are not populated"
+    );
+    let post: std::collections::BTreeSet<String> = world.post_rewrite_shas.iter().cloned().collect();
+    let retained_old: Vec<String> = world
+        .pre_rewrite_shas
+        .iter()
+        .filter(|sha| post.contains(*sha))
+        .cloned()
+        .collect();
+    ensure!(
+        retained_old.is_empty(),
+        "expected rewritten old SHAs to be absent from post-rewrite segment, retained: {}",
+        retained_old.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_rewrite_new_shas_completed_in_ledger(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !world.rewrite_new_shas.is_empty(),
+        "rewrite_new_shas is empty; rewrite assertions require rewritten SHAs"
+    );
+    let completed: std::collections::BTreeSet<String> =
+        completed_ledger_shas(world)?.into_iter().collect();
+    let missing: Vec<String> = world
+        .rewrite_new_shas
+        .iter()
+        .filter(|sha| !completed.contains(*sha))
+        .cloned()
+        .collect();
+    ensure!(
+        missing.is_empty(),
+        "rewritten SHAs missing from completed ledger rows: {}",
+        missing.join(", ")
     );
     Ok(())
 }

@@ -26,11 +26,8 @@ pub use self::progress::{SyncObserver, SyncProgressPhase, SyncProgressUpdate};
 pub use self::summary::{SyncSummary, SyncValidationFileDrift, SyncValidationSummary};
 
 pub(crate) use self::orchestrator::execute_sync;
-#[allow(unused_imports)]
-pub(crate) use self::orchestrator::execute_sync_with_observer;
-#[allow(unused_imports)]
 pub(crate) use self::orchestrator::execute_sync_with_observer_and_stats_and_diffs;
 #[cfg(test)]
 pub(crate) use self::orchestrator::execute_sync_with_stats;
-#[cfg_attr(not(test), allow(unused_imports))]
+#[cfg(test)]
 pub(crate) use self::validation::execute_sync_validation;

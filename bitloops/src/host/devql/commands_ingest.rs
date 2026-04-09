@@ -1,8 +1,9 @@
 use super::*;
 use crate::capability_packs::semantic_clones::{
     RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
-    determine_repo_embedding_sync_action, persist_active_embedding_setup,
-    refresh_current_repo_symbol_embeddings_and_clone_edges,
+    determine_repo_embedding_sync_action, load_active_embedding_setup,
+    load_current_repo_embedding_states, load_semantic_feature_inputs_for_current_repo,
+    persist_active_embedding_setup,
 };
 use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
 
@@ -80,6 +81,12 @@ async fn execute_ingest_inner(
             .context("resolving knowledge capability ingester owner")?;
     let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     let semantic_clones = capability.semantic_clones.clone();
+    let preferred_representation_kind = if semantic_clones.summary_mode == SemanticSummaryMode::Auto
+    {
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched
+    } else {
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline
+    };
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> = if enrichment.is_some()
         || semantic_clones.summary_mode == SemanticSummaryMode::Off
     {
@@ -123,9 +130,13 @@ async fn execute_ingest_inner(
     let direct_embedding_sync_action = if enrichment.is_none() {
         if let Some(embedding_provider) = embedding_provider.as_ref() {
             let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
-            let action =
-                determine_repo_embedding_sync_action(&relational, &cfg.repo.repo_id, &setup)
-                    .await?;
+            let action = determine_repo_embedding_sync_action(
+                &relational,
+                &cfg.repo.repo_id,
+                preferred_representation_kind,
+                &setup,
+            )
+            .await?;
             resolved_embedding_setup = Some(setup);
             Some(action)
         } else {
@@ -359,48 +370,41 @@ async fn execute_ingest_inner(
                                     enqueue_target.clone(),
                                     semantic_feature_inputs.clone(),
                                     input_hashes.clone(),
-                                    semantic_clones.embedding_mode,
                                 )
                                 .await?;
                         }
 
                         if embedding_outputs_enabled {
-                            match semantic_clones.embedding_mode {
-                                SemanticCloneEmbeddingMode::Off => {}
-                                SemanticCloneEmbeddingMode::Deterministic
-                                | SemanticCloneEmbeddingMode::RefreshOnUpgrade => {
-                                    enrichment
-                                        .enqueue_symbol_embeddings(
-                                            enqueue_target.clone(),
-                                            semantic_feature_inputs.clone(),
-                                            input_hashes.clone(),
-                                            semantic_clones.embedding_mode,
-                                        )
-                                        .await?;
-                                }
-                                SemanticCloneEmbeddingMode::SemanticAwareOnce => {
-                                    if semantic_clones.summary_mode == SemanticSummaryMode::Off {
-                                        enrichment
-                                            .enqueue_symbol_embeddings(
-                                                enqueue_target.clone(),
-                                                semantic_feature_inputs.clone(),
-                                                input_hashes.clone(),
-                                                semantic_clones.embedding_mode,
-                                            )
-                                            .await?;
-                                    }
-                                }
-                            }
+                            enrichment
+                                .enqueue_symbol_embeddings(
+                                    enqueue_target.clone(),
+                                    semantic_feature_inputs.clone(),
+                                    input_hashes.clone(),
+                                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                                )
+                                .await?;
                         }
                     } else if let Some(embedding_provider) = embedding_provider.as_ref() {
-                        let embedding_stats = upsert_symbol_embedding_rows(
+                        let baseline_stats = upsert_symbol_embedding_rows(
                             &relational,
                             &semantic_feature_inputs,
+                            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
                             Arc::clone(embedding_provider),
                         )
                         .await?;
-                        counters.symbol_embedding_rows_upserted += embedding_stats.upserted;
-                        counters.symbol_embedding_rows_skipped += embedding_stats.skipped;
+                        counters.symbol_embedding_rows_upserted += baseline_stats.upserted;
+                        counters.symbol_embedding_rows_skipped += baseline_stats.skipped;
+                        if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
+                            let enriched_stats = upsert_symbol_embedding_rows(
+                                &relational,
+                                &semantic_feature_inputs,
+                                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
+                                Arc::clone(embedding_provider),
+                            )
+                            .await?;
+                            counters.symbol_embedding_rows_upserted += enriched_stats.upserted;
+                            counters.symbol_embedding_rows_skipped += enriched_stats.skipped;
+                        }
                     }
                     counters.artefacts_upserted += 1;
                     counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
@@ -508,6 +512,59 @@ async fn execute_ingest_inner(
         );
     }
 
+    if let Some(enrichment) = enrichment.as_ref()
+        && embedding_outputs_enabled
+        && counters.artefacts_upserted == 0
+        && load_active_embedding_setup(&relational, &cfg.repo.repo_id)
+            .await?
+            .is_none()
+    {
+        let bootstrap_inputs = load_semantic_feature_inputs_for_current_repo(
+            &relational,
+            &cfg.repo_root,
+            &cfg.repo.repo_id,
+        )
+        .await?;
+        if !bootstrap_inputs.is_empty() {
+            let bootstrap_input_hashes = bootstrap_inputs
+                .iter()
+                .map(|input| {
+                    (
+                        input.artefact_id.clone(),
+                        semantic::build_semantic_feature_input_hash(
+                            input,
+                            summary_provider.as_ref(),
+                        ),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
+                cfg.daemon_config_root.clone(),
+                cfg.repo_root.clone(),
+                cfg.repo.repo_id.clone(),
+                active_branch_for_enqueue.clone(),
+            );
+            enrichment
+                .enqueue_symbol_embeddings(
+                    enqueue_target.clone(),
+                    bootstrap_inputs.clone(),
+                    bootstrap_input_hashes.clone(),
+                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                )
+                .await?;
+            if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
+                enrichment
+                    .enqueue_symbol_embeddings(
+                        enqueue_target,
+                        bootstrap_inputs,
+                        bootstrap_input_hashes,
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
+                    )
+                    .await?;
+            }
+        }
+    }
+
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
     if let Some(warning) = embedding_warning.as_deref() {
@@ -517,49 +574,62 @@ async fn execute_ingest_inner(
     if let (None, Some(embedding_provider)) = (enrichment.as_ref(), embedding_provider.as_ref()) {
         match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
             RepoEmbeddingSyncAction::RefreshCurrentRepo => {
-                let refresh = refresh_current_repo_symbol_embeddings_and_clone_edges(
+                clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
+                clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
+                crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
+                    &relational,
+                    &cfg.repo.repo_id,
+                )
+                .await?;
+                let current_inputs = load_semantic_feature_inputs_for_current_repo(
                     &relational,
                     &cfg.repo_root,
                     &cfg.repo.repo_id,
+                )
+                .await?;
+                let baseline_stats = upsert_symbol_embedding_rows(
+                    &relational,
+                    &current_inputs,
+                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
                     Arc::clone(embedding_provider),
                 )
                 .await?;
-                counters.symbol_embedding_rows_upserted += refresh.embedding_stats.upserted;
-                counters.symbol_embedding_rows_skipped += refresh.embedding_stats.skipped;
-                counters.symbol_clone_edges_upserted += refresh.clone_build.edges.len();
-                counters.symbol_clone_sources_scored += refresh.clone_build.sources_considered;
-            }
-            RepoEmbeddingSyncAction::Incremental | RepoEmbeddingSyncAction::AdoptExisting => {
-                if matches!(
-                    direct_embedding_sync_action,
-                    Some(RepoEmbeddingSyncAction::AdoptExisting)
-                ) && let Some(setup) = resolved_embedding_setup.as_ref()
-                {
-                    persist_active_embedding_setup(&relational, &cfg.repo.repo_id, setup).await?;
-                }
-
-                let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
-                let clone_ingest = capability_host
-                    .invoke_ingester_with_relational(
-                        SEMANTIC_CLONES_CAPABILITY_ID,
-                        SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-                        json!({}),
-                        Some(&relational),
+                counters.symbol_embedding_rows_upserted += baseline_stats.upserted;
+                counters.symbol_embedding_rows_skipped += baseline_stats.skipped;
+                if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
+                    let enriched_stats = upsert_symbol_embedding_rows(
+                        &relational,
+                        &current_inputs,
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
+                        Arc::clone(embedding_provider),
                     )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
-                        )
-                    })?;
-                counters.symbol_clone_edges_upserted += clone_ingest.payload
-                    ["symbol_clone_edges_upserted"]
-                    .as_u64()
-                    .unwrap_or_default() as usize;
-                counters.symbol_clone_sources_scored += clone_ingest.payload
-                    ["symbol_clone_sources_scored"]
-                    .as_u64()
-                    .unwrap_or_default() as usize;
+                    .await?;
+                    counters.symbol_embedding_rows_upserted += enriched_stats.upserted;
+                    counters.symbol_embedding_rows_skipped += enriched_stats.skipped;
+                }
+            }
+            RepoEmbeddingSyncAction::Incremental | RepoEmbeddingSyncAction::AdoptExisting => {}
+        }
+
+        if let Some(setup) = resolved_embedding_setup.as_ref() {
+            if let Some(active_state) = select_active_embedding_state_for_repo(
+                &relational,
+                &cfg.repo.repo_id,
+                setup,
+            )
+            .await?
+            {
+                persist_active_embedding_setup(&relational, &cfg.repo.repo_id, &active_state)
+                    .await?;
+                let clone_ingest = rebuild_active_clone_edges(cfg, &relational).await?;
+                counters.symbol_clone_edges_upserted += clone_ingest.0;
+                counters.symbol_clone_sources_scored += clone_ingest.1;
+            } else {
+                crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
+                    &relational,
+                    &cfg.repo.repo_id,
+                )
+                .await?;
             }
         }
     } else if !embedding_outputs_enabled || (enrichment.is_none() && embedding_provider.is_none()) {
@@ -600,6 +670,65 @@ async fn execute_ingest_inner(
             Err(err)
         }
     }
+}
+
+async fn select_active_embedding_state_for_repo(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    setup: &embeddings::EmbeddingSetup,
+) -> Result<
+    Option<
+        crate::capability_packs::semantic_clones::embeddings::ActiveEmbeddingRepresentationState,
+    >,
+> {
+    let states = load_current_repo_embedding_states(relational, repo_id, None).await?;
+    let mut baseline = None;
+    let mut enriched = None;
+
+    for state in states {
+        if state.setup != *setup {
+            continue;
+        }
+        match state.representation_kind {
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline => {
+                baseline = Some(state);
+            }
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched => {
+                enriched = Some(state);
+            }
+        }
+    }
+
+    Ok(enriched.or(baseline))
+}
+
+async fn rebuild_active_clone_edges(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+) -> Result<(usize, usize)> {
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let clone_ingest = capability_host
+        .invoke_ingester_with_relational(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+            json!({}),
+            Some(relational),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+            )
+        })?;
+
+    Ok((
+        clone_ingest.payload["symbol_clone_edges_upserted"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+        clone_ingest.payload["symbol_clone_sources_scored"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+    ))
 }
 
 fn active_branch_name(repo_root: &Path) -> String {

@@ -1,4 +1,5 @@
 pub mod artefact;
+pub mod artefact_selection;
 pub mod chat;
 pub mod checkpoint;
 pub mod clone;
@@ -18,7 +19,9 @@ pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
 
+pub use artefact::LineRangeInput;
 pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
+pub use artefact_selection::{ArtefactSelection, ArtefactSelectorInput};
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde_json::Value;
 
 use super::super::types::DesiredFileState;

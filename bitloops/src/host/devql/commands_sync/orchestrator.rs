@@ -4,6 +4,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
+use crate::adapters::model_providers::embeddings::EmbeddingProvider;
+use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
+use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
 use super::diff_collector::SyncDiffCollector;
@@ -20,6 +23,11 @@ use super::stats::SyncExecutionStats;
 use super::summary::SyncSummary;
 use super::validation::execute_sync_validation;
 use super::*;
+
+struct CurrentProjectionContext {
+    summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
+    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+}
 
 pub async fn run_sync(cfg: &DevqlConfig, mode: sync::types::SyncMode) -> Result<()> {
     run_sync_with_summary(cfg, mode).await.map(|_| ())
@@ -308,6 +316,8 @@ async fn execute_sync_inner(
     let mut writer = SqliteSyncWriter::open(relational.sqlite_path())
         .await
         .context("opening persistent SQLite sync writer")?;
+    let current_projection = build_current_projection_context(cfg);
+    let mut current_projection_dirty = false;
 
     let removals = classified
         .iter()
@@ -330,6 +340,14 @@ async fn execute_sync_inner(
             .remove_paths(&cfg.repo.repo_id, &removals)
             .await
             .context("removing stale paths in SQLite sync writer")?;
+        for path in &outcome.removed_paths {
+            sync::semantic_projector::remove_path(cfg, relational, path)
+                .await
+                .with_context(|| {
+                    format!("removing current semantic clone projection for `{path}`")
+                })?;
+        }
+        current_projection_dirty |= !outcome.removed_paths.is_empty();
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
         }
@@ -429,12 +447,16 @@ async fn execute_sync_inner(
                         }
                         if writer.should_flush() {
                             flush_pending_materialisations(
+                                cfg.as_ref(),
+                                relational,
+                                &current_projection,
                                 &mut writer,
                                 &cfg.repo.repo_id,
                                 parser_version.as_str(),
                                 extractor_version.as_str(),
                                 &mut diff_collector,
                                 &mut stats,
+                                &mut current_projection_dirty,
                                 observer,
                                 &counters,
                                 paths_total,
@@ -450,12 +472,16 @@ async fn execute_sync_inner(
                     }
                     _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)), if writer.has_pending_items() => {
                         flush_pending_materialisations(
+                            cfg.as_ref(),
+                            relational,
+                            &current_projection,
                             &mut writer,
                             &cfg.repo.repo_id,
                             parser_version.as_str(),
                             extractor_version.as_str(),
                             &mut diff_collector,
                             &mut stats,
+                            &mut current_projection_dirty,
                             observer,
                             &counters,
                             paths_total,
@@ -500,12 +526,16 @@ async fn execute_sync_inner(
                 }
                 if writer.should_flush() {
                     flush_pending_materialisations(
+                        cfg.as_ref(),
+                        relational,
+                        &current_projection,
                         &mut writer,
                         &cfg.repo.repo_id,
                         parser_version.as_str(),
                         extractor_version.as_str(),
                         &mut diff_collector,
                         &mut stats,
+                        &mut current_projection_dirty,
                         observer,
                         &counters,
                         paths_total,
@@ -523,12 +553,16 @@ async fn execute_sync_inner(
     }
 
     flush_pending_materialisations(
+        cfg,
+        relational,
+        &current_projection,
         &mut writer,
         &cfg.repo.repo_id,
         parser_version,
         extractor_version,
         &mut diff_collector,
         &mut stats,
+        &mut current_projection_dirty,
         observer,
         &counters,
         paths_total,
@@ -551,6 +585,15 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
+
+    if current_projection_dirty {
+        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+            relational,
+            &cfg.repo.repo_id,
+        )
+        .await
+        .context("rebuilding current semantic clone edges after DevQL sync")?;
+    }
 
     emit_progress(
         observer,
@@ -664,12 +707,16 @@ fn handle_prepared_outcome(
 
 #[allow(clippy::too_many_arguments)]
 async fn flush_pending_materialisations(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    current_projection: &CurrentProjectionContext,
     writer: &mut SqliteSyncWriter,
     repo_id: &str,
     parser_version: &str,
     extractor_version: &str,
     diff_collector: &mut SyncDiffCollector,
     stats: &mut SyncExecutionStats,
+    current_projection_dirty: &mut bool,
     observer: Option<&dyn SyncObserver>,
     counters: &sync::types::SyncCounters,
     paths_total: usize,
@@ -689,6 +736,17 @@ async fn flush_pending_materialisations(
         .flush(repo_id, parser_version, extractor_version)
         .await
         .context("flushing pending SQLite sync materialisations")?;
+    if !outcome.materialized_items.is_empty() {
+        project_materialized_items(
+            cfg,
+            relational,
+            current_projection,
+            &outcome.materialized_items,
+        )
+        .await
+        .context("projecting current semantic clone rows for synced paths")?;
+        *current_projection_dirty = true;
+    }
     for artefact in outcome.pre_artefacts.clone() {
         diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
     }
@@ -757,6 +815,73 @@ fn estimate_sync_progress_paths_completed(
     unchanged_total
         .saturating_add(removed_completed)
         .saturating_add(transform_credit)
+}
+
+fn build_current_projection_context(cfg: &DevqlConfig) -> CurrentProjectionContext {
+    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
+        match semantic_clones_pack::build_semantic_summary_provider(
+            &super::super::semantic_provider_config(cfg),
+        ) {
+            Ok(provider) => provider,
+            Err(err) => {
+                log::warn!(
+                    "semantic_clones current sync summaries degraded; using deterministic summaries only: {err:#}"
+                );
+                Arc::new(semantic::NoopSemanticSummaryProvider)
+            }
+        };
+    let embedding_config = super::super::embedding_provider_config(cfg);
+    for warning in &embedding_config.warnings {
+        log::warn!("semantic_clones current sync embeddings config warning: {warning}");
+    }
+    let embedding_provider = match semantic_clones_pack::build_symbol_embedding_provider(
+        &embedding_config,
+        Some(&cfg.repo_root),
+    ) {
+        Ok(provider) => provider,
+        Err(err) => {
+            log::warn!(
+                "semantic_clones current sync embeddings degraded; skipping current embedding projection: {err:#}"
+            );
+            None
+        }
+    };
+
+    CurrentProjectionContext {
+        summary_provider,
+        embedding_provider,
+    }
+}
+
+async fn project_materialized_items(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    current_projection: &CurrentProjectionContext,
+    items: &[super::sqlite_writer::PreparedSyncItem],
+) -> Result<()> {
+    for item in items {
+        sync::semantic_projector::project_path(
+            cfg,
+            relational,
+            &item.desired,
+            &item.extraction,
+            &item.effective_content,
+            Arc::clone(&current_projection.summary_provider),
+            current_projection
+                .embedding_provider
+                .as_ref()
+                .map(Arc::clone),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "projecting current semantic clone rows for `{}`",
+                item.desired.path
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
