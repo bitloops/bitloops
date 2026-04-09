@@ -504,6 +504,63 @@ LIMIT 1
         }))
     }
 
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<HashMap<String, LatestTestRunRecord>> {
+        if test_symbol_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders = (0..test_symbol_ids.len())
+            .map(|idx| format!("?{}", idx + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+SELECT test_symbol_id, status, duration_ms, commit_sha
+FROM test_runs
+WHERE commit_sha = ?1
+  AND test_symbol_id IN ({placeholders})
+ORDER BY test_symbol_id, ran_at DESC
+"#
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("failed preparing latest runs query")?;
+
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(commit_sha.to_string())];
+        for test_symbol_id in test_symbol_ids {
+            params_vec.push(Box::new(test_symbol_id.clone()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|value| value.as_ref()).collect();
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    LatestTestRunRecord {
+                        status: row.get(1)?,
+                        duration_ms: row.get(2)?,
+                        commit_sha: row.get(3)?,
+                    },
+                ))
+            })
+            .context("failed querying latest runs")?;
+
+        let mut runs = HashMap::new();
+        for row in rows {
+            let (test_symbol_id, latest_run) = row.context("failed decoding latest run row")?;
+            runs.entry(test_symbol_id).or_insert(latest_run);
+        }
+        Ok(runs)
+    }
+
     fn load_coverage_summary(
         &self,
         commit_sha: &str,

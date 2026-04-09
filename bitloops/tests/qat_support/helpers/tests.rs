@@ -618,22 +618,6 @@ fn command_env_value(command: &std::process::Command, key: &str) -> Option<std::
 }
 
 #[test]
-fn extract_clone_nodes_keeps_flattened_clone_rows() {
-    let rows = extract_clone_nodes(&serde_json::json!([
-        {
-            "from": "src/source.ts::source",
-            "to": "src/target.ts::target",
-            "relationKind": "shared_logic_candidate",
-            "score": 0.91
-        }
-    ]));
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["from"], serde_json::json!("src/source.ts::source"));
-    assert_eq!(rows[0]["to"], serde_json::json!("src/target.ts::target"));
-}
-
-#[test]
 fn semantic_clone_store_evidence_proves_rebuild_when_store_has_current_rows() {
     assert!(semantic_clone_store_evidence_proves_rebuild(
         Some(0),

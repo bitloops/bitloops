@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value};
 
-use super::config::ensure_codex_hooks_feature_enabled_at;
+use super::config::{codex_hooks_feature_enabled_at, ensure_codex_hooks_feature_enabled_at};
 
 const HOOKS_FILE_NAME: &str = "hooks.json";
 
@@ -357,6 +357,10 @@ pub fn uninstall_hooks() -> Result<()> {
 }
 
 pub fn are_hooks_installed_at(repo_root: &Path) -> bool {
+    if !codex_hooks_feature_enabled_at(repo_root) {
+        return false;
+    }
+
     let path = hooks_file_path_for(repo_root);
     let Ok(data) = fs::read(&path) else {
         return false;

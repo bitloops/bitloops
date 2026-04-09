@@ -576,6 +576,48 @@ LIMIT 1
         })
     }
 
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<HashMap<String, LatestTestRunRecord>> {
+        if test_symbol_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let commit_sha = commit_sha.to_string();
+        let test_symbol_ids = test_symbol_ids.to_vec();
+        self.with_client(move |client| {
+            Box::pin(async move {
+                let rows = client
+                    .query(
+                        r#"
+SELECT test_symbol_id, status, duration_ms, commit_sha
+FROM test_runs
+WHERE commit_sha = $1
+  AND test_symbol_id = ANY($2)
+ORDER BY test_symbol_id, ran_at DESC
+"#,
+                        &[&commit_sha, &test_symbol_ids],
+                    )
+                    .await
+                    .context("failed querying latest runs")?;
+
+                let mut runs = HashMap::new();
+                for row in rows {
+                    let test_symbol_id = get(&row, 0, "test_symbol_id")?;
+                    runs.entry(test_symbol_id).or_insert(LatestTestRunRecord {
+                        status: get(&row, 1, "run_status")?,
+                        duration_ms: get_opt_i64(&row, 2, "duration_ms")?,
+                        commit_sha: get(&row, 3, "commit_sha")?,
+                    });
+                }
+
+                Ok(runs)
+            })
+        })
+    }
+
     fn load_coverage_summary(
         &self,
         commit_sha: &str,

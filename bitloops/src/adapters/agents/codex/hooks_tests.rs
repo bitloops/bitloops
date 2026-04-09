@@ -142,6 +142,35 @@ fn install_hooks_fresh_and_idempotent() {
 }
 
 #[test]
+fn installed_hooks_require_repo_local_codex_feature_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    install_hooks_at(dir.path(), false, false).expect("install");
+    fs::remove_file(config_file(dir.path())).expect("remove config");
+
+    assert!(
+        !are_hooks_installed_at(dir.path()),
+        "hooks should not be considered installed without .codex/config.toml enabling codex_hooks"
+    );
+}
+
+#[test]
+fn installed_hooks_require_enabled_repo_local_codex_feature_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    install_hooks_at(dir.path(), false, false).expect("install");
+    fs::write(config_file(dir.path()), "[features]\ncodex_hooks = false\n")
+        .expect("disable codex hooks");
+
+    assert!(
+        !are_hooks_installed_at(dir.path()),
+        "hooks should not be considered installed when codex_hooks is disabled"
+    );
+}
+
+#[test]
 fn install_hooks_local_dev_writes_cargo_run_commands() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());

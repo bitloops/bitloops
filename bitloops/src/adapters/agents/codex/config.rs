@@ -37,6 +37,17 @@ pub fn ensure_codex_hooks_feature_enabled_at(repo_root: &Path) -> Result<PathBuf
     Ok(path)
 }
 
+pub fn codex_hooks_feature_enabled_at(repo_root: &Path) -> bool {
+    let path = codex_config_path(repo_root);
+    let Ok(existing) = fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(doc) = existing.parse::<DocumentMut>() else {
+        return false;
+    };
+    codex_hooks_feature_enabled(&doc)
+}
+
 fn codex_hooks_feature_enabled(doc: &DocumentMut) -> bool {
     doc.get("features")
         .and_then(Item::as_table)
