@@ -239,7 +239,9 @@ fn semantic_embedding_index_state_sql_filters_by_artefact_id() {
     assert!(sql.contains("FROM symbol_embeddings"));
     assert!(sql.contains("WHERE artefact_id = 'artefact-''1'"));
     assert!(sql.contains("representation_kind = 'code'"));
-    assert!(sql.contains("setup_fingerprint = 'provider=voyage|model=voyage-code-3|dimension=1024'"));
+    assert!(
+        sql.contains("setup_fingerprint = 'provider=voyage|model=voyage-code-3|dimension=1024'")
+    );
 }
 
 #[test]

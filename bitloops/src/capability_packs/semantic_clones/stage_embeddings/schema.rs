@@ -315,46 +315,45 @@ async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result
         let conn = rusqlite::Connection::open(&db_path)
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
 
-        let symbol_embeddings_needs_migration = sqlite_table_has_column(
-            &conn,
-            "symbol_embeddings",
-            "artefact_id",
-        )? && (!sqlite_table_has_column(&conn, "symbol_embeddings", "setup_fingerprint")?
-            || sqlite_table_primary_key_columns(&conn, "symbol_embeddings")?
-                != vec![
-                    "artefact_id".to_string(),
-                    "representation_kind".to_string(),
-                    "setup_fingerprint".to_string(),
-                ]);
+        let symbol_embeddings_needs_migration =
+            sqlite_table_has_column(&conn, "symbol_embeddings", "artefact_id")?
+                && (!sqlite_table_has_column(&conn, "symbol_embeddings", "setup_fingerprint")?
+                    || sqlite_table_primary_key_columns(&conn, "symbol_embeddings")?
+                        != vec![
+                            "artefact_id".to_string(),
+                            "representation_kind".to_string(),
+                            "setup_fingerprint".to_string(),
+                        ]);
         if symbol_embeddings_needs_migration {
             migrate_sqlite_symbol_embeddings_table(&conn)?;
         }
 
-        let symbol_embeddings_current_needs_migration = sqlite_table_has_column(
-            &conn,
-            "symbol_embeddings_current",
-            "artefact_id",
-        )? && (!sqlite_table_has_column(&conn, "symbol_embeddings_current", "setup_fingerprint")?
-            || sqlite_table_primary_key_columns(&conn, "symbol_embeddings_current")?
-                != vec![
-                    "artefact_id".to_string(),
-                    "representation_kind".to_string(),
-                    "setup_fingerprint".to_string(),
-                ]);
+        let symbol_embeddings_current_needs_migration =
+            sqlite_table_has_column(&conn, "symbol_embeddings_current", "artefact_id")?
+                && (!sqlite_table_has_column(
+                    &conn,
+                    "symbol_embeddings_current",
+                    "setup_fingerprint",
+                )? || sqlite_table_primary_key_columns(&conn, "symbol_embeddings_current")?
+                    != vec![
+                        "artefact_id".to_string(),
+                        "representation_kind".to_string(),
+                        "setup_fingerprint".to_string(),
+                    ]);
         if symbol_embeddings_current_needs_migration {
             migrate_sqlite_current_symbol_embeddings_table(&conn)?;
         }
 
-        let active_state_needs_migration = sqlite_table_has_column(
-            &conn,
-            "semantic_clone_embedding_setup_state",
-            "repo_id",
-        )? && (!sqlite_table_has_column(
-            &conn,
-            "semantic_clone_embedding_setup_state",
-            "setup_fingerprint",
-        )? || sqlite_table_primary_key_columns(&conn, "semantic_clone_embedding_setup_state")?
-            != vec!["repo_id".to_string(), "representation_kind".to_string()]);
+        let active_state_needs_migration =
+            sqlite_table_has_column(&conn, "semantic_clone_embedding_setup_state", "repo_id")?
+                && (!sqlite_table_has_column(
+                    &conn,
+                    "semantic_clone_embedding_setup_state",
+                    "setup_fingerprint",
+                )? || sqlite_table_primary_key_columns(
+                    &conn,
+                    "semantic_clone_embedding_setup_state",
+                )? != vec!["repo_id".to_string(), "representation_kind".to_string()]);
         if active_state_needs_migration {
             migrate_sqlite_active_embedding_setup_table(&conn)?;
         }
@@ -369,7 +368,8 @@ async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result
 }
 
 fn migrate_sqlite_symbol_embeddings_table(conn: &rusqlite::Connection) -> Result<()> {
-    let has_representation = sqlite_table_has_column(conn, "symbol_embeddings", "representation_kind")?;
+    let has_representation =
+        sqlite_table_has_column(conn, "symbol_embeddings", "representation_kind")?;
     conn.execute(
         "ALTER TABLE symbol_embeddings RENAME TO symbol_embeddings_legacy",
         [],

@@ -10,10 +10,11 @@ use crate::capability_packs::semantic_clones::extension_descriptor::{
 use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::capability_packs::semantic_clones::features::SemanticSummaryProviderConfig;
 use crate::capability_packs::semantic_clones::{
-    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
-    clear_repo_active_embedding_setup_for_representation,
-    determine_repo_embedding_sync_action, load_semantic_feature_inputs_for_artefacts,
-    load_semantic_summary_snapshot, persist_active_embedding_setup, persist_semantic_summary_row,
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+    clear_repo_symbol_embedding_rows_for_representation,
+    clear_repo_active_embedding_setup_for_representation, determine_repo_embedding_sync_action,
+    load_semantic_feature_inputs_for_artefacts, load_semantic_summary_snapshot,
+    persist_active_embedding_setup, persist_semantic_summary_row,
     refresh_current_repo_symbol_embeddings_and_clone_edges, upsert_symbol_embedding_rows,
 };
 use crate::config::{
@@ -526,6 +527,7 @@ fn clone_edges_rebuild_follow_up(job: &EnrichmentJob) -> FollowUpJob {
 }
 
 async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {
+    clear_repo_symbol_embedding_rows(relational, repo_id).await?;
     clear_repo_active_embedding_setup(relational, repo_id).await?;
     crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
         relational, repo_id,
@@ -538,6 +540,8 @@ async fn clear_embedding_representation(
     repo_id: &str,
     representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
 ) -> Result<()> {
+    clear_repo_symbol_embedding_rows_for_representation(relational, repo_id, representation_kind)
+        .await?;
     clear_repo_active_embedding_setup_for_representation(relational, repo_id, representation_kind)
         .await?;
     if representation_kind

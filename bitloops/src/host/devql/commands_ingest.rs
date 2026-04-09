@@ -1,6 +1,6 @@
 use super::*;
 use crate::capability_packs::semantic_clones::{
-    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
     determine_repo_embedding_sync_action, load_active_embedding_setup,
     load_current_repo_embedding_states, load_semantic_feature_inputs_for_current_repo,
     persist_active_embedding_setup,
@@ -578,6 +578,7 @@ async fn execute_ingest_inner(
     if let (None, Some(embedding_provider)) = (enrichment.as_ref(), embedding_provider.as_ref()) {
         match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
             RepoEmbeddingSyncAction::RefreshCurrentRepo => {
+                clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
                 clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
                 crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
                     &relational,
@@ -642,6 +643,7 @@ async fn execute_ingest_inner(
             }
         }
     } else if !embedding_outputs_enabled || (enrichment.is_none() && embedding_provider.is_none()) {
+        clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
         clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
         crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
             &relational,
@@ -692,7 +694,9 @@ async fn select_active_code_embedding_state_for_repo(
     let states = load_current_repo_embedding_states(
         relational,
         repo_id,
-        Some(crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code),
+        Some(
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        ),
     )
     .await?;
     Ok(states.into_iter().find(|state| state.setup == *setup))

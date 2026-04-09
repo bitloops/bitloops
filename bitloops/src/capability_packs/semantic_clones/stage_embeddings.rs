@@ -200,6 +200,29 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
         .await
 }
 
+pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let predicate = representation_kind_sql_predicate("representation_kind", representation_kind);
+    relational
+        .exec_batch_transactional(&[
+            format!(
+                "DELETE FROM symbol_embeddings WHERE repo_id = '{repo_id}' AND {predicate}",
+                repo_id = esc_pg(repo_id),
+                predicate = predicate,
+            ),
+            format!(
+                "DELETE FROM symbol_embeddings_current WHERE repo_id = '{repo_id}' AND {predicate}",
+                repo_id = esc_pg(repo_id),
+                predicate = predicate,
+            ),
+        ])
+        .await
+}
+
 #[allow(dead_code)]
 pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
     relational: &RelationalStorage,
@@ -283,14 +306,13 @@ pub(crate) async fn determine_repo_embedding_sync_action(
     .await?;
     if let Some(active) =
         load_active_embedding_setup(relational, repo_id, representation_kind).await?
+        && active.setup == *setup
     {
-        if active.setup == *setup {
-            return Ok(if current_coverage_complete {
-                RepoEmbeddingSyncAction::Incremental
-            } else {
-                RepoEmbeddingSyncAction::RefreshCurrentRepo
-            });
-        }
+        return Ok(if current_coverage_complete {
+            RepoEmbeddingSyncAction::Incremental
+        } else {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo
+        });
     }
 
     let current_states =
@@ -581,7 +603,12 @@ fn build_current_repo_embedding_states_sql(
     representation_kind: Option<embeddings::EmbeddingRepresentationKind>,
 ) -> String {
     let representation_filter = representation_kind
-        .map(|kind| format!("AND {}", representation_kind_sql_predicate("e.representation_kind", kind)))
+        .map(|kind| {
+            format!(
+                "AND {}",
+                representation_kind_sql_predicate("e.representation_kind", kind)
+            )
+        })
         .unwrap_or_default();
     format!(
         "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
@@ -709,17 +736,19 @@ fn parse_active_embedding_state_rows(
 
     states
         .into_iter()
-        .map(|(representation_kind, provider, model, dimension, setup_fingerprint)| {
-            embeddings::ActiveEmbeddingRepresentationState::new(
-                representation_kind,
-                embeddings::EmbeddingSetup {
-                    provider,
-                    model,
-                    dimension,
-                    setup_fingerprint,
-                },
-            )
-        })
+        .map(
+            |(representation_kind, provider, model, dimension, setup_fingerprint)| {
+                embeddings::ActiveEmbeddingRepresentationState::new(
+                    representation_kind,
+                    embeddings::EmbeddingSetup {
+                        provider,
+                        model,
+                        dimension,
+                        setup_fingerprint,
+                    },
+                )
+            },
+        )
         .collect()
 }
 

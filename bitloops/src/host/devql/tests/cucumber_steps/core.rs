@@ -287,26 +287,31 @@ fn build_fixture_embedding_provider(
     summary_by_artefact_id: &HashMap<String, String>,
     embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
 ) -> Result<Arc<dyn EmbeddingProvider>> {
-    let embedding_inputs = semantic_embeddings::build_symbol_embedding_inputs(
-        inputs,
+    let mut embeddings_by_document = HashMap::new();
+    for representation_kind in [
         semantic_embeddings::EmbeddingRepresentationKind::Code,
-        summary_by_artefact_id,
-    );
-    let mut embeddings_by_document = HashMap::with_capacity(embedding_inputs.len());
-    for input in embedding_inputs {
-        let embedding = embeddings_by_artefact_id
-            .get(&input.artefact_id)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "fixture embedding not configured for artefact `{}`",
-                    input.artefact_id
-                )
-            })?;
-        embeddings_by_document.insert(
-            semantic_embeddings::build_symbol_embedding_text(&input),
-            embedding,
+        semantic_embeddings::EmbeddingRepresentationKind::Summary,
+    ] {
+        let embedding_inputs = semantic_embeddings::build_symbol_embedding_inputs(
+            inputs,
+            representation_kind,
+            summary_by_artefact_id,
         );
+        for input in embedding_inputs {
+            let embedding = embeddings_by_artefact_id
+                .get(&input.artefact_id)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "fixture embedding not configured for artefact `{}`",
+                        input.artefact_id
+                    )
+                })?;
+            embeddings_by_document.insert(
+                semantic_embeddings::build_symbol_embedding_text(&input),
+                embedding,
+            );
+        }
     }
     Ok(Arc::new(FixtureEmbeddingProvider {
         embeddings_by_document,
@@ -2518,15 +2523,14 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
             &initial_embeddings_by_artefact_id,
         )
         .expect("build snapshot one fixture embedding provider");
-        let initial_stage2_stats =
-            upsert_symbol_embedding_rows(
-                &relational,
-                &initial_inputs,
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                initial_embedding_provider,
-            )
-            .await
-            .expect("run stage 2 for incremental snapshot one");
+        let initial_stage2_stats = upsert_symbol_embedding_rows(
+            &relational,
+            &initial_inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+            initial_embedding_provider,
+        )
+        .await
+        .expect("run stage 2 for incremental snapshot one");
         assert_eq!(
             initial_stage2_stats.upserted,
             snapshot_one.len(),
@@ -2580,15 +2584,14 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
             &updated_embeddings_by_artefact_id,
         )
         .expect("build snapshot two fixture embedding provider");
-        let stage2_stats =
-            upsert_symbol_embedding_rows(
-                &relational,
-                &updated_inputs,
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                updated_embedding_provider,
-            )
-            .await
-            .expect("run stage 2 for incremental snapshot two");
+        let stage2_stats = upsert_symbol_embedding_rows(
+            &relational,
+            &updated_inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+            updated_embedding_provider,
+        )
+        .await
+        .expect("run stage 2 for incremental snapshot two");
         rebuild_symbol_clone_edges(&relational, &repo_id)
             .await
             .expect("rebuild clone edges for snapshot two");

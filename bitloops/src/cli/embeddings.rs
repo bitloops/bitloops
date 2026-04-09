@@ -161,6 +161,9 @@ pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsIn
     let Ok(config_path) = resolve_daemon_config_path_for_repo(repo_root) else {
         return EmbeddingsInstallState::NotConfigured;
     };
+    if !config_path.is_file() {
+        return EmbeddingsInstallState::NotConfigured;
+    }
     let Ok(capability) = embedding_capability_for_config_path(&config_path) else {
         return EmbeddingsInstallState::NotConfigured;
     };

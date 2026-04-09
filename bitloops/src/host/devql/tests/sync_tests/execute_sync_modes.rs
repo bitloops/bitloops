@@ -651,7 +651,7 @@ async fn sync_populates_current_semantic_and_embedding_tables() {
         .expect("count symbol_features_current rows");
     let embedding_rows: i64 = db
         .query_row(
-            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'baseline'",
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'code'",
             [cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
@@ -668,6 +668,6 @@ async fn sync_populates_current_semantic_and_embedding_tables() {
     );
     assert!(
         embedding_rows > 0,
-        "current baseline embeddings should be populated"
+        "current code embeddings should be populated"
     );
 }

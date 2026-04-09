@@ -263,7 +263,10 @@ pub fn build_symbol_embedding_input_hash(
                 );
                 map.insert(
                     "body".to_string(),
-                    json!(truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS)),
+                    json!(truncate_chars(
+                        normalize_whitespace(&input.body),
+                        MAX_EMBEDDING_BODY_CHARS
+                    )),
                 );
             }
             EmbeddingRepresentationKind::Summary => {}
@@ -521,14 +524,14 @@ mod tests {
             ("import-1".to_string(), "Import statement.".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(
-            &inputs,
-            EmbeddingRepresentationKind::Code,
-            &summaries,
-        );
+        let rows =
+            build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
-        assert_eq!(rows[0].representation_kind, EmbeddingRepresentationKind::Code);
+        assert_eq!(
+            rows[0].representation_kind,
+            EmbeddingRepresentationKind::Code
+        );
     }
 
     #[test]
@@ -581,11 +584,8 @@ mod tests {
             ("function-2".to_string(), "   ".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(
-            &inputs,
-            EmbeddingRepresentationKind::Code,
-            &summaries,
-        );
+        let rows =
+            build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
     }
