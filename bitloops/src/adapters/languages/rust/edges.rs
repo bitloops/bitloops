@@ -360,9 +360,9 @@ fn rust_module_qualified_calls_in_macro(node: tree_sitter::Node, content: &str) 
     let Ok(text) = node.utf8_text(content.as_bytes()) else {
         return Vec::new();
     };
-    let Ok(re) =
-        Regex::new(r"(?P<module>(?:self|super|crate|[a-z_][A-Za-z0-9_]*))::(?P<call>[A-Za-z_][A-Za-z0-9_]*)\s*\(")
-    else {
+    let Ok(re) = Regex::new(
+        r"(?P<module>(?:self|super|crate|[a-z_][A-Za-z0-9_]*))::(?P<call>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    ) else {
         return Vec::new();
     };
 
