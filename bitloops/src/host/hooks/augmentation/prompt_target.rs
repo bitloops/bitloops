@@ -229,6 +229,26 @@ mod tests {
     }
 
     #[test]
+    fn extracts_file_only_target_from_trailing_double_colon_prompt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo_root = dir.path();
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).expect("create src");
+        std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").expect("write file");
+
+        let target = extract_primary_prompt_target(repo_root, "explain src/main.rs::").expect("target");
+
+        assert_eq!(
+            target,
+            PromptTarget {
+                path: "src/main.rs".to_string(),
+                start_line: None,
+                end_line: None,
+            }
+        );
+    }
+
+    #[test]
     fn normalizes_absolute_paths_inside_repo() {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo_root = dir.path();

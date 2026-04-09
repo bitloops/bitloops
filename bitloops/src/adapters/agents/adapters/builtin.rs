@@ -152,8 +152,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_COPILOT,
                 aliases: &["copilot", "copilot-cli", "github-copilot"],
                 is_default: false,
-                // Copilot CLI currently documents session-start output as ignored, so keep the
-                // advertised capability surface conservative until end-to-end visibility is proven.
+                // Copilot inherits the shared generic session-start wording through the host
+                // builder, but Copilot CLI currently documents session-start output as ignored.
+                // Keep the advertised capability surface conservative until end-to-end model
+                // visibility is proven.
                 capabilities: ANALYTICS_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -230,9 +232,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_CURSOR,
                 aliases: &[],
                 is_default: false,
-                // Cursor native hooks now emit session-start augmentation from Bitloops, but we
-                // keep the advertised capability surface conservative until live model visibility
-                // is validated outside repo tests.
+                // Cursor inherits the shared generic session-start wording through the host
+                // builder, but we keep the advertised capability surface conservative until live
+                // model visibility is validated outside repo tests.
                 capabilities: BASE_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -330,6 +332,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     format!("opencode -s {session_id}")
                 }
             },
+            // OpenCode's current plugin path forwards hook input into Bitloops but does not
+            // surface Bitloops stdout back into the model, so prompt augmentation remains
+            // intentionally disabled here until that transport gap is closed.
             None,
         ),
     ]

@@ -509,6 +509,7 @@ mod route_tests {
     use super::*;
     use crate::adapters::agents::{
         AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
+        AGENT_NAME_OPEN_CODE,
     };
     use crate::host::interactions::db_store::interaction_spool_db_path;
     use crate::test_support::process_state::{git_command, with_process_state};
@@ -780,6 +781,60 @@ mod route_tests {
     }
 
     #[test]
+    fn route_claude_user_prompt_submit_returns_targeted_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_id = "claude-session-prompt";
+        let transcript_path = repo.path().join("claude-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(
+            &transcript_path,
+            r#"{"messages":[{"type":"user","content":"Inspect tracked file"},{"type":"assistant","content":"Looking"}]}"#,
+        )
+        .expect("write transcript");
+
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str.clone(),
+            })
+            .to_string();
+            route_hook_command_to_lifecycle(
+                repo.path(),
+                crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+                CLAUDE_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let prompt_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+                "prompt": "Explain tracked.txt:1",
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+                CLAUDE_HOOK_USER_PROMPT_SUBMIT,
+                &prompt_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .expect("additionalContext");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                serde_json::Value::String("UserPromptSubmit".to_string())
+            );
+            assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("tracked.txt"));
+            assert!(!context.contains("<repo-relative-path>"));
+            Ok(())
+        })
+    }
+
+    #[test]
     fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> {
         let repo = seed_repo();
         let session_id = "claude-session-start";
@@ -810,6 +865,8 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
         })
@@ -846,6 +903,8 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
         })
@@ -900,6 +959,7 @@ mod route_tests {
             );
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("tracked.txt"));
+            assert!(!context.contains("<repo-relative-path>"));
             Ok(())
         })
     }
@@ -935,6 +995,8 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
         })
@@ -967,6 +1029,8 @@ mod route_tests {
                 .as_str()
                 .expect("additional_context");
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
         })
@@ -1006,10 +1070,37 @@ mod route_tests {
                     .as_str()
                     .expect("additionalContext");
                 assert!(context.contains("selectArtefacts"));
+                assert!(context.contains("<repo-relative-path>"));
+                assert!(!context.contains("src/main.rs"));
                 assert!(!context.contains("tracked.txt"));
                 Ok(())
             },
         )
+    }
+
+    #[test]
+    fn route_opencode_session_start_returns_no_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let transcript_path = repo.path().join("opencode-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(&transcript_path, "").expect("write transcript");
+
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": "opencode-session-start",
+                "transcript_path": transcript_path_str,
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_OPEN_CODE,
+                OPENCODE_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            assert!(outcome.stdout.is_none());
+            Ok(())
+        })
     }
 }
 

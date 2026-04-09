@@ -28,7 +28,7 @@ mod tests {
 
     fn augmentation() -> HookAugmentation {
         HookAugmentation {
-            additional_context: "Use selectArtefacts first.".to_string(),
+            additional_context: "Review the current context before making changes.".to_string(),
             targeted: true,
         }
     }
@@ -48,7 +48,7 @@ mod tests {
         );
         assert_eq!(
             value["hookSpecificOutput"]["additionalContext"],
-            serde_json::Value::String("Use selectArtefacts first.".to_string())
+            serde_json::Value::String("Review the current context before making changes.".to_string())
         );
     }
 
@@ -67,7 +67,7 @@ mod tests {
         );
         assert_eq!(
             value["hookSpecificOutput"]["additionalContext"],
-            serde_json::Value::String("Use selectArtefacts first.".to_string())
+            serde_json::Value::String("Review the current context before making changes.".to_string())
         );
     }
 
