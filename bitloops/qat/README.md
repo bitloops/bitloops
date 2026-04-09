@@ -123,12 +123,14 @@ cargo test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignore
 | 14  | Init sync=true — incremental sync for new files    | `SyncInitSyncTrueIncremental`   |
 | 15  | Init sync=true — validation stays clean            | `SyncInitSyncTrueValidateClean` |
 
-### 4. DevQL capabilities (`cargo qat-devql`, 18 scenarios)
+### 4. DevQL capabilities (`cargo qat-devql`, 21 scenarios)
 
 Exercises the strict offline DevQL capability surface: agent queryability,
 checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
-artefact-scoped TestHarness proof-map queries, deterministic semantic clones,
-knowledge rejection handling, and one final integrated cross-capability smoke.
+artefact-scoped TestHarness proof-map queries, guide-aligned deterministic
+semantic clones, knowledge rejection handling, and one final integrated
+cross-capability smoke. The default semantic-clones lane validates the offline
+fake-runtime path rather than real local-model warm-cache behavior.
 
 ```bash
 cargo qat-devql
@@ -156,12 +158,15 @@ cargo test --features qat-tests --test qat_acceptance qat_devql -- --ignored
 | 10  | Coverage query returns line coverage data                     | `TestHarnessProofMap`      |
 | 11  | Untested artefact is clearly identified                       | `TestHarnessProofMap`      |
 | 12  | Failing test is distinguishable from passing test             | `TestHarnessProofMap`      |
-| 13  | Clones query returns similar implementations                  | `SemanticClones`           |
-| 14  | Score filtering reduces result set                            | `SemanticClones`           |
-| 15  | Strong local patterns rank ahead of weak matches              | `SemanticClones`           |
-| 16  | Clone results include explanation payload                     | `SemanticClones`           |
-| 17  | Unsupported URL fails cleanly without partial persistence     | `KnowledgeIngestion`       |
-| 18  | Hardened DevQL capability surfaces compose in one workflow    | `CrossCapabilitySmoke`     |
+| 13  | Historical ingest populates semantic-clone historical tables  | `SemanticClones`           |
+| 14  | Current projection populates semantic-clone current tables    | `SemanticClones`           |
+| 15  | Semantic and embedding jobs both make progress                | `SemanticClones`           |
+| 16  | Historical and current embeddings keep code and summary rows  | `SemanticClones`           |
+| 17  | Handler clones stay explainable, rankable, and filterable     | `SemanticClones`           |
+| 18  | DevQL clone summary returns grouped counts                    | `SemanticClones`           |
+| 19  | GraphQL clone summary returns grouped counts                  | `SemanticClones`           |
+| 20  | Unsupported URL fails cleanly without partial persistence     | `KnowledgeIngestion`       |
+| 21  | Hardened DevQL capability surfaces compose in one workflow    | `CrossCapabilitySmoke`     |
 
 ## Daemon prerequisite
 

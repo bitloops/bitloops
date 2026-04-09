@@ -40,7 +40,7 @@ fn fake_embeddings_runtime_command_and_args(
         .join("capability-runtime")
         .join("fake-embeddings-runtime.sh");
     let script = r#"#!/bin/sh
-profile_name=fake
+profile_name=local
 while [ $# -gt 0 ]; do
   case "$1" in
     --profile)
@@ -59,6 +59,7 @@ while IFS= read -r line; do
       printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"qat","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"qat-test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id" "$profile_name"
       ;;
     *'"type":"embed_batch"'*)
+      sleep 0.05
       printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
       ;;
     *'"type":"shutdown"'*)
@@ -96,7 +97,7 @@ fn fake_embeddings_runtime_command_and_args(
         .join("capability-runtime")
         .join("fake-embeddings-runtime.ps1");
     let script = r#"
-$profileName = "fake"
+$profileName = "local"
 for ($i = 0; $i -lt $args.Length; $i++) {
   if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
     $profileName = $args[$i + 1]
@@ -129,6 +130,7 @@ while (($line = $stdin.ReadLine()) -ne $null) {
       }
     }
     "embed_batch" {
+      Start-Sleep -Milliseconds 50
       $response = @{
         type = "embed_batch"
         request_id = $request.request_id
@@ -174,7 +176,11 @@ while (($line = $stdin.ReadLine()) -ne $null) {
     ))
 }
 
-fn render_semantic_clones_config(world: &QatWorld, command: &str, args: &[String]) -> String {
+fn render_guide_aligned_semantic_clones_config(
+    world: &QatWorld,
+    command: &str,
+    args: &[String],
+) -> String {
     let runtime_args = args
         .iter()
         .map(|arg| format!("{arg:?}"))
@@ -210,9 +216,10 @@ local_path = {blob_path:?}
 provider = "disabled"
 
 [semantic_clones]
-summary_mode = "off"
+summary_mode = "auto"
 embedding_mode = "deterministic"
-embedding_profile = "fake"
+embedding_profile = "local"
+enrichment_workers = 2
 
 [embeddings.runtime]
 command = {command:?}
@@ -220,9 +227,9 @@ args = [{runtime_args}]
 startup_timeout_secs = 5
 request_timeout_secs = 5
 
-[embeddings.profiles.fake]
+[embeddings.profiles.local]
 kind = "local_fastembed"
-model = "ignored-by-fake-runtime"
+model = "qat-test-model"
 "#,
         relational_path = relational_path.display().to_string(),
         events_path = events_path.display().to_string(),
@@ -294,14 +301,21 @@ pub fn configure_semantic_clones_with_fake_runtime(
     world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
+    configure_semantic_clones_with_guide_aligned_fake_runtime(world, repo_name)
+}
+
+pub fn configure_semantic_clones_with_guide_aligned_fake_runtime(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let (command, args, script_path) = fake_embeddings_runtime_command_and_args(world)?;
-    let config = render_semantic_clones_config(world, &command, &args);
+    let config = render_guide_aligned_semantic_clones_config(world, &command, &args);
     write_scenario_capability_config(world, &config)?;
     append_world_log(
         world,
         &format!(
-            "Configured semantic clones fake embeddings runtime at {}.\n",
+            "Configured guide-aligned semantic clones fake embeddings runtime at {}.\n",
             script_path.display()
         ),
     )?;
