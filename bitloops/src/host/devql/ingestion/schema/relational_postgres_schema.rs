@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS repositories (
     organization TEXT NOT NULL,
     name TEXT NOT NULL,
     default_branch TEXT,
+    metadata_json TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 

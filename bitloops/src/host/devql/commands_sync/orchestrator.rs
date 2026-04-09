@@ -200,7 +200,12 @@ async fn execute_sync_inner(
     let mut counters = sync::types::SyncCounters::default();
     let mut stats = SyncExecutionStats::default();
     let mut diff_collector = SyncDiffCollector::new();
-    let requested_paths = requested_paths(mode);
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for DevQL sync")?;
+    let mut requested_paths = requested_paths(mode);
+    if let Some(paths) = requested_paths.as_mut() {
+        paths.retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
+    }
 
     emit_progress(
         observer,
@@ -211,11 +216,23 @@ async fn execute_sync_inner(
         0,
     );
     let workspace_started = Instant::now();
-    let workspace = sync::workspace_state::inspect_workspace_for_paths(
+    let mut workspace = sync::workspace_state::inspect_workspace_for_paths(
         &cfg.repo_root,
         requested_paths.as_ref(),
     )
     .context("inspecting workspace for DevQL sync")?;
+    workspace
+        .head_tree
+        .retain(|path, _| !exclusion_matcher.excludes_repo_relative_path(path));
+    workspace
+        .staged_changes
+        .retain(|path, _| !exclusion_matcher.excludes_repo_relative_path(path));
+    workspace
+        .dirty_files
+        .retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
+    workspace
+        .untracked_files
+        .retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
     stats.workspace_inspection = workspace_started.elapsed();
 
     emit_progress(
@@ -228,9 +245,18 @@ async fn execute_sync_inner(
     );
     let desired_started = Instant::now();
     let mut desired = sync::manifest::build_desired_manifest(&workspace, &cfg.repo_root, |path| {
-        resolve_language_id_for_file_path(path).map(str::to_string)
+        let language = indexing_language_for_path(path);
+        if language == PLAIN_TEXT_LANGUAGE_ID && should_skip_plain_text_fallback_path(path) {
+            return None;
+        }
+        Some(language)
     })
     .context("building desired manifest for DevQL sync")?;
+    desired.retain(|_, state| {
+        !(state.language == PLAIN_TEXT_LANGUAGE_ID
+            && !state.exists_in_head
+            && !state.exists_in_index)
+    });
     if let Some(requested_paths) = requested_paths.as_ref() {
         desired.retain(|path, _| requested_paths.contains(path));
     }
@@ -420,7 +446,7 @@ async fn execute_sync_inner(
                 tokio::select! {
                     join_result = join_set.join_next() => {
                         let Some(join_result) = join_result else { continue; };
-                        let outcome = join_result.context("joining sync prepare task")??;
+                        let outcome = join_result.context("joining sync prepare task")?;
                         handle_prepared_outcome(
                             &mut counters,
                             &mut stats,
@@ -499,7 +525,7 @@ async fn execute_sync_inner(
                 let Some(join_result) = join_set.join_next().await else {
                     continue;
                 };
-                let outcome = join_result.context("joining sync prepare task")??;
+                let outcome = join_result.context("joining sync prepare task")?;
                 handle_prepared_outcome(
                     &mut counters,
                     &mut stats,
@@ -668,6 +694,12 @@ fn handle_prepared_outcome(
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
 ) -> Result<()> {
+    if let Some(error_message) = outcome.error_message.as_deref() {
+        log::warn!(
+            "skipping sync path `{}` due prepare failure: {error_message}",
+            outcome.path
+        );
+    }
     stats.add_prepared_path(&outcome.stats);
     if outcome.cache_hit {
         counters.cache_hits += 1;

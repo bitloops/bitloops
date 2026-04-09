@@ -13,6 +13,8 @@ pub(super) fn discover_baseline_files_at_revision(
     repo_root: &Path,
     revision: &str,
 ) -> Result<Vec<String>> {
+    let exclusion_matcher = load_repo_exclusion_matcher(repo_root)
+        .context("loading repo policy exclusions for baseline discovery")?;
     let tree_output = match run_git(repo_root, &["ls-tree", "-r", "--full-tree", revision]) {
         Ok(output) => output,
         Err(err) if is_missing_head_error(&err) => return Ok(Vec::new()),
@@ -33,7 +35,16 @@ pub(super) fn discover_baseline_files_at_revision(
                 return None;
             }
             let normalized_path = normalize_repo_path(raw_path);
-            if normalized_path.is_empty() || !is_supported_baseline_file(&normalized_path) {
+            if normalized_path.is_empty()
+                || exclusion_matcher.excludes_repo_relative_path(&normalized_path)
+                || !is_supported_baseline_file(&normalized_path)
+            {
+                return None;
+            }
+            let language = indexing_language_for_path(&normalized_path);
+            if language == PLAIN_TEXT_LANGUAGE_ID
+                && should_skip_plain_text_fallback_path(&normalized_path)
+            {
                 return None;
             }
             Some(normalized_path)
@@ -46,14 +57,7 @@ pub(super) fn discover_baseline_files_at_revision(
 
 #[cfg_attr(not(test), allow(dead_code))]
 fn is_supported_baseline_file(path: &str) -> bool {
-    let Some(extension) = Path::new(path).extension().and_then(|value| value.to_str()) else {
-        return false;
-    };
-
-    matches!(
-        extension.trim().to_ascii_lowercase().as_str(),
-        "rs" | "ts" | "tsx" | "js" | "jsx"
-    )
+    !path.trim().is_empty()
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -244,7 +248,7 @@ mod tests {
         assert!(is_supported_baseline_file("src/main.tsx"));
         assert!(is_supported_baseline_file("src/main.js"));
         assert!(is_supported_baseline_file("src/main.jsx"));
-        assert!(!is_supported_baseline_file("README.md"));
-        assert!(!is_supported_baseline_file("src/main.py"));
+        assert!(is_supported_baseline_file("README.md"));
+        assert!(is_supported_baseline_file("src/main.py"));
     }
 }

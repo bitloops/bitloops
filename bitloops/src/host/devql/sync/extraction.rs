@@ -22,12 +22,31 @@ struct ExtractionInput<'a> {
 pub(crate) fn extract_to_cache_format(
     cfg: &crate::host::devql::DevqlConfig,
     path: &str,
+    language: &str,
     content_id: &str,
     parser_version: &str,
     extractor_version: &str,
     content: &str,
 ) -> Result<Option<CachedExtraction>> {
-    let language = crate::host::devql::detect_language(path);
+    if language == crate::host::devql::PLAIN_TEXT_LANGUAGE_ID {
+        if !crate::host::devql::plain_text_content_is_allowed(content) {
+            return Ok(None);
+        }
+        return Ok(Some(map_extraction_to_cache_format(
+            ExtractionInput {
+                path,
+                content_id,
+                parser_version,
+                extractor_version,
+                language,
+                content,
+                file_docstring: None,
+            },
+            Vec::new(),
+            Vec::new(),
+        )));
+    }
+
     let rev = crate::host::devql::FileRevision {
         commit_sha: content_id,
         revision: crate::host::devql::TemporalRevisionRef {
@@ -42,7 +61,7 @@ pub(crate) fn extract_to_cache_format(
 
     let Some((items, edges, file_docstring)) =
         crate::host::devql::extract_language_pack_artefacts_and_edges(
-            cfg, &rev, &language, content,
+            cfg, &rev, language, content,
         )?
     else {
         return Ok(None);
@@ -54,7 +73,7 @@ pub(crate) fn extract_to_cache_format(
             content_id,
             parser_version,
             extractor_version,
-            language: &language,
+            language,
             content,
             file_docstring,
         },

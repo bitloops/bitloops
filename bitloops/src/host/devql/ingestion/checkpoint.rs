@@ -1,6 +1,7 @@
 use super::*;
 
 use chrono::{TimeZone, Utc};
+use std::collections::BTreeMap;
 
 use crate::host::checkpoints::strategy::manual_commit::resolve_default_branch_name;
 
@@ -10,16 +11,66 @@ pub(super) async fn ensure_repository_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
 ) -> Result<()> {
-    let sql = format!(
-        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) VALUES ('{}', '{}', '{}', '{}', '{}') \
-ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch",
+    let metadata_json = build_repository_metadata_json(cfg)
+        .context("building repository metadata profile for DevQL persistence")?;
+    let sql_with_metadata = format!(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch, metadata_json) VALUES ('{}', '{}', '{}', '{}', '{}', '{}') \
+ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch, metadata_json = EXCLUDED.metadata_json",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(&cfg.repo.provider),
         esc_pg(&cfg.repo.organization),
         esc_pg(&cfg.repo.name),
-        esc_pg(&default_branch_name(&cfg.repo_root))
+        esc_pg(&default_branch_name(&cfg.repo_root)),
+        esc_pg(&metadata_json),
     );
-    relational.exec(&sql).await
+    if let Err(err) = relational.exec(&sql_with_metadata).await {
+        let message = format!("{err:#}");
+        let missing_metadata_column = message.contains("no column named metadata_json")
+            || message.contains("column \"metadata_json\" does not exist");
+        if !missing_metadata_column {
+            return Err(err);
+        }
+
+        let legacy_sql = format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) VALUES ('{}', '{}', '{}', '{}', '{}') \
+ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization = EXCLUDED.organization, name = EXCLUDED.name, default_branch = EXCLUDED.default_branch",
+            esc_pg(&cfg.repo.repo_id),
+            esc_pg(&cfg.repo.provider),
+            esc_pg(&cfg.repo.organization),
+            esc_pg(&cfg.repo.name),
+            esc_pg(&default_branch_name(&cfg.repo_root)),
+        );
+        return relational.exec(&legacy_sql).await;
+    }
+    Ok(())
+}
+
+fn build_repository_metadata_json(cfg: &DevqlConfig) -> Result<String> {
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for repository metadata")?;
+    let tracked = run_git(&cfg.repo_root, &["ls-files", "-z"]).unwrap_or_default();
+    let mut language_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+    for raw_path in tracked.split('\0').filter(|value| !value.is_empty()) {
+        let path = normalize_repo_path(raw_path);
+        if path.is_empty() || exclusion_matcher.excludes_repo_relative_path(&path) {
+            continue;
+        }
+        let language = indexing_language_for_path(&path);
+        if language == PLAIN_TEXT_LANGUAGE_ID && should_skip_plain_text_fallback_path(&path) {
+            continue;
+        }
+        *language_counts.entry(language).or_insert(0) += 1;
+    }
+
+    let languages = language_counts.keys().cloned().collect::<Vec<_>>();
+    serde_json::to_string(&serde_json::json!({
+        "language_profile": {
+            "languages": languages,
+            "file_count_by_language": language_counts,
+        }
+    }))
+    .context("serialising repository metadata JSON")
 }
 
 pub(super) fn default_branch_name(repo_root: &Path) -> String {

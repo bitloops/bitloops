@@ -321,6 +321,32 @@ fn init_args_support_backfill_flag_variants() {
 }
 
 #[test]
+fn init_args_support_repeated_exclusion_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--exclude",
+        "docs/**",
+        "--exclude",
+        "**/third_party/**",
+        "--exclude-from",
+        ".bitloopsignore",
+        "--exclude-from",
+        "configs/extra.ignore",
+    ])
+    .expect("parse init exclusion flags");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(args.exclude, vec!["docs/**", "**/third_party/**"]);
+    assert_eq!(
+        args.exclude_from,
+        vec![".bitloopsignore", "configs/extra.ignore"]
+    );
+}
+
+#[test]
 fn init_args_reject_zero_backfill() {
     let err = Cli::try_parse_from(["bitloops", "init", "--backfill=0"])
         .err()
@@ -365,6 +391,8 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
             },
             repo.path(),
             &mut out,
@@ -387,6 +415,98 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
 }
 
 #[test]
+fn run_init_persists_scope_exclusions_and_preserves_unrelated_local_settings() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+    std::fs::write(
+        repo.path().join(".bitloops.local.toml"),
+        r#"
+[custom]
+keep = true
+"#,
+    )
+    .expect("seed local policy");
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: vec!["docs/**".to_string(), "**/third_party/**".to_string()],
+                exclude_from: vec![".bitloopsignore".to_string()],
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let local_policy = std::fs::read_to_string(repo.path().join(".bitloops.local.toml"))
+            .expect("read local policy");
+        assert!(
+            local_policy.contains("exclude = [\"**/third_party/**\", \"docs/**\"]")
+                || local_policy.contains("exclude = [\"docs/**\", \"**/third_party/**\"]"),
+            "scope.exclude should be persisted, got:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("exclude_from = [\".bitloopsignore\"]"),
+            "scope.exclude_from should be persisted, got:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("[custom]") && local_policy.contains("keep = true"),
+            "init should preserve unrelated existing local policy settings, got:\n{local_policy}"
+        );
+    });
+}
+
+#[test]
+fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    setup_git_repo(&repo);
+    let outside_path = outside.path().join("outside.ignore");
+    std::fs::write(&outside_path, "vendor/**\n").expect("write outside ignore file");
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let err = run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: vec![outside_path.display().to_string()],
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect_err("outside-root --exclude-from path should fail");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("must be under repo-policy root"),
+            "unexpected error for outside-root --exclude-from path: {rendered}"
+        );
+    });
+}
+
+#[test]
 fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_requested() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
@@ -405,6 +525,8 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
             },
             repo.path(),
             &mut out,
@@ -439,6 +561,8 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
             },
             repo.path(),
             &mut out,
@@ -671,6 +795,8 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
                         },
                         repo.path(),
                         &mut out,
@@ -722,6 +848,8 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
                         },
                         repo.path(),
                         &mut out,
@@ -759,6 +887,8 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     sync: Some(false),
                     ingest: Some(false),
                     backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
                 },
                 repo.path(),
                 &mut out,
@@ -808,6 +938,8 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
                         },
                         repo.path(),
                         &mut out,
@@ -870,6 +1002,8 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                     sync: Some(false),
                                     ingest: Some(false),
                                     backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
                                 },
                                 repo.path(),
                                 &mut out,
@@ -935,6 +1069,8 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
                         },
                         repo.path(),
                         &mut out,
@@ -972,6 +1108,8 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     sync: None,
                     ingest: Some(false),
                     backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
                 },
                 repo.path(),
                 &mut out,
@@ -1078,6 +1216,8 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             sync: Some(false),
                                             ingest: Some(true),
                                             backfill: None,
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
                                         },
                                         repo.path(),
                                         &mut out,
@@ -1190,6 +1330,8 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             sync: Some(false),
                                             ingest: None,
                                             backfill: Some(10),
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
                                         },
                                         repo.path(),
                                         &mut out,

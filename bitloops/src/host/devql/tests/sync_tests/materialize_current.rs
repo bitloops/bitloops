@@ -32,6 +32,7 @@ function localHelper(): number {
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         path,
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
@@ -134,6 +135,7 @@ function localHelper(): number {
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         path,
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
@@ -326,6 +328,7 @@ function localHelper(): number {
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         original_path,
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
@@ -439,6 +442,7 @@ function localHelper(): number {
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         path,
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",

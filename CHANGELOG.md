@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Repo-policy DevQL exclusions from init to runtime**: added repeatable `bitloops init --exclude <glob>` and `--exclude-from <path>` flags, persisted to `.bitloops.local.toml` before any init-triggered sync/ingest work, with path normalization to the repo-policy root and rejection of outside-root `exclude_from` paths. Runtime now applies the same `[scope].exclude` / `[scope].exclude_from` policy during sync, baseline discovery, historical ingest, watcher capture, and refresh entry points.
+- **Dynamic exclusion file resolution and fingerprinting**: repo-policy exclusion resolution now loads `.bitloopsignore`-style sources from `scope.exclude_from` on each evaluation, and the repo-policy fingerprint now changes when inline exclusions, referenced `exclude_from` paths, or referenced file contents change.
+- **Repository language-profile metadata persistence**: added `repositories.metadata_json` persistence for repo-level language-profile metadata (with schema initialization/migration support for SQLite and Postgres).
+- **Non-language plain-text fallback indexing**: non-language files are now indexed as file-level `plain_text` artefacts (no symbol extraction) when they pass UTF-8/non-binary/size guardrails; binary-style extensions and untracked plain-text sidecar/runtime files are skipped.
+
 - **Expanded Codex hook support**: Codex now supports the full currently documented hook surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
 - **Repo-local Codex hooks config bootstrap**: `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
 - **Codex Bash hook installation/parsing**: Codex Bash tool hooks are now installed and parsed, but remain non-mutating/no-op in Bitloops until dedicated Bash-level checkpoint capture is added.

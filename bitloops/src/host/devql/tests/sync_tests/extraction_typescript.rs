@@ -22,6 +22,7 @@ function localHelper(): number {
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         path,
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
@@ -39,6 +40,7 @@ function localHelper(): number {
     let repeated = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         path,
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
@@ -174,6 +176,7 @@ function localHelper(): number {
     let first = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         "src/sample.ts",
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
@@ -184,6 +187,7 @@ function localHelper(): number {
     let second = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
         "nested/other.ts",
+        "typescript",
         &content_id,
         "tree-sitter-ts@1",
         "ts-language-pack@1",
