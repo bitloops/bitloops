@@ -251,7 +251,7 @@ async fn load_persisted_summary_map(
         .join(", ");
     let rows = relational
         .query_rows(&format!(
-            "SELECT artefact_id, template_summary, docstring_summary \
+            "SELECT artefact_id, template_summary, docstring_summary, llm_summary, summary, source_model \
              FROM symbol_semantics \
              WHERE artefact_id IN ({ids_sql})"
         ))
@@ -274,10 +274,29 @@ async fn load_persisted_summary_map(
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        summaries.insert(
-            artefact_id.to_string(),
-            semantic::synthesize_deterministic_summary(template_summary, docstring_summary),
-        );
+        let canonical_summary = row
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let llm_summary = row
+            .get("llm_summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let has_llm_enrichment = llm_summary.is_some()
+            || row
+                .get("source_model")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty());
+        let summary = if has_llm_enrichment {
+            canonical_summary.map(str::to_string).unwrap_or_else(|| {
+                semantic::synthesize_deterministic_summary(template_summary, docstring_summary)
+            })
+        } else {
+            semantic::synthesize_deterministic_summary(template_summary, docstring_summary)
+        };
+        summaries.insert(artefact_id.to_string(), summary);
     }
     Ok(summaries)
 }

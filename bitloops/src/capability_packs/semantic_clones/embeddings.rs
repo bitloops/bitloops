@@ -238,7 +238,7 @@ pub fn build_symbol_embedding_input_hash(
 ) -> String {
     let mut value = json!({
         "fingerprint_version": EMBEDDING_FINGERPRINT_VERSION,
-        "provider": provider.cache_key(),
+        "provider": embedding_provider_hash_identity(provider),
         "artefact_id": &input.artefact_id,
         "repo_id": &input.repo_id,
         "blob_sha": &input.blob_sha,
@@ -273,6 +273,21 @@ pub fn build_symbol_embedding_input_hash(
         }
     }
     sha256_hex(&value.to_string())
+}
+
+fn embedding_provider_hash_identity(provider: &dyn EmbeddingProvider) -> serde_json::Value {
+    match provider.output_dimension() {
+        Some(dimension) => json!({
+            "provider": provider.provider_name(),
+            "model": provider.model_name(),
+            "dimension": dimension,
+        }),
+        None => json!({
+            "provider": provider.provider_name(),
+            "model": provider.model_name(),
+            "cache_key": provider.cache_key(),
+        }),
+    }
 }
 
 pub fn symbol_embeddings_require_reindex(
@@ -664,6 +679,22 @@ mod tests {
         assert_ne!(
             build_symbol_embedding_input_hash(&base, &provider),
             build_symbol_embedding_input_hash(&changed, &provider)
+        );
+    }
+
+    #[test]
+    fn symbol_embedding_hash_ignores_profile_rename_when_runtime_setup_matches() {
+        let input = sample_input();
+        let first = MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-a::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        };
+        let second = MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-b::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        };
+
+        assert_eq!(
+            build_symbol_embedding_input_hash(&input, &first),
+            build_symbol_embedding_input_hash(&input, &second)
         );
     }
 

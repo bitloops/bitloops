@@ -405,6 +405,7 @@ fn pull_runtime_client_config(
 mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
+    use crate::test_support::process_state::enter_process_state;
     use clap::Parser;
     use std::fs;
     use std::path::Path;
@@ -727,6 +728,15 @@ request_timeout_secs = 5
     #[test]
     fn inspect_embeddings_install_state_reports_not_configured() {
         let repo = TempDir::new().expect("tempdir");
+        let home = TempDir::new().expect("home dir");
+        let home_path = home.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            Some(repo.path()),
+            &[
+                ("HOME", Some(home_path.as_str())),
+                ("USERPROFILE", Some(home_path.as_str())),
+            ],
+        );
         crate::test_support::git_fixtures::init_test_repo(
             repo.path(),
             "main",
