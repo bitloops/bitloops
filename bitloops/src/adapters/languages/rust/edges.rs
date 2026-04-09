@@ -137,6 +137,7 @@ pub(crate) fn collect_rust_edges_recursive(
         && let Some(owner) = smallest_enclosing_callable(start_line, ctx.callables)
         && let Some((target_name, call_form)) = rust_call_target(node, content)
     {
+        let edge_count_before = ec.out.len();
         push_rust_call_edge(
             ec,
             &owner.symbol_fqn,
@@ -146,6 +147,33 @@ pub(crate) fn collect_rust_edges_recursive(
             ctx,
             false,
         );
+
+        // When a call is written with a module-qualified path (e.g. `log::banner()`),
+        // there is no `use` binding for the callee name and we should still emit a
+        // stable calls edge keyed by that explicit path.
+        if ec.out.len() == edge_count_before
+            && let Some(to_symbol_ref) = rust_module_qualified_call_symbol_ref(node, content)
+        {
+            let key = format!(
+                "{}|{}|{}|{}|{}",
+                owner.symbol_fqn,
+                to_symbol_ref,
+                start_line,
+                Resolution::Import.as_str(),
+                call_form.as_str()
+            );
+            if ec.seen.insert(key) {
+                ec.out.push(DependencyEdge {
+                    edge_kind: EdgeKind::Calls,
+                    from_symbol_fqn: owner.symbol_fqn,
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some(to_symbol_ref),
+                    start_line: Some(start_line),
+                    end_line: Some(start_line),
+                    metadata: EdgeMetadata::call(call_form, Resolution::Import),
+                });
+            }
+        }
     }
 
     if kind == "macro_invocation"
@@ -161,6 +189,28 @@ pub(crate) fn collect_rust_edges_recursive(
             ctx,
             false,
         );
+
+        for to_symbol_ref in rust_module_qualified_calls_in_macro(node, content) {
+            let key = format!(
+                "{}|{}|{}|{}|{}",
+                owner.symbol_fqn,
+                to_symbol_ref,
+                start_line,
+                Resolution::Import.as_str(),
+                CallForm::Associated.as_str()
+            );
+            if ec.seen.insert(key) {
+                ec.out.push(DependencyEdge {
+                    edge_kind: EdgeKind::Calls,
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some(to_symbol_ref),
+                    start_line: Some(start_line),
+                    end_line: Some(start_line),
+                    metadata: EdgeMetadata::call(CallForm::Associated, Resolution::Import),
+                });
+            }
+        }
     }
 
     if kind == "impl_item"
@@ -259,6 +309,96 @@ pub(crate) fn rust_macro_target(
             .trim_end_matches('!'),
     )?;
     Some((target_name, CallForm::Macro))
+}
+
+fn rust_module_qualified_call_symbol_ref(node: tree_sitter::Node, content: &str) -> Option<String> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+
+    let function_node = node.child_by_field_name("function")?;
+    let function_text = function_node.utf8_text(content.as_bytes()).ok()?.trim();
+    if function_text.contains('.') || function_text.contains('<') || function_text.contains('!') {
+        return None;
+    }
+
+    let mut segments = function_text.split("::").map(str::trim);
+    let module = segments.next()?;
+    let callable = segments.next()?;
+    if segments.next().is_some() {
+        return None;
+    }
+
+    if !is_rust_plain_identifier(module) || !is_rust_plain_identifier(callable) {
+        return None;
+    }
+
+    let module_is_allowed = module
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_lowercase())
+        || matches!(module, "self" | "super" | "crate");
+    if !module_is_allowed {
+        return None;
+    }
+
+    Some(format!("{module}::{callable}"))
+}
+
+fn is_rust_plain_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn rust_module_qualified_calls_in_macro(node: tree_sitter::Node, content: &str) -> Vec<String> {
+    let Ok(text) = node.utf8_text(content.as_bytes()) else {
+        return Vec::new();
+    };
+    let Ok(re) =
+        Regex::new(r"(?P<module>(?:self|super|crate|[a-z_][A-Za-z0-9_]*))::(?P<call>[A-Za-z_][A-Za-z0-9_]*)\s*\(")
+    else {
+        return Vec::new();
+    };
+
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for captures in re.captures_iter(text) {
+        let Some(full_match) = captures.get(0) else {
+            continue;
+        };
+
+        if full_match.start() > 0
+            && text
+                .as_bytes()
+                .get(full_match.start().saturating_sub(1))
+                .is_some_and(|byte| *byte == b':')
+        {
+            continue;
+        }
+
+        let Some(module) = captures.name("module").map(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(callable) = captures.name("call").map(|value| value.as_str()) else {
+            continue;
+        };
+        if !is_rust_plain_identifier(module) || !is_rust_plain_identifier(callable) {
+            continue;
+        }
+
+        let symbol_ref = format!("{module}::{callable}");
+        if seen.insert(symbol_ref.clone()) {
+            out.push(symbol_ref);
+        }
+    }
+
+    out
 }
 
 pub(crate) fn rust_callable_name_from_text(text: &str) -> Option<String> {
