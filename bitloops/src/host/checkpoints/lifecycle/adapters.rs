@@ -774,8 +774,13 @@ mod route_tests {
                 json["hookSpecificOutput"]["hookEventName"],
                 serde_json::Value::String("UserPromptSubmit".to_string())
             );
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage DevQL"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("tracked.txt"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
+            assert!(!context.contains("<repo-relative-path>"));
             Ok(())
         })
     }
@@ -827,8 +832,12 @@ mod route_tests {
                 json["hookSpecificOutput"]["hookEventName"],
                 serde_json::Value::String("UserPromptSubmit".to_string())
             );
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage DevQL"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("tracked.txt"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
             assert!(!context.contains("<repo-relative-path>"));
             Ok(())
         })
@@ -864,8 +873,15 @@ mod route_tests {
                 json["hookSpecificOutput"]["hookEventName"],
                 serde_json::Value::String("SessionStart".to_string())
             );
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage it"));
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
@@ -902,8 +918,15 @@ mod route_tests {
                 json["hookSpecificOutput"]["hookEventName"],
                 serde_json::Value::String("SessionStart".to_string())
             );
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage it"));
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
@@ -957,8 +980,12 @@ mod route_tests {
                 json["hookSpecificOutput"]["hookEventName"],
                 serde_json::Value::String("BeforeAgent".to_string())
             );
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage DevQL"));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("tracked.txt"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
             assert!(!context.contains("<repo-relative-path>"));
             Ok(())
         })
@@ -994,8 +1021,15 @@ mod route_tests {
                 json["hookSpecificOutput"]["hookEventName"],
                 serde_json::Value::String("SessionStart".to_string())
             );
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage it"));
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
@@ -1028,8 +1062,15 @@ mod route_tests {
             let context = json["additional_context"]
                 .as_str()
                 .expect("additional_context");
+            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+            assert!(context.contains("You should leverage it"));
             assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("summary"));
+            assert!(context.contains("schema"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
             assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("menu"));
             assert!(!context.contains("src/main.rs"));
             assert!(!context.contains("tracked.txt"));
             Ok(())
@@ -1069,8 +1110,15 @@ mod route_tests {
                 let context = json["additionalContext"]
                     .as_str()
                     .expect("additionalContext");
+                assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+                assert!(context.contains("You should leverage it"));
                 assert!(context.contains("selectArtefacts"));
+                assert!(context.contains("summary"));
+                assert!(context.contains("schema"));
+                assert!(context.contains("items(first:"));
+                assert!(context.contains("bitloops devql schema --global"));
                 assert!(context.contains("<repo-relative-path>"));
+                assert!(!context.contains("menu"));
                 assert!(!context.contains("src/main.rs"));
                 assert!(!context.contains("tracked.txt"));
                 Ok(())

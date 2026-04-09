@@ -10,13 +10,13 @@ DevQL is exposed as a GraphQL-compatible schema. The CLI, dashboard, and HTTP/We
 
 When the Bitloops daemon is running, DevQL exposes these routes:
 
-| Route | Method | Purpose |
-|---|---|---|
-| `/devql` | `POST` | GraphQL queries and mutations |
-| `/devql` | `GET` | DevQL Explorer UI |
-| `/devql/playground` | `GET` | DevQL Explorer UI |
-| `/devql/sdl` | `GET` | Generated schema SDL |
-| `/devql/ws` | WebSocket | GraphQL subscriptions |
+| Route               | Method    | Purpose                       |
+| ------------------- | --------- | ----------------------------- |
+| `/devql`            | `POST`    | GraphQL queries and mutations |
+| `/devql`            | `GET`     | DevQL Explorer UI             |
+| `/devql/playground` | `GET`     | DevQL Explorer UI             |
+| `/devql/sdl`        | `GET`     | Generated schema SDL          |
+| `/devql/ws`         | WebSocket | GraphQL subscriptions         |
 
 The checked-in schema snapshot lives at `bitloops/schema.graphql`. The canonical runtime schema is whatever `GET /devql/sdl` returns.
 
@@ -140,7 +140,9 @@ Use it when you want one compact answer first, then typed detail only if needed:
 
 ```graphql
 {
-  selectArtefacts(by: { path: "rust-app/src/main.rs", lines: { start: 6, end: 10 } }) {
+  selectArtefacts(
+    by: { path: "rust-app/src/main.rs", lines: { start: 6, end: 10 } }
+  ) {
     summary
   }
 }
@@ -181,8 +183,6 @@ Selector rules:
 
 Current limitation: the raw GraphQL slim surface supports `selectArtefacts { summary }`, but the DevQL DSL compiler still supports one explicit terminal stage at a time such as `checkpoints()`, `clones()`, `deps()`, or `tests()`.
 
-When Bitloops-managed hooks are installed for Claude Code, Codex, or Gemini, Bitloops injects a compact DevQL quick-start before supported turns. That guidance uses raw GraphQL examples for `selectArtefacts { summary }`, then points agents at stage `schema`, stage `items(first: ...)`, and `bitloops devql schema`. The hook guidance is instructional only; it does not execute DevQL or attach live query results.
-
 ### DevQL `summary()` stage
 
 In the DevQL DSL, `summary()` is overloaded: it either aggregates **clone detection** results or attaches **dependency edge counts** to each artefact row. Both shapes compile to typed GraphQL; they are not interchangeable.
@@ -198,12 +198,12 @@ bitloops devql query 'repo("bitloops")->file("bitloops/src/main.rs")->artefacts(
 
 **Per-artefact dependency counts (`depsSummary`).** Use `summary(deps:true, ...)`. This requires an `artefacts()` stage and **must not** be combined with `deps()` or `clones()` in the same query.
 
-| Argument | Values | Role |
-| --- | --- | --- |
-| `deps` | `true` only | Selects dependency-summary mode (`deps:false` is rejected). |
-| `kind` | `imports`, `calls`, `references`, `extends`, `implements`, `exports` | Restrict counts to one edge kind; omit for all kinds. |
-| `direction` | `out`, `in`, `both` | Which directions to include; default is `both`. |
-| `unresolved` | `true`, `false` | Include unresolved targets when `true`; default is `false` (resolved-only). |
+| Argument     | Values                                                               | Role                                                                        |
+| ------------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `deps`       | `true` only                                                          | Selects dependency-summary mode (`deps:false` is rejected).                 |
+| `kind`       | `imports`, `calls`, `references`, `extends`, `implements`, `exports` | Restrict counts to one edge kind; omit for all kinds.                       |
+| `direction`  | `out`, `in`, `both`                                                  | Which directions to include; default is `both`.                             |
+| `unresolved` | `true`, `false`                                                      | Include unresolved targets when `true`; default is `false` (resolved-only). |
 
 The compiler emits `artefacts { edges { node { depsSummary(filter: ...) { ... } } } }`. Counts are **for each returned artefact’s edges** in the current dependency graph (same data plane as `outgoingDeps` / `incomingDeps`). Filters on `artefacts(...)` only restrict **which artefacts appear** as rows, not “edges only to other rows on this page.”
 
@@ -279,7 +279,9 @@ Per-artefact dependency summaries (same field the DSL `summary(deps:true, ...)` 
           node {
             path
             symbolFqn
-            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: false }) {
+            depsSummary(
+              filter: { kind: CALLS, direction: BOTH, unresolved: false }
+            ) {
               totalCount
               incomingCount
               outgoingCount
@@ -460,11 +462,11 @@ DevQL exposes capability-pack functionality in three ways:
 
 DevQL currently emits these structured GraphQL error codes from resolver code:
 
-| Code | Meaning |
-|---|---|
+| Code             | Meaning                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
 | `BAD_USER_INPUT` | Invalid field arguments, invalid temporal scope input, invalid references, or unsupported combinations |
-| `BAD_CURSOR` | Invalid pagination cursor |
-| `BACKEND_ERROR` | Backend configuration, execution, migration, provider, or serialisation failures |
+| `BAD_CURSOR`     | Invalid pagination cursor                                                                              |
+| `BACKEND_ERROR`  | Backend configuration, execution, migration, provider, or serialisation failures                       |
 
 The schema also enforces global limits:
 

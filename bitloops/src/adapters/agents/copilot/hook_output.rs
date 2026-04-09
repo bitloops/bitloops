@@ -21,7 +21,9 @@ mod tests {
 
     fn augmentation() -> HookAugmentation {
         HookAugmentation {
-            additional_context: "Review the current context before making changes.".to_string(),
+            additional_context:
+                "You have DevQL available in this repo. You should leverage it for repo-aware requests."
+                    .to_string(),
             targeted: false,
         }
     }
@@ -37,7 +39,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&rendered).expect("json");
         assert_eq!(
             value["additionalContext"],
-            serde_json::Value::String("Review the current context before making changes.".to_string())
+            serde_json::Value::String(
+                "You have DevQL available in this repo. You should leverage it for repo-aware requests."
+                    .to_string()
+            )
         );
     }
 

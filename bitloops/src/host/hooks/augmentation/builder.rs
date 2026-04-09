@@ -2,7 +2,8 @@ use super::prompt_target::PromptTarget;
 
 const GENERIC_SUMMARY_QUERY: &str =
     "bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\" }) { summary } }'";
-const GENERIC_LINES_SELECTOR: &str = "lines: { start: <start>, end: <end> }";
+const GENERIC_LINES_QUERY: &str =
+    "bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } }) { summary } }'";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAugmentation {
@@ -12,9 +13,7 @@ pub struct HookAugmentation {
 
 pub fn build_devql_session_start_augmentation() -> HookAugmentation {
     HookAugmentation {
-        additional_context: format!(
-            "DevQL is available in this repo. For file-specific requests, start with `{GENERIC_SUMMARY_QUERY}` by replacing `<repo-relative-path>` with the relevant repo path. To narrow the query to a region, add `{GENERIC_LINES_SELECTOR}` inside the `by` selector. Read stage `schema` only if needed, then query `items(first: ...)` for typed rows. Use `bitloops devql schema` or `bitloops devql schema --global` for SDL discovery.",
-        ),
+        additional_context: generic_devql_guidance(),
         targeted: false,
     }
 }
@@ -24,22 +23,27 @@ pub fn build_devql_hook_augmentation(target: Option<&PromptTarget>) -> HookAugme
     let additional_context = match target {
         Some(target) => {
             let query = targeted_summary_query(target);
-            format!(
-                "DevQL is available in this repo. Start with `{query}` to get a compact summary of what Bitloops knows. Read the returned `schema` only if you need the drill-down shape, then query `items(first: ...)` on the relevant stage for typed rows. Use `bitloops devql schema` when you need the slim SDL and `bitloops devql schema --global` when you need the full global SDL."
-            )
+            targeted_devql_guidance(&query)
         }
-        None => {
-            let query = String::from(GENERIC_SUMMARY_QUERY);
-            format!(
-                "DevQL is available in this repo. Start with `{query}` to get a compact summary of what Bitloops knows. If the request is file-specific, replace `<repo-relative-path>` with the relevant path before running it. To narrow the query to a region, add `{GENERIC_LINES_SELECTOR}` inside the `by` selector. Read the returned `schema` only if you need the drill-down shape, then query `items(first: ...)` on the relevant stage for typed rows. Use `bitloops devql schema` when you need the slim SDL and `bitloops devql schema --global` when you need the full global SDL."
-            )
-        }
+        None => generic_devql_guidance(),
     };
 
     HookAugmentation {
         additional_context,
         targeted,
     }
+}
+
+fn generic_devql_guidance() -> String {
+    format!(
+        "<EXTREMELY_IMPORTANT>\nYou have DevQL available in this repo. You should leverage it for repo-aware requests.\n\nStart with:\n`{GENERIC_SUMMARY_QUERY}`\n\nOptional line targeting:\n`{GENERIC_LINES_QUERY}`\n\nThen:\n- read returned `schema` only if needed\n- query `items(first: ...)` for typed rows\n- use `bitloops devql schema` or `bitloops devql schema --global` for SDL discovery\n</EXTREMELY_IMPORTANT>"
+    )
+}
+
+fn targeted_devql_guidance(query: &str) -> String {
+    format!(
+        "<EXTREMELY_IMPORTANT>\nYou should leverage DevQL for this repo-aware request.\n\nStart with:\n`{query}`\n\nThen:\n- read returned `schema` only if needed\n- query `items(first: ...)` for typed rows\n- use `bitloops devql schema` or `bitloops devql schema --global` for SDL discovery\n</EXTREMELY_IMPORTANT>"
+    )
 }
 
 fn targeted_summary_query(target: &PromptTarget) -> String {
@@ -63,7 +67,13 @@ mod tests {
         let augmentation = build_devql_session_start_augmentation();
 
         assert!(!augmentation.targeted);
+        assert!(augmentation.additional_context.contains("<EXTREMELY_IMPORTANT>"));
         assert!(augmentation.additional_context.contains("<repo-relative-path>"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("You have DevQL available in this repo. You should leverage it for repo-aware requests.")
+        );
         assert!(
             augmentation
                 .additional_context
@@ -88,7 +98,13 @@ mod tests {
         let augmentation = build_devql_hook_augmentation(None);
 
         assert!(!augmentation.targeted);
+        assert!(augmentation.additional_context.contains("<EXTREMELY_IMPORTANT>"));
         assert!(augmentation.additional_context.contains("<repo-relative-path>"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("You have DevQL available in this repo. You should leverage it for repo-aware requests.")
+        );
         assert!(
             augmentation
                 .additional_context
@@ -119,11 +135,18 @@ mod tests {
         let augmentation = build_devql_hook_augmentation(Some(&target));
 
         assert!(augmentation.targeted);
+        assert!(augmentation.additional_context.contains("<EXTREMELY_IMPORTANT>"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("You should leverage DevQL for this repo-aware request.")
+        );
         assert!(augmentation.additional_context.contains("src/main.rs"));
         assert!(augmentation.additional_context.contains("start: 6"));
         assert!(augmentation.additional_context.contains("end: 10"));
         assert!(augmentation.additional_context.contains("selectArtefacts"));
         assert!(augmentation.additional_context.contains("summary"));
+        assert!(augmentation.additional_context.contains("schema"));
         assert!(!augmentation.additional_context.contains("<repo-relative-path>"));
     }
 }

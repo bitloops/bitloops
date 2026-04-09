@@ -28,16 +28,23 @@ mod tests {
 
     fn augmentation() -> HookAugmentation {
         HookAugmentation {
-            additional_context: "Review the current context before making changes.".to_string(),
-            targeted: true,
+            additional_context:
+                "You have DevQL available in this repo. You should leverage it for repo-aware requests."
+                    .to_string(),
+            targeted: false,
         }
     }
 
     #[test]
     fn user_prompt_submit_renders_additional_context_json() {
+        let targeted_augmentation = HookAugmentation {
+            additional_context:
+                "You should leverage DevQL for this repo-aware request.".to_string(),
+            targeted: true,
+        };
         let rendered = render_hook_output(
             crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT,
-            &augmentation(),
+            &targeted_augmentation,
         )
         .expect("rendered");
 
@@ -48,7 +55,9 @@ mod tests {
         );
         assert_eq!(
             value["hookSpecificOutput"]["additionalContext"],
-            serde_json::Value::String("Review the current context before making changes.".to_string())
+            serde_json::Value::String(
+                "You should leverage DevQL for this repo-aware request.".to_string()
+            )
         );
     }
 
@@ -67,7 +76,10 @@ mod tests {
         );
         assert_eq!(
             value["hookSpecificOutput"]["additionalContext"],
-            serde_json::Value::String("Review the current context before making changes.".to_string())
+            serde_json::Value::String(
+                "You have DevQL available in this repo. You should leverage it for repo-aware requests."
+                    .to_string()
+            )
         );
     }
 
