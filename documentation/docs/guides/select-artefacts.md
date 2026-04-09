@@ -224,6 +224,17 @@ This is the normal escalation path:
 3. Read `schema` only if needed
 4. Query `items(first: ...)` for typed detail rows
 
+## Agent Hook Guidance
+
+When Bitloops-managed hooks are installed for Claude Code, Codex, or Gemini, Bitloops injects a short DevQL reminder at supported pre-turn hooks. That reminder follows the same workflow documented here:
+
+1. Start with `selectArtefacts(by: ...) { summary }`
+2. Read stage `schema` only when the summary says a drill-down is worth it
+3. Query `items(first: ...)` on the relevant stage for typed rows
+4. Use `bitloops devql schema` or `bitloops devql schema --global` when the full SDL is needed
+
+The injected reminder is guidance only. It does not execute DevQL automatically or attach live query results to the turn.
+
 ## Category Summaries
 
 Current category coverage:

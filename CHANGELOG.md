@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **DevQL prompt augmentation for Claude Code, Codex, and Gemini hooks**: supported pre-turn hooks now return compact additional context that teaches agents to start with `selectArtefacts(by: ...) { summary }`, inspect stage `schema` only when needed, drill into `items(first: ...)`, and use `bitloops devql schema` or `bitloops devql schema --global` for SDL discovery. The hook path reuses the shared prompt file/line target parser and remains guidance-only; it does not execute DevQL or inject live query results.
 - **Expanded Codex hook support**: Codex now supports the full currently documented hook surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
 - **Repo-local Codex hooks config bootstrap**: `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
 - **Codex Bash hook installation/parsing**: Codex Bash tool hooks are now installed and parsed, but remain non-mutating/no-op in Bitloops until dedicated Bash-level checkpoint capture is added.

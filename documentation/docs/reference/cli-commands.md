@@ -344,6 +344,8 @@ Highlights:
 - `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
+- when Bitloops-managed hooks are installed for Claude Code, Codex, or Gemini, supported pre-turn hooks inject a short DevQL reminder that points the agent at `selectArtefacts(by: ...) { summary }`, stage `schema`, stage `items(first: ...)`, and `bitloops devql schema`
+- that injected hook guidance is instruction-only; Bitloops does not run DevQL queries on the agent's behalf in the hook path
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
 
 ### Knowledge

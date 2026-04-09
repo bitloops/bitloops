@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
@@ -6,6 +8,8 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
+use crate::host::hooks::augmentation::builder::build_devql_hook_augmentation;
+use crate::host::hooks::augmentation::prompt_target::extract_primary_prompt_target;
 
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event,
@@ -60,6 +64,11 @@ pub const CODEX_HOOK_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
 pub const CODEX_HOOK_PRE_TOOL_USE: &str = "pre-tool-use";
 pub const CODEX_HOOK_POST_TOOL_USE: &str = "post-tool-use";
 pub const CODEX_HOOK_STOP: &str = "stop";
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HookCommandOutcome {
+    pub stdout: Option<String>,
+}
 
 #[derive(Default)]
 pub struct ClaudeCodeLifecycleAdapter;
@@ -424,11 +433,27 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
     }
 }
 
+fn build_prompt_augmentation_stdout(
+    repo_root: &Path,
+    hook_name: &str,
+    event: &LifecycleEvent,
+    registration: &crate::adapters::agents::AgentAdapterRegistration,
+) -> Option<String> {
+    if event.event_type != Some(LifecycleEventType::TurnStart) || event.prompt.trim().is_empty() {
+        return None;
+    }
+
+    let target = extract_primary_prompt_target(repo_root, &event.prompt);
+    let augmentation = build_devql_hook_augmentation(target.as_ref());
+    registration.render_prompt_augmentation(hook_name, &augmentation)
+}
+
 pub fn route_hook_command_to_lifecycle(
+    repo_root: &Path,
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
-) -> Result<()> {
+) -> Result<HookCommandOutcome> {
     let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
     let descriptor = resolved.registration.descriptor();
     let family = descriptor.protocol_family.id;
@@ -461,20 +486,23 @@ pub fn route_hook_command_to_lifecycle(
             "failed to parse lifecycle hook '{hook_name}' for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
         )
     })?;
+    let mut outcome = HookCommandOutcome::default();
     if let Some(event) = event {
         dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event)).map_err(|err| {
             anyhow!(
                 "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
             )
         })?;
+        outcome.stdout =
+            build_prompt_augmentation_stdout(repo_root, hook_name, &event, resolved.registration);
     }
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]
 mod route_tests {
     use super::*;
-    use crate::adapters::agents::AGENT_NAME_CODEX;
+    use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
     use crate::host::interactions::db_store::interaction_spool_db_path;
     use crate::test_support::process_state::{git_command, with_process_state};
     use anyhow::Result;
@@ -532,6 +560,7 @@ mod route_tests {
             })
             .to_string();
             route_hook_command_to_lifecycle(
+                repo.path(),
                 AGENT_NAME_CODEX,
                 CODEX_HOOK_SESSION_START,
                 &session_payload,
@@ -550,8 +579,13 @@ mod route_tests {
                 "transcriptPath": transcript_path_str,
             })
             .to_string();
-            route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_STOP, &stop_payload)
-                .expect("stop should still succeed when the runtime checkpoint store is available");
+            route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_CODEX,
+                CODEX_HOOK_STOP,
+                &stop_payload,
+            )
+            .expect("stop should still succeed when the runtime checkpoint store is available");
             Ok(())
         })?;
 
@@ -667,6 +701,112 @@ mod route_tests {
         })?;
 
         Ok(())
+    }
+
+    #[test]
+    fn route_codex_user_prompt_submit_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_id = "codex-session-prompt";
+        let transcript_path = repo.path().join("codex-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(
+            &transcript_path,
+            r#"{"messages":[{"type":"user","content":"Inspect tracked file"},{"type":"assistant","content":"Looking"}]}"#,
+        )
+        .expect("write transcript");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str.clone(),
+            })
+            .to_string();
+            route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_CODEX,
+                CODEX_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let prompt_payload = serde_json::json!({
+                "sessionId": session_id,
+                "transcriptPath": transcript_path_str,
+                "prompt": "Explain tracked.txt:1",
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_CODEX,
+                CODEX_HOOK_USER_PROMPT_SUBMIT,
+                &prompt_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .expect("additionalContext");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                serde_json::Value::String("UserPromptSubmit".to_string())
+            );
+            assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("tracked.txt"));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn route_gemini_before_agent_returns_additional_context_stdout() -> Result<()> {
+        let repo = seed_repo();
+        let session_id = "gemini-session-prompt";
+        let transcript_path = repo.path().join("gemini-transcript.json");
+        let transcript_path_str = transcript_path.to_string_lossy().to_string();
+        std::fs::write(
+            &transcript_path,
+            r#"{"messages":[{"type":"user","content":"Inspect tracked file"},{"type":"assistant","content":"Looking"}]}"#,
+        )
+        .expect("write transcript");
+
+        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+            let session_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str.clone(),
+            })
+            .to_string();
+            route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_GEMINI,
+                GEMINI_HOOK_SESSION_START,
+                &session_payload,
+            )?;
+
+            let prompt_payload = serde_json::json!({
+                "session_id": session_id,
+                "transcript_path": transcript_path_str,
+                "prompt": "Explain tracked.txt#L1",
+            })
+            .to_string();
+            let outcome = route_hook_command_to_lifecycle(
+                repo.path(),
+                AGENT_NAME_GEMINI,
+                GEMINI_HOOK_BEFORE_AGENT,
+                &prompt_payload,
+            )?;
+
+            let stdout = outcome.stdout.expect("stdout");
+            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+            let context = json["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .expect("additionalContext");
+            assert_eq!(
+                json["hookSpecificOutput"]["hookEventName"],
+                serde_json::Value::String("BeforeAgent".to_string())
+            );
+            assert!(context.contains("selectArtefacts"));
+            assert!(context.contains("tracked.txt"));
+            Ok(())
+        })
     }
 }
 

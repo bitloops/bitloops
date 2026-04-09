@@ -181,6 +181,8 @@ Selector rules:
 
 Current limitation: the raw GraphQL slim surface supports `selectArtefacts { summary }`, but the DevQL DSL compiler still supports one explicit terminal stage at a time such as `checkpoints()`, `clones()`, `deps()`, or `tests()`.
 
+When Bitloops-managed hooks are installed for Claude Code, Codex, or Gemini, Bitloops injects a compact DevQL quick-start before supported turns. That guidance uses raw GraphQL examples for `selectArtefacts { summary }`, then points agents at stage `schema`, stage `items(first: ...)`, and `bitloops devql schema`. The hook guidance is instructional only; it does not execute DevQL or attach live query results.
+
 ### DevQL `summary()` stage
 
 In the DevQL DSL, `summary()` is overloaded: it either aggregates **clone detection** results or attaches **dependency edge counts** to each artefact row. Both shapes compile to typed GraphQL; they are not interchangeable.
