@@ -398,6 +398,7 @@ duckdb_path = ".bitloops/stores/events.duckdb"
 struct CurrentEmbeddingRow {
     symbol_fqn: String,
     path: String,
+    representation_kind: String,
     provider: String,
     model: String,
     dimension: i64,
@@ -408,21 +409,22 @@ fn load_current_embedding_rows(sqlite_path: &Path, repo_id: &str) -> Vec<Current
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
     let mut stmt = conn
         .prepare(
-            "SELECT a.symbol_fqn, a.path, e.provider, e.model, e.dimension, e.embedding_input_hash
+            "SELECT a.symbol_fqn, a.path, e.representation_kind, e.provider, e.model, e.dimension, e.embedding_input_hash
              FROM artefacts_current a
              JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
              WHERE a.repo_id = ?1
-             ORDER BY a.path, a.start_line, a.symbol_fqn",
+             ORDER BY a.path, a.start_line, a.symbol_fqn, e.representation_kind",
         )
         .expect("prepare current embeddings query");
     stmt.query_map([repo_id], |row| {
         Ok(CurrentEmbeddingRow {
             symbol_fqn: row.get(0)?,
             path: row.get(1)?,
-            provider: row.get(2)?,
-            model: row.get(3)?,
-            dimension: row.get(4)?,
-            embedding_input_hash: row.get(5)?,
+            representation_kind: row.get(2)?,
+            provider: row.get(3)?,
+            model: row.get(4)?,
+            dimension: row.get(5)?,
+            embedding_input_hash: row.get(6)?,
         })
     })
     .expect("query current embeddings")
@@ -474,8 +476,16 @@ fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
 
 fn hash_by_symbol(rows: &[CurrentEmbeddingRow]) -> BTreeMap<String, String> {
     rows.iter()
+        .filter(|row| is_code_embedding_row(row))
         .map(|row| (row.symbol_fqn.clone(), row.embedding_input_hash.clone()))
         .collect()
+}
+
+fn is_code_embedding_row(row: &CurrentEmbeddingRow) -> bool {
+    matches!(
+        row.representation_kind.as_str(),
+        "code" | "baseline" | "enriched"
+    )
 }
 
 async fn run_direct_ingest_with_env(
@@ -692,14 +702,14 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
     );
 
     let mut unchanged_symbol_count = 0usize;
-    for row in &second_rows {
+    for row in second_rows.iter().filter(|row| is_code_embedding_row(row)) {
         let first_hash = first_hashes
             .get(&row.symbol_fqn)
             .expect("symbol present after profile rename");
         assert_eq!(&row.embedding_input_hash, first_hash);
         unchanged_symbol_count += 1;
     }
-    assert_eq!(unchanged_symbol_count, second_rows.len());
+    assert_eq!(unchanged_symbol_count, first_hashes.len());
     assert_eq!(
         second_hashes
             .get("src/invoice.ts")

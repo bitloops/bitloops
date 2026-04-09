@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_packs::semantic_clones::clear_repo_symbol_embedding_rows;
 use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
@@ -571,7 +572,7 @@ fn build_embedding_job(
             artefact_ids,
             input_hashes,
             representation_kind:
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
         },
     }
 }

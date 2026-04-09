@@ -365,14 +365,20 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     .expect("insert target features");
 
     conn.execute(
-        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'code', ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             "artefact::invoice_pdf",
             repo_id,
             "src/pdf.ts",
             "blob-1",
             "sym::invoice_pdf",
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+                "local",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            )
+            .setup_fingerprint,
             "local",
             "jinaai/jina-embeddings-v2-base-code",
             3,
@@ -382,14 +388,20 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     )
     .expect("insert source embedding");
     conn.execute(
-        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'code', ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             "artefact::invoice_doc",
             repo_id,
             "src/render.ts",
             "blob-2",
             "sym::invoice_doc",
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+                "local",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+            )
+            .setup_fingerprint,
             "local",
             "jinaai/jina-embeddings-v2-base-code",
             3,
@@ -594,6 +606,13 @@ fn insert_clone_candidate_fixture(
     dimension: i64,
     embedding: &str,
 ) {
+    let setup_fingerprint =
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+            provider,
+            model,
+            dimension as usize,
+        )
+        .setup_fingerprint;
     conn.execute(
         "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, content_hash)
          VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function_declaration', ?6, NULL, 1, 12, 0, 120, ?7, '[]', ?8)",
@@ -657,12 +676,13 @@ fn insert_clone_candidate_fixture(
     .expect("insert features");
 
     conn.execute(
-        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
+         VALUES (?1, ?2, ?3, 'code', ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             artefact_id,
             repo_id,
             format!("blob-{symbol_id}"),
+            setup_fingerprint,
             provider,
             model,
             dimension,

@@ -13,9 +13,8 @@ use crate::capability_packs::semantic_clones::extension_descriptor as semantic_c
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-    clear_repo_symbol_embedding_rows, load_pre_stage_artefacts_for_blob,
-    load_pre_stage_dependencies_for_blob, upsert_semantic_feature_rows,
-    upsert_symbol_embedding_rows,
+    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
+    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
 };
 use crate::config::{
     EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig,

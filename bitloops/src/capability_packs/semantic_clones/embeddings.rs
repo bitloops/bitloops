@@ -31,15 +31,25 @@ const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingRepresentationKind {
     #[default]
-    Baseline,
-    Enriched,
+    #[serde(alias = "baseline", alias = "enriched")]
+    Code,
+    Summary,
 }
 
 impl fmt::Display for EmbeddingRepresentationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Baseline => write!(f, "baseline"),
-            Self::Enriched => write!(f, "enriched"),
+            Self::Code => write!(f, "code"),
+            Self::Summary => write!(f, "summary"),
+        }
+    }
+}
+
+impl EmbeddingRepresentationKind {
+    pub const fn storage_values(self) -> &'static [&'static str] {
+        match self {
+            Self::Code => &["code", "baseline", "enriched"],
+            Self::Summary => &["summary"],
         }
     }
 }
@@ -115,6 +125,7 @@ pub struct SymbolEmbeddingRow {
     pub repo_id: String,
     pub blob_sha: String,
     pub representation_kind: EmbeddingRepresentationKind,
+    pub setup_fingerprint: String,
     pub provider: String,
     pub model: String,
     pub dimension: usize,
@@ -215,59 +226,68 @@ pub fn build_symbol_embedding_inputs(
 }
 
 pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
-    let body = truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS);
-    let signature = input
-        .signature
-        .as_deref()
-        .map(normalize_whitespace)
-        .unwrap_or_default();
-    let dependencies = render_dependency_context(&input.dependency_signals);
-
-    // Keep the clone semantic basis focused on symbol behavior rather than location.
-    format!(
-        "kind: {kind}\n\
-language: {language}\n\
-language_kind: {language_kind}\n\
-name: {name}\n\
-signature: {signature}\n\
-summary: {summary}\n\
-dependencies: {dependencies}\n\
-body:\n{body}",
-        kind = input.canonical_kind,
-        language = input.language,
-        language_kind = input.language_kind,
-        name = input.name,
-        signature = signature,
-        summary = normalize_whitespace(&input.summary),
-        dependencies = dependencies,
-        body = body,
-    )
+    match input.representation_kind {
+        EmbeddingRepresentationKind::Code => build_code_embedding_text(input),
+        EmbeddingRepresentationKind::Summary => build_summary_embedding_text(input),
+    }
 }
 
 pub fn build_symbol_embedding_input_hash(
     input: &SymbolEmbeddingInput,
     provider: &dyn EmbeddingProvider,
 ) -> String {
-    sha256_hex(
-        &json!({
-            "fingerprint_version": EMBEDDING_FINGERPRINT_VERSION,
-            "provider": provider.cache_key(),
-            "artefact_id": &input.artefact_id,
-            "repo_id": &input.repo_id,
-            "blob_sha": &input.blob_sha,
-            "representation_kind": input.representation_kind,
-            "language": input.language.to_ascii_lowercase(),
-            "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
-            "language_kind": input.language_kind.to_ascii_lowercase(),
-            "name": &input.name,
-            "signature": input.signature.as_deref().map(normalize_whitespace),
-            "summary": normalize_whitespace(&input.summary),
-            "dependency_signals": &input.dependency_signals,
-            "body": truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS),
-            "content_hash": &input.content_hash,
-        })
-        .to_string(),
-    )
+    let mut value = json!({
+        "fingerprint_version": EMBEDDING_FINGERPRINT_VERSION,
+        "provider": embedding_provider_hash_identity(provider),
+        "artefact_id": &input.artefact_id,
+        "repo_id": &input.repo_id,
+        "blob_sha": &input.blob_sha,
+        "representation_kind": input.representation_kind,
+        "language": input.language.to_ascii_lowercase(),
+        "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
+        "language_kind": input.language_kind.to_ascii_lowercase(),
+        "name": &input.name,
+        "summary": normalize_whitespace(&input.summary),
+        "content_hash": &input.content_hash,
+    });
+    if let Some(map) = value.as_object_mut() {
+        match input.representation_kind {
+            EmbeddingRepresentationKind::Code => {
+                map.insert(
+                    "signature".to_string(),
+                    json!(input.signature.as_deref().map(normalize_whitespace)),
+                );
+                map.insert(
+                    "dependency_signals".to_string(),
+                    json!(&input.dependency_signals),
+                );
+                map.insert(
+                    "body".to_string(),
+                    json!(truncate_chars(
+                        normalize_whitespace(&input.body),
+                        MAX_EMBEDDING_BODY_CHARS
+                    )),
+                );
+            }
+            EmbeddingRepresentationKind::Summary => {}
+        }
+    }
+    sha256_hex(&value.to_string())
+}
+
+fn embedding_provider_hash_identity(provider: &dyn EmbeddingProvider) -> serde_json::Value {
+    match provider.output_dimension() {
+        Some(dimension) => json!({
+            "provider": provider.provider_name(),
+            "model": provider.model_name(),
+            "dimension": dimension,
+        }),
+        None => json!({
+            "provider": provider.provider_name(),
+            "model": provider.model_name(),
+            "cache_key": provider.cache_key(),
+        }),
+    }
 }
 
 pub fn symbol_embeddings_require_reindex(
@@ -292,6 +312,7 @@ pub fn build_symbol_embedding_row(
     input: &SymbolEmbeddingInput,
     provider: &dyn EmbeddingProvider,
 ) -> Result<SymbolEmbeddingRow> {
+    let setup = resolve_embedding_setup(provider)?;
     let embedding = provider.embed(
         &build_symbol_embedding_text(input),
         crate::adapters::model_providers::embeddings::EmbeddingInputType::Document,
@@ -305,12 +326,56 @@ pub fn build_symbol_embedding_row(
         repo_id: input.repo_id.clone(),
         blob_sha: input.blob_sha.clone(),
         representation_kind: input.representation_kind,
-        provider: provider.provider_name().to_string(),
-        model: provider.model_name().to_string(),
-        dimension: embedding.len(),
+        setup_fingerprint: setup.setup_fingerprint.clone(),
+        provider: setup.provider,
+        model: setup.model,
+        dimension: setup.dimension,
         embedding_input_hash: build_symbol_embedding_input_hash(input, provider),
         embedding,
     })
+}
+
+fn build_code_embedding_text(input: &SymbolEmbeddingInput) -> String {
+    let body = truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS);
+    let signature = input
+        .signature
+        .as_deref()
+        .map(normalize_whitespace)
+        .unwrap_or_default();
+    let dependencies = render_dependency_context(&input.dependency_signals);
+
+    // Keep the code representation anchored in implementation details plus the best summary.
+    format!(
+        "kind: {kind}\n\
+language: {language}\n\
+language_kind: {language_kind}\n\
+name: {name}\n\
+signature: {signature}\n\
+summary: {summary}\n\
+dependencies: {dependencies}\n\
+body:\n{body}",
+        kind = input.canonical_kind,
+        language = input.language,
+        language_kind = input.language_kind,
+        name = input.name,
+        signature = signature,
+        summary = normalize_whitespace(&input.summary),
+        dependencies = dependencies,
+        body = body,
+    )
+}
+
+fn build_summary_embedding_text(input: &SymbolEmbeddingInput) -> String {
+    format!(
+        "kind: {kind}\n\
+language: {language}\n\
+name: {name}\n\
+summary: {summary}",
+        kind = input.canonical_kind,
+        language = input.language,
+        name = input.name,
+        summary = normalize_whitespace(&input.summary),
+    )
 }
 
 fn truncate_chars(input: String, max_chars: usize) -> String {
@@ -335,13 +400,11 @@ fn sha256_hex(input: &str) -> String {
 }
 
 fn build_embedding_setup_fingerprint(provider: &str, model: &str, dimension: usize) -> String {
-    sha256_hex(
-        &json!({
-            "provider": provider,
-            "model": model,
-            "dimension": dimension,
-        })
-        .to_string(),
+    format!(
+        "provider={provider}|model={model}|dimension={dimension}",
+        provider = provider,
+        model = model,
+        dimension = dimension,
     )
 }
 
@@ -406,7 +469,7 @@ mod tests {
             artefact_id: "artefact-1".to_string(),
             repo_id: "repo-1".to_string(),
             blob_sha: "blob-1".to_string(),
-            representation_kind: EmbeddingRepresentationKind::Baseline,
+            representation_kind: EmbeddingRepresentationKind::Code,
             path: "src/services/user.ts".to_string(),
             language: "typescript".to_string(),
             canonical_kind: "function".to_string(),
@@ -476,16 +539,13 @@ mod tests {
             ("import-1".to_string(), "Import statement.".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(
-            &inputs,
-            EmbeddingRepresentationKind::Baseline,
-            &summaries,
-        );
+        let rows =
+            build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
         assert_eq!(
             rows[0].representation_kind,
-            EmbeddingRepresentationKind::Baseline
+            EmbeddingRepresentationKind::Code
         );
     }
 
@@ -539,11 +599,8 @@ mod tests {
             ("function-2".to_string(), "   ".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(
-            &inputs,
-            EmbeddingRepresentationKind::Baseline,
-            &summaries,
-        );
+        let rows =
+            build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
     }
@@ -617,12 +674,51 @@ mod tests {
         let provider = MockEmbeddingProvider;
         let base = sample_input();
         let mut changed = base.clone();
-        changed.representation_kind = EmbeddingRepresentationKind::Enriched;
+        changed.representation_kind = EmbeddingRepresentationKind::Summary;
 
         assert_ne!(
             build_symbol_embedding_input_hash(&base, &provider),
             build_symbol_embedding_input_hash(&changed, &provider)
         );
+    }
+
+    #[test]
+    fn symbol_embedding_hash_ignores_profile_rename_when_runtime_setup_matches() {
+        let input = sample_input();
+        let first = MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-a::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        };
+        let second = MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-b::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        };
+
+        assert_eq!(
+            build_symbol_embedding_input_hash(&input, &first),
+            build_symbol_embedding_input_hash(&input, &second)
+        );
+    }
+
+    #[test]
+    fn summary_embedding_text_omits_body_and_dependencies() {
+        let mut input = sample_input();
+        input.representation_kind = EmbeddingRepresentationKind::Summary;
+
+        let text = build_symbol_embedding_text(&input);
+        assert!(text.contains("summary: Function normalize email."));
+        assert!(!text.contains("dependencies:"));
+        assert!(!text.contains("body:"));
+        assert!(!text.contains("signature:"));
+    }
+
+    #[test]
+    fn legacy_representation_aliases_map_to_code() {
+        let baseline = serde_json::from_str::<EmbeddingRepresentationKind>("\"baseline\"")
+            .expect("baseline alias");
+        let enriched = serde_json::from_str::<EmbeddingRepresentationKind>("\"enriched\"")
+            .expect("enriched alias");
+
+        assert_eq!(baseline, EmbeddingRepresentationKind::Code);
+        assert_eq!(enriched, EmbeddingRepresentationKind::Code);
     }
 
     #[test]

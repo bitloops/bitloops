@@ -45,6 +45,7 @@ pub(crate) async fn upsert_symbol_embedding_rows(
     }
 
     ensure_semantic_embeddings_schema(relational).await?;
+    let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
 
     let artefact_ids = inputs
         .iter()
@@ -66,6 +67,7 @@ pub(crate) async fn upsert_symbol_embedding_rows(
             relational,
             &input.artefact_id,
             input.representation_kind,
+            &setup.setup_fingerprint,
         )
         .await?;
         if !embeddings::symbol_embeddings_require_reindex(&state, &next_input_hash) {
@@ -124,8 +126,8 @@ pub(crate) async fn upsert_current_symbol_embedding_rows(
         relational,
         &first.repo_id,
         path,
+        content_id,
         representation_kind,
-        &setup,
         &embedding_inputs
             .iter()
             .map(|input| input.artefact_id.clone())
@@ -146,6 +148,7 @@ pub(crate) async fn upsert_current_symbol_embedding_rows(
             relational,
             &input.artefact_id,
             input.representation_kind,
+            &setup.setup_fingerprint,
         )
         .await?;
         if !embeddings::symbol_embeddings_require_reindex(&state, &next_input_hash) {
@@ -177,6 +180,7 @@ pub(crate) async fn ensure_semantic_embeddings_schema(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn clear_repo_symbol_embedding_rows(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -191,6 +195,29 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
             format!(
                 "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}'",
                 esc_pg(repo_id),
+            ),
+        ])
+        .await
+}
+
+pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let predicate = representation_kind_sql_predicate("representation_kind", representation_kind);
+    relational
+        .exec_batch_transactional(&[
+            format!(
+                "DELETE FROM symbol_embeddings WHERE repo_id = '{repo_id}' AND {predicate}",
+                repo_id = esc_pg(repo_id),
+                predicate = predicate,
+            ),
+            format!(
+                "DELETE FROM symbol_embeddings_current WHERE repo_id = '{repo_id}' AND {predicate}",
+                repo_id = esc_pg(repo_id),
+                predicate = predicate,
             ),
         ])
         .await
@@ -223,13 +250,32 @@ pub(crate) async fn clear_repo_active_embedding_setup(
     relational.exec(&sql).await
 }
 
+pub(crate) async fn clear_repo_active_embedding_setup_for_representation(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> Result<()> {
+    ensure_semantic_embeddings_schema(relational).await?;
+    let sql = format!(
+        "DELETE FROM semantic_clone_embedding_setup_state WHERE repo_id = '{repo_id}' AND {representation_predicate}",
+        repo_id = esc_pg(repo_id),
+        representation_predicate =
+            representation_kind_sql_predicate("representation_kind", representation_kind),
+    );
+    relational.exec(&sql).await
+}
+
 pub(crate) async fn load_active_embedding_setup(
     relational: &RelationalStorage,
     repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
 ) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
     ensure_semantic_embeddings_schema(relational).await?;
     let rows = relational
-        .query_rows(&build_active_embedding_setup_lookup_sql(repo_id))
+        .query_rows(&build_active_embedding_setup_lookup_sql(
+            repo_id,
+            representation_kind,
+        ))
         .await?;
     Ok(parse_active_embedding_state_rows(&rows).into_iter().next())
 }
@@ -240,6 +286,7 @@ pub(crate) async fn persist_active_embedding_setup(
     active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> Result<()> {
     ensure_semantic_embeddings_schema(relational).await?;
+    persist_embedding_setup(relational, &active_state.setup).await?;
     let sql = build_active_embedding_setup_persist_sql(repo_id, active_state);
     relational.exec(&sql).await
 }
@@ -257,8 +304,8 @@ pub(crate) async fn determine_repo_embedding_sync_action(
         setup,
     )
     .await?;
-    if let Some(active) = load_active_embedding_setup(relational, repo_id).await?
-        && active.representation_kind == representation_kind
+    if let Some(active) =
+        load_active_embedding_setup(relational, repo_id, representation_kind).await?
         && active.setup == *setup
     {
         return Ok(if current_coverage_complete {
@@ -271,7 +318,7 @@ pub(crate) async fn determine_repo_embedding_sync_action(
     let current_states =
         load_current_repo_embedding_states(relational, repo_id, Some(representation_kind)).await?;
     Ok(
-        if current_states.len() == 1 && current_states[0].setup == *setup {
+        if current_states.iter().any(|state| state.setup == *setup) {
             if current_coverage_complete {
                 RepoEmbeddingSyncAction::AdoptExisting
             } else {
@@ -318,11 +365,14 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
         &embeddings::ActiveEmbeddingRepresentationState::new(representation_kind, setup),
     )
     .await?;
-    let clone_build =
+    let clone_build = if representation_kind == embeddings::EmbeddingRepresentationKind::Code {
         crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
             relational, repo_id,
         )
-        .await?;
+        .await?
+    } else {
+        Default::default()
+    };
 
     Ok(CurrentRepoEmbeddingRefreshResult {
         semantic_feature_stats,
@@ -362,12 +412,14 @@ async fn load_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
 ) -> Result<embeddings::SymbolEmbeddingIndexState> {
     let rows = relational
         .query_rows(&build_symbol_embedding_index_state_sql(
             artefact_id,
             "symbol_embeddings",
             representation_kind,
+            setup_fingerprint,
         ))
         .await?;
     Ok(parse_symbol_embedding_index_state_rows(&rows))
@@ -377,12 +429,14 @@ async fn load_current_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
 ) -> Result<embeddings::SymbolEmbeddingIndexState> {
     let rows = relational
         .query_rows(&build_symbol_embedding_index_state_sql(
             artefact_id,
             "symbol_embeddings_current",
             representation_kind,
+            setup_fingerprint,
         ))
         .await?;
     Ok(parse_symbol_embedding_index_state_rows(&rows))
@@ -421,7 +475,7 @@ async fn load_semantic_summary_map_from_table(
     relational: &RelationalStorage,
     artefact_ids: &[String],
     table: &str,
-    representation_kind: embeddings::EmbeddingRepresentationKind,
+    _representation_kind: embeddings::EmbeddingRepresentationKind,
 ) -> Result<HashMap<String, String>> {
     if artefact_ids.is_empty() {
         return Ok(HashMap::new());
@@ -435,7 +489,7 @@ async fn load_semantic_summary_map_from_table(
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
             continue;
         };
-        if let Some(summary) = resolve_embedding_summary(&row, representation_kind) {
+        if let Some(summary) = resolve_embedding_summary(&row) {
             out.insert(artefact_id.to_string(), summary);
         }
     }
@@ -446,6 +500,16 @@ async fn persist_symbol_embedding_row(
     relational: &RelationalStorage,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
+    persist_embedding_setup(
+        relational,
+        &embeddings::EmbeddingSetup {
+            provider: row.provider.clone(),
+            model: row.model.clone(),
+            dimension: row.dimension,
+            setup_fingerprint: row.setup_fingerprint.clone(),
+        },
+    )
+    .await?;
     let sql = build_sqlite_symbol_embedding_persist_sql(row)?;
     relational.exec(&sql).await
 }
@@ -458,6 +522,16 @@ async fn persist_current_symbol_embedding_row(
     content_id: &str,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
+    persist_embedding_setup(
+        relational,
+        &embeddings::EmbeddingSetup {
+            provider: row.provider.clone(),
+            model: row.model.clone(),
+            dimension: row.dimension,
+            setup_fingerprint: row.setup_fingerprint.clone(),
+        },
+    )
+    .await?;
     let sql = build_current_symbol_embedding_persist_sql(input, path, content_id, row)?;
     relational.exec(&sql).await
 }
@@ -466,14 +540,17 @@ fn build_symbol_embedding_index_state_sql(
     artefact_id: &str,
     table: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
 ) -> String {
     format!(
         "SELECT embedding_input_hash AS embedding_hash \
 FROM {table} \
-WHERE artefact_id = '{artefact_id}' AND representation_kind = '{representation_kind}'",
+WHERE artefact_id = '{artefact_id}' AND representation_kind = '{representation_kind}' \
+  AND setup_fingerprint = '{setup_fingerprint}'",
         table = table,
         artefact_id = esc_pg(artefact_id),
         representation_kind = esc_pg(&representation_kind.to_string()),
+        setup_fingerprint = esc_pg(setup_fingerprint),
     )
 }
 
@@ -481,8 +558,8 @@ async fn delete_stale_current_symbol_embedding_rows_for_path(
     relational: &RelationalStorage,
     repo_id: &str,
     path: &str,
+    content_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
-    setup: &embeddings::EmbeddingSetup,
     keep_artefact_ids: &[String],
 ) -> Result<()> {
     let extra_delete_clause = if keep_artefact_ids.is_empty() {
@@ -495,25 +572,29 @@ async fn delete_stale_current_symbol_embedding_rows_for_path(
     };
     let sql = format!(
         "DELETE FROM symbol_embeddings_current \
-WHERE repo_id = '{repo_id}' AND path = '{path}' AND representation_kind = '{representation_kind}' \
-  AND (provider <> '{provider}' OR model <> '{model}' OR dimension <> {dimension}{extra_delete_clause})",
+WHERE repo_id = '{repo_id}' AND path = '{path}' AND {representation_predicate} \
+  AND (content_id <> '{content_id}'{extra_delete_clause})",
         repo_id = esc_pg(repo_id),
         path = esc_pg(path),
-        representation_kind = esc_pg(&representation_kind.to_string()),
-        provider = esc_pg(&setup.provider),
-        model = esc_pg(&setup.model),
-        dimension = setup.dimension,
+        content_id = esc_pg(content_id),
+        representation_predicate =
+            representation_kind_sql_predicate("representation_kind", representation_kind),
         extra_delete_clause = extra_delete_clause,
     );
     relational.exec(&sql).await
 }
 
-fn build_active_embedding_setup_lookup_sql(repo_id: &str) -> String {
+fn build_active_embedding_setup_lookup_sql(
+    repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> String {
     format!(
-        "SELECT representation_kind, provider, model, dimension \
+        "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
 FROM semantic_clone_embedding_setup_state \
-WHERE repo_id = '{}'",
-        esc_pg(repo_id),
+WHERE repo_id = '{repo_id}' AND {representation_predicate}",
+        repo_id = esc_pg(repo_id),
+        representation_predicate =
+            representation_kind_sql_predicate("representation_kind", representation_kind),
     )
 }
 
@@ -524,25 +605,25 @@ fn build_current_repo_embedding_states_sql(
     let representation_filter = representation_kind
         .map(|kind| {
             format!(
-                "AND e.representation_kind = '{}'",
-                esc_pg(&kind.to_string())
+                "AND {}",
+                representation_kind_sql_predicate("e.representation_kind", kind)
             )
         })
         .unwrap_or_default();
     format!(
-        "SELECT representation_kind, provider, model, dimension \
+        "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
 FROM ( \
-    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension \
+    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
     FROM artefacts_current a \
     JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
     WHERE a.repo_id = '{repo_id}' {representation_filter} \
     UNION \
-    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension \
+    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
     FROM artefacts_current a \
     JOIN symbol_embeddings e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
     WHERE a.repo_id = '{repo_id}' {representation_filter} \
 ) setups \
-ORDER BY representation_kind, provider, model, dimension",
+ORDER BY representation_kind, provider, model, dimension, setup_fingerprint",
         repo_id = esc_pg(repo_id),
         representation_filter = representation_filter,
     )
@@ -564,12 +645,13 @@ fn build_current_repo_semantic_clone_coverage_sql(
              JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
              WHERE a.repo_id = '{repo_id}' \
                AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND e.representation_kind = '{representation_kind}' \
+               AND {representation_predicate} \
                AND e.provider = '{provider}' \
                AND e.model = '{model}' \
                AND e.dimension = {dimension}) AS fully_indexed_current_artefacts",
         repo_id = esc_pg(repo_id),
-        representation_kind = esc_pg(&representation_kind.to_string()),
+        representation_predicate =
+            representation_kind_sql_predicate("e.representation_kind", representation_kind),
         provider = esc_pg(&setup.provider),
         model = esc_pg(&setup.model),
         dimension = setup.dimension,
@@ -584,7 +666,7 @@ fn build_active_embedding_setup_persist_sql(
     format!(
         "INSERT INTO semantic_clone_embedding_setup_state (repo_id, representation_kind, provider, model, dimension, setup_fingerprint) \
 VALUES ('{repo_id}', '{representation_kind}', '{provider}', '{model}', {dimension}, '{setup_fingerprint}') \
-ON CONFLICT (repo_id) DO UPDATE SET representation_kind = excluded.representation_kind, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, setup_fingerprint = excluded.setup_fingerprint, updated_at = CURRENT_TIMESTAMP",
+ON CONFLICT (repo_id, representation_kind) DO UPDATE SET provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, setup_fingerprint = excluded.setup_fingerprint, updated_at = CURRENT_TIMESTAMP",
         repo_id = esc_pg(repo_id),
         representation_kind = esc_pg(&active_state.representation_kind.to_string()),
         provider = esc_pg(&setup.provider),
@@ -634,22 +716,39 @@ fn parse_active_embedding_state_rows(
         else {
             continue;
         };
+        let setup_fingerprint = row
+            .get("setup_fingerprint")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                embeddings::EmbeddingSetup::new(provider, model, dimension).setup_fingerprint
+            });
         states.insert((
             representation_kind,
             provider.to_string(),
             model.to_string(),
             dimension,
+            setup_fingerprint,
         ));
     }
 
     states
         .into_iter()
-        .map(|(representation_kind, provider, model, dimension)| {
-            embeddings::ActiveEmbeddingRepresentationState::new(
-                representation_kind,
-                embeddings::EmbeddingSetup::new(provider, model, dimension),
-            )
-        })
+        .map(
+            |(representation_kind, provider, model, dimension, setup_fingerprint)| {
+                embeddings::ActiveEmbeddingRepresentationState::new(
+                    representation_kind,
+                    embeddings::EmbeddingSetup {
+                        provider,
+                        model,
+                        dimension,
+                        setup_fingerprint,
+                    },
+                )
+            },
+        )
         .collect()
 }
 
@@ -665,8 +764,8 @@ fn value_as_positive_usize(value: &Value) -> Option<usize> {
 
 fn parse_representation_kind(raw: &str) -> Option<embeddings::EmbeddingRepresentationKind> {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "baseline" => Some(embeddings::EmbeddingRepresentationKind::Baseline),
-        "enriched" => Some(embeddings::EmbeddingRepresentationKind::Enriched),
+        "code" | "baseline" | "enriched" => Some(embeddings::EmbeddingRepresentationKind::Code),
+        "summary" => Some(embeddings::EmbeddingRepresentationKind::Summary),
         _ => None,
     }
 }
@@ -681,10 +780,7 @@ WHERE artefact_id IN ({})",
     )
 }
 
-fn resolve_embedding_summary(
-    row: &Value,
-    representation_kind: embeddings::EmbeddingRepresentationKind,
-) -> Option<String> {
+fn resolve_embedding_summary(row: &Value) -> Option<String> {
     let template_summary = row
         .get("template_summary")
         .and_then(Value::as_str)
@@ -711,14 +807,18 @@ fn resolve_embedding_summary(
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty());
 
-    match representation_kind {
-        embeddings::EmbeddingRepresentationKind::Baseline => Some(
-            semantic::synthesize_deterministic_summary(template_summary, docstring_summary),
-        ),
-        embeddings::EmbeddingRepresentationKind::Enriched if has_llm_enrichment => {
-            canonical_summary.map(str::to_string)
-        }
-        embeddings::EmbeddingRepresentationKind::Enriched => None,
+    if has_llm_enrichment {
+        canonical_summary.map(str::to_string).or_else(|| {
+            Some(semantic::synthesize_deterministic_summary(
+                template_summary,
+                docstring_summary,
+            ))
+        })
+    } else {
+        Some(semantic::synthesize_deterministic_summary(
+            template_summary,
+            docstring_summary,
+        ))
     }
 }
 
@@ -742,13 +842,14 @@ fn build_postgres_symbol_embedding_persist_sql(
 ) -> Result<String> {
     let embedding_expr = sql_vector_string(&row.embedding)?;
     Ok(format!(
-        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, provider, model, dimension, embedding_input_hash, embedding) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{representation_kind}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', {embedding}) \
-ON CONFLICT (artefact_id, representation_kind) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension, embedding_input_hash = EXCLUDED.embedding_input_hash, embedding = EXCLUDED.embedding, generated_at = now()",
+        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', {embedding}) \
+ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension, embedding_input_hash = EXCLUDED.embedding_input_hash, embedding = EXCLUDED.embedding, generated_at = now()",
         artefact_id = esc_pg(&row.artefact_id),
         repo_id = esc_pg(&row.repo_id),
         blob_sha = esc_pg(&row.blob_sha),
         representation_kind = esc_pg(&row.representation_kind.to_string()),
+        setup_fingerprint = esc_pg(&row.setup_fingerprint),
         provider = esc_pg(&row.provider),
         model = esc_pg(&row.model),
         dimension = row.dimension,
@@ -762,13 +863,14 @@ fn build_sqlite_symbol_embedding_persist_sql(
 ) -> Result<String> {
     let embedding_json = sql_json_string(&row.embedding)?;
     Ok(format!(
-        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, provider, model, dimension, embedding_input_hash, embedding) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{representation_kind}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', '{embedding}') \
-ON CONFLICT (artefact_id, representation_kind) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = excluded.blob_sha, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, embedding_input_hash = excluded.embedding_input_hash, embedding = excluded.embedding, generated_at = CURRENT_TIMESTAMP",
+        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', '{embedding}') \
+ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = excluded.blob_sha, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, embedding_input_hash = excluded.embedding_input_hash, embedding = excluded.embedding, generated_at = CURRENT_TIMESTAMP",
         artefact_id = esc_pg(&row.artefact_id),
         repo_id = esc_pg(&row.repo_id),
         blob_sha = esc_pg(&row.blob_sha),
         representation_kind = esc_pg(&row.representation_kind.to_string()),
+        setup_fingerprint = esc_pg(&row.setup_fingerprint),
         provider = esc_pg(&row.provider),
         model = esc_pg(&row.model),
         dimension = row.dimension,
@@ -791,21 +893,56 @@ fn build_current_symbol_embedding_persist_sql(
         .map(|value| format!("'{}'", esc_pg(value)))
         .unwrap_or_else(|| "NULL".to_string());
     Ok(format!(
-        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, representation_kind, provider, model, dimension, embedding_input_hash, embedding) \
-VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{representation_kind}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', '{embedding}') \
-ON CONFLICT (artefact_id, representation_kind) DO UPDATE SET repo_id = excluded.repo_id, path = excluded.path, content_id = excluded.content_id, symbol_id = excluded.symbol_id, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, embedding_input_hash = excluded.embedding_input_hash, embedding = excluded.embedding, generated_at = CURRENT_TIMESTAMP",
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding) \
+VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', '{embedding}') \
+ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET repo_id = excluded.repo_id, path = excluded.path, content_id = excluded.content_id, symbol_id = excluded.symbol_id, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, embedding_input_hash = excluded.embedding_input_hash, embedding = excluded.embedding, generated_at = CURRENT_TIMESTAMP",
         artefact_id = esc_pg(&row.artefact_id),
         repo_id = esc_pg(&row.repo_id),
         path = esc_pg(path),
         content_id = esc_pg(content_id),
         symbol_id = symbol_id_sql,
         representation_kind = esc_pg(&row.representation_kind.to_string()),
+        setup_fingerprint = esc_pg(&row.setup_fingerprint),
         provider = esc_pg(&row.provider),
         model = esc_pg(&row.model),
         dimension = row.dimension,
         embedding_input_hash = esc_pg(&row.embedding_input_hash),
         embedding = embedding_json,
     ))
+}
+
+async fn persist_embedding_setup(
+    relational: &RelationalStorage,
+    setup: &embeddings::EmbeddingSetup,
+) -> Result<()> {
+    relational
+        .exec(&build_embedding_setup_persist_sql(setup))
+        .await
+}
+
+fn build_embedding_setup_persist_sql(setup: &embeddings::EmbeddingSetup) -> String {
+    format!(
+        "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension) \
+VALUES ('{setup_fingerprint}', '{provider}', '{model}', {dimension}) \
+ON CONFLICT (setup_fingerprint) DO UPDATE SET provider = excluded.provider, model = excluded.model, dimension = excluded.dimension",
+        setup_fingerprint = esc_pg(&setup.setup_fingerprint),
+        provider = esc_pg(&setup.provider),
+        model = esc_pg(&setup.model),
+        dimension = setup.dimension,
+    )
+}
+
+fn representation_kind_sql_predicate(
+    column: &str,
+    kind: embeddings::EmbeddingRepresentationKind,
+) -> String {
+    let values = kind
+        .storage_values()
+        .iter()
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{column} IN ({values})")
 }
 
 #[cfg(test)]
