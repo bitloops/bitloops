@@ -470,6 +470,85 @@ exclude = ["docs/**"]
 }
 
 #[tokio::test]
+async fn full_sync_removes_current_rows_for_plain_folder_exclusion() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::create_dir_all(repo.path().join("docs")).expect("create docs dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet() -> &'static str {\n    \"hi\"\n}\n",
+    )
+    .expect("write rust file");
+    fs::write(repo.path().join("docs/readme.md"), "# docs\n").expect("write docs file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[scope]
+exclude = ["docs"]
+"#,
+    )
+    .expect("write local exclusions");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after exclusions");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+
+    assert!(
+        result.success,
+        "sync should succeed after exclusions update"
+    );
+    assert!(
+        current_paths.iter().any(|path| path == "src/lib.rs"),
+        "expected src/lib.rs to remain indexed after exclusions update"
+    );
+    assert!(
+        !current_paths.iter().any(|path| path == "docs/readme.md"),
+        "expected excluded docs/readme.md to be removed from current state"
+    );
+}
+
+#[tokio::test]
 async fn full_sync_fails_fast_when_exclude_from_file_is_missing() {
     let repo = seed_full_sync_repo();
     fs::write(
