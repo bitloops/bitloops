@@ -52,6 +52,7 @@ mod commands_refresh;
 mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+mod plain_text;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
 mod types;
@@ -82,6 +83,10 @@ pub use self::commands_sync::{
     run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
+pub(crate) use self::plain_text::{
+    PLAIN_TEXT_LANGUAGE_ID, indexing_language_for_path, plain_text_content_is_allowed,
+    should_skip_plain_text_fallback_path,
+};
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
@@ -397,91 +402,6 @@ fn resolve_language_id_for_file_path(file_path: &str) -> Option<&'static str> {
             .ok()
             .map(|resolved| resolved.profile.language_id)
     })
-}
-
-pub(crate) const PLAIN_TEXT_LANGUAGE_ID: &str = "plain_text";
-const PLAIN_TEXT_MAX_BYTES: usize = 1024 * 1024;
-
-pub(crate) fn indexing_language_for_path(path: &str) -> String {
-    resolve_language_id_for_file_path(path)
-        .unwrap_or(PLAIN_TEXT_LANGUAGE_ID)
-        .to_string()
-}
-
-pub(crate) fn plain_text_content_is_allowed(content: &str) -> bool {
-    if content.len() > PLAIN_TEXT_MAX_BYTES {
-        return false;
-    }
-    if content.contains('\0') {
-        return false;
-    }
-    // `git cat-file` currently uses lossy UTF-8 decoding; reject replacement-char output so
-    // plain-text fallback stays UTF-8 only.
-    if content.contains('\u{FFFD}') {
-        return false;
-    }
-    true
-}
-
-pub(crate) fn should_skip_plain_text_fallback_path(path: &str) -> bool {
-    let file_name = Path::new(path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase);
-    if let Some(file_name) = file_name {
-        if file_name.ends_with(".sqlite-wal")
-            || file_name.ends_with(".sqlite-shm")
-            || file_name.ends_with(".db-wal")
-            || file_name.ends_with(".db-shm")
-        {
-            return true;
-        }
-    }
-
-    let Some(extension) = Path::new(path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase)
-    else {
-        return false;
-    };
-
-    matches!(
-        extension.as_str(),
-        "sqlite"
-            | "sqlite3"
-            | "db"
-            | "wal"
-            | "shm"
-            | "lock"
-            | "sqlite-wal"
-            | "sqlite-shm"
-            | "db-wal"
-            | "db-shm"
-            | "duckdb"
-            | "bin"
-            | "exe"
-            | "dll"
-            | "dylib"
-            | "so"
-            | "a"
-            | "o"
-            | "class"
-            | "jar"
-            | "png"
-            | "jpg"
-            | "jpeg"
-            | "gif"
-            | "ico"
-            | "pdf"
-            | "zip"
-            | "gz"
-            | "tar"
-            | "tgz"
-            | "bz2"
-            | "xz"
-            | "7z"
-    )
 }
 
 #[derive(Debug, Clone)]
