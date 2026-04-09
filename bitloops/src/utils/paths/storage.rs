@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::utils::platform_dirs::bitloops_state_dir;
-#[cfg(test)]
-use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir, explicit_test_state_dir};
 #[cfg(not(test))]
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
+#[cfg(test)]
+use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir, explicit_test_state_dir};
 use sha2::{Digest, Sha256};
 
 use super::constants::{

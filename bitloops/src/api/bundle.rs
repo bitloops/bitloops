@@ -118,7 +118,9 @@ fn read_local_bundle_version(bundle_dir: &Path) -> Result<Option<String>, Bundle
     }
 }
 
-async fn fetch_manifest_for_state(state: &DashboardState) -> Result<BundleVersionsManifest, BundleError> {
+async fn fetch_manifest_for_state(
+    state: &DashboardState,
+) -> Result<BundleVersionsManifest, BundleError> {
     let manifest_url = manifest_url_for_state(state)?;
     let body = download_text(&manifest_url)
         .await

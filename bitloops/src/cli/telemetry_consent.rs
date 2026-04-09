@@ -254,7 +254,10 @@ fn test_assume_daemon_running_override() -> Option<bool> {
 #[cfg(test)]
 pub(crate) fn with_test_tty_override<T>(value: bool, f: impl FnOnce() -> T) -> T {
     TEST_TTY_OVERRIDE.with(|cell| {
-        assert!(cell.borrow().is_none(), "test tty override already installed");
+        assert!(
+            cell.borrow().is_none(),
+            "test tty override already installed"
+        );
         *cell.borrow_mut() = Some(value);
     });
     let result = f();

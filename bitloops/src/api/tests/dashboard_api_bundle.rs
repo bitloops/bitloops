@@ -781,12 +781,8 @@ async fn api_check_bundle_version_returns_up_to_date() {
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
@@ -812,12 +808,8 @@ async fn api_check_bundle_version_returns_update_available() {
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
@@ -894,12 +886,8 @@ async fn api_fetch_bundle_returns_checksum_mismatch() {
     let cdn = setup_local_bundle_cdn(&archive, &wrong_checksum, "2.1.0");
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) =
@@ -919,12 +907,8 @@ async fn api_fetch_bundle_returns_no_compatible_version() {
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, Some(&archive), Some(&checksum));
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) =
@@ -942,12 +926,8 @@ async fn api_fetch_bundle_returns_bundle_download_failed() {
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, None, None);
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) =
@@ -979,12 +959,8 @@ async fn api_fetch_bundle_returns_bundle_install_failed() {
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, Some(&archive), Some(&checksum));
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) =
@@ -1046,12 +1022,8 @@ async fn api_fetch_bundle_returns_internal_on_manifest_parse_failure() {
         .expect("write invalid manifest");
     let base_url = format!("file://{}/", cdn.path().display());
     let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir,
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
     );
 
     let (status, payload) =

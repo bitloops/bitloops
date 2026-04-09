@@ -166,11 +166,9 @@ async fn run_with_io_async_for_project_root(
         )
         .await?;
     } else if let Some(choice) = telemetry_choice {
-        let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
-            project_root,
-            Some(choice),
-        )
-        .await?;
+        let persisted =
+            telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, Some(choice))
+                .await?;
         if persisted.needs_prompt {
             bail!("failed to persist telemetry consent");
         }
