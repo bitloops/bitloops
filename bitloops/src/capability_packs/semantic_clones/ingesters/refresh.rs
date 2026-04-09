@@ -26,7 +26,8 @@ use super::super::types::{
 };
 use crate::capability_packs::semantic_clones::{
     RepoEmbeddingSyncAction, clear_current_symbol_embedding_rows_for_path,
-    clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
+    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
     determine_repo_embedding_sync_action, load_semantic_summary_snapshot,
     persist_active_embedding_setup, refresh_current_repo_symbol_embeddings_and_clone_edges,
     upsert_current_semantic_feature_rows, upsert_current_symbol_embedding_rows,
@@ -267,6 +268,18 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
             if payload.manage_active_state
                 && sync_action == RepoEmbeddingSyncAction::RefreshCurrentRepo
             {
+                clear_repo_symbol_embedding_rows_for_representation(
+                    relational,
+                    &ctx.repo().repo_id,
+                    payload.representation_kind,
+                )
+                .await?;
+                clear_repo_active_embedding_setup_for_representation(
+                    relational,
+                    &ctx.repo().repo_id,
+                    payload.representation_kind,
+                )
+                .await?;
                 let summary_provider = resolve_summary_provider(
                     &config,
                     ctx.inference(),

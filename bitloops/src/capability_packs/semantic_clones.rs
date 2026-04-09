@@ -22,7 +22,8 @@ mod stage_semantic_features;
 #[allow(unused_imports)]
 pub(crate) use stage_embeddings::{
     RepoEmbeddingSyncAction, clear_current_symbol_embedding_rows_for_path,
-    clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
+    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
     determine_repo_embedding_sync_action, ensure_semantic_embeddings_schema,
     init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
     load_active_embedding_setup, load_current_repo_embedding_states,

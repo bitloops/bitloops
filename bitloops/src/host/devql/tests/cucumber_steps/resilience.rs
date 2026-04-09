@@ -1,28 +1,20 @@
-use crate::adapters::connectors::types::ConnectorContext;
-use crate::adapters::connectors::{ConnectorRegistry, KnowledgeConnectorAdapter};
-use crate::capability_packs::knowledge::ParsedKnowledgeUrl;
 use crate::capability_packs::semantic_clones::features::SemanticFeatureInput;
 use crate::capability_packs::semantic_clones::health::SEMANTIC_CLONES_HEALTH_CHECKS;
 use crate::cli::embeddings::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsPullArgs,
 };
-use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, ProviderConfig, resolve_embedding_capability_config_for_repo,
-};
+use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_embedding_capability_config_for_repo};
 use crate::daemon;
-use crate::host::capability_host::CapabilityHealthContext;
-use crate::host::capability_host::config_view::CapabilityConfigView;
-use crate::host::capability_host::gateways::StoreHealthGateway;
+use crate::host::capability_host::runtime_contexts::LocalCapabilityRuntimeResources;
 use crate::host::devql::cucumber_world::DevqlBddWorld;
 use crate::host::devql::{RepoIdentity, deterministic_uuid};
 use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::process_state::enter_process_state;
-use anyhow::{Result, bail};
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn doc_string(ctx: &cucumber::step::Context) -> String {
     ctx.step
@@ -65,75 +57,6 @@ fn step_fn(
     f: for<'a> fn(&'a mut DevqlBddWorld, cucumber::step::Context) -> LocalBoxFuture<'a, ()>,
 ) -> for<'a> fn(&'a mut DevqlBddWorld, cucumber::step::Context) -> LocalBoxFuture<'a, ()> {
     f
-}
-
-#[derive(Default)]
-struct DummyStores;
-
-impl StoreHealthGateway for DummyStores {
-    fn check_relational(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn check_documents(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn check_blobs(&self) -> Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct DummyConnectors {
-    provider_config: ProviderConfig,
-}
-
-impl ConnectorContext for DummyConnectors {
-    fn provider_config(&self) -> &ProviderConfig {
-        &self.provider_config
-    }
-}
-
-impl ConnectorRegistry for DummyConnectors {
-    fn knowledge_adapter_for(
-        &self,
-        _parsed: &ParsedKnowledgeUrl,
-    ) -> Result<&dyn KnowledgeConnectorAdapter> {
-        bail!("knowledge connectors are not used in semantic-clone health BDD steps")
-    }
-}
-
-struct TestHealthContext {
-    repo: RepoIdentity,
-    repo_root: PathBuf,
-    connectors: DummyConnectors,
-    stores: DummyStores,
-}
-
-impl CapabilityHealthContext for TestHealthContext {
-    fn repo(&self) -> &RepoIdentity {
-        &self.repo
-    }
-
-    fn repo_root(&self) -> &Path {
-        self.repo_root.as_path()
-    }
-
-    fn config_view(&self, capability_id: &str) -> Result<CapabilityConfigView> {
-        Ok(CapabilityConfigView::new(
-            capability_id.to_string(),
-            Value::Object(Default::default()),
-        ))
-    }
-
-    fn connectors(&self) -> &dyn ConnectorRegistry {
-        &self.connectors
-    }
-
-    fn stores(&self) -> &dyn StoreHealthGateway {
-        &self.stores
-    }
 }
 
 fn ensure_scenario_repo(world: &mut DevqlBddWorld) -> PathBuf {
@@ -370,12 +293,9 @@ fn when_semantic_clone_health_checks_run(
         let repo_root = ensure_scenario_repo(world);
         let repo = world.cfg.repo.clone();
         let results = with_scenario_process_state(world, || {
-            let ctx = TestHealthContext {
-                repo,
-                repo_root,
-                connectors: DummyConnectors::default(),
-                stores: DummyStores,
-            };
+            let resources = LocalCapabilityRuntimeResources::new(&repo_root, repo)
+                .expect("build local capability runtime resources");
+            let ctx = resources.runtime();
             SEMANTIC_CLONES_HEALTH_CHECKS
                 .iter()
                 .map(|check| (check.name.to_string(), (check.run)(&ctx)))

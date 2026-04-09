@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Host-owned inference gateway for semantic clones**: added `host/inference` as the shared composition root for embedding and text-generation services, exposed inference access through capability-host contexts, added `semantic_clones.summary_profile` repo policy selection, and introduced internal `semantic_clones.semantic_features_refresh` and `semantic_clones.symbol_embeddings_refresh` ingesters so packs can consume host-managed inference without reconstructing providers.
 - **Expanded Codex hook support**: Codex now supports the full currently documented hook surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
 - **Repo-local Codex hooks config bootstrap**: `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
 - **Codex Bash hook installation/parsing**: Codex Bash tool hooks are now installed and parsed, but remain non-mutating/no-op in Bitloops until dedicated Bash-level checkpoint capture is added.
@@ -40,6 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Semantic-clone enrichment now runs through the capability host**: DevQL ingest, current-state sync projection, semantic-clone health checks, and daemon enrichment now resolve provider selection from host-owned inference/config surfaces and execute semantic summary refresh, symbol embedding refresh, and clone-edge rebuild via `DevqlCapabilityHost` ingesters instead of constructing semantic-clone providers directly in host and daemon runtime paths.
 - **Artefact selection stage schemas are now actionable**: `CheckpointStageResult`, `CloneStageResult`, `DependencyStageResult`, and `TestsStageResult` now expose `items(first: ...)` detail selectors alongside `summary` and `schema`, so the stage-local SDL fragments describe selectable GraphQL fields rather than dangling result types. The slim SDL snapshot and runtime coverage were updated accordingly, and selected-symbol checkpoint resolution now uses symbol-based checkpoint provenance lookups plus `checkpoint_artefacts` symbol indexes for stable cross-revision checkpoint matching.
 - **Storage responsibilities are now split by purpose**: queryable checkpoint and DevQL relational state continue to live behind `RelationalStore`, while local workflow state such as sessions, temporary checkpoints, pre-prompt markers, pre-task markers, daemon runtime documents, queue state, and the interaction spool now live behind `RuntimeStore`.
 - **Event-first checkpoint derivation hardening**: `post_commit` now treats the Event DB as the normal interaction read path, while the local spool remains a write-ahead buffer and local mirror only. Checkpoint condensation now prefers captured interaction turns for prompts, token usage, file overlap, and transcript scoping, with transcript-file fallback limited to the committed transcript blob when turn offsets are unavailable. Post-commit coverage is now split between fast fake repository/spool tests and ignored real-DB derivation coverage for DuckDB and ClickHouse.
@@ -56,6 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Inference-refactor dead-code cleanup**: removed obsolete semantic-clone and DevQL helper paths left behind by the host-owned inference migration, keeping the runtime surface aligned with the new architecture and restoring a clean `cargo dev-clippy` run.
 - **Explicit daemon config startup inside nested Git repos**: daemon startup and dashboard DB initialisation now honour the selected explicit config path even when that config lives inside a larger Git repository. This fixes false startup health-check failures and detached-start timeouts caused by resolving store backends from the wrong repo root, and makes `--bootstrap-local-stores` work reliably for repo-scoped test configs.
 - **Stop Daemon on Uninstall**: made sure that the Bitloops daemon is stopped when the service is uninstalled in order to release the port.
 - **DevQL ingest telemetry metadata**: removed the stale `max_checkpoints` property from the `bitloops devql ingest` telemetry action after the CLI command stopped exposing that flag, restoring clean compilation of the CLI telemetry surface and adding regression coverage for the current empty-args ingest command.
