@@ -71,11 +71,25 @@ fn execute_coverage_stage<R: TestHarnessQueryRepository + ?Sized>(
             "end_line": row_obj.get("end_line").and_then(Value::as_i64).unwrap_or(0),
         });
 
-        let line_records = store.load_stage_line_coverage(
+        let mut line_records = store.load_stage_line_coverage(
             &repo_id,
             production_symbol_id,
             commit_sha.as_deref(),
         )?;
+        let mut branch_records = store.load_stage_branch_coverage(
+            &repo_id,
+            production_symbol_id,
+            commit_sha.as_deref(),
+        )?;
+        if line_records.is_empty()
+            && branch_records.is_empty()
+            && artefact_id != production_symbol_id
+        {
+            line_records =
+                store.load_stage_line_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
+            branch_records =
+                store.load_stage_branch_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
+        }
         let total_lines = line_records.len();
         let mut uncovered_lines = Vec::new();
         let mut covered_line_count = 0usize;
@@ -92,11 +106,6 @@ fn execute_coverage_stage<R: TestHarnessQueryRepository + ?Sized>(
             0.0
         };
 
-        let branch_records = store.load_stage_branch_coverage(
-            &repo_id,
-            production_symbol_id,
-            commit_sha.as_deref(),
-        )?;
         let total_branches = branch_records.len();
         let mut uncovered_branch_count = 0usize;
         let mut branches = Vec::with_capacity(total_branches);
@@ -322,6 +331,7 @@ mod tests {
             &self,
             _repo_id: &str,
             _production_symbol_id: &str,
+            _commit_sha: Option<&str>,
             _min_confidence: Option<f64>,
             _linkage_source: Option<&str>,
             _limit: usize,

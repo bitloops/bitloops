@@ -16,7 +16,10 @@ pub(super) fn test_state(
         mode,
         db,
         bundle_dir,
-    }
+        bundle_source_overrides: crate::api::DashboardBundleSourceOverrides::default(),
+    };
+    crate::daemon::activate_sync_worker(state.subscription_hub());
+    state
 }
 
 pub(super) fn seed_dashboard_repo() -> TempDir {

@@ -15,20 +15,48 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(crate) use tempfile::TempDir;
 pub(crate) const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
-pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
+fn write_test_store_backend_config(repo_root: &Path, include_events: bool) {
+    let events_section = if include_events {
+        "\n[stores.events]\nduckdb_path = \"stores/event/events.duckdb\"\n"
+    } else {
+        ""
+    };
+    let config = format!(
+        "[stores.relational]\nsqlite_path = \"stores/relational/relational.db\"\n{events_section}\n[stores.blob]\nlocal_path = \"stores/blob\"\n"
+    );
     fs::write(
         repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
-        r#"[stores.relational]
-sqlite_path = "stores/relational/relational.db"
-
-[stores.events]
-duckdb_path = "stores/event/events.duckdb"
-
-[stores.blob]
-local_path = "stores/blob"
-"#,
+        config,
     )
     .unwrap();
+}
+
+pub(crate) fn ensure_test_checkpoint_backends(repo_root: &Path) {
+    write_test_store_backend_config(repo_root, false);
+
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root).unwrap();
+
+    let sqlite_path = backends
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .unwrap();
+    if let Some(parent) = sqlite_path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let sqlite = SqliteConnectionPool::connect(sqlite_path).unwrap();
+    sqlite.initialise_checkpoint_schema().unwrap();
+
+    fs::create_dir_all(
+        backends
+            .blobs
+            .resolve_local_path_for_repo(repo_root)
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
+    write_test_store_backend_config(repo_root, true);
 
     let backends = crate::config::resolve_store_backend_config_for_repo(repo_root).unwrap();
 
@@ -75,8 +103,14 @@ local_path = "stores/blob"
     .unwrap();
 }
 
-/// Creates a real git repository with an initial commit for testing.
-pub(crate) fn setup_git_repo(dir: &TempDir) -> String {
+pub(crate) fn setup_git_repo_with_checkpoint_backends(dir: &TempDir) -> String {
+    setup_git_repo_with_backend_initializer(dir, ensure_test_checkpoint_backends)
+}
+
+fn setup_git_repo_with_backend_initializer(
+    dir: &TempDir,
+    initialize_backends: impl FnOnce(&Path),
+) -> String {
     let run = |args: &[&str]| {
         let out = isolated_git_command(dir.path())
             .args(args)
@@ -95,11 +129,10 @@ pub(crate) fn setup_git_repo(dir: &TempDir) -> String {
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
     fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
-    ensure_test_store_backends(dir.path());
+    initialize_backends(dir.path());
     fs::write(dir.path().join("README.md"), "initial content").unwrap();
     run(&["add", "."]);
     run(&["commit", "--allow-empty", "-m", "initial"]);
-    // Return HEAD hash.
     let out = isolated_git_command(dir.path())
         .args(["rev-parse", "HEAD"])
         .output()
@@ -111,6 +144,11 @@ pub(crate) fn setup_git_repo(dir: &TempDir) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Creates a real git repository with an initial commit for testing.
+pub(crate) fn setup_git_repo(dir: &TempDir) -> String {
+    setup_git_repo_with_backend_initializer(dir, ensure_test_store_backends)
 }
 
 /// Creates a git repo with no commits.
@@ -225,6 +263,22 @@ pub(crate) fn initialize_session_uses_injected_session_backend() {
         .unwrap()
         .unwrap();
     assert_eq!(state.phase, SessionPhase::Active);
+}
+
+#[test]
+pub(crate) fn setup_git_repo_with_checkpoint_backends_skips_events_store() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
+
+    assert!(
+        !head.trim().is_empty(),
+        "expected helper to create an initial commit"
+    );
+    assert!(
+        !dir.path().join("stores/event/events.duckdb").exists(),
+        "checkpoint-only helper should not initialize DuckDB events storage"
+    );
 }
 
 pub(crate) fn git_ok(repo_root: &Path, args: &[&str]) -> String {

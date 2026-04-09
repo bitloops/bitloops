@@ -515,20 +515,8 @@ pub fn run_devql_ingest_for_repo(world: &mut QatWorld, repo_name: &str) -> Resul
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    world.last_command_stdout = Some(stdout.clone());
-    ensure_success(&output, "bitloops devql ingest")?;
-
-    let checkpoints_processed = extract_ingest_metric(&stdout, "checkpoints_processed=");
-    let artefacts_upserted = extract_ingest_metric(&stdout, "artefacts_upserted=");
-    if checkpoints_processed == Some(0) && artefacts_upserted == Some(0) {
-        append_world_log(
-            world,
-            "DevQL ingest reported zero checkpoint work; running DevQL sync compatibility fallback.\n",
-        )?;
-        return run_devql_sync_for_repo(world, repo_name);
-    }
-
-    Ok(())
+    world.last_command_stdout = Some(stdout);
+    ensure_success(&output, "bitloops devql ingest")
 }
 
 pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
@@ -885,6 +873,20 @@ pub fn run_devql_query(world: &mut QatWorld, query: &str) -> Result<serde_json::
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout.clone());
     serde_json::from_str(stdout.trim()).context("parsing devql query json output")
+}
+
+pub fn run_devql_graphql_query(world: &mut QatWorld, query: &str) -> Result<serde_json::Value> {
+    let output = run_command_capture(
+        world,
+        "bitloops devql query --graphql",
+        build_bitloops_command(world, &["devql", "query", "--graphql", query, "--compact"])?,
+    )?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    ensure_success(&output, "bitloops devql query --graphql")?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout.clone());
+    serde_json::from_str(stdout.trim()).context("parsing raw DevQL GraphQL json output")
 }
 
 pub fn resolve_head_sha(world: &QatWorld) -> Result<String> {
@@ -1790,49 +1792,56 @@ pub fn assert_devql_artefacts_query_returns_results(
     Ok(())
 }
 
+fn checkpoint_agent_candidates(agent: &str) -> Vec<String> {
+    let mut candidates = vec![agent.to_string()];
+    if agent == "claude" {
+        candidates.push("claude-code".to_string());
+    } else if agent == "claude-code" {
+        candidates.push("claude".to_string());
+    }
+    candidates
+}
+
+fn build_chat_history_query(path: &str) -> String {
+    format!(
+        r#"repo("bitloops")->file("{}")->artefacts()->chatHistory()->limit(10)"#,
+        escape_devql_string(path)
+    )
+}
+
+fn count_chat_history_edges_for_agent(value: &serde_json::Value, agent_name: &str) -> usize {
+    value.as_array().map_or(0, |rows| {
+        rows.iter()
+            .flat_map(|row| {
+                row.get("chatHistory")
+                    .and_then(|chat_history| chat_history.get("edges"))
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter(|edge| {
+                edge.get("node")
+                    .and_then(|node| node.get("agent"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|candidate| candidate == agent_name)
+            })
+            .count()
+    })
+}
+
 pub fn assert_devql_checkpoints_query_returns_results(
     world: &mut QatWorld,
     repo_name: &str,
     agent: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mut agent_candidates = vec![agent.to_string()];
-    if agent == "claude" {
-        agent_candidates.push("claude-code".to_string());
-    } else if agent == "claude-code" {
-        agent_candidates.push("claude".to_string());
-    }
-
     let mut max_count = 0_usize;
-    for candidate in agent_candidates {
+    for candidate in checkpoint_agent_candidates(agent) {
         let query = format!(
             r#"repo("bitloops")->checkpoints(agent:"{}")->limit(5)"#,
             escape_devql_string(&candidate)
         );
-        let value = match run_devql_query(world, &query) {
-            Ok(value) => value,
-            Err(err) => {
-                let message = err.to_string();
-                if message.contains("checkpoint_events") && message.contains("does not exist") {
-                    let fallback_count = with_scenario_app_env(world, || {
-                        read_commit_checkpoint_mappings(world.repo_dir())
-                    })
-                    .context("reading checkpoint mappings for checkpoints query fallback")?
-                    .len();
-                    world.last_query_result_count = Some(fallback_count);
-                    ensure!(
-                        fallback_count >= 1,
-                        "expected at least 1 checkpoint mapping for agent {agent}, got {fallback_count}"
-                    );
-                    append_world_log(
-                        world,
-                        "DevQL checkpoints query fallback used commit_checkpoint mappings because checkpoint_events table is unavailable.\n",
-                    )?;
-                    return Ok(());
-                }
-                return Err(err);
-            }
-        };
+        let value = run_devql_query(world, &query)?;
         let count = count_json_array_rows(&value);
         max_count = max_count.max(count);
         if count >= 1 {
@@ -1842,13 +1851,6 @@ pub fn assert_devql_checkpoints_query_returns_results(
     }
 
     world.last_query_result_count = Some(max_count);
-    if max_count == 0 && claude_fallback_marker_exists(world) {
-        append_world_log(
-            world,
-            "DevQL checkpoints query assertion bypassed because QAT Claude fallback is active.\n",
-        )?;
-        return Ok(());
-    }
     ensure!(
         max_count >= 1,
         "expected at least 1 checkpoint for agent {agent}, got {max_count}"
@@ -1861,26 +1863,18 @@ pub fn assert_devql_chat_history_returns_results(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let value = run_devql_query(
-        world,
-        r#"repo("bitloops")->artefacts()->chatHistory()->limit(5)"#,
-    )?;
-    let rows = value
-        .as_array()
-        .ok_or_else(|| anyhow!("expected chat history query to return a JSON array"))?;
-    let count = rows
-        .iter()
-        .filter(|row| {
-            row.get("chatHistory")
-                .and_then(|chat_history| chat_history.get("edges"))
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|edges| !edges.is_empty())
-        })
-        .count();
+    let target_path = smoke_target_relative_path(world);
+    let query = build_chat_history_query(&target_path);
+    let value = run_devql_query(world, &query)?;
+    let agent_name = world
+        .agent_name
+        .as_deref()
+        .ok_or_else(|| anyhow!("no agent name captured for chat history assertion"))?;
+    let count = count_chat_history_edges_for_agent(&value, agent_name);
     world.last_query_result_count = Some(count);
     ensure!(
         count >= 1,
-        "expected at least 1 chat history result, got {count}"
+        "expected at least 1 chat history result for agent `{agent_name}` in `{target_path}`, got {count}"
     );
     Ok(())
 }

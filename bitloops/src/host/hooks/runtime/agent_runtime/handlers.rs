@@ -13,7 +13,6 @@ use super::{
     CLAUDE_HOOK_AGENT_PROFILE, HookAgentProfile, apply_session_transition, generate_turn_id,
 };
 use crate::adapters::agents::claude_code::git_hooks;
-use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::config::settings;
 use crate::git;
 use crate::host::checkpoints::history::devql_prefetch;
@@ -149,7 +148,7 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile_and_model(
     .context("turn-start requires non-empty session_id")?;
 
     if let Some(root) = repo_root {
-        let _ = ensure_hook_setup(root);
+        let _ = ensure_hook_setup(root, profile.agent_type);
     }
 
     // Capture pre-prompt state for use by `stop`.
@@ -232,15 +231,20 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile_and_model(
 ///
 /// If hooks were overwritten/deleted by
 /// third-party tools, reinstall them before the turn proceeds.
-fn ensure_hook_setup(repo_root: &Path) -> Result<()> {
-    if !claude_hooks::are_hooks_installed(repo_root) {
-        let _ = claude_hooks::install_hooks(repo_root, false);
+fn ensure_hook_setup(repo_root: &Path, agent_name: &str) -> Result<()> {
+    let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
+    let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let local_dev = settings::load_settings(&policy_start)
+        .map(|s| s.local_dev)
+        .unwrap_or(false);
+
+    if !registry
+        .are_agent_hooks_installed(repo_root, agent_name)
+        .unwrap_or(false)
+    {
+        let _ = registry.install_agent_hooks(repo_root, agent_name, local_dev, false);
     }
     if !git_hooks::is_git_hook_installed(repo_root) {
-        let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
-        let local_dev = settings::load_settings(&policy_start)
-            .map(|s| s.local_dev)
-            .unwrap_or(false);
         let _ = git_hooks::install_git_hooks(repo_root, local_dev);
     }
     Ok(())

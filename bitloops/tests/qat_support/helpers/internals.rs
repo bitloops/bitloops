@@ -46,9 +46,36 @@ fn candidate_symbol_file_paths(world: &QatWorld, symbol_alias: &str) -> Vec<Stri
     candidates
 }
 
+fn candidate_symbol_fqns(world: &QatWorld, symbol_alias: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |candidate: String| {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    };
+
+    if let Some((class_name, method_name)) = symbol_alias.split_once('.') {
+        for path in candidate_symbol_file_paths(world, symbol_alias) {
+            push_unique(format!("{path}::{class_name}::{method_name}"));
+            push_unique(format!("{path}::{method_name}"));
+        }
+    } else {
+        for path in candidate_symbol_file_paths(world, symbol_alias) {
+            push_unique(format!("{path}::{symbol_alias}"));
+        }
+    }
+
+    candidates
+}
+
 fn resolve_symbol_fqn_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<String> {
     if symbol_alias.contains("::") {
         return Ok(symbol_alias.to_string());
+    }
+
+    let candidate_fqns = candidate_symbol_fqns(world, symbol_alias);
+    if let Some(candidate) = candidate_fqns.first() {
+        return Ok(candidate.clone());
     }
 
     let mut suffixes = Vec::new();
@@ -59,61 +86,51 @@ fn resolve_symbol_fqn_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<
         suffixes.push(format!("::{symbol_alias}"));
     }
 
-    for file_path in candidate_symbol_file_paths(world, symbol_alias) {
-        let query = format!(
-            r#"repo("bitloops")->file("{}")->artefacts()->limit(500)"#,
-            escape_devql_string(&file_path)
-        );
-        let Ok(value) = run_devql_query(world, &query) else {
-            continue;
-        };
-        let Some(rows) = value.as_array() else {
-            continue;
-        };
+    let value = run_devql_graphql_query(
+        world,
+        r#"query {
+  artefacts(first: 2000) {
+    edges {
+      node {
+        path
+        symbolFqn
+      }
+    }
+  }
+}"#,
+    )?;
+    let rows = value
+        .get("artefacts")
+        .and_then(|artefacts| artefacts.get("edges"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected artefact edges in GraphQL response"))?;
+
+    let candidate_paths = candidate_symbol_file_paths(world, symbol_alias);
+    for file_path in &candidate_paths {
         for suffix in &suffixes {
             if let Some(symbol_fqn) = rows.iter().find_map(|row| {
-                row.get("symbolFqn")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|candidate| candidate.ends_with(suffix))
+                let node = row.get("node")?;
+                let path = node.get("path").and_then(serde_json::Value::as_str)?;
+                let symbol_fqn = node.get("symbolFqn").and_then(serde_json::Value::as_str)?;
+                (path == file_path && symbol_fqn.ends_with(suffix)).then_some(symbol_fqn)
             }) {
                 return Ok(symbol_fqn.to_string());
             }
         }
     }
 
-    Ok(symbol_alias.to_string())
-}
-
-fn resolve_file_path_for_symbol(world: &mut QatWorld, symbol_fqn: &str) -> Result<String> {
-    if let Some((path, _)) = symbol_fqn.split_once("::")
-        && !path.is_empty()
-    {
-        return Ok(path.to_string());
+    for suffix in &suffixes {
+        if let Some(symbol_fqn) = rows.iter().find_map(|row| {
+            row.get("node")
+                .and_then(|node| node.get("symbolFqn"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|candidate| candidate.ends_with(suffix))
+        }) {
+            return Ok(symbol_fqn.to_string());
+        }
     }
 
-    if world.repo_dir().join(symbol_fqn).exists() {
-        return Ok(symbol_fqn.to_string());
-    }
-
-    if let Some(path) = candidate_symbol_file_paths(world, symbol_fqn)
-        .into_iter()
-        .next()
-    {
-        return Ok(path);
-    }
-
-    bail!("could not resolve file path for symbol `{symbol_fqn}`")
-}
-
-fn resolve_file_path_for_symbol_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<String> {
-    if let Some(path) = candidate_symbol_file_paths(world, symbol_alias)
-        .into_iter()
-        .next()
-    {
-        return Ok(path);
-    }
-    let symbol_fqn = resolve_symbol_fqn_alias(world, symbol_alias)?;
-    resolve_file_path_for_symbol(world, &symbol_fqn)
+    bail!("unable to resolve symbol alias `{symbol_alias}` to a DevQL symbolFqn")
 }
 
 fn parse_last_command_stdout_json(world: &QatWorld) -> Result<serde_json::Value> {
@@ -188,80 +205,6 @@ fn parse_knowledge_versions_count(stdout: &str) -> Result<usize> {
     bail!("unable to parse knowledge versions count from command output")
 }
 
-fn is_knowledge_provider_config_missing(stderr: &str) -> bool {
-    stderr.contains("knowledge.providers.github")
-        || stderr.contains("knowledge.providers.jira")
-        || stderr.contains("knowledge.providers.confluence")
-        || stderr.contains("knowledge.providers.atlassian")
-}
-
-fn is_knowledge_item_not_found(stderr: &str) -> bool {
-    stderr.contains("knowledge item `") && stderr.contains("not found")
-}
-
-fn knowledge_fallback_active(world: &QatWorld) -> bool {
-    world.run_dir().join(KNOWLEDGE_FALLBACK_MARKER).exists()
-}
-
-fn activate_knowledge_fallback(world: &mut QatWorld, url: &str, with_commit: bool) -> Result<()> {
-    let knowledge_item_id = world
-        .knowledge_items_by_url
-        .get(url)
-        .cloned()
-        .unwrap_or_else(|| format!("qat-knowledge-{}", world.knowledge_items_by_url.len() + 1));
-    world
-        .knowledge_items_by_url
-        .insert(url.to_string(), knowledge_item_id.clone());
-    world
-        .knowledge_versions_by_ref
-        .entry(knowledge_item_id.clone())
-        .or_insert(1);
-    world.last_knowledge_add_had_commit_association = Some(with_commit);
-    world.last_command_exit_code = Some(0);
-    world.last_command_stdout = Some(format!("knowledge item: {knowledge_item_id}\n"));
-
-    fs::write(world.run_dir().join(KNOWLEDGE_FALLBACK_MARKER), b"1").with_context(|| {
-        format!(
-            "writing knowledge fallback marker in {}",
-            world.run_dir().display()
-        )
-    })?;
-    Ok(())
-}
-
-fn synthetic_knowledge_rows(world: &QatWorld) -> Vec<serde_json::Value> {
-    let mut urls: Vec<&String> = world.knowledge_items_by_url.keys().collect();
-    urls.sort();
-
-    urls.into_iter()
-        .filter_map(|url| {
-            let knowledge_item_id = world.knowledge_items_by_url.get(url)?;
-            let (provider, source_kind) = if url.contains("github.com") && url.contains("/issues/")
-            {
-                ("github", "issue")
-            } else if url.contains("github.com") && url.contains("/pull/") {
-                ("github", "pull_request")
-            } else {
-                ("unknown", "unknown")
-            };
-            Some(serde_json::json!({
-                "knowledgeItemId": knowledge_item_id,
-                "sourceUrl": url,
-                "provider": provider,
-                "sourceKind": source_kind
-            }))
-        })
-        .collect()
-}
-
-fn fallback_knowledge_versions_count(world: &QatWorld, knowledge_ref: &str) -> usize {
-    knowledge_ref
-        .strip_prefix("knowledge:")
-        .and_then(|knowledge_item_id| world.knowledge_versions_by_ref.get(knowledge_item_id))
-        .copied()
-        .unwrap_or(1)
-}
-
 /// Parse a key=value field from sync validation output.
 /// Format: "artefacts: expected=2 actual=0 missing=2 stale=0 mismatched=0"
 pub fn parse_validation_field(stdout: &str, field: &str) -> Option<usize> {
@@ -303,14 +246,6 @@ fn activate_claude_fallback(world: &QatWorld, reason: &str) -> Result<()> {
     append_world_log(world, &format!("Claude fallback activated: {reason}\n"))?;
     fs::write(world.run_dir().join(CLAUDE_FALLBACK_MARKER), b"1")
         .with_context(|| format!("writing fallback marker in {}", world.run_dir().display()))
-}
-
-fn semantic_clones_fallback_active(world: &QatWorld) -> bool {
-    world.semantic_clones_fallback_active
-        || world
-            .run_dir()
-            .join(SEMANTIC_CLONES_FALLBACK_MARKER)
-            .exists()
 }
 
 fn repo_has_head(world: &QatWorld) -> Result<bool> {

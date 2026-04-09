@@ -22,15 +22,20 @@ use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
 };
 
-fn ensure_hook_setup(repo_root: &std::path::Path) -> Result<()> {
-    if !crate::adapters::agents::claude_code::hooks::are_hooks_installed(repo_root) {
-        let _ = crate::adapters::agents::claude_code::hooks::install_hooks(repo_root, false);
+fn ensure_hook_setup(repo_root: &std::path::Path, agent_name: &str) -> Result<()> {
+    let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
+    let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let local_dev = crate::config::settings::load_settings(&policy_start)
+        .map(|s| s.local_dev)
+        .unwrap_or(false);
+
+    if !registry
+        .are_agent_hooks_installed(repo_root, agent_name)
+        .unwrap_or(false)
+    {
+        let _ = registry.install_agent_hooks(repo_root, agent_name, local_dev, false);
     }
     if !crate::adapters::agents::claude_code::git_hooks::is_git_hook_installed(repo_root) {
-        let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
-        let local_dev = crate::config::settings::load_settings(&policy_start)
-            .map(|s| s.local_dev)
-            .unwrap_or(false);
         let _ = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
             repo_root, local_dev,
         );
@@ -147,7 +152,7 @@ pub fn handle_lifecycle_turn_start(
         return Ok(());
     }
 
-    let _ = ensure_hook_setup(&repo_root);
+    let _ = ensure_hook_setup(&repo_root, agent.agent_name());
 
     let transcript_offset = agent
         .as_transcript_analyzer()

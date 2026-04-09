@@ -16,8 +16,9 @@ use crate::capability_packs::semantic_clones::{
     refresh_current_repo_symbol_embeddings_and_clone_edges, upsert_symbol_embedding_rows,
 };
 use crate::config::{
-    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
-    resolve_store_backend_config_for_repo, resolve_store_semantic_config_for_repo,
+    SemanticSummaryMode, resolve_daemon_config_path_for_repo,
+    resolve_embedding_capability_config_for_repo, resolve_store_backend_config_for_repo,
+    resolve_store_semantic_config_for_repo,
 };
 use crate::host::devql::{DevqlConfig, RelationalStorage, resolve_repo_identity};
 
@@ -323,6 +324,10 @@ async fn execute_embedding_job(
     };
 
     if sync_action == RepoEmbeddingSyncAction::RefreshCurrentRepo {
+        let summary_provider = match build_embedding_refresh_summary_provider(job) {
+            Ok(provider) => provider,
+            Err(err) => return JobExecutionOutcome::failed(err),
+        };
         if let Err(err) = clear_embedding_outputs(relational, &job.repo_id).await {
             return JobExecutionOutcome::failed(err);
         }
@@ -330,6 +335,7 @@ async fn execute_embedding_job(
             relational,
             &job.repo_root,
             &job.repo_id,
+            summary_provider,
             representation_kind,
             Arc::clone(&provider),
         )
@@ -406,6 +412,31 @@ async fn execute_embedding_job(
     let mut outcome = JobExecutionOutcome::ok();
     outcome.follow_ups.push(clone_edges_rebuild_follow_up(job));
     outcome
+}
+
+fn build_embedding_refresh_summary_provider(
+    job: &EnrichmentJob,
+) -> Result<Arc<dyn semantic_features::SemanticSummaryProvider>> {
+    let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
+    if capability.semantic_clones.summary_mode == SemanticSummaryMode::Off {
+        return Ok(Arc::new(semantic_features::NoopSemanticSummaryProvider));
+    }
+
+    let semantic_cfg = resolve_store_semantic_config_for_repo(&job.config_root);
+    match build_semantic_summary_provider(&SemanticSummaryProviderConfig {
+        semantic_provider: semantic_cfg.semantic_provider,
+        semantic_model: semantic_cfg.semantic_model,
+        semantic_api_key: semantic_cfg.semantic_api_key,
+        semantic_base_url: semantic_cfg.semantic_base_url,
+    }) {
+        Ok(provider) => Ok(provider),
+        Err(err) => {
+            log::warn!(
+                "semantic_clones semantic summaries degraded during embedding refresh; using deterministic summaries only: {err:#}"
+            );
+            Ok(Arc::new(semantic_features::NoopSemanticSummaryProvider))
+        }
+    }
 }
 
 async fn execute_clone_edges_rebuild_job(

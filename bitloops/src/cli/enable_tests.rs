@@ -362,6 +362,7 @@ enabled = true
         );
         git_hooks::install_git_hooks(dir.path(), false).unwrap();
         codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+        assert!(dir.path().join(".codex/config.toml").exists());
 
         let mut out = Vec::new();
         run_disable(dir.path(), &mut out, false).unwrap();
@@ -381,6 +382,7 @@ enabled = true
         );
         assert!(git_hooks::is_git_hook_installed(dir.path()));
         assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+        assert!(dir.path().join(".codex/config.toml").exists());
         assert!(!settings::is_enabled(dir.path()).unwrap());
     });
 }

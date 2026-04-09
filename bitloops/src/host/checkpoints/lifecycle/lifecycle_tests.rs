@@ -1,7 +1,9 @@
+use super::adapters::route_hook_command_to_lifecycle;
 use super::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, CLAUDE_HOOK_SESSION_END,
     CLAUDE_HOOK_SESSION_START, CLAUDE_HOOK_STOP, CLAUDE_HOOK_USER_PROMPT_SUBMIT,
-    CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP, COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END,
+    CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP,
+    CODEX_HOOK_USER_PROMPT_SUBMIT, COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END,
     COPILOT_HOOK_SESSION_START, COPILOT_HOOK_SUBAGENT_STOP, COPILOT_HOOK_USER_PROMPT_SUBMITTED,
     CURSOR_HOOK_BEFORE_SUBMIT_PROMPT, CURSOR_HOOK_PRE_COMPACT, CURSOR_HOOK_SESSION_END,
     CURSOR_HOOK_SESSION_START, CURSOR_HOOK_STOP, CURSOR_HOOK_SUBAGENT_START,
@@ -24,6 +26,7 @@ use super::{
     handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
+use crate::adapters::agents::AGENT_NAME_CODEX;
 use crate::adapters::agents::canonical::{
     CanonicalContractCompatibility, CanonicalResumableSessionState,
 };
@@ -32,7 +35,9 @@ use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::phase::SessionPhase;
 use crate::host::checkpoints::session::state::{PendingCheckpointState, SessionState};
 use crate::test_support::git_fixtures::ensure_test_store_backends;
-use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
+use crate::test_support::process_state::{
+    git_command, with_cwd, with_git_env_cleared, with_process_state,
+};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Cursor;
@@ -323,6 +328,42 @@ fn test_handle_lifecycle_turn_start_prefers_real_prompt_over_bootstrap_prompt() 
             .expect("session should exist");
         assert_eq!(state.first_prompt, "Turn prompt");
     });
+}
+
+#[test]
+fn route_codex_user_prompt_submit_persists_pre_prompt_state() -> anyhow::Result<()> {
+    let repo = tempfile::tempdir().expect("tempdir");
+    setup_git_repo(&repo);
+    let session_id = "codex-session-ups";
+    let transcript_path = repo.path().join("codex-transcript.jsonl");
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    with_process_state(Some(repo.path()), &[], || -> anyhow::Result<()> {
+        let payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path.to_string_lossy().to_string(),
+            "prompt": "Refactor tracked file",
+            "model": "gpt-5.4-codex"
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_USER_PROMPT_SUBMIT, &payload)?;
+        Ok(())
+    })?;
+
+    with_process_state(Some(repo.path()), &[], || -> anyhow::Result<()> {
+        let backend = create_session_backend_or_local(repo.path());
+        let pre_prompt = backend
+            .load_pre_prompt(session_id)?
+            .expect("pre-prompt should exist");
+        assert_eq!(pre_prompt.prompt, "Refactor tracked file");
+        assert!(
+            crate::adapters::agents::codex::hooks::are_hooks_installed_at(repo.path()),
+            "expected codex hooks to be installed for agent-aware self-heal"
+        );
+        Ok(())
+    })?;
+
+    Ok(())
 }
 
 // CLI-868
@@ -1456,10 +1497,60 @@ fn test_parse_hook_event_turn_end_codex() {
 }
 
 #[test]
+fn test_parse_hook_event_turn_start_codex() {
+    let adapter = CodexLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"codex-session-3","transcript_path":"/tmp/codex-3.jsonl","prompt":"Refactor tracked file","model":"gpt-5.4-codex"}"#,
+    );
+    let event = adapter
+        .parse_hook_event(CODEX_HOOK_USER_PROMPT_SUBMIT, &mut stdin)
+        .expect("parse")
+        .expect("event");
+    assert_eq!(event.event_type, Some(LifecycleEventType::TurnStart));
+    assert_eq!(event.session_id, "codex-session-3");
+    assert_eq!(event.session_ref, "/tmp/codex-3.jsonl");
+    assert_eq!(event.prompt, "Refactor tracked file");
+    assert_eq!(event.model, "gpt-5.4-codex");
+}
+
+#[test]
+fn test_parse_hook_event_pre_tool_use_codex_returns_none() {
+    let adapter = CodexLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"codex-session-ptu","transcript_path":"/tmp/codex-ptu.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"}}"#,
+    );
+    let event = adapter
+        .parse_hook_event(CODEX_HOOK_PRE_TOOL_USE, &mut stdin)
+        .expect("parse");
+    assert!(event.is_none());
+}
+
+#[test]
+fn test_parse_hook_event_post_tool_use_codex_returns_none() {
+    let adapter = CodexLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"codex-session-post","transcript_path":"/tmp/codex-post.jsonl","tool_name":"Bash","tool_use_id":"toolu_2","tool_input":{"command":"git status"},"tool_response":"clean"}"#,
+    );
+    let event = adapter
+        .parse_hook_event(CODEX_HOOK_POST_TOOL_USE, &mut stdin)
+        .expect("parse");
+    assert!(event.is_none());
+}
+
+#[test]
 fn test_hook_names_codex() {
     let adapter = CodexLifecycleAdapter;
     let names = adapter.hook_names();
-    assert_eq!(names, vec![CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP]);
+    assert_eq!(
+        names,
+        vec![
+            CODEX_HOOK_SESSION_START,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            CODEX_HOOK_PRE_TOOL_USE,
+            CODEX_HOOK_POST_TOOL_USE,
+            CODEX_HOOK_STOP,
+        ]
+    );
 }
 
 #[test]

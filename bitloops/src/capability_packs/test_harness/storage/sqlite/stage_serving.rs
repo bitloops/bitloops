@@ -12,30 +12,62 @@ pub(super) fn load_stage_covering_tests(
     conn: &Connection,
     repo_id: &str,
     production_symbol_id: &str,
+    commit_sha: Option<&str>,
     min_confidence: Option<f64>,
     linkage_source: Option<&str>,
     limit: usize,
 ) -> Result<Vec<StageCoveringTestRecord>> {
-    let mut sql = String::from(
-        "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
-         parent.name AS suite_name, ts.path AS file_path, \
-         ts.start_line, ts.end_line, \
-         COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) AS confidence, \
-         ts.discovery_source, \
-         COALESCE(json_extract(te.metadata, '$.link_source'), 'unknown') AS linkage_source, \
-         COALESCE(json_extract(te.metadata, '$.linkage_status'), 'unknown') AS linkage_status \
-         FROM test_artefact_edges_current te \
-         JOIN test_artefacts_current ts \
-           ON ts.repo_id = te.repo_id \
-          AND ts.symbol_id = te.from_symbol_id \
-         LEFT JOIN test_artefacts_current parent \
-           ON parent.repo_id = ts.repo_id \
-          AND parent.symbol_id = ts.parent_symbol_id \
-         WHERE te.repo_id = ?1 \
-           AND (te.to_symbol_id = ?2 OR te.to_artefact_id = ?2) \
-           AND ts.canonical_kind = 'test_scenario'",
-    );
-    let mut param_idx = 3;
+    let mut sql = if commit_sha.is_some() {
+        String::from(
+            "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
+             parent.name AS suite_name, ts.path AS file_path, \
+             ts.start_line, ts.end_line, \
+             COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) AS confidence, \
+             ts.discovery_source, \
+             COALESCE(json_extract(te.metadata, '$.link_source'), 'unknown') AS linkage_source, \
+             COALESCE(json_extract(te.metadata, '$.linkage_status'), 'unknown') AS linkage_status, \
+             tc.classification, \
+             tc.classification_source, \
+             tc.fan_out \
+             FROM test_artefact_edges_current te \
+             JOIN test_artefacts_current ts \
+               ON ts.repo_id = te.repo_id \
+              AND ts.symbol_id = te.from_symbol_id \
+             LEFT JOIN test_artefacts_current parent \
+               ON parent.repo_id = ts.repo_id \
+              AND parent.symbol_id = ts.parent_symbol_id \
+             LEFT JOIN test_classifications tc \
+               ON tc.test_symbol_id = ts.symbol_id \
+              AND tc.commit_sha = ?3 \
+             WHERE te.repo_id = ?1 \
+               AND (te.to_symbol_id = ?2 OR te.to_artefact_id = ?2) \
+               AND ts.canonical_kind = 'test_scenario'",
+        )
+    } else {
+        String::from(
+            "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
+             parent.name AS suite_name, ts.path AS file_path, \
+             ts.start_line, ts.end_line, \
+             COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) AS confidence, \
+             ts.discovery_source, \
+             COALESCE(json_extract(te.metadata, '$.link_source'), 'unknown') AS linkage_source, \
+             COALESCE(json_extract(te.metadata, '$.linkage_status'), 'unknown') AS linkage_status, \
+             NULL AS classification, \
+             NULL AS classification_source, \
+             NULL AS fan_out \
+             FROM test_artefact_edges_current te \
+             JOIN test_artefacts_current ts \
+               ON ts.repo_id = te.repo_id \
+              AND ts.symbol_id = te.from_symbol_id \
+             LEFT JOIN test_artefacts_current parent \
+               ON parent.repo_id = ts.repo_id \
+              AND parent.symbol_id = ts.parent_symbol_id \
+             WHERE te.repo_id = ?1 \
+               AND (te.to_symbol_id = ?2 OR te.to_artefact_id = ?2) \
+               AND ts.canonical_kind = 'test_scenario'",
+        )
+    };
+    let mut param_idx = if commit_sha.is_some() { 4 } else { 3 };
     if min_confidence.is_some() {
         sql.push_str(&format!(
             " AND COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) >= ?{param_idx}"
@@ -60,6 +92,9 @@ pub(super) fn load_stage_covering_tests(
         Box::new(repo_id.to_string()),
         Box::new(production_symbol_id.to_string()),
     ];
+    if let Some(commit_sha) = commit_sha {
+        params_vec.push(Box::new(commit_sha.to_string()));
+    }
     if let Some(mc) = min_confidence {
         params_vec.push(Box::new(mc));
     }
@@ -82,6 +117,9 @@ pub(super) fn load_stage_covering_tests(
                 discovery_source: row.get(7)?,
                 linkage_source: row.get(8)?,
                 linkage_status: row.get(9)?,
+                classification: row.get(10)?,
+                classification_source: row.get(11)?,
+                fan_out: row.get(12)?,
             })
         })
         .context("failed querying stage covering tests")?;

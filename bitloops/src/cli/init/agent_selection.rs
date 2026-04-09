@@ -13,6 +13,10 @@ use crate::cli::enable::initialized_agents;
 use super::agent_hooks::{DEFAULT_AGENT, agent_display, available_agents, detect_agents};
 
 pub fn can_prompt_interactively() -> bool {
+    #[cfg(test)]
+    if let Some(v) = crate::cli::telemetry_consent::test_tty_override() {
+        return v && command_exists("stty");
+    }
     if let Ok(v) = env::var("BITLOOPS_TEST_TTY") {
         return v == "1" && command_exists("stty");
     }
