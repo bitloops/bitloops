@@ -528,7 +528,7 @@ async fn execute_relational_pipeline_clones_without_neighbors_reads_persisted_ed
     }
 
     conn.execute(
-        "INSERT INTO symbol_clone_edges (
+        "INSERT INTO symbol_clone_edges_current (
             repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
             relation_kind, score, semantic_score, lexical_score, structural_score,
             clone_input_hash, explanation_json
@@ -588,6 +588,12 @@ async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_orderin
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     let repo_id = cfg.repo.repo_id.as_str();
+    crate::capability_packs::semantic_clones::ensure_semantic_features_schema(&relational)
+        .await
+        .expect("ensure current semantic feature schema");
+    crate::capability_packs::semantic_clones::ensure_semantic_embeddings_schema(&relational)
+        .await
+        .expect("ensure current semantic embedding schema");
 
     for (
         symbol_id,
@@ -649,32 +655,36 @@ async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_orderin
         .expect("insert current artefact");
 
         conn.execute(
-            "INSERT INTO symbol_semantics (
-                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+            "INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
                 template_summary, summary, confidence
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 artefact_id,
                 repo_id,
+                path,
                 format!("blob-{symbol_id}"),
+                symbol_id,
                 format!("semantic-hash-{symbol_id}"),
                 summary,
                 summary,
                 0.92_f64,
             ],
         )
-        .expect("insert semantic summary");
+        .expect("insert current semantic summary");
 
         conn.execute(
-            "INSERT INTO symbol_features (
-                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+            "INSERT INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
                 normalized_name, normalized_signature, modifiers, identifier_tokens,
                 normalized_body_tokens, parent_kind, context_tokens
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 artefact_id,
                 repo_id,
+                path,
                 format!("blob-{symbol_id}"),
+                symbol_id,
                 format!("semantic-hash-{symbol_id}"),
                 normalized_name,
                 normalized_signature,
@@ -684,16 +694,19 @@ async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_orderin
                 r#"["src","orders"]"#,
             ],
         )
-        .expect("insert semantic features");
+        .expect("insert current semantic features");
 
         conn.execute(
-            "INSERT INTO symbol_embeddings (
-                artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension,
+                embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 artefact_id,
                 repo_id,
+                path,
                 format!("blob-{symbol_id}"),
+                symbol_id,
                 "local",
                 "jinaai/jina-embeddings-v2-base-code",
                 3,
@@ -701,7 +714,7 @@ async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_orderin
                 embedding,
             ],
         )
-        .expect("insert embedding");
+        .expect("insert current embedding");
     }
 
     let parsed_neighbors = parse_devql_query(
@@ -738,9 +751,12 @@ async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_orderin
         }
     }
 
-    rebuild_symbol_clone_edges(&relational, repo_id)
-        .await
-        .expect("rebuild persisted clone edges");
+    crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+        &relational,
+        repo_id,
+    )
+    .await
+    .expect("rebuild persisted current clone edges");
     let parsed_persisted = parse_devql_query(
         r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/source.ts::process")->clones(min_score:0.4)->limit(10)"#,
     )

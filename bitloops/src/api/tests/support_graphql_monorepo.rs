@@ -421,10 +421,12 @@ pub(super) fn seed_graphql_clone_scoring_inputs(repo_root: &Path) {
 
     conn.execute_batch(
         r#"
-CREATE TABLE IF NOT EXISTS symbol_semantics (
+CREATE TABLE IF NOT EXISTS symbol_semantics_current (
     artefact_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
     semantic_features_input_hash TEXT NOT NULL,
     docstring_summary TEXT,
     llm_summary TEXT,
@@ -435,10 +437,12 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     generated_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS symbol_features (
+CREATE TABLE IF NOT EXISTS symbol_features_current (
     artefact_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
     semantic_features_input_hash TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     normalized_signature TEXT,
@@ -450,16 +454,20 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     generated_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS symbol_embeddings (
-    artefact_id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
+    artefact_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    representation_kind TEXT NOT NULL DEFAULT 'baseline',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     dimension INTEGER NOT NULL CHECK (dimension > 0),
     embedding_input_hash TEXT NOT NULL,
     embedding TEXT NOT NULL,
-    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (artefact_id, representation_kind)
 );
 "#,
     )
@@ -469,50 +477,60 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
     )
     .expect("initialise clone edge table");
 
-    for (artefact_id, blob_sha, semantic_hash, template_summary, summary) in [
+    for (artefact_id, path, content_id, symbol_id, semantic_hash, template_summary, summary) in [
         (
             "artefact::api-caller",
+            "packages/api/src/caller.ts",
             "blob-api-caller",
+            "sym::api-caller",
             "semantic-hash-api-caller",
             "Caller helper summary",
             "Calls API target and web render helpers to build a response payload.",
         ),
         (
             "artefact::api-target",
+            "packages/api/src/target.ts",
             "blob-api-target",
+            "sym::api-target",
             "semantic-hash-api-target",
             "Target helper summary",
             "Builds API response payload fields and returns the transformed target result.",
         ),
         (
             "artefact::web-render",
+            "packages/web/src/page.ts",
             "blob-web-page",
+            "sym::web-render",
             "semantic-hash-web-render",
             "Render helper summary",
             "Renders a web payload fragment used by API caller output assembly.",
         ),
     ] {
         conn.execute(
-            "INSERT OR REPLACE INTO symbol_semantics (
-                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+            "INSERT OR REPLACE INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
                 template_summary, summary, confidence
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
-                blob_sha,
+                path,
+                content_id,
+                symbol_id,
                 semantic_hash,
                 template_summary,
                 summary,
                 0.92_f64,
             ],
         )
-        .expect("insert clone scoring semantics");
+        .expect("insert current clone scoring semantics");
     }
 
     for (
         artefact_id,
-        blob_sha,
+        path,
+        content_id,
+        symbol_id,
         semantic_hash,
         normalized_name,
         normalized_signature,
@@ -522,7 +540,9 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
     ) in [
         (
             "artefact::api-caller",
+            "packages/api/src/caller.ts",
             "blob-api-caller",
+            "sym::api-caller",
             "semantic-hash-api-caller",
             "caller",
             "function caller()",
@@ -532,7 +552,9 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
         ),
         (
             "artefact::api-target",
+            "packages/api/src/target.ts",
             "blob-api-target",
+            "sym::api-target",
             "semantic-hash-api-target",
             "target",
             "function caller()",
@@ -542,7 +564,9 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
         ),
         (
             "artefact::web-render",
+            "packages/web/src/page.ts",
             "blob-web-page",
+            "sym::web-render",
             "semantic-hash-web-render",
             "render",
             "function render()",
@@ -552,15 +576,17 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
         ),
     ] {
         conn.execute(
-            "INSERT OR REPLACE INTO symbol_features (
-                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+            "INSERT OR REPLACE INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
                 normalized_name, normalized_signature, modifiers, identifier_tokens,
                 normalized_body_tokens, parent_kind, context_tokens
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
-                blob_sha,
+                path,
+                content_id,
+                symbol_id,
                 semantic_hash,
                 normalized_name,
                 normalized_signature,
@@ -570,38 +596,46 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
                 context_tokens,
             ],
         )
-        .expect("insert clone scoring features");
+        .expect("insert current clone scoring features");
     }
 
-    for (artefact_id, blob_sha, input_hash, embedding) in [
+    for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
         (
             "artefact::api-caller",
+            "packages/api/src/caller.ts",
             "blob-api-caller",
+            "sym::api-caller",
             "embed-hash-api-caller",
             "[0.95,0.05,0.0]",
         ),
         (
             "artefact::api-target",
+            "packages/api/src/target.ts",
             "blob-api-target",
+            "sym::api-target",
             "embed-hash-api-target",
             "[0.93,0.07,0.0]",
         ),
         (
             "artefact::web-render",
+            "packages/web/src/page.ts",
             "blob-web-page",
+            "sym::web-render",
             "embed-hash-web-render",
             "[0.81,0.19,0.0]",
         ),
     ] {
         conn.execute(
-            "INSERT OR REPLACE INTO symbol_embeddings (
-                artefact_id, repo_id, blob_sha, provider, model, dimension,
-                embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR REPLACE INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'baseline', ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
-                blob_sha,
+                path,
+                content_id,
+                symbol_id,
                 "local_fastembed",
                 "jinaai/jina-embeddings-v2-base-code",
                 3,
@@ -609,7 +643,7 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
                 embedding,
             ],
         )
-        .expect("insert clone scoring embeddings");
+        .expect("insert current clone scoring embeddings");
     }
 }
 

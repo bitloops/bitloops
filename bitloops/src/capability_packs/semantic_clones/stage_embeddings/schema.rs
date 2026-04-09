@@ -188,10 +188,10 @@ END $$;
 }
 
 pub(crate) async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
+    upgrade_sqlite_semantic_embeddings_schema(sqlite_path).await?;
     sqlite_exec_path_allow_create(sqlite_path, semantic_embeddings_sqlite_schema_sql())
         .await
         .context("creating SQLite semantic embedding tables")?;
-    upgrade_sqlite_semantic_embeddings_schema(sqlite_path).await?;
     Ok(())
 }
 
@@ -213,18 +213,51 @@ async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result
         let conn = rusqlite::Connection::open(&db_path)
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
 
-        if sqlite_table_has_column(&conn, "symbol_embeddings", "artefact_id")?
-            && !sqlite_table_has_column(&conn, "symbol_embeddings", "representation_kind")?
-        {
+        let symbol_embeddings_needs_upgrade =
+            sqlite_table_has_column(&conn, "symbol_embeddings", "artefact_id")?
+                && !sqlite_table_has_column(&conn, "symbol_embeddings", "representation_kind")?;
+        let symbol_embeddings_has_generated_at =
+            sqlite_table_has_column(&conn, "symbol_embeddings", "generated_at")?;
+        let symbol_embeddings_current_needs_upgrade =
+            sqlite_table_has_column(&conn, "symbol_embeddings_current", "artefact_id")?
+                && !sqlite_table_has_column(
+                    &conn,
+                    "symbol_embeddings_current",
+                    "representation_kind",
+                )?;
+        let symbol_embeddings_current_has_generated_at =
+            sqlite_table_has_column(&conn, "symbol_embeddings_current", "generated_at")?;
+
+        if symbol_embeddings_needs_upgrade {
             conn.execute(
                 "ALTER TABLE symbol_embeddings RENAME TO symbol_embeddings_legacy",
                 [],
             )
             .context("renaming legacy symbol_embeddings table")?;
+        }
+
+        if symbol_embeddings_current_needs_upgrade {
+            conn.execute(
+                "ALTER TABLE symbol_embeddings_current RENAME TO symbol_embeddings_current_legacy",
+                [],
+            )
+            .context("renaming legacy symbol_embeddings_current table")?;
+        }
+
+        if symbol_embeddings_needs_upgrade || symbol_embeddings_current_needs_upgrade {
             conn.execute_batch(semantic_embeddings_sqlite_schema_sql())
                 .context("creating upgraded semantic embedding tables")?;
+        }
+
+        if symbol_embeddings_needs_upgrade {
+            let generated_at_select = if symbol_embeddings_has_generated_at {
+                "generated_at"
+            } else {
+                "CURRENT_TIMESTAMP"
+            };
             conn.execute(
-                "INSERT INTO symbol_embeddings (
+                &format!(
+                    "INSERT INTO symbol_embeddings (
                     artefact_id,
                     repo_id,
                     blob_sha,
@@ -246,8 +279,9 @@ async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result
                     dimension,
                     embedding_input_hash,
                     embedding,
-                    generated_at
-                FROM symbol_embeddings_legacy",
+                    {generated_at_select}
+                FROM symbol_embeddings_legacy"
+                ),
                 [],
             )
             .context("copying legacy symbol_embeddings rows into upgraded table")?;
@@ -255,18 +289,15 @@ async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result
                 .context("dropping legacy symbol_embeddings table")?;
         }
 
-        if sqlite_table_has_column(&conn, "symbol_embeddings_current", "artefact_id")?
-            && !sqlite_table_has_column(&conn, "symbol_embeddings_current", "representation_kind")?
-        {
+        if symbol_embeddings_current_needs_upgrade {
+            let generated_at_select = if symbol_embeddings_current_has_generated_at {
+                "generated_at"
+            } else {
+                "CURRENT_TIMESTAMP"
+            };
             conn.execute(
-                "ALTER TABLE symbol_embeddings_current RENAME TO symbol_embeddings_current_legacy",
-                [],
-            )
-            .context("renaming legacy symbol_embeddings_current table")?;
-            conn.execute_batch(semantic_embeddings_sqlite_schema_sql())
-                .context("creating upgraded current semantic embedding tables")?;
-            conn.execute(
-                "INSERT INTO symbol_embeddings_current (
+                &format!(
+                    "INSERT INTO symbol_embeddings_current (
                     artefact_id,
                     repo_id,
                     path,
@@ -292,8 +323,9 @@ async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result
                     dimension,
                     embedding_input_hash,
                     embedding,
-                    generated_at
-                FROM symbol_embeddings_current_legacy",
+                    {generated_at_select}
+                FROM symbol_embeddings_current_legacy"
+                ),
                 [],
             )
             .context("copying legacy symbol_embeddings_current rows into upgraded table")?;

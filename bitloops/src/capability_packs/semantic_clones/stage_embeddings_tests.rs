@@ -197,6 +197,95 @@ async fn semantic_embedding_loads_index_state_from_relational_storage() {
 }
 
 #[tokio::test]
+async fn sqlite_embedding_schema_upgrade_preserves_legacy_rows() {
+    let temp = tempdir().expect("temp dir");
+    let db_path = temp.path().join("semantic-embeddings-legacy.sqlite");
+    sqlite_exec_path_allow_create(
+        &db_path,
+        r#"
+CREATE TABLE symbol_embeddings (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL
+);
+CREATE TABLE symbol_embeddings_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL
+);
+CREATE TABLE semantic_clone_embedding_setup_state (
+    repo_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL,
+    setup_fingerprint TEXT NOT NULL
+);
+INSERT INTO symbol_embeddings (
+    artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding
+) VALUES (
+    'artefact-historical', 'repo-1', 'blob-1', 'local', 'test-model', 3, 'hash-historical', '[0.1,0.2,0.3]'
+);
+INSERT INTO symbol_embeddings_current (
+    artefact_id, repo_id, path, content_id, symbol_id, provider, model, dimension, embedding_input_hash, embedding
+) VALUES (
+    'artefact-current', 'repo-1', 'src/a.ts', 'blob-1', 'sym::a', 'local', 'test-model', 3, 'hash-current', '[0.1,0.2,0.3]'
+);
+INSERT INTO semantic_clone_embedding_setup_state (
+    repo_id, provider, model, dimension, setup_fingerprint
+) VALUES (
+    'repo-1', 'local', 'test-model', 3, 'fingerprint-1'
+);
+"#,
+    )
+    .await
+    .expect("create legacy embedding schema");
+
+    let relational = RelationalStorage::local_only(db_path.clone());
+    ensure_semantic_embeddings_schema(&relational)
+        .await
+        .expect("upgrade legacy embedding schema");
+
+    let conn = rusqlite::Connection::open(&db_path).expect("open upgraded sqlite");
+    let historical = conn
+        .query_row(
+            "SELECT representation_kind FROM symbol_embeddings WHERE artefact_id = 'artefact-historical'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("read upgraded historical embedding row");
+    let current = conn
+        .query_row(
+            "SELECT representation_kind FROM symbol_embeddings_current WHERE artefact_id = 'artefact-current'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("read upgraded current embedding row");
+    let setup = conn
+        .query_row(
+            "SELECT representation_kind FROM semantic_clone_embedding_setup_state WHERE repo_id = 'repo-1'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("read upgraded embedding setup state");
+
+    assert_eq!(historical, "baseline");
+    assert_eq!(current, "baseline");
+    assert_eq!(setup, "baseline");
+}
+
+#[tokio::test]
 async fn current_embedding_upsert_reuses_matching_rows_and_keeps_enriched_variant() {
     let relational = sqlite_relational_with_schema(&format!(
         "{}\nCREATE TABLE symbol_semantics_current (

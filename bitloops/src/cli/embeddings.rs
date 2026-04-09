@@ -402,6 +402,7 @@ fn pull_runtime_client_config(
 mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
+    use crate::test_support::process_state::with_process_state;
     use clap::Parser;
     use std::fs;
     use std::path::Path;
@@ -731,10 +732,19 @@ request_timeout_secs = 5
             "alice@example.com",
         );
 
-        assert!(matches!(
-            inspect_embeddings_install_state(repo.path()),
-            EmbeddingsInstallState::NotConfigured
-        ));
+        let config_root = TempDir::new().expect("config tempdir");
+        let config_root_value = config_root.path().to_string_lossy().into_owned();
+
+        with_process_state(
+            Some(repo.path()),
+            &[("BITLOOPS_TEST_CONFIG_DIR_OVERRIDE", Some(config_root_value.as_str()))],
+            || {
+                assert!(matches!(
+                    inspect_embeddings_install_state(repo.path()),
+                    EmbeddingsInstallState::NotConfigured
+                ));
+            },
+        );
     }
 
     #[test]
