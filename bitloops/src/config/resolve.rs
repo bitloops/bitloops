@@ -14,21 +14,22 @@ use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
     normalize_sqlite_path, read_any_string, read_any_u64, read_non_empty_env,
-    resolve_configured_path, resolve_optional_env_indirection, resolve_required_provider_string,
+    resolve_configured_path, resolve_required_provider_string,
 };
 use super::types::{
     AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
-    DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingProfileConfig, EmbeddingsConfig,
-    EmbeddingsRuntimeConfig, EventsBackendConfig, GithubProviderConfig,
-    MAX_SEMANTIC_CLONES_ANN_NEIGHBORS, MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig,
-    RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
-    StoreBackendConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingsConfig, EventsBackendConfig,
+    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig, InferenceProfileConfig,
+    InferenceRuntimeConfig, InferenceTask, MAX_SEMANTIC_CLONES_ANN_NEIGHBORS,
+    MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig, RelationalBackendConfig,
+    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig,
+    StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 use super::unified_config::{
-    UnifiedSettings, resolve_dashboard_from_unified, resolve_embedding_capability_from_unified,
-    resolve_embeddings_from_unified, resolve_provider_from_unified,
-    resolve_semantic_clones_from_unified, resolve_semantic_from_unified,
-    resolve_store_backend_from_unified, resolve_watch_from_unified,
+    UnifiedSettings, resolve_dashboard_from_unified, resolve_inference_capability_from_unified,
+    resolve_inference_from_unified, resolve_provider_from_unified,
+    resolve_semantic_clones_from_unified, resolve_store_backend_from_unified,
+    resolve_watch_from_unified,
 };
 
 fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSettings)>> {
@@ -196,18 +197,6 @@ pub fn resolve_repo_runtime_db_path_for_config_root(config_root: &Path) -> PathB
         .join("runtime.sqlite")
 }
 
-pub fn resolve_store_semantic_config() -> StoreSemanticConfig {
-    let repo_root = current_repo_root_or_cwd();
-    resolve_store_semantic_config_for_repo(&repo_root)
-}
-
-pub fn resolve_store_semantic_config_for_repo(repo_root: &Path) -> StoreSemanticConfig {
-    let settings = daemon_settings_for_repo(repo_root)
-        .map(|(_, settings)| settings)
-        .unwrap_or_default();
-    resolve_semantic_from_unified(&settings, |key| env::var(key).ok())
-}
-
 pub fn resolve_provider_config() -> Result<ProviderConfig> {
     let repo_root = current_repo_root_or_cwd_result()?;
     resolve_provider_config_for_repo(&repo_root)
@@ -226,14 +215,22 @@ pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClon
     resolve_semantic_clones_from_unified(&settings, |key| env::var(key).ok())
 }
 
-pub fn resolve_embeddings_config_for_repo(repo_root: &Path) -> EmbeddingsConfig {
+pub fn resolve_inference_config_for_repo(repo_root: &Path) -> InferenceConfig {
     let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
-    resolve_embeddings_from_unified(&settings, &config_root, |key| env::var(key).ok())
+    resolve_inference_from_unified(&settings, &config_root, |key| env::var(key).ok())
+}
+
+pub fn resolve_embeddings_config_for_repo(repo_root: &Path) -> EmbeddingsConfig {
+    resolve_inference_config_for_repo(repo_root)
+}
+
+pub fn resolve_inference_capability_config_for_repo(repo_root: &Path) -> InferenceCapabilityConfig {
+    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
+    resolve_inference_capability_from_unified(&settings, &config_root, |key| env::var(key).ok())
 }
 
 pub fn resolve_embedding_capability_config_for_repo(repo_root: &Path) -> EmbeddingCapabilityConfig {
-    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
-    resolve_embedding_capability_from_unified(&settings, &config_root, |key| env::var(key).ok())
+    resolve_inference_capability_config_for_repo(repo_root)
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -369,25 +366,6 @@ where
     })
 }
 
-pub(crate) fn resolve_store_semantic_config_with<F>(
-    file_cfg: StoreFileConfig,
-    env_lookup: F,
-) -> StoreSemanticConfig
-where
-    F: Fn(&str) -> Option<String>,
-{
-    StoreSemanticConfig {
-        semantic_provider: read_non_empty_env(&env_lookup, ENV_SEMANTIC_PROVIDER)
-            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_provider, &env_lookup)),
-        semantic_model: read_non_empty_env(&env_lookup, ENV_SEMANTIC_MODEL)
-            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_model, &env_lookup)),
-        semantic_api_key: read_non_empty_env(&env_lookup, ENV_SEMANTIC_API_KEY)
-            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_api_key, &env_lookup)),
-        semantic_base_url: read_non_empty_env(&env_lookup, ENV_SEMANTIC_BASE_URL)
-            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_base_url, &env_lookup)),
-    }
-}
-
 pub(crate) fn resolve_semantic_clones_from_unified_with<F>(
     settings: &UnifiedSettings,
     env_lookup: F,
@@ -406,27 +384,9 @@ where
         .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE"))
         .map(|value| parse_embedding_mode(&value))
         .unwrap_or_default();
-    let summary_profile = root
-        .and_then(|map| read_any_string(map, &["summary_profile"]))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .filter(|value| {
-            !matches!(
-                value.to_ascii_lowercase().as_str(),
-                "none" | "disabled" | "off"
-            )
-        });
-    let embedding_profile = root
-        .and_then(|map| read_any_string(map, &["embedding_profile"]))
-        .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_PROFILE"))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .filter(|value| {
-            !matches!(
-                value.to_ascii_lowercase().as_str(),
-                "none" | "disabled" | "off"
-            )
-        });
+    let inference_root = root
+        .and_then(|map| map.get("inference"))
+        .and_then(Value::as_object);
     let ann_neighbors = root
         .and_then(|map| {
             read_any_u64(map, &["ann_neighbors"])
@@ -455,11 +415,27 @@ where
 
     SemanticClonesConfig {
         summary_mode,
-        summary_profile,
         embedding_mode,
-        embedding_profile,
         ann_neighbors,
         enrichment_workers,
+        inference: crate::config::SemanticClonesInferenceBindings {
+            summary_generation: inference_root
+                .and_then(|map| read_any_string(map, &["summary_generation"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
+            code_embeddings: inference_root
+                .and_then(|map| read_any_string(map, &["code_embeddings"]))
+                .or_else(|| {
+                    read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_CODE_EMBEDDINGS")
+                })
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            summary_embeddings: inference_root
+                .and_then(|map| read_any_string(map, &["summary_embeddings"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        },
     }
 }
 
@@ -473,105 +449,135 @@ fn clamp_semantic_clones_ann_neighbors(value: i64) -> usize {
     value as usize
 }
 
-pub(crate) fn resolve_embeddings_from_unified_with<F>(
+pub(crate) fn resolve_inference_from_unified_with<F>(
     settings: &UnifiedSettings,
     config_root: &Path,
     env_lookup: F,
-) -> EmbeddingsConfig
+) -> InferenceConfig
 where
     F: Fn(&str) -> Option<String>,
 {
-    let root = settings.embeddings.as_ref().and_then(Value::as_object);
-    let runtime_root = root
-        .and_then(|map| map.get(EMBEDDINGS_RUNTIME_CONFIG_KEY))
+    let root = settings.inference.as_ref().and_then(Value::as_object);
+    let runtimes_root = root
+        .and_then(|map| map.get("runtimes"))
         .and_then(Value::as_object);
     let profiles_root = root
-        .and_then(|map| map.get(EMBEDDINGS_PROFILES_CONFIG_KEY))
+        .and_then(|map| map.get("profiles"))
         .and_then(Value::as_object);
 
-    let defaults = EmbeddingsRuntimeConfig::default();
+    let defaults = InferenceRuntimeConfig::default();
     let mut warnings = Vec::new();
-    let runtime = EmbeddingsRuntimeConfig {
-        command: resolve_runtime_string_opt(
-            runtime_root,
-            "command",
-            &env_lookup,
-            &mut warnings,
-            "embeddings.runtime.command",
-        )
-        .unwrap_or(defaults.command),
-        args: resolve_runtime_args(
-            runtime_root,
-            &env_lookup,
-            &mut warnings,
-            "embeddings.runtime.args",
-        )
-        .unwrap_or(defaults.args),
-        startup_timeout_secs: runtime_root
-            .and_then(|map| read_any_u64(map, &["startup_timeout_secs"]))
-            .unwrap_or(defaults.startup_timeout_secs),
-        request_timeout_secs: runtime_root
-            .and_then(|map| read_any_u64(map, &["request_timeout_secs"]))
-            .unwrap_or(defaults.request_timeout_secs),
-    };
+    let mut runtimes = std::collections::BTreeMap::new();
+    if let Some(runtimes_root) = runtimes_root {
+        for (name, value) in runtimes_root {
+            let Some(runtime_root) = value.as_object() else {
+                warnings.push(format!(
+                    "inference.runtimes.{name} must be a table and was ignored"
+                ));
+                continue;
+            };
+
+            runtimes.insert(
+                name.to_string(),
+                InferenceRuntimeConfig {
+                    command: resolve_runtime_string_opt(
+                        Some(runtime_root),
+                        "command",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("inference.runtimes.{name}.command"),
+                    )
+                    .unwrap_or_else(|| defaults.command.clone()),
+                    args: resolve_runtime_args(
+                        Some(runtime_root),
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("inference.runtimes.{name}.args"),
+                    )
+                    .unwrap_or_default(),
+                    startup_timeout_secs: read_any_u64(runtime_root, &["startup_timeout_secs"])
+                        .unwrap_or(defaults.startup_timeout_secs),
+                    request_timeout_secs: read_any_u64(runtime_root, &["request_timeout_secs"])
+                        .unwrap_or(defaults.request_timeout_secs),
+                },
+            );
+        }
+    }
 
     let mut profiles = std::collections::BTreeMap::new();
     if let Some(profiles_root) = profiles_root {
         for (name, value) in profiles_root {
             let Some(profile_root) = value.as_object() else {
                 warnings.push(format!(
-                    "embeddings.profiles.{name} must be a table and was ignored"
+                    "inference.profiles.{name} must be a table and was ignored"
                 ));
                 continue;
             };
 
-            let kind = resolve_runtime_string_opt(
+            let task = resolve_runtime_string_opt(
                 Some(profile_root),
-                "kind",
+                "task",
                 &env_lookup,
                 &mut warnings,
-                &format!("embeddings.profiles.{name}.kind"),
+                &format!("inference.profiles.{name}.task"),
             )
             .unwrap_or_default();
-            if kind.is_empty() {
+            let driver = resolve_runtime_string_opt(
+                Some(profile_root),
+                "driver",
+                &env_lookup,
+                &mut warnings,
+                &format!("inference.profiles.{name}.driver"),
+            )
+            .unwrap_or_default();
+            if task.is_empty() || driver.is_empty() {
                 warnings.push(format!(
-                    "embeddings.profiles.{name} is missing `kind` and was ignored"
+                    "inference.profiles.{name} must declare both `task` and `driver` and was ignored"
                 ));
                 continue;
             }
+            let task = parse_inference_task(&task);
 
             profiles.insert(
                 name.to_string(),
-                EmbeddingProfileConfig {
+                InferenceProfileConfig {
                     name: name.to_string(),
-                    kind,
+                    task,
+                    driver,
+                    runtime: resolve_runtime_string_opt(
+                        Some(profile_root),
+                        "runtime",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("inference.profiles.{name}.runtime"),
+                    ),
                     model: resolve_runtime_string_opt(
                         Some(profile_root),
                         "model",
                         &env_lookup,
                         &mut warnings,
-                        &format!("embeddings.profiles.{name}.model"),
+                        &format!("inference.profiles.{name}.model"),
                     ),
                     api_key: resolve_runtime_string_opt(
                         Some(profile_root),
                         "api_key",
                         &env_lookup,
                         &mut warnings,
-                        &format!("embeddings.profiles.{name}.api_key"),
+                        &format!("inference.profiles.{name}.api_key"),
                     ),
                     base_url: resolve_runtime_string_opt(
                         Some(profile_root),
                         "base_url",
                         &env_lookup,
                         &mut warnings,
-                        &format!("embeddings.profiles.{name}.base_url"),
+                        &format!("inference.profiles.{name}.base_url"),
                     ),
                     cache_dir: resolve_runtime_string_opt(
                         Some(profile_root),
                         "cache_dir",
                         &env_lookup,
                         &mut warnings,
-                        &format!("embeddings.profiles.{name}.cache_dir"),
+                        &format!("inference.profiles.{name}.cache_dir"),
                     )
                     .map(|path| resolve_configured_path(&path, config_root)),
                 },
@@ -579,8 +585,8 @@ where
         }
     }
 
-    EmbeddingsConfig {
-        runtime,
+    InferenceConfig {
+        runtimes,
         profiles,
         warnings,
     }
@@ -643,22 +649,6 @@ pub(crate) fn resolve_store_backend_config_for_tests(
     file_cfg: StoreFileConfig,
 ) -> Result<StoreBackendConfig> {
     resolve_store_backend_config_with(file_cfg)
-}
-
-#[cfg(test)]
-pub(crate) fn resolve_store_semantic_config_for_tests(
-    file_cfg: StoreFileConfig,
-    env: &[(&str, &str)],
-) -> StoreSemanticConfig {
-    resolve_store_semantic_config_with(file_cfg, |key| {
-        env.iter().find_map(|(k, v)| {
-            if *k == key {
-                Some((*v).to_string())
-            } else {
-                None
-            }
-        })
-    })
 }
 
 fn resolve_runtime_string_opt<F>(
@@ -754,6 +744,13 @@ fn parse_embedding_mode(raw: &str) -> SemanticCloneEmbeddingMode {
         "deterministic" => SemanticCloneEmbeddingMode::Deterministic,
         "refresh_on_upgrade" | "refresh-on-upgrade" => SemanticCloneEmbeddingMode::RefreshOnUpgrade,
         _ => SemanticCloneEmbeddingMode::SemanticAwareOnce,
+    }
+}
+
+fn parse_inference_task(raw: &str) -> InferenceTask {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "text_generation" | "text-generation" => InferenceTask::TextGeneration,
+        _ => InferenceTask::Embeddings,
     }
 }
 

@@ -40,9 +40,6 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
     let duckdb_path = settings["stores"]["events"]["duckdb_path"]
         .as_str()
         .expect("events duckdb path");
-    let semantic_provider = settings["semantic"]["provider"]
-        .as_str()
-        .expect("semantic provider");
 
     fs::write(
         repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
@@ -53,9 +50,6 @@ sqlite_path = {sqlite_path:?}
 
 [stores.events]
 duckdb_path = {duckdb_path:?}
-
-[semantic]
-provider = {semantic_provider:?}
 "#
         ),
     )
@@ -1184,9 +1178,6 @@ sqlite_path = {sqlite_path:?}
 
 [stores.events]
 duckdb_path = {duckdb_path:?}
-
-[semantic]
-provider = "disabled"
 
 [semantic_clones]
 summary_mode = "off"

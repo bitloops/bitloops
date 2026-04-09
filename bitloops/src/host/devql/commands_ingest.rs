@@ -93,6 +93,7 @@ async fn execute_ingest_inner(
     let semantic_clones = resolve_semantic_clones_config(
         &capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID),
     );
+    let semantic_inference = capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
     let preferred_representation_kind =
         crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code;
     let embedding_outputs_enabled = embeddings_enabled(&semantic_clones);
@@ -102,7 +103,8 @@ async fn execute_ingest_inner(
     let direct_embedding_sync_action = if enrichment.is_none() && embedding_outputs_enabled {
         let selection = resolve_embedding_provider(
             &semantic_clones,
-            capability_host.inference(),
+            &semantic_inference,
+            preferred_representation_kind,
             EmbeddingProviderMode::ConfiguredDegrade,
         )?;
         if selection.degraded_reason.is_some() {
@@ -311,7 +313,7 @@ async fn execute_ingest_inner(
                     )
                     .await?;
                     let semantic_feature_inputs =
-                        semantic_clones_pack::build_semantic_feature_inputs(
+                        semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
                             &pre_stage_artefacts,
                             &pre_stage_dependencies,
                             &content,
@@ -535,7 +537,7 @@ async fn execute_ingest_inner(
         if !bootstrap_inputs.is_empty() {
             let bootstrap_summary_provider = resolve_summary_provider(
                 &semantic_clones,
-                capability_host.inference(),
+                &semantic_inference,
                 SummaryProviderMode::DeterministicOnly,
             )?;
             let bootstrap_input_hashes = bootstrap_inputs

@@ -156,7 +156,7 @@ Feature: Semantic Clones BDD scenarios
     And the Stage 1 docstring is empty
     And the Stage 1 summary provider returns no candidate
     When Stage 2 starts with invalid embedding provider configuration
-    Then Stage 2 fails with message containing "spawning embeddings runtime"
+    Then Stage 2 fails with message containing "building `bitloops_embeddings_ipc` service"
     And Stage 2 writes 0 embedding rows
 
   @SemanticClones-ERR1-profile
@@ -165,7 +165,7 @@ Feature: Semantic Clones BDD scenarios
     And the Stage 1 docstring is empty
     And the Stage 1 summary provider returns no candidate
     When Stage 2 starts with embedding provider configuration "missing embedding profile"
-    Then Stage 2 fails with message containing "embedding profile `missing-profile` is not defined"
+    Then Stage 2 fails with message containing "inference profile `missing-profile` is not defined"
     And Stage 2 writes 0 embedding rows
 
   # S6 already covers the pure same-file weak-neighbour case. The scenarios below add cross-file handler calibration.

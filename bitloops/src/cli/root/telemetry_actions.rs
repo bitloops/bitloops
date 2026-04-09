@@ -125,7 +125,6 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Debug(_) => None,
         crate::cli::Commands::Devql(args) => devql_action(args),
         crate::cli::Commands::Embeddings(args) => embeddings_action(args),
-        crate::cli::Commands::EmbeddingsRuntime(_) => None,
         crate::cli::Commands::DevqlWatcher(_) => None,
         crate::cli::Commands::DaemonProcess(_) => None,
         crate::cli::Commands::DaemonSupervisor(_) => None,

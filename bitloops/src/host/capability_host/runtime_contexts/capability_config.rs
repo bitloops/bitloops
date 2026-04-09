@@ -1,12 +1,12 @@
 use serde_json::Value;
 
-use crate::config::{EmbeddingsConfig, ProviderConfig, SemanticClonesConfig, StoreBackendConfig};
+use crate::config::{InferenceConfig, ProviderConfig, SemanticClonesConfig, StoreBackendConfig};
 
 pub(super) fn build_capability_config_root(
     backends: &StoreBackendConfig,
     providers: &ProviderConfig,
     semantic_clones: &SemanticClonesConfig,
-    embeddings: &EmbeddingsConfig,
+    inference: &InferenceConfig,
 ) -> Value {
     serde_json::json!({
         "knowledge": {
@@ -23,29 +23,38 @@ pub(super) fn build_capability_config_root(
         },
         "semantic_clones": {
             "summary_mode": semantic_clones.summary_mode,
-            "summary_profile": semantic_clones.summary_profile,
             "embedding_mode": semantic_clones.embedding_mode,
-            "embedding_profile": semantic_clones.embedding_profile,
             "ann_neighbors": semantic_clones.ann_neighbors,
             "enrichment_workers": semantic_clones.enrichment_workers,
-        },
-        "embeddings": {
-            "runtime": {
-                "command": embeddings.runtime.command,
-                "args": embeddings.runtime.args,
-                "startup_timeout_secs": embeddings.runtime.startup_timeout_secs,
-                "request_timeout_secs": embeddings.runtime.request_timeout_secs,
+            "inference": {
+                "summary_generation": semantic_clones.inference.summary_generation,
+                "code_embeddings": semantic_clones.inference.code_embeddings,
+                "summary_embeddings": semantic_clones.inference.summary_embeddings,
             },
-            "profiles": embeddings.profiles.iter().map(|(name, profile)| (
+        },
+        "inference": {
+            "runtimes": inference.runtimes.iter().map(|(name, runtime)| (
                 name.clone(),
                 serde_json::json!({
-                    "kind": profile.kind,
+                    "command": runtime.command,
+                    "args": runtime.args,
+                    "startup_timeout_secs": runtime.startup_timeout_secs,
+                    "request_timeout_secs": runtime.request_timeout_secs,
+                })
+            )).collect::<serde_json::Map<_, _>>(),
+            "profiles": inference.profiles.iter().map(|(name, profile)| (
+                name.clone(),
+                serde_json::json!({
+                    "task": profile.task,
+                    "driver": profile.driver,
+                    "runtime": profile.runtime,
                     "model": profile.model,
+                    "api_key": profile.api_key.as_ref().map(|_| "<configured>"),
                     "base_url": profile.base_url,
                     "cache_dir": profile.cache_dir,
                 })
             )).collect::<serde_json::Map<_, _>>(),
-            "warnings": embeddings.warnings,
+            "warnings": inference.warnings,
         },
         "host": {
             "invocation": {

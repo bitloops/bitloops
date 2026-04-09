@@ -8,9 +8,6 @@ sqlite_path = ".bitloops/stores/devql.sqlite"
 
 [stores.events]
 duckdb_path = ".bitloops/stores/events.duckdb"
-
-[semantic]
-provider = "disabled"
 "#,
     );
 }

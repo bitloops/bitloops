@@ -2,13 +2,16 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::adapters::model_providers::embeddings::EmbeddingProvider;
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::config::{SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode};
 use crate::host::capability_host::CapabilityConfigView;
-use crate::host::inference::{DEFAULT_TEXT_GENERATION_PROFILE_ID, InferenceGateway};
+use crate::host::inference::{EmbeddingService, InferenceGateway};
 
-use super::embeddings;
 use super::features::{self, SemanticSummaryProvider};
+use super::types::{
+    SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
+    SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryProviderMode {
@@ -26,12 +29,14 @@ pub enum EmbeddingProviderMode {
 pub struct SummaryProviderSelection {
     pub provider: Arc<dyn SemanticSummaryProvider>,
     pub degraded_reason: Option<String>,
+    pub slot_name: Option<String>,
     pub profile_name: Option<String>,
 }
 
 pub struct EmbeddingProviderSelection {
-    pub provider: Option<Arc<dyn EmbeddingProvider>>,
+    pub provider: Option<Arc<dyn EmbeddingService>>,
     pub degraded_reason: Option<String>,
+    pub slot_name: Option<String>,
     pub profile_name: Option<String>,
 }
 
@@ -44,30 +49,48 @@ pub fn resolve_semantic_clones_config(view: &CapabilityConfigView) -> SemanticCl
 
 pub fn embeddings_enabled(config: &SemanticClonesConfig) -> bool {
     config.embedding_mode != SemanticCloneEmbeddingMode::Off
-        && config
-            .embedding_profile
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+        && (configured_slot_name(config.inference.code_embeddings.as_deref()).is_some()
+            || configured_slot_name(config.inference.summary_embeddings.as_deref()).is_some())
 }
 
-pub fn resolve_selected_summary_profile(
-    config: &SemanticClonesConfig,
-    inference: &dyn InferenceGateway,
-) -> Option<String> {
+fn configured_slot_name(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resolved_profile_name(inference: &dyn InferenceGateway, slot_name: &str) -> Option<String> {
+    inference.describe(slot_name).map(|slot| slot.profile_name)
+}
+
+pub fn resolve_selected_summary_slot(config: &SemanticClonesConfig) -> Option<String> {
     if config.summary_mode == SemanticSummaryMode::Off {
         return None;
     }
-    if let Some(profile_name) = config
-        .summary_profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Some(profile_name.to_string());
+
+    configured_slot_name(config.inference.summary_generation.as_deref())
+        .map(|_| SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT.to_string())
+}
+
+pub fn embedding_slot_for_representation(
+    config: &SemanticClonesConfig,
+    representation_kind: EmbeddingRepresentationKind,
+) -> Option<String> {
+    if config.embedding_mode == SemanticCloneEmbeddingMode::Off {
+        return None;
     }
-    inference
-        .has_text_generation_profile(DEFAULT_TEXT_GENERATION_PROFILE_ID)
-        .then_some(DEFAULT_TEXT_GENERATION_PROFILE_ID.to_string())
+
+    match representation_kind {
+        EmbeddingRepresentationKind::Code => {
+            configured_slot_name(config.inference.code_embeddings.as_deref())
+                .map(|_| SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT.to_string())
+        }
+        EmbeddingRepresentationKind::Summary => {
+            configured_slot_name(config.inference.summary_embeddings.as_deref())
+                .map(|_| SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT.to_string())
+        }
+    }
 }
 
 pub fn resolve_summary_provider(
@@ -81,23 +104,27 @@ pub fn resolve_summary_provider(
         return Ok(SummaryProviderSelection {
             provider: Arc::new(features::NoopSemanticSummaryProvider),
             degraded_reason: None,
+            slot_name: None,
             profile_name: None,
         });
     }
 
-    let Some(profile_name) = resolve_selected_summary_profile(config, inference) else {
+    let Some(slot_name) = resolve_selected_summary_slot(config) else {
         return Ok(SummaryProviderSelection {
             provider: Arc::new(features::NoopSemanticSummaryProvider),
             degraded_reason: None,
+            slot_name: None,
             profile_name: None,
         });
     };
+    let profile_name = resolved_profile_name(inference, &slot_name);
 
-    match inference.text_generation(&profile_name) {
+    match inference.text_generation(&slot_name) {
         Ok(service) => Ok(SummaryProviderSelection {
             provider: features::summary_provider_from_service(service),
             degraded_reason: None,
-            profile_name: Some(profile_name),
+            slot_name: Some(slot_name),
+            profile_name,
         }),
         Err(err) if matches!(mode, SummaryProviderMode::ConfiguredDegrade) => {
             let message = format!("{err:#}");
@@ -107,11 +134,19 @@ pub fn resolve_summary_provider(
             Ok(SummaryProviderSelection {
                 provider: Arc::new(features::NoopSemanticSummaryProvider),
                 degraded_reason: Some(message),
-                profile_name: Some(profile_name),
+                slot_name: Some(slot_name),
+                profile_name,
             })
         }
         Err(err) => Err(err).with_context(|| {
-            format!("resolving semantic summary provider for profile `{profile_name}`")
+            format!(
+                "resolving semantic summary provider for slot `{}`{}",
+                slot_name,
+                profile_name
+                    .as_deref()
+                    .map(|name| format!(" (profile `{name}`)"))
+                    .unwrap_or_default()
+            )
         }),
     }
 }
@@ -119,37 +154,45 @@ pub fn resolve_summary_provider(
 pub fn resolve_embedding_provider(
     config: &SemanticClonesConfig,
     inference: &dyn InferenceGateway,
+    representation_kind: EmbeddingRepresentationKind,
     mode: EmbeddingProviderMode,
 ) -> Result<EmbeddingProviderSelection> {
-    let profile_name = config
-        .embedding_profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    if config.embedding_mode == SemanticCloneEmbeddingMode::Off || profile_name.is_none() {
+    let slot_name = embedding_slot_for_representation(config, representation_kind);
+    if slot_name.is_none() {
         return Ok(EmbeddingProviderSelection {
             provider: None,
             degraded_reason: None,
-            profile_name,
+            slot_name: None,
+            profile_name: None,
         });
     }
 
-    let profile_name = profile_name.expect("checked above");
-    match inference.embeddings(&profile_name) {
+    let slot_name = slot_name.expect("checked above");
+    let profile_name = resolved_profile_name(inference, &slot_name);
+    match inference.embeddings(&slot_name) {
         Ok(service) => Ok(EmbeddingProviderSelection {
-            provider: Some(embeddings::provider_from_service(service)),
+            provider: Some(service),
             degraded_reason: None,
-            profile_name: Some(profile_name),
+            slot_name: Some(slot_name),
+            profile_name,
         }),
         Err(err) if matches!(mode, EmbeddingProviderMode::ConfiguredDegrade) => {
             Ok(EmbeddingProviderSelection {
                 provider: None,
                 degraded_reason: Some(format!("{err:#}")),
-                profile_name: Some(profile_name),
+                slot_name: Some(slot_name),
+                profile_name,
             })
         }
-        Err(err) => Err(err)
-            .with_context(|| format!("resolving embedding provider for profile `{profile_name}`")),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "resolving embedding provider for slot `{}`{}",
+                slot_name,
+                profile_name
+                    .as_deref()
+                    .map(|name| format!(" (profile `{name}`)"))
+                    .unwrap_or_default()
+            )
+        }),
     }
 }

@@ -1,5 +1,6 @@
 use crate::capability_packs::semantic_clones::features::SemanticFeatureInput;
 use crate::capability_packs::semantic_clones::health::SEMANTIC_CLONES_HEALTH_CHECKS;
+use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::cli::embeddings::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsPullArgs,
 };
@@ -149,21 +150,20 @@ fn fake_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<Stri
 
     let script_path = world.scenario_bin_dir().join("fake-embeddings-runtime.sh");
     let script = r#"#!/bin/sh
+model_name="bdd-test-model"
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
-  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
-    *'"type":"describe"'*)
-      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"bdd","profile_name":"fake","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"bdd-test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id"
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"%s"}\n' "$req_id" "$model_name"
       ;;
-    *'"type":"embed_batch"'*)
-      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
-      ;;
-    *'"type":"shutdown"'*)
-      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"%s"}\n' "$req_id" "$model_name"
       exit 0
       ;;
     *)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
       ;;
   esac
 done
@@ -181,58 +181,42 @@ done
 fn fake_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<String>) {
     let script_path = world.scenario_bin_dir().join("fake-embeddings-runtime.ps1");
     let script = r#"
+$modelName = "bdd-test-model"
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
+}
+$ready | ConvertTo-Json -Compress
 $stdin = [Console]::In
 while (($line = $stdin.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $request = $line | ConvertFrom-Json
-  switch ($request.type) {
-    "describe" {
+  switch ($request.cmd) {
+    "embed" {
       $response = @{
-        type = "describe"
-        request_id = $request.request_id
-        protocol_version = 1
-        runtime = @{
-          protocol_version = 1
-          runtime_name = "bitloops-embeddings"
-          runtime_version = "bdd"
-          profile_name = "fake"
-          provider = @{
-            kind = "local_fastembed"
-            provider_name = "local_fastembed"
-            model_name = "bdd-test-model"
-            output_dimension = 3
-            cache_dir = $null
-          }
-        }
-      }
-    }
-    "embed_batch" {
-      $response = @{
-        type = "embed_batch"
-        request_id = $request.request_id
-        protocol_version = 1
-        vectors = @(@{
-          index = 0
-          values = @(0.1, 0.2, 0.3)
-        })
+        id = $request.id
+        ok = $true
+        vectors = @(@(0.1, 0.2, 0.3))
+        model = $modelName
       }
     }
     "shutdown" {
       $response = @{
-        type = "shutdown"
-        request_id = $request.request_id
-        protocol_version = 1
-        accepted = $true
+        id = $request.id
+        ok = $true
+        model = $modelName
       }
       $response | ConvertTo-Json -Compress
       break
     }
     default {
       $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "unexpected request"
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
       }
     }
   }
@@ -260,7 +244,7 @@ fn config_with_fake_runtime(world: &mut DevqlBddWorld, base: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "{base}\n\n[embeddings.runtime]\ncommand = {command:?}\nargs = [{runtime_args}]\nstartup_timeout_secs = 5\nrequest_timeout_secs = 5\n"
+        "{base}\n\n[inference.runtimes.bitloops_embeddings]\ncommand = {command:?}\nargs = [{runtime_args}]\nstartup_timeout_secs = 5\nrequest_timeout_secs = 5\n"
     )
 }
 
@@ -295,7 +279,7 @@ fn when_semantic_clone_health_checks_run(
         let results = with_scenario_process_state(world, || {
             let resources = LocalCapabilityRuntimeResources::new(&repo_root, repo)
                 .expect("build local capability runtime resources");
-            let ctx = resources.runtime();
+            let ctx = resources.runtime_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
             SEMANTIC_CLONES_HEALTH_CHECKS
                 .iter()
                 .map(|check| (check.name.to_string(), (check.run)(&ctx)))
@@ -398,7 +382,7 @@ fn local_cache_dir(world: &mut DevqlBddWorld, profile_name: &str) -> PathBuf {
     let repo_root = ensure_scenario_repo(world);
     let capability = resolve_embedding_capability_config_for_repo(&repo_root);
     let profile = capability
-        .embeddings
+        .inference
         .profiles
         .get(profile_name)
         .unwrap_or_else(|| panic!("missing embedding profile `{profile_name}`"));

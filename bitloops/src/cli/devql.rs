@@ -4,9 +4,8 @@ use std::io::Write;
 use std::time::Instant;
 
 use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
-use crate::config::{
-    SemanticCloneEmbeddingMode, SemanticSummaryMode, resolve_embedding_capability_config_for_repo,
-};
+use crate::capability_packs::semantic_clones::runtime_config::embeddings_enabled;
+use crate::config::{SemanticSummaryMode, resolve_embedding_capability_config_for_repo};
 use crate::devql_transport::{
     SlimCliRepoScope, discover_slim_cli_repo_scope, is_repo_root_discovery_error,
 };
@@ -245,12 +244,7 @@ where
     let enrichment_capability = resolve_embedding_capability_config_for_repo(&cfg.repo_root);
     let enrichment_enabled = enrichment_capability.semantic_clones.summary_mode
         != SemanticSummaryMode::Off
-        || (enrichment_capability.semantic_clones.embedding_mode
-            != SemanticCloneEmbeddingMode::Off
-            && enrichment_capability
-                .semantic_clones
-                .embedding_profile
-                .is_some());
+        || embeddings_enabled(&enrichment_capability.semantic_clones);
 
     match command {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,

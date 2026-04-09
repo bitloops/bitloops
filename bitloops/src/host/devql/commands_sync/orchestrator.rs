@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
+use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
@@ -820,19 +821,20 @@ async fn project_materialized_items(
     items: &[super::sqlite_writer::PreparedSyncItem],
 ) -> Result<()> {
     for item in items {
-        let inputs = semantic_clones_pack::build_semantic_feature_inputs(
-            &sync::semantic_projector::pre_stage_artefacts_for_projection(
-                cfg,
-                &item.desired,
-                &item.extraction,
-            )?,
-            &sync::semantic_projector::pre_stage_dependencies_for_projection(
-                cfg,
-                &item.desired,
-                &item.extraction,
-            )?,
-            &item.effective_content,
-        );
+        let inputs =
+            semantic_features::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+                &sync::semantic_projector::pre_stage_artefacts_for_projection(
+                    cfg,
+                    &item.desired,
+                    &item.extraction,
+                )?,
+                &sync::semantic_projector::pre_stage_dependencies_for_projection(
+                    cfg,
+                    &item.desired,
+                    &item.extraction,
+                )?,
+                &item.effective_content,
+            );
         current_projection
             .invoke_ingester_with_relational(
                 crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,

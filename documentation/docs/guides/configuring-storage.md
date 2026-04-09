@@ -34,7 +34,7 @@ Linux examples:
 ~/.local/share/bitloops/stores/relational/relational.db
 ~/.local/share/bitloops/stores/event/events.duckdb
 ~/.local/share/bitloops/stores/blob/
-~/.cache/bitloops/embeddings/models/
+~/.cache/bitloops-embeddings/
 ~/.local/state/bitloops/daemon/runtime.sqlite
 ```
 
@@ -78,31 +78,44 @@ s3_secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
 
 ## Embedding Cache
 
-Semantic and embeddings configuration lives alongside store config in the daemon config, but it uses separate sections from `[stores]`:
+Inference configuration lives alongside store config in the daemon config, but it uses separate sections from `[stores]`:
 
 ```toml
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
-api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
-
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local"
+ann_neighbors = 5
+enrichment_workers = 1
 
-[embeddings.runtime]
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_embeddings]
 command = "bitloops-embeddings"
-startup_timeout_secs = 10
-request_timeout_secs = 60
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
-cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+cache_dir = "/Users/alex/.cache/bitloops-embeddings"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
 ```
 
 `bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create that default local profile for you. Edit the daemon config manually only when you need a different profile name, model, or hosted provider.
+
+The `bitloops-embeddings` runtime entry points at the standalone binary from the `bitloops/bitloops-embeddings` releases, so you do not need Python installed for this setup.
 
 Embedding model downloads are cache, not durable relational or event store data.
 

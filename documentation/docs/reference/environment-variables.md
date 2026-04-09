@@ -17,18 +17,14 @@ Bitloops prefers daemon config and repo policy over environment variables. The l
 | `BITLOOPS_LOG_LEVEL` | Sets the log level for both the daemon log (`daemon.log`) and the telemetry file logger |
 | `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |
 
-## DevQL Semantic Overrides
+## Inference Configuration
 
-These override semantic settings resolved from daemon config:
+Configure embeddings and text generation through the daemon config:
 
-| Variable | Meaning |
-| --- | --- |
-| `BITLOOPS_DEVQL_SEMANTIC_PROVIDER` | Semantic provider override |
-| `BITLOOPS_DEVQL_SEMANTIC_MODEL` | Semantic model override |
-| `BITLOOPS_DEVQL_SEMANTIC_API_KEY` | Semantic API key override |
-| `BITLOOPS_DEVQL_SEMANTIC_BASE_URL` | Semantic base URL override |
-
-Embeddings no longer support environment-variable overrides. Configure embeddings through the daemon config under `[semantic_clones]`, `[embeddings.runtime]`, and `[embeddings.profiles.<name>]`.
+- `[semantic_clones]` for capability policy such as `summary_mode` and `embedding_mode`
+- `[semantic_clones.inference]` for slot bindings such as `summary_generation`, `code_embeddings`, and `summary_embeddings`
+- `[inference.runtimes.<name>]` for executable-backed runtimes such as the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases
+- `[inference.profiles.<name>]` for embeddings and text-generation profiles
 
 ## Watcher Overrides
 
@@ -58,4 +54,4 @@ token = "${GITHUB_TOKEN}"
 
 Use this for secrets and per-machine credentials. Repo policy files should not contain secrets.
 
-This interpolation also applies to semantic daemon config values such as `[semantic].api_key`.
+This interpolation also applies to inference profile values such as `[inference.profiles.summary_llm].api_key`.

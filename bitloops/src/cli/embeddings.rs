@@ -4,16 +4,19 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::model_providers::embeddings::{
-    EmbeddingInputType, EmbeddingRuntimeClientConfig, build_embedding_provider,
-};
 use crate::cli::enable::find_repo_root;
 use crate::config::unified_config::resolve_embedding_capability_from_unified;
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, DaemonEmbeddingsInstallMode, EmbeddingCapabilityConfig,
-    EmbeddingProfileConfig, load_daemon_settings, prepare_daemon_embeddings_install,
+    EmbeddingProfileConfig, InferenceTask, load_daemon_settings, prepare_daemon_embeddings_install,
     resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
 };
+use crate::host::inference::{
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, EmbeddingInputType, InferenceGateway, LocalInferenceGateway,
+};
+
+#[cfg(test)]
+const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct EmbeddingsArgs {
@@ -101,8 +104,6 @@ pub fn run(args: EmbeddingsArgs) -> Result<()> {
     }
 }
 
-const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
-
 fn current_repo_root() -> Result<PathBuf> {
     let cwd = env::current_dir().context("getting current directory")?;
     find_repo_root(&cwd)
@@ -114,14 +115,14 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
 
     match plan.mode {
         DaemonEmbeddingsInstallMode::SkipHosted => {
-            let profile_kind = plan
-                .profile_kind
+            let profile_driver = plan
+                .profile_driver
                 .as_deref()
-                .map(|kind| format!(" (kind `{kind}`)"))
+                .map(|driver| format!(" (driver `{driver}`)"))
                 .unwrap_or_default();
             return Ok(vec![format!(
                 "Embeddings are already configured via profile `{}`{}; skipped local runtime bootstrap.",
-                plan.profile_name, profile_kind
+                plan.profile_name, profile_driver
             )]);
         }
         DaemonEmbeddingsInstallMode::WarmExisting | DaemonEmbeddingsInstallMode::Bootstrap => {}
@@ -167,15 +168,16 @@ pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsIn
     let Ok(capability) = embedding_capability_for_config_path(&config_path) else {
         return EmbeddingsInstallState::NotConfigured;
     };
-    let Some(profile_name) = capability.semantic_clones.embedding_profile.clone() else {
+    let Some(profile_name) = selected_inference_profile_name(&capability).map(ToOwned::to_owned)
+    else {
         return EmbeddingsInstallState::NotConfigured;
     };
     let kind = capability
-        .embeddings
+        .inference
         .profiles
         .get(&profile_name)
-        .map(|profile| profile.kind.clone());
-    if kind.as_deref() == Some("local_fastembed") {
+        .map(|profile| profile.driver.clone());
+    if kind.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER) {
         EmbeddingsInstallState::ConfiguredLocal { profile_name }
     } else {
         EmbeddingsInstallState::ConfiguredNonLocal { profile_name, kind }
@@ -195,21 +197,25 @@ pub(crate) fn pull_profile(
 
 fn pull_profile_with_config_path(
     repo_root: &Path,
-    config_path: &Path,
+    _config_path: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: &str,
 ) -> Result<Vec<String>> {
     let profile = resolve_profile(capability, profile_name)?;
     ensure_local_profile(profile, profile_name)?;
 
-    let cache_dir = local_profile_cache_dir(repo_root, profile);
+    let cache_dir = local_profile_cache_dir(profile)?;
     if let Some(parent) = cache_dir.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating cache parent {}", parent.display()))?;
     }
 
-    let runtime = pull_runtime_client_config(repo_root, config_path, capability, profile_name);
-    let provider = build_embedding_provider(&runtime)?;
+    let gateway = LocalInferenceGateway::new(
+        repo_root,
+        capability.inference.clone(),
+        std::collections::HashMap::new(),
+    );
+    let provider = gateway.embeddings(profile_name)?;
     let _ = provider
         .embed(
             "bitloops embeddings cache warmup",
@@ -229,20 +235,22 @@ fn pull_profile_with_config_path(
 }
 
 pub(crate) fn doctor_profile(
-    repo_root: &Path,
+    _repo_root: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: Option<&str>,
 ) -> Result<Vec<String>> {
     let Some((profile_name, profile)) = resolve_doctor_target(capability, profile_name)? else {
         return Ok(vec![
             "Embeddings: disabled".to_string(),
-            "No embedding profile is configured in [semantic_clones].".to_string(),
+            "No embedding inference profile is bound in [semantic_clones.inference].".to_string(),
         ]);
     };
 
     let mut lines = vec![
         format!("Profile: {profile_name}"),
-        format!("Kind: {}", profile.kind),
+        format!("Task: {}", profile.task),
+        format!("Driver: {}", profile.driver),
+        format!("Kind: {}", profile.driver),
     ];
 
     if let Some(model) = profile.model.as_deref() {
@@ -252,9 +260,9 @@ pub(crate) fn doctor_profile(
         lines.push(format!("Base URL: {base_url}"));
     }
 
-    match profile.kind.as_str() {
-        "local_fastembed" => {
-            let cache_dir = local_profile_cache_dir(repo_root, profile);
+    match profile.driver.as_str() {
+        BITLOOPS_EMBEDDINGS_IPC_DRIVER => {
+            let cache_dir = local_profile_cache_dir(profile)?;
             lines.push(format!("Cache directory: {}", cache_dir.display()));
             lines.push(format!(
                 "Cache status: {}",
@@ -264,17 +272,20 @@ pub(crate) fn doctor_profile(
                     "missing"
                 }
             ));
-            lines.push(format!(
-                "Runtime: {}",
-                capability.embeddings.runtime.command
-            ));
+            if let Some(runtime_name) = profile.runtime.as_deref() {
+                let runtime = capability.inference.runtimes.get(runtime_name);
+                lines.push(format!("Runtime: {runtime_name}"));
+                if let Some(runtime) = runtime {
+                    lines.push(format!("Runtime command: {}", runtime.command));
+                }
+            }
         }
         "openai" | "voyage" => {
             lines.push("Cache directory: not applicable".to_string());
             lines.push("Runtime: hosted profile".to_string());
         }
         other => {
-            lines.push(format!("Cache directory: unsupported for kind `{other}`"));
+            lines.push(format!("Cache directory: unsupported for driver `{other}`"));
         }
     }
 
@@ -282,13 +293,13 @@ pub(crate) fn doctor_profile(
 }
 
 pub(crate) fn clear_cache_for_profile(
-    repo_root: &Path,
+    _repo_root: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: &str,
 ) -> Result<Vec<String>> {
     let profile = resolve_profile(capability, profile_name)?;
     ensure_local_profile(profile, profile_name)?;
-    let cache_dir = local_profile_cache_dir(repo_root, profile);
+    let cache_dir = local_profile_cache_dir(profile)?;
 
     if cache_dir.exists() {
         fs::remove_dir_all(&cache_dir)
@@ -309,7 +320,12 @@ fn resolve_doctor_target<'a>(
     capability: &'a EmbeddingCapabilityConfig,
     profile_name: Option<&'a str>,
 ) -> Result<Option<(&'a str, &'a EmbeddingProfileConfig)>> {
-    if capability.embeddings.profiles.is_empty() {
+    if !capability
+        .inference
+        .profiles
+        .values()
+        .any(|profile| profile.task == InferenceTask::Embeddings)
+    {
         return Ok(None);
     }
 
@@ -318,17 +334,24 @@ fn resolve_doctor_target<'a>(
         return Ok(Some((profile_name, profile)));
     }
 
-    if let Some(active_profile) = capability.semantic_clones.embedding_profile.as_deref() {
+    if let Some(active_profile) = selected_inference_profile_name(capability) {
         let profile = resolve_profile(capability, active_profile)?;
         return Ok(Some((active_profile, profile)));
     }
 
-    if capability.embeddings.profiles.len() == 1 {
+    if capability
+        .inference
+        .profiles
+        .values()
+        .filter(|profile| profile.task == InferenceTask::Embeddings)
+        .count()
+        == 1
+    {
         let (name, profile) = capability
-            .embeddings
+            .inference
             .profiles
             .iter()
-            .next()
+            .find(|(_, profile)| profile.task == InferenceTask::Embeddings)
             .expect("at least one profile exists");
         return Ok(Some((name.as_str(), profile)));
     }
@@ -343,24 +366,33 @@ fn resolve_profile<'a>(
     profile_name: &str,
 ) -> Result<&'a EmbeddingProfileConfig> {
     capability
-        .embeddings
+        .inference
         .profiles
         .get(profile_name)
         .ok_or_else(|| anyhow::anyhow!("embedding profile `{profile_name}` was not found"))
 }
 
 fn ensure_local_profile(profile: &EmbeddingProfileConfig, profile_name: &str) -> Result<()> {
-    if profile.kind != "local_fastembed" {
-        bail!("embedding profile `{profile_name}` is not a local_fastembed profile");
+    if profile.task != InferenceTask::Embeddings {
+        bail!("embedding profile `{profile_name}` is not an embeddings profile");
+    }
+    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER {
+        bail!(
+            "embedding profile `{profile_name}` is not a `{BITLOOPS_EMBEDDINGS_IPC_DRIVER}` profile"
+        );
     }
     Ok(())
 }
 
-fn local_profile_cache_dir(repo_root: &Path, profile: &EmbeddingProfileConfig) -> PathBuf {
-    profile
-        .cache_dir
-        .clone()
-        .unwrap_or_else(|| repo_root.join(".bitloops/embeddings/models"))
+fn local_profile_cache_dir(profile: &EmbeddingProfileConfig) -> Result<PathBuf> {
+    if let Some(cache_dir) = profile.cache_dir.clone() {
+        return Ok(cache_dir);
+    }
+
+    dirs::cache_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
+        .map(|dir| dir.join("bitloops-embeddings"))
+        .context("resolving bitloops-embeddings cache directory")
 }
 
 fn embedding_capability_for_config_path(config_path: &Path) -> Result<EmbeddingCapabilityConfig> {
@@ -372,33 +404,56 @@ fn embedding_capability_for_config_path(config_path: &Path) -> Result<EmbeddingC
     ))
 }
 
-fn runtime_client_config(
-    repo_root: &Path,
-    config_path: &Path,
-    capability: &EmbeddingCapabilityConfig,
-    profile_name: &str,
-) -> EmbeddingRuntimeClientConfig {
-    EmbeddingRuntimeClientConfig {
-        command: capability.embeddings.runtime.command.clone(),
-        args: capability.embeddings.runtime.args.clone(),
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        config_path: config_path.to_path_buf(),
-        profile_name: profile_name.to_string(),
-        repo_root: Some(repo_root.to_path_buf()),
-    }
+fn selected_inference_profile_name(capability: &EmbeddingCapabilityConfig) -> Option<&str> {
+    capability
+        .semantic_clones
+        .inference
+        .code_embeddings
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            capability
+                .semantic_clones
+                .inference
+                .summary_embeddings
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
+#[cfg(test)]
+struct PullRuntimeConfig {
+    startup_timeout_secs: u64,
+    request_timeout_secs: u64,
+}
+
+#[cfg(test)]
 fn pull_runtime_client_config(
-    repo_root: &Path,
-    config_path: &Path,
+    _repo_root: &Path,
+    _config_path: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: &str,
-) -> EmbeddingRuntimeClientConfig {
-    let mut config = runtime_client_config(repo_root, config_path, capability, profile_name);
-    config.startup_timeout_secs = config.startup_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
-    config.request_timeout_secs = config.request_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
-    config
+) -> PullRuntimeConfig {
+    let profile = capability
+        .inference
+        .profiles
+        .get(profile_name)
+        .expect("embedding profile for timeout test");
+    let runtime_name = profile
+        .runtime
+        .as_deref()
+        .expect("runtime-backed embedding profile for timeout test");
+    let runtime = capability
+        .inference
+        .runtimes
+        .get(runtime_name)
+        .expect("runtime config for timeout test");
+    PullRuntimeConfig {
+        startup_timeout_secs: runtime.startup_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS),
+        request_timeout_secs: runtime.request_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS),
+    }
 }
 
 #[cfg(test)]
@@ -418,22 +473,26 @@ mod tests {
 [runtime]
 local_dev = false
 
-[semantic_clones]
-embedding_profile = "local"
+[semantic_clones.inference]
+code_embeddings = "local"
+summary_embeddings = "local"
 
-[embeddings.runtime]
+[inference.runtimes.bitloops_embeddings]
 command = "bitloops-embeddings"
 args = []
-startup_timeout_secs = 10
-request_timeout_secs = 60
+startup_timeout_secs = 60
+request_timeout_secs = 300
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
-model = "jinaai/jina-embeddings-v2-base-code"
+[inference.profiles.local]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
 cache_dir = ".bitloops/embeddings/models"
 
-[embeddings.profiles.openai]
-kind = "openai"
+[inference.profiles.openai]
+task = "embeddings"
+driver = "openai"
 model = "text-embedding-3-large"
 api_key = "secret"
 "#,
@@ -463,33 +522,20 @@ api_key = "secret"
             fs::create_dir_all(parent).expect("create fake runtime dir");
         }
         let script = r#"#!/bin/sh
-profile_name=fake
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --profile)
-      profile_name=$2
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
+model_name="bge-m3"
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
-  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
-    *'"type":"describe"'*)
-      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"test","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id" "$profile_name"
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"%s"}\n' "$req_id" "$model_name"
       ;;
-    *'"type":"embed_batch"'*)
-      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
-      ;;
-    *'"type":"shutdown"'*)
-      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"%s"}\n' "$req_id" "$model_name"
       exit 0
       ;;
     *)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
       ;;
   esac
 done
@@ -510,65 +556,42 @@ done
             fs::create_dir_all(parent).expect("create fake runtime dir");
         }
         let script = r#"
-$profileName = "fake"
-for ($i = 0; $i -lt $args.Length; $i++) {
-  if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
-    $profileName = $args[$i + 1]
-    break
-  }
+$modelName = "bge-m3"
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
 }
+$ready | ConvertTo-Json -Compress
 $stdin = [Console]::In
 while (($line = $stdin.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $request = $line | ConvertFrom-Json
-  switch ($request.type) {
-    "describe" {
+  switch ($request.cmd) {
+    "embed" {
       $response = @{
-        type = "describe"
-        request_id = $request.request_id
-        protocol_version = 1
-        runtime = @{
-          protocol_version = 1
-          runtime_name = "bitloops-embeddings"
-          runtime_version = "test"
-          profile_name = $profileName
-          provider = @{
-            kind = "local_fastembed"
-            provider_name = "local_fastembed"
-            model_name = "test-model"
-            output_dimension = 3
-            cache_dir = $null
-          }
-        }
-      }
-    }
-    "embed_batch" {
-      $response = @{
-        type = "embed_batch"
-        request_id = $request.request_id
-        protocol_version = 1
-        vectors = @(@{
-          index = 0
-          values = @(0.1, 0.2, 0.3)
-        })
+        id = $request.id
+        ok = $true
+        vectors = @(@(0.1, 0.2, 0.3))
+        model = $modelName
       }
     }
     "shutdown" {
       $response = @{
-        type = "shutdown"
-        request_id = $request.request_id
-        protocol_version = 1
-        accepted = $true
+        id = $request.id
+        ok = $true
+        model = $modelName
       }
       $response | ConvertTo-Json -Compress
       break
     }
     default {
       $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "unexpected request"
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
       }
     }
   }
@@ -601,7 +624,7 @@ while (($line = $stdin.ReadLine()) -ne $null) {
 [runtime]
 local_dev = false
 
-[embeddings.runtime]
+[inference.runtimes.bitloops_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -624,14 +647,14 @@ request_timeout_secs = 5
 
     #[test]
     fn embeddings_cli_parses_pull_and_clear_cache() {
-        let parsed = Cli::try_parse_from(["bitloops", "embeddings", "pull", "local"])
+        let parsed = Cli::try_parse_from(["bitloops", "embeddings", "pull", "local_code"])
             .expect("pull should parse");
         let Some(Commands::Embeddings(args)) = parsed.command else {
             panic!("expected embeddings command");
         };
         assert!(matches!(args.command, Some(EmbeddingsCommand::Pull(_))));
 
-        let parsed = Cli::try_parse_from(["bitloops", "embeddings", "clear-cache", "local"])
+        let parsed = Cli::try_parse_from(["bitloops", "embeddings", "clear-cache", "local_code"])
             .expect("clear-cache should parse");
         let Some(Commands::Embeddings(args)) = parsed.command else {
             panic!("expected embeddings command");
@@ -652,7 +675,7 @@ request_timeout_secs = 5
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Kind: local_fastembed"))
+                .any(|line| line.contains("Kind: bitloops_embeddings_ipc"))
         );
     }
 
@@ -722,7 +745,10 @@ request_timeout_secs = 5
         let repo = seed_repo();
         let capability = resolve_embedding_capability_config_for_repo(repo.path());
         let err = pull_profile(repo.path(), &capability, "openai").expect_err("hosted pull");
-        assert!(err.to_string().contains("not a local_fastembed"));
+        assert!(
+            err.to_string()
+                .contains("not a `bitloops_embeddings_ipc` profile")
+        );
     }
 
     #[test]
@@ -773,9 +799,9 @@ request_timeout_secs = 5
         let config = fs::read_to_string(repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH))
             .expect("read updated config");
 
-        assert!(config.contains("embedding_profile = \"local\""));
-        assert!(config.contains("[embeddings.profiles.local]"));
-        assert!(config.contains("kind = \"local_fastembed\""));
+        assert!(config.contains("code_embeddings = \"local_code\""));
+        assert!(config.contains("[inference.profiles.local_code]"));
+        assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
         assert!(
             lines
                 .iter()
@@ -785,7 +811,7 @@ request_timeout_secs = 5
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Pulled embedding profile `local`")),
+                .any(|line| line.contains("Pulled embedding profile `local_code`")),
             "expected warmup line, got: {lines:?}"
         );
     }
@@ -809,7 +835,7 @@ request_timeout_secs = 5
 
         assert_eq!(after, original);
         assert!(
-            format!("{err:#}").contains("spawning embeddings runtime"),
+            format!("{err:#}").contains("spawning python embeddings runtime"),
             "unexpected error: {err:#}"
         );
     }
@@ -830,11 +856,12 @@ request_timeout_secs = 5
 [runtime]
 local_dev = false
 
-[semantic_clones]
-embedding_profile = "openai"
+[semantic_clones.inference]
+code_embeddings = "openai"
 
-[embeddings.profiles.openai]
-kind = "openai"
+[inference.profiles.openai]
+task = "embeddings"
+driver = "openai"
 model = "text-embedding-3-large"
 "#,
         )

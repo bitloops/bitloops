@@ -24,17 +24,17 @@ Bitloops stores daemon configuration at:
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
-- `bitloops init --install-default-daemon` also auto-applies the default local embeddings setup when embeddings are not configured yet.
+- `bitloops init --install-default-daemon` also auto-applies the default local embeddings setup when embeddings are not configured yet. That setup expects the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases to already be available on `PATH`.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
 - `bitloops start --config /path/to/config.toml --bootstrap-local-stores` keeps that explicit config path and creates the matching local SQLite, DuckDB, and blob-store artefacts before startup.
 - `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
-- `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile.
+- `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile. They do not install the `bitloops-embeddings` binary for you.
 
 The daemon config owns:
 
 - Store backends and custom store paths
 - Provider credentials
-- Semantic and embeddings runtime settings
+- Inference runtimes, profiles, and capability bindings
 - Dashboard defaults
 - Daemon runtime defaults such as `local_dev`, logging, and telemetry
 
@@ -68,24 +68,35 @@ site_url = "https://example.atlassian.net"
 email = "${ATLASSIAN_EMAIL}"
 token = "${ATLASSIAN_TOKEN}"
 
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
-api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
-
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local"
+ann_neighbors = 5
+enrichment_workers = 1
 
-[embeddings.runtime]
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_embeddings]
 command = "bitloops-embeddings"
-startup_timeout_secs = 10
-request_timeout_secs = 60
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
 
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
@@ -103,9 +114,8 @@ The current daemon parser accepts these top-level surfaces:
 - `logging`
 - `stores`
 - `knowledge`
-- `semantic`
 - `semantic_clones`
-- `embeddings`
+- `inference`
 - `dashboard`
 
 ### Telemetry Consent
@@ -156,19 +166,32 @@ That means:
 When Bitloops auto-enables embeddings through `bitloops enable --install-embeddings`, interactive `bitloops enable`, or `bitloops init --install-default-daemon`, it creates the minimum daemon config needed for the default local profile only when no active profile is already configured:
 
 ```toml
-[semantic_clones]
-embedding_profile = "local"
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
+[inference.runtimes.bitloops_embeddings]
+command = "bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
 ```
 
 Notes:
 
-- `local` is the default auto-created profile name.
-- `local_fastembed` is the default auto-created profile kind.
+- `local_code` is the default auto-created local embeddings profile name.
+- `bitloops_embeddings_ipc` is the default auto-created local embeddings driver.
+- `bitloops_embeddings` is the default auto-created runtime id.
+- `bge-m3` is the default auto-created local model.
+- The runtime command is the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases; no Python installation is required.
 - Existing active embedding profiles are preserved. Bitloops does not overwrite an already configured non-local active profile.
-- The same runtime warm/bootstrap path used by `bitloops embeddings pull` is reused for local-profile setup.
+- The same runtime warm/bootstrap path used by `bitloops embeddings pull local_code` is reused for local-profile setup.
 
 ## RuntimeStore And RelationalStore
 
@@ -315,7 +338,7 @@ Use the global daemon config for:
 
 - SQLite, DuckDB, ClickHouse, PostgreSQL, and blob paths
 - Provider credentials and service defaults
-- Semantic summary settings, semantic clone settings, and embeddings runtime profiles
+- Capability policy plus inference runtimes, profiles, and slot bindings
 - Dashboard bundle overrides and TLS hints
 
 Use project policy for:

@@ -1,6 +1,5 @@
 pub mod descriptor;
 pub mod embeddings;
-pub mod extension_descriptor;
 pub mod features;
 pub mod health;
 pub mod ingesters;

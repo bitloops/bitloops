@@ -8,7 +8,6 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
     SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, load_pre_stage_artefacts_for_blob,
@@ -84,13 +83,6 @@ pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
-
-#[cfg(test)]
-use crate::capability_packs::semantic_clones::embeddings;
-#[cfg(test)]
-use crate::config::{
-    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
-};
 
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync;
@@ -622,21 +614,6 @@ async fn init_relational_schema_with_mode(
             )
         })?;
     Ok(outcome)
-}
-
-#[cfg(test)]
-fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
-    embeddings::EmbeddingProviderConfig {
-        daemon_config_path: resolve_daemon_config_path_for_repo(&cfg.repo_root)
-            .unwrap_or_else(|_| cfg.daemon_config_root.join("config.toml")),
-        embedding_profile: capability.semantic_clones.embedding_profile,
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    }
 }
 
 pub(crate) async fn ensure_devql_storage_current(

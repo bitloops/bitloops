@@ -10,4 +10,5 @@ pub static TEST_HARNESS_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor 
     experimental: false,
     dependencies: &[],
     required_host_features: &[],
+    inference_slots: &[],
 };

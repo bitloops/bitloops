@@ -176,7 +176,8 @@ impl IngesterHandler for SemanticFeaturesRefreshIngester {
                     "produced_enriched_semantics": produced_enriched_semantics,
                     "input_hashes": input_hashes,
                     "degraded_summary_provider": summary_provider.degraded_reason.is_some(),
-                    "summary_profile": summary_provider.profile_name,
+                    "summary_slot": summary_provider.slot_name,
+                    "summary_inference_profile": summary_provider.profile_name,
                     "degraded_reason": summary_provider.degraded_reason,
                 }),
                 format!(
@@ -205,6 +206,7 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
             let provider = resolve_embedding_provider(
                 &config,
                 ctx.inference(),
+                payload.representation_kind,
                 match payload.mode {
                     EmbeddingRefreshMode::ConfiguredDegrade => {
                         EmbeddingProviderMode::ConfiguredDegrade
@@ -214,6 +216,8 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
                     }
                 },
             )?;
+            let provider_profile_name = provider.profile_name.clone();
+            let provider_slot_name = provider.slot_name.clone();
             let relational = current_relational(ctx)?;
 
             match payload.scope {
@@ -239,8 +243,9 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
                         "symbol_embedding_rows_skipped": 0,
                         "symbol_embedding_rows_eligible": 0,
                         "provider_available": false,
+                        "embedding_slot": provider.slot_name,
                         "degraded_reason": provider.degraded_reason,
-                        "embedding_profile": provider.profile_name,
+                        "embedding_inference_profile": provider.profile_name,
                         "sync_action": serde_json::Value::Null,
                         "clone_rebuild_performed": false,
                         "clone_rebuild_recommended": false,
@@ -309,7 +314,8 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
                         "symbol_embedding_rows_skipped": refresh.embedding_stats.skipped,
                         "symbol_embedding_rows_eligible": refresh.embedding_stats.eligible,
                         "provider_available": true,
-                        "embedding_profile": config.embedding_profile.as_deref(),
+                        "embedding_slot": provider_slot_name.as_deref(),
+                        "embedding_inference_profile": provider_profile_name.as_deref(),
                         "sync_action": sync_action.to_string(),
                         "clone_rebuild_performed": payload.representation_kind == EmbeddingRepresentationKind::Code,
                         "clone_rebuild_recommended": false,
@@ -354,8 +360,9 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
                     "symbol_embedding_rows_skipped": stats.skipped,
                     "symbol_embedding_rows_eligible": stats.eligible,
                     "provider_available": true,
+                    "embedding_slot": provider_slot_name.as_deref(),
                     "degraded_reason": serde_json::Value::Null,
-                    "embedding_profile": config.embedding_profile.as_deref(),
+                    "embedding_inference_profile": provider_profile_name.as_deref(),
                     "sync_action": if payload.manage_active_state { json!(sync_action.to_string()) } else { serde_json::Value::Null },
                     "clone_rebuild_performed": false,
                     "clone_rebuild_recommended": clone_rebuild_recommended,
@@ -380,6 +387,7 @@ async fn handle_current_path_embedding_refresh(
     let path = required_field(payload.path.as_deref(), "path")?;
     let content_id = required_field(payload.content_id.as_deref(), "content_id")?;
     let profile_name = provider.profile_name.clone();
+    let slot_name = provider.slot_name.clone();
     let degraded_reason = provider.degraded_reason.clone();
 
     let Some(provider) = provider.provider else {
@@ -392,8 +400,9 @@ async fn handle_current_path_embedding_refresh(
                 "symbol_embedding_rows_skipped": 0,
                 "symbol_embedding_rows_eligible": 0,
                 "provider_available": false,
+                "embedding_slot": slot_name.as_deref(),
                 "degraded_reason": degraded_reason,
-                "embedding_profile": profile_name,
+                "embedding_inference_profile": profile_name,
                 "sync_action": serde_json::Value::Null,
                 "clone_rebuild_performed": false,
                 "clone_rebuild_recommended": false,
@@ -421,8 +430,9 @@ async fn handle_current_path_embedding_refresh(
             "symbol_embedding_rows_skipped": stats.skipped,
             "symbol_embedding_rows_eligible": stats.eligible,
             "provider_available": true,
+            "embedding_slot": slot_name.as_deref(),
             "degraded_reason": serde_json::Value::Null,
-            "embedding_profile": profile_name,
+            "embedding_inference_profile": profile_name,
             "sync_action": serde_json::Value::Null,
             "clone_rebuild_performed": false,
             "clone_rebuild_recommended": false,

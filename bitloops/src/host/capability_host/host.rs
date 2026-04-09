@@ -29,7 +29,7 @@ use super::registrar::{
     StageRegistration, StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
-use crate::host::inference::InferenceGateway;
+use crate::host::inference::{InferenceGateway, ScopedInferenceGateway};
 
 #[derive(Clone)]
 enum RegisteredStage {
@@ -123,6 +123,13 @@ impl DevqlCapabilityHost {
 
     pub fn inference(&self) -> &dyn InferenceGateway {
         &self.runtime.inference
+    }
+
+    pub fn inference_for_capability<'a>(
+        &'a self,
+        capability_id: &'a str,
+    ) -> ScopedInferenceGateway<'a> {
+        self.runtime.inference.scoped(Some(capability_id))
     }
 
     pub fn cross_pack_access(&self) -> &CrossPackAccessPolicy {
@@ -396,7 +403,7 @@ impl DevqlCapabilityHost {
         };
 
         let request = StageRequest::new(payload);
-        let mut runtime = self.runtime.runtime();
+        let mut runtime = self.runtime.runtime_for_capability(capability_id);
         let limit = self.invocation_policy.stage_timeout;
         match handler {
             RegisteredStage::Core(h) => {
@@ -414,7 +421,7 @@ impl DevqlCapabilityHost {
             .get(capability_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let runtime = self.runtime.runtime();
+        let runtime = self.runtime.runtime_for_capability(capability_id);
         lifecycle::run_health_checks(capability_id, checks, &runtime)
     }
 
@@ -577,6 +584,7 @@ mod tests {
         experimental: false,
         dependencies: &[],
         required_host_features: &[],
+        inference_slots: &[],
     };
 
     #[derive(Debug, Deserialize, PartialEq)]

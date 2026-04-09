@@ -1,5 +1,4 @@
 use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
-use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
 use crate::capability_packs::semantic_clones::embeddings as semantic_embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
@@ -17,6 +16,9 @@ use crate::capability_packs::test_harness::mapping::model::{
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::host::devql::*;
+use crate::host::inference::{
+    EmbeddingInputType as HostEmbeddingInputType, EmbeddingService, LocalInferenceGateway,
+};
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ProductionArtefact, ScopeKind,
     TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
@@ -193,7 +195,7 @@ struct FixtureEmbeddingProvider {
     embeddings_by_document: HashMap<String, Vec<f32>>,
 }
 
-impl EmbeddingProvider for FixtureEmbeddingProvider {
+impl EmbeddingService for FixtureEmbeddingProvider {
     fn provider_name(&self) -> &str {
         "fixture"
     }
@@ -216,8 +218,8 @@ impl EmbeddingProvider for FixtureEmbeddingProvider {
         )
     }
 
-    fn embed(&self, input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
-        if input_type != EmbeddingInputType::Document {
+    fn embed(&self, input: &str, input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
+        if input_type != HostEmbeddingInputType::Document {
             bail!("fixture embedding provider only supports document inputs");
         }
 
@@ -305,7 +307,7 @@ fn build_fixture_embedding_provider(
     inputs: &[semantic::SemanticFeatureInput],
     summary_by_artefact_id: &HashMap<String, String>,
     embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
-) -> Result<Arc<dyn EmbeddingProvider>> {
+) -> Result<Arc<dyn EmbeddingService>> {
     let mut embeddings_by_document = HashMap::new();
     for representation_kind in [
         semantic_embeddings::EmbeddingRepresentationKind::Code,
@@ -723,9 +725,9 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "function",
                 "src/validation/checkout.ts::validate_order_checkout",
                 Some("function validateOrder(orderId: string, mode: string)"),
-                "const checkoutRules = orderPolicy.load(orderId);\nreturn authorizeCheckout(checkoutRules, cartTotals, shippingAddress);",
+                "const checkoutRules = orderPolicy.load(orderId);\nreturn rules.checkout(checkoutRules, cartTotals, shippingAddress);",
                 "Function validate order checkout. Validates order data for checkout.",
-                vec![0.95, 0.05, 0.0],
+                vec![0.9, 0.2, 0.0],
                 vec!["rules.checkout"],
                 vec!["references:order_policy::default"],
                 1,
@@ -737,9 +739,9 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "function",
                 "src/validation/draft.ts::validate_order_draft",
                 Some("function validateOrder(orderId: string, mode: string)"),
-                "const draftPolicy = orderPolicy.load(orderId);\nreturn saveDraftRevision(draftPolicy, pendingEdits, autosaveVersion);",
+                "const draftPolicy = orderPolicy.load(orderId);\nreturn rules.draft(draftPolicy, pendingEdits, autosaveVersion);",
                 "Function validate order draft. Validates order data for draft save.",
-                vec![0.55, 0.75, 0.0],
+                vec![0.7, 0.3, 0.0],
                 vec!["rules.draft"],
                 vec!["references:order_policy::default"],
                 1,
@@ -1359,7 +1361,7 @@ fn build_incremental_clone_fixture(
                     ),
                     "const formatted = currency.format(totalCents, locale);\nreturn invoice.renderLine(formatted);",
                     "Function create invoice. Creates invoice line output from billing totals.",
-                    vec![0.86, 0.14, 0.0],
+                    vec![0.76, 0.24, 0.0],
                     vec!["currency.format", "invoice.renderLine"],
                     vec!["references:invoice_template::default"],
                     "blob-create-v1",
@@ -1371,11 +1373,18 @@ fn build_incremental_clone_fixture(
                     "src/billing/render.ts",
                     "src/billing/render.ts::renderInvoiceLine",
                     Some("function renderInvoiceLine(totalCents: number, locale: string)"),
-                    "const formatted = currency.format(totalCents, locale);\nreturn invoice.renderLine(formatted);",
+                    "const formatted = currency.format(totalCents, locale);\nconst localized = billing.localizeLine(formatted, locale);\nreturn invoice.renderLine(localized);",
                     "Function render invoice line. Renders invoice line output from billing totals.",
                     vec![0.85, 0.15, 0.0],
-                    vec!["currency.format", "invoice.renderLine"],
-                    vec!["references:invoice_template::default"],
+                    vec![
+                        "currency.format",
+                        "billing.localizeLine",
+                        "invoice.renderLine",
+                    ],
+                    vec![
+                        "references:invoice_template::default",
+                        "references:billing_localizer::default",
+                    ],
                     "blob-render-v1",
                     "content-render-v1",
                 ),
@@ -1385,11 +1394,18 @@ fn build_incremental_clone_fixture(
                     "src/billing/common.ts",
                     "src/billing/common.ts::formatInvoiceTotal",
                     Some("function formatInvoiceTotal(totalCents: number, locale: string)"),
-                    "const formatted = currency.format(totalCents, locale);\nreturn invoice.renderLine(formatted);",
+                    "const formatted = currency.format(totalCents, locale);\nconst localized = billing.localizeLine(formatted, locale);\nreturn invoice.renderLine(localized);",
                     "Function format invoice total. Formats invoice totals into billing line output.",
                     vec![0.84, 0.16, 0.0],
-                    vec!["currency.format", "invoice.renderLine"],
-                    vec!["references:invoice_template::default"],
+                    vec![
+                        "currency.format",
+                        "billing.localizeLine",
+                        "invoice.renderLine",
+                    ],
+                    vec![
+                        "references:invoice_template::default",
+                        "references:billing_localizer::default",
+                    ],
                     "blob-common-v1",
                     "content-common-v1",
                 ),
@@ -1406,7 +1422,7 @@ fn build_incremental_clone_fixture(
                     ),
                     "const formatted = currency.format(totalCents, locale);\naudit.recordInvoice(orderId);\nreturn invoice.renderLine(formatted);",
                     "Function create invoice. Creates invoice line output from billing totals.",
-                    vec![0.86, 0.14, 0.0],
+                    vec![0.76, 0.24, 0.0],
                     vec![
                         "currency.format",
                         "invoice.renderLine",
@@ -2768,131 +2784,61 @@ fn then_clone_edge_hash_changes_across_snapshots(
     })
 }
 
-fn invalid_embedding_provider_config(
-    world: &mut DevqlBddWorld,
+fn invalid_embedding_gateway(
+    repo_root: &Path,
     case_name: &str,
-) -> crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-    let daemon_config_path = world
-        .scenario_config_override_root()
-        .join("semantic-clones-embeddings.toml");
-    fs::write(&daemon_config_path, "").expect("write fake daemon config");
+) -> crate::host::inference::LocalInferenceGateway {
+    let mut inference = crate::config::InferenceConfig::default();
+    let mut slot_bindings = HashMap::new();
+    let mut semantic_slots = std::collections::BTreeMap::new();
 
     match case_name {
         "missing runtime command" => {
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-                daemon_config_path,
-                embedding_profile: Some("local".to_string()),
-                runtime_command: "definitely-missing-embeddings-runtime".to_string(),
-                runtime_args: Vec::new(),
-                startup_timeout_secs: 1,
-                request_timeout_secs: 1,
-                warnings: Vec::new(),
-            }
+            inference.runtimes.insert(
+                crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID.to_string(),
+                crate::config::InferenceRuntimeConfig {
+                    command: "definitely-missing-embeddings-runtime".to_string(),
+                    args: Vec::new(),
+                    startup_timeout_secs: 1,
+                    request_timeout_secs: 1,
+                },
+            );
+            inference.profiles.insert(
+                "local".to_string(),
+                crate::config::InferenceProfileConfig {
+                    name: "local".to_string(),
+                    task: crate::config::InferenceTask::Embeddings,
+                    driver: crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string(),
+                    runtime: Some(
+                        crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID.to_string(),
+                    ),
+                    model: Some("bge-m3".to_string()),
+                    api_key: None,
+                    base_url: None,
+                    cache_dir: None,
+                },
+            );
+            semantic_slots.insert(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT
+                    .to_string(),
+                "local".to_string(),
+            );
         }
         "missing embedding profile" => {
-            let (runtime_command, runtime_args) =
-                failing_embeddings_runtime_command_and_args(world);
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-                daemon_config_path,
-                embedding_profile: Some("missing-profile".to_string()),
-                runtime_command,
-                runtime_args,
-                startup_timeout_secs: 1,
-                request_timeout_secs: 1,
-                warnings: Vec::new(),
-            }
+            semantic_slots.insert(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT
+                    .to_string(),
+                "missing-profile".to_string(),
+            );
         }
         other => panic!("unknown invalid embedding provider configuration `{other}`"),
     }
-}
 
-#[cfg(unix)]
-fn failing_embeddings_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<String>) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let script_path = world
-        .scenario_bin_dir()
-        .join("failing-embeddings-runtime.sh");
-    let script = r#"#!/bin/sh
-while IFS= read -r line; do
-  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
-  case "$line" in
-    *'"type":"describe"'*)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"embedding profile `missing-profile` is not defined"}\n' "$req_id"
-      ;;
-    *'"type":"shutdown"'*)
-      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
-      exit 0
-      ;;
-    *)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
-      ;;
-  esac
-done
-"#;
-    fs::write(&script_path, script).expect("write failing embeddings runtime script");
-    let mut permissions = fs::metadata(&script_path)
-        .expect("stat failing embeddings runtime script")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)
-        .expect("chmod failing embeddings runtime script");
-    ("sh".to_string(), vec![script_path.display().to_string()])
-}
-
-#[cfg(windows)]
-fn failing_embeddings_runtime_command_and_args(world: &mut DevqlBddWorld) -> (String, Vec<String>) {
-    let script_path = world
-        .scenario_bin_dir()
-        .join("failing-embeddings-runtime.ps1");
-    let script = r#"
-$stdin = [Console]::In
-while (($line = $stdin.ReadLine()) -ne $null) {
-  if ([string]::IsNullOrWhiteSpace($line)) { continue }
-  $request = $line | ConvertFrom-Json
-  switch ($request.type) {
-    "describe" {
-      $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "embedding profile `missing-profile` is not defined"
-      }
-    }
-    "shutdown" {
-      $response = @{
-        type = "shutdown"
-        request_id = $request.request_id
-        protocol_version = 1
-        accepted = $true
-      }
-      $response | ConvertTo-Json -Compress
-      exit 0
-    }
-    default {
-      $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "unexpected request"
-      }
-    }
-  }
-  $response | ConvertTo-Json -Compress
-}
-"#;
-    fs::write(&script_path, script).expect("write failing embeddings runtime script");
-    (
-        "powershell".to_string(),
-        vec![
-            "-NoLogo".to_string(),
-            "-NoProfile".to_string(),
-            "-ExecutionPolicy".to_string(),
-            "Bypass".to_string(),
-            "-File".to_string(),
-            script_path.display().to_string(),
-        ],
-    )
+    slot_bindings.insert(
+        crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        semantic_slots,
+    );
+    LocalInferenceGateway::new(repo_root, inference, slot_bindings)
 }
 
 async fn run_stage2_with_invalid_embedding_provider_configuration(
@@ -2919,10 +2865,12 @@ async fn run_stage2_with_invalid_embedding_provider_configuration(
         .await
         .expect("ensure symbol embeddings schema before invalid stage2 config");
 
-    let config = invalid_embedding_provider_config(world, case_name);
-    world.semantic_clone_stage2_error = crate::capability_packs::semantic_clones::extension_descriptor::build_symbol_embedding_provider(
-        &config,
-        None,
+    let gateway = invalid_embedding_gateway(temp.path(), case_name);
+    world.semantic_clone_stage2_error = crate::host::inference::InferenceGateway::embeddings(
+        &gateway.scoped(Some(
+            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
+        )),
+        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT,
     )
     .err();
 

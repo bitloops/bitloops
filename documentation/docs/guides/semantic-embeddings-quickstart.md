@@ -6,8 +6,8 @@ title: Semantic + Embeddings Quickstart
 
 This guide shows the quickest way to try:
 
-- semantic summaries through a configured LLM provider
-- local embeddings through the standalone `bitloops-embeddings` runtime
+- semantic summaries through a configured text-generation inference profile
+- local embeddings through the standalone `bitloops-embeddings` binary over stdio IPC
 - the daemon-owned enrichment queue and health checks
 
 Run the repo-scoped commands below from inside a Git repository or Bitloops project, typically after `bitloops init`.
@@ -16,18 +16,19 @@ Run the repo-scoped commands below from inside a Git repository or Bitloops proj
 
 - `bitloops`
 - `bitloops-embeddings`
-- a semantic provider API key if you want LLM semantic summaries
+- a text-generation provider API key if you want LLM semantic summaries
 
-In a packaged release, both CLIs should be installed together. In a source checkout, build and install both:
+In a source checkout, build and install `bitloops`, then install the matching standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform and make sure it is on `PATH`:
 
 ```bash
 cargo build
 cargo dev-install
-cargo install --path bitloops-embeddings --force
 ```
 
 On macOS, prefer `cargo dev-install` over plain `cargo install --path bitloops --force` so the
 DuckDB runtime is staged correctly for the installed `bitloops` binary.
+
+No Python interpreter is required for the embeddings runtime binary.
 
 ## Fastest Setup Paths
 
@@ -56,7 +57,7 @@ Interactive `bitloops enable` also asks whether to install embeddings when they 
 
 ## Config Location And Targeting
 
-Semantic and embeddings runtime settings live in the Bitloops daemon config.
+Inference runtimes, profiles, and semantic-clones slot bindings live in the Bitloops daemon config.
 
 Typical macOS location, for example:
 
@@ -83,35 +84,53 @@ That same resolved path is used for both config mutation and runtime bootstrap.
 When Bitloops auto-configures embeddings, it writes the minimum profile required for the default local setup:
 
 ```toml
-[semantic_clones]
-embedding_profile = "local"
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
+[inference.runtimes.bitloops_embeddings]
+command = "bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
 ```
 
 Notes:
 
-- `local` is the default auto-created profile name.
-- `local_fastembed` is the default auto-created profile kind.
+- `local_code` is the default auto-created local embeddings profile name.
+- `bitloops_embeddings_ipc` is the default auto-created local embeddings driver.
+- `bge-m3` is the default auto-created local embeddings model.
+- The runtime command is the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases, so no Python installation is required.
 - If an active embedding profile already exists, Bitloops does not overwrite it.
 - If that existing active profile is local, Bitloops still runs the normal warm/bootstrap path for it.
 - If that existing active profile is hosted or otherwise non-local, Bitloops treats embeddings as already enabled and skips local runtime bootstrap.
 
 ## Optional Semantic Summaries
 
-If you also want semantic summaries, add semantic provider settings to the daemon config:
+If you also want semantic summaries, bind the `summary_generation` slot to a text-generation profile:
 
 ```toml
-[semantic]
-provider = "openai"
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
 ```
 
 Notes:
 
-- `kind = "local_fastembed"` uses the local embeddings runtime with the default local model settings.
+- `summary_generation` is optional when `summary_mode = "auto"`. If it is unset or unavailable, Bitloops falls back to deterministic summaries.
+- `code_embeddings` and `summary_embeddings` can point at the same embeddings profile or at different ones.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 
 ## Warm The Local Model
@@ -119,19 +138,19 @@ Notes:
 Run:
 
 ```bash
-bitloops embeddings pull local
+bitloops embeddings pull local_code
 ```
 
 What this does:
 
-- starts the standalone embeddings runtime
-- validates the selected profile
+- starts the standalone `bitloops-embeddings` binary through the host inference runtime
+- validates the selected profile and runtime binding
 - warms the local model cache
 - downloads the model if it is missing
 
-This is the best first check that `bitloops-embeddings` is installed and reachable.
+This is the best first check that `bitloops-embeddings` is installed and reachable on `PATH`.
 
-`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` reuse this same warm/bootstrap path automatically; `bitloops embeddings pull local` remains useful when you want to rerun it explicitly.
+`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` reuse this same warm/bootstrap path automatically; `bitloops embeddings pull local_code` remains useful when you want to rerun it explicitly.
 
 ## Verify Health
 
@@ -143,10 +162,10 @@ bitloops devql packs --with-health
 
 Healthy output should show:
 
-- semantic summary provider ready
-- embedding profile resolved
+- summary generation slot resolved when configured
+- code and summary embedding slots resolved when configured
 - runtime command available
-- runtime handshake succeeded
+- IPC handshake succeeded
 
 If embeddings are disabled, health should report that explicitly instead of failing.
 
@@ -197,7 +216,7 @@ bitloops embeddings doctor
 Clear a local model cache:
 
 ```bash
-bitloops embeddings clear-cache local
+bitloops embeddings clear-cache local_code
 ```
 
 Pause and resume background enrichment work:
@@ -212,7 +231,7 @@ bitloops daemon enrichments retry-failed
 
 ### `bitloops-embeddings` not found
 
-Make sure the companion runtime is installed and on `PATH`:
+Make sure the standalone binary is installed and on `PATH`:
 
 ```bash
 which bitloops-embeddings
@@ -220,10 +239,10 @@ which bitloops-embeddings
 
 ### Runtime handshake timeout on first local run
 
-If the first local model startup is slow, raise the daemon timeouts:
+If the first local model startup is slow, raise the inference runtime timeouts:
 
 ```toml
-[embeddings.runtime]
+[inference.runtimes.bitloops_embeddings]
 startup_timeout_secs = 120
 request_timeout_secs = 120
 ```
@@ -237,9 +256,9 @@ After fixing the local runtime, rerun one of:
 ```bash
 bitloops enable --install-embeddings
 bitloops daemon enable --install-embeddings
-bitloops embeddings pull local
+bitloops embeddings pull local_code
 ```
 
 ### Semantic summaries stay on deterministic fallback
 
-That means semantic is enabled, but no semantic provider is configured, or the provider is disabled or unavailable. `bitloops devql packs --with-health` should show this clearly.
+That means `summary_mode = "auto"` is enabled, but no `summary_generation` profile is bound, or the bound text-generation profile is unavailable. `bitloops devql packs --with-health` should show this clearly.

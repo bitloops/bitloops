@@ -10,9 +10,9 @@ use crate::capability_packs::test_harness::storage::{
     BitloopsTestHarnessRepository, open_repository_for_repo,
 };
 use crate::config::{
-    ProviderConfig, StoreBackendConfig, resolve_daemon_config_path_for_repo,
-    resolve_embedding_capability_config_for_repo, resolve_provider_config_for_repo,
-    resolve_store_backend_config_for_repo, resolve_store_semantic_config_for_repo,
+    InferenceCapabilityConfig, ProviderConfig, StoreBackendConfig,
+    resolve_inference_capability_config_for_repo, resolve_provider_config_for_repo,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::devql::RelationalStorage;
@@ -33,6 +33,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub config_root: serde_json::Value,
     pub backends: StoreBackendConfig,
     pub provider_config: ProviderConfig,
+    pub inference_config: InferenceCapabilityConfig,
     pub relational: SqliteRelationalGateway,
     pub knowledge_relational: SqliteKnowledgeRelationalRepository,
     pub knowledge_documents: DuckdbKnowledgeDocumentStore,
@@ -50,10 +51,7 @@ impl LocalCapabilityRuntimeResources {
     pub fn new(repo_root: &Path, repo: RepoIdentity) -> Result<Self> {
         let backends = resolve_store_backend_config_for_repo(repo_root)?;
         let provider_config = resolve_provider_config_for_repo(repo_root)?;
-        let embedding_capability = resolve_embedding_capability_config_for_repo(repo_root);
-        let legacy_semantic = resolve_store_semantic_config_for_repo(repo_root);
-        let daemon_config_path = resolve_daemon_config_path_for_repo(repo_root)
-            .unwrap_or_else(|_| repo_root.join("config.toml"));
+        let inference_config = resolve_inference_capability_config_for_repo(repo_root);
 
         let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
         let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
@@ -67,8 +65,8 @@ impl LocalCapabilityRuntimeResources {
         let config_root = build_capability_config_root(
             &backends,
             &provider_config,
-            &embedding_capability.semantic_clones,
-            &embedding_capability.embeddings,
+            &inference_config.semantic_clones,
+            &inference_config.inference,
         );
         let stores = LocalStoreHealthGateway;
         let test_harness = open_repository_for_repo(repo_root)
@@ -76,9 +74,8 @@ impl LocalCapabilityRuntimeResources {
             .map(std::sync::Mutex::new);
         let inference = LocalInferenceGateway::new(
             repo_root,
-            daemon_config_path,
-            embedding_capability.embeddings,
-            legacy_semantic,
+            inference_config.inference.clone(),
+            build_slot_bindings(&inference_config),
         );
 
         Ok(Self {
@@ -87,6 +84,7 @@ impl LocalCapabilityRuntimeResources {
             config_root,
             backends,
             provider_config,
+            inference_config,
             relational,
             knowledge_relational,
             knowledge_documents,
@@ -103,6 +101,13 @@ impl LocalCapabilityRuntimeResources {
 
     pub fn runtime(&self) -> LocalCapabilityRuntime<'_> {
         self.runtime_with_relational(None, None, None)
+    }
+
+    pub fn runtime_for_capability<'a>(
+        &'a self,
+        capability_id: &'a str,
+    ) -> LocalCapabilityRuntime<'a> {
+        self.runtime_with_relational(None, Some(capability_id), None)
     }
 
     pub fn runtime_with_relational<'a>(
@@ -132,4 +137,22 @@ impl LocalCapabilityRuntimeResources {
             invoking_ingester_id,
         )
     }
+}
+
+fn build_slot_bindings(
+    config: &InferenceCapabilityConfig,
+) -> std::collections::HashMap<String, std::collections::BTreeMap<String, String>> {
+    let mut bindings = std::collections::HashMap::new();
+    let mut semantic_clones = std::collections::BTreeMap::new();
+    if let Some(profile) = config.semantic_clones.inference.summary_generation.as_ref() {
+        semantic_clones.insert("summary_generation".to_string(), profile.clone());
+    }
+    if let Some(profile) = config.semantic_clones.inference.code_embeddings.as_ref() {
+        semantic_clones.insert("code_embeddings".to_string(), profile.clone());
+    }
+    if let Some(profile) = config.semantic_clones.inference.summary_embeddings.as_ref() {
+        semantic_clones.insert("summary_embeddings".to_string(), profile.clone());
+    }
+    bindings.insert("semantic_clones".to_string(), semantic_clones);
+    bindings
 }
