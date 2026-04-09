@@ -545,6 +545,22 @@ mod route_tests {
         dir
     }
 
+    fn with_route_test_state<T>(
+        repo_root: &std::path::Path,
+        extra_env: &[(&str, Option<&str>)],
+        f: impl FnOnce() -> T,
+    ) -> T {
+        let state_dir = repo_root.join(".route-test-state");
+        let state_dir_str = state_dir.to_string_lossy().to_string();
+        let mut env_vars = Vec::with_capacity(extra_env.len() + 1);
+        env_vars.push((
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        ));
+        env_vars.extend_from_slice(extra_env);
+        with_process_state(Some(repo_root), &env_vars, f)
+    }
+
     #[test]
     fn route_codex_hooks_persist_interactions_to_event_db_when_relational_store_is_absent()
     -> Result<()> {
@@ -560,7 +576,7 @@ mod route_tests {
         .expect("write transcript");
         std::fs::write(repo.path().join("tracked.txt"), "two\n").expect("modify tracked file");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "session_id": session_id,
                 "transcript_path": transcript_path_str.clone(),
@@ -596,7 +612,7 @@ mod route_tests {
             Ok(())
         })?;
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let event_db_path = crate::config::resolve_store_backend_config_for_repo(repo.path())?
                 .events
                 .resolve_duckdb_db_path_for_repo(repo.path());
@@ -722,7 +738,7 @@ mod route_tests {
         )
         .expect("write transcript");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "session_id": session_id,
                 "transcript_path": transcript_path_str.clone(),
@@ -771,7 +787,7 @@ mod route_tests {
         let transcript_path_str = transcript_path.to_string_lossy().to_string();
         std::fs::write(&transcript_path, "").expect("write transcript");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "session_id": session_id,
                 "transcript_path": transcript_path_str,
@@ -807,7 +823,7 @@ mod route_tests {
         let transcript_path_str = transcript_path.to_string_lossy().to_string();
         std::fs::write(&transcript_path, "").expect("write transcript");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "session_id": session_id,
                 "transcript_path": transcript_path_str,
@@ -847,7 +863,7 @@ mod route_tests {
         )
         .expect("write transcript");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "session_id": session_id,
                 "transcript_path": transcript_path_str.clone(),
@@ -896,7 +912,7 @@ mod route_tests {
         let transcript_path_str = transcript_path.to_string_lossy().to_string();
         std::fs::write(&transcript_path, "").expect("write transcript");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "session_id": session_id,
                 "transcript_path": transcript_path_str,
@@ -931,7 +947,7 @@ mod route_tests {
         let transcript_path_str = transcript_path.to_string_lossy().to_string();
         std::fs::write(&transcript_path, "").expect("write transcript");
 
-        with_process_state(Some(repo.path()), &[], || -> Result<()> {
+        with_route_test_state(repo.path(), &[], || -> Result<()> {
             let session_payload = serde_json::json!({
                 "conversation_id": "cursor-session-start",
                 "transcript_path": transcript_path_str,
@@ -963,8 +979,8 @@ mod route_tests {
         std::fs::create_dir_all(&session_dir).expect("create copilot session dir");
         let session_dir_str = session_dir.to_string_lossy().to_string();
 
-        with_process_state(
-            Some(repo.path()),
+        with_route_test_state(
+            repo.path(),
             &[(
                 "BITLOOPS_TEST_COPILOT_SESSION_DIR",
                 Some(session_dir_str.as_str()),
