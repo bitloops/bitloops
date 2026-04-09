@@ -70,6 +70,19 @@ pub trait TestHarnessQueryRepository {
         commit_sha: &str,
         test_symbol_id: &str,
     ) -> Result<Option<LatestTestRunRecord>>;
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<HashMap<String, LatestTestRunRecord>> {
+        let mut runs = HashMap::new();
+        for test_symbol_id in test_symbol_ids {
+            if let Some(run) = self.load_latest_test_run(commit_sha, test_symbol_id)? {
+                runs.insert(test_symbol_id.clone(), run);
+            }
+        }
+        Ok(runs)
+    }
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
@@ -82,6 +95,7 @@ pub trait TestHarnessQueryRepository {
         &self,
         repo_id: &str,
         production_symbol_id: &str,
+        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,

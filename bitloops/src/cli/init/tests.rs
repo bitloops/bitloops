@@ -5,10 +5,12 @@ use super::*;
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
+    with_test_assume_daemon_running, with_test_tty_override,
 };
 use crate::cli::{Cli, Commands};
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ensure_daemon_config_exists};
 use crate::test_support::process_state::with_process_state;
+use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
 use clap::Parser;
 use std::io::Cursor;
@@ -52,40 +54,26 @@ fn write_current_daemon_runtime_state(config_root: &std::path::Path) {
     std::fs::write(&runtime_path, bytes).expect("write runtime state");
 }
 
-fn app_dir_env(temp: &TempDir) -> [(&'static str, Option<String>); 4] {
-    [
-        (
-            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-            Some(temp.path().join("config-root").display().to_string()),
-        ),
-        (
-            "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-            Some(temp.path().join("data-root").display().to_string()),
-        ),
-        (
-            "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-            Some(temp.path().join("cache-root").display().to_string()),
-        ),
-        (
-            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-            Some(temp.path().join("state-root").display().to_string()),
-        ),
-    ]
+fn app_dir_overrides(temp: &TempDir) -> TestPlatformDirOverrides {
+    TestPlatformDirOverrides {
+        config_root: Some(temp.path().join("config-root")),
+        data_root: Some(temp.path().join("data-root")),
+        cache_root: Some(temp.path().join("cache-root")),
+        state_root: Some(temp.path().join("state-root")),
+    }
 }
 
-fn with_temp_app_dirs_and_env<T>(
-    repo_root: &std::path::Path,
+fn with_temp_app_dirs<T>(
     temp: &TempDir,
-    extra_env: &[(&str, Option<&str>)],
+    tty: bool,
+    assume_daemon_running: bool,
     f: impl FnOnce() -> T,
 ) -> T {
-    let env_vars = app_dir_env(temp);
-    let mut env_refs = env_vars
-        .iter()
-        .map(|(key, value)| (*key, value.as_deref()))
-        .collect::<Vec<_>>();
-    env_refs.extend_from_slice(extra_env);
-    with_process_state(Some(repo_root), &env_refs, f)
+    with_test_platform_dir_overrides(app_dir_overrides(temp), || {
+        with_test_tty_override(tty, || {
+            with_test_assume_daemon_running(assume_daemon_running, f)
+        })
+    })
 }
 
 fn test_runtime() -> tokio::runtime::Runtime {
@@ -364,42 +352,38 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
-        || {
-            let mut out = Vec::new();
-            run_with_writer(
-                InitArgs {
-                    install_default_daemon: false,
-                    force: false,
-                    agent: None,
-                    telemetry: None,
-                    no_telemetry: false,
-                    skip_baseline: false,
-                    sync: Some(false),
-                    ingest: Some(false),
-                    backfill: None,
-                },
-                &mut out,
-                None,
-            )
-            .expect("run init");
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
 
-            let rendered = String::from_utf8(out).expect("utf8 output");
-            assert!(!rendered.contains("Initialising DevQL schema"));
-            assert!(!rendered.contains("Bitloops project bootstrap is ready."));
-            assert!(repo.path().join(".bitloops.local.toml").exists());
-            assert!(repo.path().join(".claude/settings.json").exists());
-            let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
-                .expect("read git exclude");
-            assert!(exclude.contains(".bitloops.local.toml"));
-            assert!(!exclude.contains(".bitloops/"));
-            assert!(!exclude.contains("config.local.json"));
-            assert!(!exclude.contains(".bitloops/config.local.json"));
-        },
-    );
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(!rendered.contains("Initialising DevQL schema"));
+        assert!(!rendered.contains("Bitloops project bootstrap is ready."));
+        assert!(repo.path().join(".bitloops.local.toml").exists());
+        assert!(repo.path().join(".claude/settings.json").exists());
+        let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+            .expect("read git exclude");
+        assert!(exclude.contains(".bitloops.local.toml"));
+        assert!(!exclude.contains(".bitloops/"));
+        assert!(!exclude.contains("config.local.json"));
+        assert!(!exclude.contains(".bitloops/config.local.json"));
+    });
 }
 
 #[test]
@@ -408,36 +392,66 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
-        || {
-            let mut out = Vec::new();
-            run_with_writer(
-                InitArgs {
-                    install_default_daemon: false,
-                    force: true,
-                    agent: Some(AGENT_CURSOR.to_string()),
-                    telemetry: None,
-                    no_telemetry: false,
-                    skip_baseline: true,
-                    sync: Some(false),
-                    ingest: Some(false),
-                    backfill: None,
-                },
-                &mut out,
-                None,
-            )
-            .expect("run init");
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: Some(AGENT_CURSOR.to_string()),
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
 
-            let rendered = String::from_utf8(out).expect("utf8 output");
-            assert!(!rendered.contains("Initialised agents: cursor"));
-            assert!(!rendered.contains("Initialising DevQL schema"));
-            assert!(repo.path().join(".cursor/hooks.json").exists());
-            assert!(!repo.path().join(".claude/settings.json").exists());
-        },
-    );
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        assert!(!rendered.contains("Initialised agents: cursor"));
+        assert!(!rendered.contains("Initialising DevQL schema"));
+        assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(!repo.path().join(".claude/settings.json").exists());
+    });
+}
+
+#[test]
+fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: Some(AGENT_CODEX.to_string()),
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        assert!(repo.path().join(".codex/hooks.json").exists());
+        let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
+            .expect("read codex config");
+        assert!(config.contains("codex_hooks = true"));
+        assert!(!repo.path().join(".claude/settings.json").exists());
+    });
 }
 
 #[test]
@@ -618,67 +632,60 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[
-            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
-            ("BITLOOPS_TEST_TTY", Some("1")),
-        ],
-        || {
-            ensure_daemon_config_exists().expect("create default daemon config");
+    with_temp_app_dirs(&app_dirs, true, true, || {
+        ensure_daemon_config_exists().expect("create default daemon config");
 
-            with_global_graphql_executor_hook(
-                |_runtime_root, _query, variables| {
-                    if variables["telemetry"].is_null() {
-                        Ok(serde_json::json!({
-                            "updateCliTelemetryConsent": {
-                                "telemetry": serde_json::Value::Null,
-                                "needsPrompt": true
-                            }
-                        }))
-                    } else {
-                        assert_eq!(variables["telemetry"], serde_json::json!(true));
-                        Ok(serde_json::json!({
-                            "updateCliTelemetryConsent": {
-                                "telemetry": true,
-                                "needsPrompt": false
-                            }
-                        }))
-                    }
-                },
-                || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("\n");
-                    let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
-                    let runtime = test_runtime();
-                    runtime
-                        .block_on(run_with_io_async(
-                            InitArgs {
-                                install_default_daemon: false,
-                                force: false,
-                                agent: None,
-                                telemetry: None,
-                                no_telemetry: false,
-                                skip_baseline: false,
-                                sync: Some(false),
-                                ingest: Some(false),
-                                backfill: None,
-                            },
-                            &mut out,
-                            &mut input,
-                            Some(&select),
-                        ))
-                        .expect("run init");
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, variables| {
+                if variables["telemetry"].is_null() {
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": serde_json::Value::Null,
+                            "needsPrompt": true
+                        }
+                    }))
+                } else {
+                    assert_eq!(variables["telemetry"], serde_json::json!(true));
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": true,
+                            "needsPrompt": false
+                        }
+                    }))
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                let mut input = Cursor::new("\n");
+                let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
+                let runtime = test_runtime();
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        InitArgs {
+                            install_default_daemon: false,
+                            force: false,
+                            agent: None,
+                            telemetry: None,
+                            no_telemetry: false,
+                            skip_baseline: false,
+                            sync: Some(false),
+                            ingest: Some(false),
+                            backfill: None,
+                        },
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        Some(&select),
+                    ))
+                    .expect("run init");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(rendered.contains("Help us improve Bitloops"));
-                    assert!(rendered.contains("Enable anonymous telemetry? [Y/n]"));
-                    assert!(!rendered.contains("Bitloops project bootstrap is ready."));
-                },
-            );
-        },
-    );
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(rendered.contains("Help us improve Bitloops"));
+                assert!(rendered.contains("Enable anonymous telemetry? [Y/n]"));
+                assert!(!rendered.contains("Bitloops project bootstrap is ready."));
+            },
+        );
+    });
 }
 
 #[test]
@@ -687,54 +694,47 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[
-            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
-            ("BITLOOPS_TEST_TTY", Some("0")),
-        ],
-        || {
-            ensure_daemon_config_exists().expect("create default daemon config");
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        ensure_daemon_config_exists().expect("create default daemon config");
 
-            with_global_graphql_executor_hook(
-                |_runtime_root, _query, _variables| {
-                    Ok(serde_json::json!({
-                        "updateCliTelemetryConsent": {
-                            "telemetry": serde_json::Value::Null,
-                            "needsPrompt": true
-                        }
-                    }))
-                },
-                || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("");
-                    let runtime = test_runtime();
-                    let err = runtime
-                        .block_on(run_with_io_async(
-                            InitArgs {
-                                install_default_daemon: false,
-                                force: false,
-                                agent: None,
-                                telemetry: None,
-                                no_telemetry: false,
-                                skip_baseline: false,
-                                sync: Some(false),
-                                ingest: Some(false),
-                                backfill: None,
-                            },
-                            &mut out,
-                            &mut input,
-                            None,
-                        ))
-                        .expect_err("init should fail without explicit telemetry");
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, _variables| {
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": serde_json::Value::Null,
+                        "needsPrompt": true
+                    }
+                }))
+            },
+            || {
+                let mut out = Vec::new();
+                let mut input = Cursor::new("");
+                let runtime = test_runtime();
+                let err = runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        InitArgs {
+                            install_default_daemon: false,
+                            force: false,
+                            agent: None,
+                            telemetry: None,
+                            no_telemetry: false,
+                            skip_baseline: false,
+                            sync: Some(false),
+                            ingest: Some(false),
+                            backfill: None,
+                        },
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect_err("init should fail without explicit telemetry");
 
-                    assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
-                    assert!(!repo.path().join(".bitloops.local.toml").exists());
-                },
-            );
-        },
-    );
+                assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
+                assert!(!repo.path().join(".bitloops.local.toml").exists());
+            },
+        );
+    });
 }
 
 #[test]
@@ -743,36 +743,32 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[("BITLOOPS_TEST_TTY", Some("0"))],
-        || {
-            let mut out = Vec::new();
-            let mut input = Cursor::new("");
-            let runtime = test_runtime();
-            let err = runtime
-                .block_on(run_with_io_async(
-                    InitArgs {
-                        install_default_daemon: true,
-                        force: false,
-                        agent: None,
-                        telemetry: None,
-                        no_telemetry: false,
-                        skip_baseline: false,
-                        sync: Some(false),
-                        ingest: Some(false),
-                        backfill: None,
-                    },
-                    &mut out,
-                    &mut input,
-                    None,
-                ))
-                .expect_err("init should fail without explicit telemetry flag");
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("");
+        let runtime = test_runtime();
+        let err = runtime
+            .block_on(run_with_io_async_for_project_root(
+                InitArgs {
+                    install_default_daemon: true,
+                    force: false,
+                    agent: None,
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: false,
+                    sync: Some(false),
+                    ingest: Some(false),
+                    backfill: None,
+                },
+                repo.path(),
+                &mut out,
+                &mut input,
+                None,
+            ))
+            .expect_err("init should fail without explicit telemetry flag");
 
-            assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
-        },
-    );
+        assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
+    });
 }
 
 #[test]
@@ -781,60 +777,53 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[
-            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
-            ("BITLOOPS_TEST_TTY", Some("0")),
-        ],
-        || {
-            let config_path = ensure_daemon_config_exists().expect("create default daemon config");
-            let (command, args) = fake_runtime_command_and_args(repo.path());
-            write_runtime_only_daemon_config(&config_path, &command, &args);
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let config_path = ensure_daemon_config_exists().expect("create default daemon config");
+        let (command, args) = fake_runtime_command_and_args(repo.path());
+        write_runtime_only_daemon_config(&config_path, &command, &args);
 
-            with_global_graphql_executor_hook(
-                |_runtime_root, _query, variables| {
-                    assert_eq!(variables["telemetry"], serde_json::json!(false));
-                    Ok(serde_json::json!({
-                        "updateCliTelemetryConsent": {
-                            "telemetry": false,
-                            "needsPrompt": false
-                        }
-                    }))
-                },
-                || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("");
-                    let runtime = test_runtime();
-                    runtime
-                        .block_on(run_with_io_async(
-                            InitArgs {
-                                install_default_daemon: false,
-                                force: false,
-                                agent: None,
-                                telemetry: Some(false),
-                                no_telemetry: false,
-                                skip_baseline: false,
-                                sync: Some(false),
-                                ingest: Some(false),
-                                backfill: None,
-                            },
-                            &mut out,
-                            &mut input,
-                            None,
-                        ))
-                        .expect("run init");
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, variables| {
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                let mut out = Vec::new();
+                let mut input = Cursor::new("");
+                let runtime = test_runtime();
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        InitArgs {
+                            install_default_daemon: false,
+                            force: false,
+                            agent: None,
+                            telemetry: Some(false),
+                            no_telemetry: false,
+                            skip_baseline: false,
+                            sync: Some(false),
+                            ingest: Some(false),
+                            backfill: None,
+                        },
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("run init");
 
-                    let config = std::fs::read_to_string(&config_path).expect("read config");
-                    assert!(
-                        !config.contains("embedding_profile = \"local\""),
-                        "plain init should not install embeddings:\n{config}"
-                    );
-                },
-            );
-        },
-    );
+                let config = std::fs::read_to_string(&config_path).expect("read config");
+                assert!(
+                    !config.contains("embedding_profile = \"local\""),
+                    "plain init should not install embeddings:\n{config}"
+                );
+            },
+        );
+    });
 }
 
 #[test]
@@ -844,78 +833,71 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[
-            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
-            ("BITLOOPS_TEST_TTY", Some("0")),
-        ],
-        || {
-            with_install_default_daemon_hook(
-                move |install_default_daemon| {
-                    assert!(install_default_daemon);
-                    let config_path =
-                        ensure_daemon_config_exists().expect("create default daemon config");
-                    let (command, args) = fake_runtime_command_and_args(&repo_root);
-                    write_runtime_only_daemon_config(&config_path, &command, &args);
-                    Ok(())
-                },
-                || {
-                    with_global_graphql_executor_hook(
-                        |_runtime_root, _query, variables| {
-                            assert_eq!(variables["telemetry"], serde_json::json!(false));
-                            Ok(serde_json::json!({
-                                "updateCliTelemetryConsent": {
-                                    "telemetry": false,
-                                    "needsPrompt": false
-                                }
-                            }))
-                        },
-                        || {
-                            let mut out = Vec::new();
-                            let mut input = Cursor::new("");
-                            let runtime = test_runtime();
-                            runtime
-                                .block_on(run_with_io_async(
-                                    InitArgs {
-                                        install_default_daemon: true,
-                                        force: false,
-                                        agent: None,
-                                        telemetry: Some(false),
-                                        no_telemetry: false,
-                                        skip_baseline: false,
-                                        sync: Some(false),
-                                        ingest: Some(false),
-                                        backfill: None,
-                                    },
-                                    &mut out,
-                                    &mut input,
-                                    None,
-                                ))
-                                .expect("run init");
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                let (command, args) = fake_runtime_command_and_args(&repo_root);
+                write_runtime_only_daemon_config(&config_path, &command, &args);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    install_default_daemon: true,
+                                    force: false,
+                                    agent: None,
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
 
-                            let rendered = String::from_utf8(out).expect("utf8 output");
-                            assert!(rendered.contains("Pulled embedding profile `local`."));
-                            let config = std::fs::read_to_string(
-                                repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
-                            )
-                            .unwrap_or_else(|_| String::new());
-                            assert!(
-                                config.is_empty(),
-                                "init with default daemon should use the daemon config, not repo-local config:\n{config}"
-                            );
-                            let daemon_config = ensure_daemon_config_exists()
-                                .expect("resolve daemon config after init");
-                            let daemon_config =
-                                std::fs::read_to_string(daemon_config).expect("read daemon config");
-                            assert!(daemon_config.contains("embedding_profile = \"local\""));
-                        },
-                    );
-                },
-            );
-        },
-    );
+                        let rendered = String::from_utf8(out).expect("utf8 output");
+                        assert!(rendered.contains("Pulled embedding profile `local`."));
+                        let config = std::fs::read_to_string(
+                            repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+                        )
+                        .unwrap_or_else(|_| String::new());
+                        assert!(
+                            config.is_empty(),
+                            "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                        );
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(daemon_config).expect("read daemon config");
+                        assert!(daemon_config.contains("embedding_profile = \"local\""));
+                    },
+                );
+            },
+        );
+    });
 }
 
 #[test]
@@ -924,55 +906,48 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[
-            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
-            ("BITLOOPS_TEST_TTY", Some("0")),
-        ],
-        || {
-            ensure_daemon_config_exists().expect("create default daemon config");
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        ensure_daemon_config_exists().expect("create default daemon config");
 
-            with_global_graphql_executor_hook(
-                |_runtime_root, _query, variables| {
-                    assert_eq!(variables["telemetry"], serde_json::json!(false));
-                    Ok(serde_json::json!({
-                        "updateCliTelemetryConsent": {
-                            "telemetry": false,
-                            "needsPrompt": false
-                        }
-                    }))
-                },
-                || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("");
-                    let runtime = test_runtime();
-                    runtime
-                        .block_on(run_with_io_async(
-                            InitArgs {
-                                install_default_daemon: false,
-                                force: false,
-                                agent: None,
-                                telemetry: Some(false),
-                                no_telemetry: false,
-                                skip_baseline: false,
-                                sync: Some(false),
-                                ingest: Some(false),
-                                backfill: None,
-                            },
-                            &mut out,
-                            &mut input,
-                            None,
-                        ))
-                        .expect("run init");
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, variables| {
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                let mut out = Vec::new();
+                let mut input = Cursor::new("");
+                let runtime = test_runtime();
+                runtime
+                    .block_on(run_with_io_async_for_project_root(
+                        InitArgs {
+                            install_default_daemon: false,
+                            force: false,
+                            agent: None,
+                            telemetry: Some(false),
+                            no_telemetry: false,
+                            skip_baseline: false,
+                            sync: Some(false),
+                            ingest: Some(false),
+                            backfill: None,
+                        },
+                        repo.path(),
+                        &mut out,
+                        &mut input,
+                        None,
+                    ))
+                    .expect("run init");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(!rendered.contains("Help us improve Bitloops"));
-                },
-            );
-        },
-    );
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(!rendered.contains("Help us improve Bitloops"));
+            },
+        );
+    });
 }
 
 #[test]
@@ -981,42 +956,35 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[
-            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
-            ("BITLOOPS_TEST_TTY", Some("0")),
-        ],
-        || {
-            let mut out = Vec::new();
-            let mut input = Cursor::new("");
-            let runtime = test_runtime();
-            let err = runtime
-                .block_on(run_with_io_async(
-                    InitArgs {
-                        install_default_daemon: false,
-                        force: false,
-                        agent: None,
-                        telemetry: Some(false),
-                        no_telemetry: false,
-                        skip_baseline: false,
-                        sync: None,
-                        ingest: Some(false),
-                        backfill: None,
-                    },
-                    &mut out,
-                    &mut input,
-                    None,
-                ))
-                .expect_err("init should require explicit init actions");
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("");
+        let runtime = test_runtime();
+        let err = runtime
+            .block_on(run_with_io_async_for_project_root(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: false,
+                    agent: None,
+                    telemetry: Some(false),
+                    no_telemetry: false,
+                    skip_baseline: false,
+                    sync: None,
+                    ingest: Some(false),
+                    backfill: None,
+                },
+                repo.path(),
+                &mut out,
+                &mut input,
+                None,
+            ))
+            .expect_err("init should require explicit init actions");
 
-            assert_eq!(
-                err.to_string(),
-                "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
-            );
-        },
-    );
+        assert_eq!(
+            err.to_string(),
+            "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
+        );
+    });
 }
 
 #[test]
@@ -1027,34 +995,30 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[("BITLOOPS_TEST_TTY", Some("0"))],
-        || {
-            ensure_daemon_config_exists().expect("create default daemon config");
-            write_current_daemon_runtime_state(repo.path());
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        ensure_daemon_config_exists().expect("create default daemon config");
+        write_current_daemon_runtime_state(repo.path());
 
-            with_global_graphql_executor_hook(
-                |_runtime_root, query, variables| {
-                    assert!(query.contains("updateCliTelemetryConsent"));
-                    assert_eq!(variables["telemetry"], serde_json::json!(false));
-                    Ok(serde_json::json!({
-                        "updateCliTelemetryConsent": {
-                            "telemetry": false,
-                            "needsPrompt": false
-                        }
-                    }))
-                },
-                || {
-                    with_ingest_daemon_bootstrap_hook(
-                        |_repo_root| Ok(()),
-                        || {
-                            with_graphql_executor_hook(
-                                {
-                                    let saw_ingest = std::rc::Rc::clone(&saw_ingest);
-                                    let repo_root = repo_root.clone();
-                                    move |actual_repo_root: &std::path::Path,
+        with_global_graphql_executor_hook(
+            |_runtime_root, query, variables| {
+                assert!(query.contains("updateCliTelemetryConsent"));
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                with_ingest_daemon_bootstrap_hook(
+                    |_repo_root| Ok(()),
+                    || {
+                        with_graphql_executor_hook(
+                            {
+                                let saw_ingest = std::rc::Rc::clone(&saw_ingest);
+                                let repo_root = repo_root.clone();
+                                move |actual_repo_root: &std::path::Path,
                                   query: &str,
                                   variables: &serde_json::Value| {
                                 let expected_repo_root =
@@ -1097,41 +1061,41 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
 
                                 panic!("unexpected repo-scoped query: {query}");
                             }
-                                },
-                                || {
-                                    let mut out = Vec::new();
-                                    let mut input = Cursor::new("");
-                                    let runtime = test_runtime();
-                                    runtime
-                                        .block_on(run_with_io_async(
-                                            InitArgs {
-                                                install_default_daemon: false,
-                                                force: false,
-                                                agent: None,
-                                                telemetry: Some(false),
-                                                no_telemetry: false,
-                                                skip_baseline: false,
-                                                sync: Some(false),
-                                                ingest: Some(true),
-                                                backfill: None,
-                                            },
-                                            &mut out,
-                                            &mut input,
-                                            None,
-                                        ))
-                                        .expect("run init");
-                                },
-                            )
-                        },
-                    );
-                    assert!(
-                        *saw_ingest.borrow(),
-                        "init should invoke repo-scoped ingest"
-                    );
-                },
-            );
-        },
-    );
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            install_default_daemon: false,
+                                            force: false,
+                                            agent: None,
+                                            telemetry: Some(false),
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: Some(false),
+                                            ingest: Some(true),
+                                            backfill: None,
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        None,
+                                    ))
+                                    .expect("run init");
+                            },
+                        )
+                    },
+                );
+                assert!(
+                    *saw_ingest.borrow(),
+                    "init should invoke repo-scoped ingest"
+                );
+            },
+        );
+    });
 }
 
 #[test]
@@ -1142,34 +1106,30 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs_and_env(
-        repo.path(),
-        &app_dirs,
-        &[("BITLOOPS_TEST_TTY", Some("0"))],
-        || {
-            ensure_daemon_config_exists().expect("create default daemon config");
-            write_current_daemon_runtime_state(repo.path());
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        ensure_daemon_config_exists().expect("create default daemon config");
+        write_current_daemon_runtime_state(repo.path());
 
-            with_global_graphql_executor_hook(
-                |_runtime_root, query, variables| {
-                    assert!(query.contains("updateCliTelemetryConsent"));
-                    assert_eq!(variables["telemetry"], serde_json::json!(false));
-                    Ok(serde_json::json!({
-                        "updateCliTelemetryConsent": {
-                            "telemetry": false,
-                            "needsPrompt": false
-                        }
-                    }))
-                },
-                || {
-                    with_ingest_daemon_bootstrap_hook(
-                        |_repo_root| Ok(()),
-                        || {
-                            with_graphql_executor_hook(
-                                {
-                                    let saw_ingest = std::rc::Rc::clone(&saw_ingest);
-                                    let repo_root = repo_root.clone();
-                                    move |actual_repo_root: &std::path::Path,
+        with_global_graphql_executor_hook(
+            |_runtime_root, query, variables| {
+                assert!(query.contains("updateCliTelemetryConsent"));
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                with_ingest_daemon_bootstrap_hook(
+                    |_repo_root| Ok(()),
+                    || {
+                        with_graphql_executor_hook(
+                            {
+                                let saw_ingest = std::rc::Rc::clone(&saw_ingest);
+                                let repo_root = repo_root.clone();
+                                move |actual_repo_root: &std::path::Path,
                                           query: &str,
                                           variables: &serde_json::Value| {
                                         let expected_repo_root = repo_root
@@ -1213,39 +1173,39 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
 
                                         panic!("unexpected repo-scoped query: {query}");
                                     }
-                                },
-                                || {
-                                    let mut out = Vec::new();
-                                    let mut input = Cursor::new("");
-                                    let runtime = test_runtime();
-                                    runtime
-                                        .block_on(run_with_io_async(
-                                            InitArgs {
-                                                install_default_daemon: false,
-                                                force: false,
-                                                agent: None,
-                                                telemetry: Some(false),
-                                                no_telemetry: false,
-                                                skip_baseline: false,
-                                                sync: Some(false),
-                                                ingest: None,
-                                                backfill: Some(10),
-                                            },
-                                            &mut out,
-                                            &mut input,
-                                            None,
-                                        ))
-                                        .expect("run init");
-                                },
-                            )
-                        },
-                    );
-                    assert!(
-                        *saw_ingest.borrow(),
-                        "init should invoke repo-scoped ingest"
-                    );
-                },
-            );
-        },
-    );
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            install_default_daemon: false,
+                                            force: false,
+                                            agent: None,
+                                            telemetry: Some(false),
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: Some(false),
+                                            ingest: None,
+                                            backfill: Some(10),
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        None,
+                                    ))
+                                    .expect("run init");
+                            },
+                        )
+                    },
+                );
+                assert!(
+                    *saw_ingest.borrow(),
+                    "init should invoke repo-scoped ingest"
+                );
+            },
+        );
+    });
 }

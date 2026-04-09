@@ -7,14 +7,14 @@ QAT runs as a standard Cargo integration test. The production binary no longer e
 
 ## Where to run from
 
-All commands below assume you are inside the `bitloops/` crate directory.
-Cargo aliases are configured in `.cargo/config.toml` and only resolve from this directory.
+All commands below assume you are at the repository root.
+The explicit `cargo test` forms also work from the `bitloops/` crate directory when you keep the `--manifest-path bitloops/Cargo.toml` flag.
 
 ## Implemented test suites
 
-### Onboarding + DevQL sync + Smoke (CI bundle)
+### Onboarding + DevQL sync, then Smoke, then DevQL capabilities (CI bundle)
 
-Runs onboarding + DevQL sync + smoke in parallel (41 scenarios total).
+Runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite (59 scenarios total).
 
 - PRs targeting `main`: runs automatically in `.github/workflows/ci.yml`
 - For develop-target work: run `.github/workflows/develop-qat.yml` manually from the GitHub Actions UI and select the branch you want to test
@@ -24,6 +24,8 @@ cargo qat
 ```
 
 Works from both the `bitloops/` crate directory and the repository root.
+
+The DevQL capabilities suite is part of `cargo qat`, and the focused aliases remain available for targeted runs.
 
 ### 1. Smoke (13 scenarios across 2 features)
 
@@ -85,7 +87,7 @@ cargo test --features qat-tests --test qat_acceptance qat_onboarding -- --ignore
 | 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
 | 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
 
-### 3. DevQL Sync (15 scenarios)
+### 3. DevQL Sync (`cargo qat-devql-sync`, 15 scenarios)
 
 Exercises the `devql sync` workspace reconciliation flow: full indexing, incremental
 add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
@@ -120,6 +122,46 @@ cargo test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignore
 | 13  | Init sync=true — follow-up sync reports no changes | `SyncInitSyncTrueNoop`          |
 | 14  | Init sync=true — incremental sync for new files    | `SyncInitSyncTrueIncremental`   |
 | 15  | Init sync=true — validation stays clean            | `SyncInitSyncTrueValidateClean` |
+
+### 4. DevQL capabilities (`cargo qat-devql`, 18 scenarios)
+
+Exercises the strict offline DevQL capability surface: agent queryability,
+checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
+artefact-scoped TestHarness proof-map queries, deterministic semantic clones,
+knowledge rejection handling, and one final integrated cross-capability smoke.
+
+```bash
+cargo qat-devql
+```
+
+Or equivalently:
+
+```bash
+cargo test --features qat-tests --test qat_acceptance qat_devql -- --ignored
+```
+
+**Scenarios:**
+
+| #   | Scenario                                                      | Flow                       |
+| --- | ------------------------------------------------------------- | -------------------------- |
+| 1   | First Claude Code change is queryable through DevQL           | `AgentEnablementQueryable` |
+| 2   | Claude Code chat history is retrievable after edit and commit | `AgentChatHistory`         |
+| 3   | Dependency query returns outgoing edges for a known caller    | `BlastRadiusTemporal`      |
+| 4   | Dependency query returns incoming edges for a known callee    | `BlastRadiusTemporal`      |
+| 5   | Current workspace edit changes the outgoing dependency graph  | `BlastRadiusTemporal`      |
+| 6   | Historical query returns the pre-edit outgoing graph          | `BlastRadiusTemporal`      |
+| 7   | Repeated ingest does not duplicate artefacts or edges         | `BlastRadiusTemporal`      |
+| 8   | Test summary returns counts for `UserService.createUser`      | `TestHarnessProofMap`      |
+| 9   | Tests query returns individual covering tests                 | `TestHarnessProofMap`      |
+| 10  | Coverage query returns line coverage data                     | `TestHarnessProofMap`      |
+| 11  | Untested artefact is clearly identified                       | `TestHarnessProofMap`      |
+| 12  | Failing test is distinguishable from passing test             | `TestHarnessProofMap`      |
+| 13  | Clones query returns similar implementations                  | `SemanticClones`           |
+| 14  | Score filtering reduces result set                            | `SemanticClones`           |
+| 15  | Strong local patterns rank ahead of weak matches              | `SemanticClones`           |
+| 16  | Clone results include explanation payload                     | `SemanticClones`           |
+| 17  | Unsupported URL fails cleanly without partial persistence     | `KnowledgeIngestion`       |
+| 18  | Hardened DevQL capability surfaces compose in one workflow    | `CrossCapabilitySmoke`     |
 
 ## Daemon prerequisite
 
@@ -156,7 +198,7 @@ Inside each scenario folder you will see:
 - `terminal.log`: all executed commands with status/stdout/stderr
 - `bitloops/`: isolated test repository used by the scenario
 - `home/`: isolated HOME/XDG state for tools
-- optional markers like `.qat-claude-fallback`, `.qat-semantic-clones-fallback`, `.qat-knowledge-fallback`
+- optional markers like `.qat-claude-fallback`
 
 `.last-run` in the runs root points to the latest suite folder.
 
@@ -169,7 +211,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 ## Environment variables
 
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
-- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the onboarding + DevQL sync + smoke bundle running in parallel under `cargo qat`)
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the onboarding and DevQL sync parallel phase under `cargo qat`, before smoke and the final DevQL capability stage)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)
@@ -181,7 +223,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 Example:
 
 ```bash
-BITLOOPS_QAT_COMMAND_TIMEOUT_SECS=300 cargo qat-devql-sync
+BITLOOPS_QAT_COMMAND_TIMEOUT_SECS=300 cargo qat-devql
 ```
 
 ## Troubleshooting

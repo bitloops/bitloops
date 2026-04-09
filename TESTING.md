@@ -24,6 +24,8 @@ Run commands from the repository root.
 | Clippy (warnings denied)                         | `cargo dev-clippy`           |
 | One-command local gate                           | `cargo dev-loop`             |
 | Quality Assurance Tests                          | `cargo qat`                  |
+| DevQL capabilities suite                         | `cargo qat-devql-capabilities` |
+| DevQL sync suite                                 | `cargo qat-devql-sync`       |
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
@@ -34,7 +36,9 @@ CI is pinned to `BITLOOPS_TEST_THREADS=6`.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 `dev-test-*` aliases run with terse test output (`.` style) by default.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
-`cargo qat` runs the onboarding and DevQL sync suites as a parallel bundle.
+`cargo qat` runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite.
+`cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
+`cargo qat-devql-sync` is the focused DevQL sync alias.
 
 ### Fast-lane thread tuning
 

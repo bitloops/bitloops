@@ -70,6 +70,44 @@ pub(crate) async fn load_pre_stage_dependencies_for_blob(
     parse_semantic_dependency_rows(rows)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CurrentSemanticArtefactKey {
+    path: String,
+    canonical_kind: String,
+    symbol_fqn: String,
+}
+
+fn current_semantic_artefact_key_from_row(
+    row: &semantic::PreStageArtefactRow,
+) -> CurrentSemanticArtefactKey {
+    CurrentSemanticArtefactKey {
+        path: row.path.clone(),
+        canonical_kind: row.canonical_kind.to_ascii_lowercase(),
+        symbol_fqn: row.symbol_fqn.clone(),
+    }
+}
+
+fn current_semantic_artefact_key_from_input(
+    input: &semantic::SemanticFeatureInput,
+) -> CurrentSemanticArtefactKey {
+    CurrentSemanticArtefactKey {
+        path: input.path.clone(),
+        canonical_kind: input.canonical_kind.to_ascii_lowercase(),
+        symbol_fqn: input.symbol_fqn.clone(),
+    }
+}
+
+fn remap_semantic_input_to_current_artefact(
+    input: semantic::SemanticFeatureInput,
+    current_by_key: &HashMap<CurrentSemanticArtefactKey, semantic::PreStageArtefactRow>,
+) -> Option<semantic::SemanticFeatureInput> {
+    let current = current_by_key.get(&current_semantic_artefact_key_from_input(&input))?;
+    let mut remapped = input;
+    remapped.artefact_id = current.artefact_id.clone();
+    remapped.symbol_id = current.symbol_id.clone();
+    Some(remapped)
+}
+
 pub(crate) async fn upsert_semantic_feature_rows(
     relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
@@ -193,24 +231,49 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
         .query_rows(&build_current_repo_artefacts_sql(repo_id))
         .await?;
     let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
-    let requested_ids = target_artefacts
+    let current_by_key = target_artefacts
         .iter()
-        .map(|row| row.artefact_id.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|row| (current_semantic_artefact_key_from_row(row), row.clone()))
+        .collect::<HashMap<_, _>>();
     let requested_order = target_artefacts
         .iter()
         .enumerate()
         .map(|(index, row)| (row.artefact_id.clone(), index))
         .collect::<HashMap<_, _>>();
+    let groups = target_artefacts
+        .iter()
+        .map(|row| (row.repo_id.clone(), row.blob_sha.clone(), row.path.clone()))
+        .collect::<BTreeSet<_>>();
 
-    hydrate_semantic_feature_inputs(
-        relational,
-        repo_root,
-        target_artefacts,
-        &requested_ids,
-        &requested_order,
-    )
-    .await
+    let mut hydrated_inputs = Vec::with_capacity(target_artefacts.len());
+    for (group_repo_id, blob_sha, path) in groups {
+        let artefacts =
+            load_pre_stage_artefacts_for_blob(relational, &group_repo_id, &blob_sha, &path).await?;
+        let dependencies =
+            load_pre_stage_dependencies_for_blob(relational, &group_repo_id, &blob_sha, &path)
+                .await?;
+        let blob_content = load_blob_content_from_git(repo_root, &blob_sha)
+            .with_context(|| format!("loading blob `{blob_sha}` for `{path}`"))?;
+
+        hydrated_inputs.extend(
+            semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+                &artefacts,
+                &dependencies,
+                &blob_content,
+            )
+            .into_iter()
+            .filter_map(|input| remap_semantic_input_to_current_artefact(input, &current_by_key)),
+        );
+    }
+
+    hydrated_inputs.sort_by_key(|input| {
+        requested_order
+            .get(&input.artefact_id)
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    hydrated_inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
+    Ok(hydrated_inputs)
 }
 
 async fn hydrate_semantic_feature_inputs(
@@ -378,7 +441,13 @@ fn load_blob_content_from_git(repo_root: &Path, blob_sha: &str) -> Result<String
 
 #[cfg(test)]
 mod tests {
-    use super::SemanticSummarySnapshot;
+    use std::collections::HashMap;
+
+    use super::{
+        SemanticSummarySnapshot, current_semantic_artefact_key_from_row,
+        remap_semantic_input_to_current_artefact,
+    };
+    use crate::capability_packs::semantic_clones::features as semantic;
 
     #[test]
     fn semantic_summary_snapshot_marks_llm_enrichment_from_summary_or_model() {
@@ -411,5 +480,59 @@ mod tests {
             }
             .is_llm_enriched()
         );
+    }
+
+    #[test]
+    fn remap_semantic_input_to_current_artefact_uses_current_sync_ids() {
+        let current = semantic::PreStageArtefactRow {
+            artefact_id: "current-artefact".to_string(),
+            symbol_id: Some("current-symbol".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/render.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/render.ts::renderInvoice".to_string(),
+            parent_artefact_id: None,
+            start_line: Some(1),
+            end_line: Some(3),
+            start_byte: Some(0),
+            end_byte: Some(64),
+            signature: Some("renderInvoice(orderId: string): string".to_string()),
+            modifiers: vec!["export".to_string()],
+            docstring: None,
+            content_hash: Some("hash-1".to_string()),
+        };
+        let historical = semantic::SemanticFeatureInput {
+            artefact_id: "historical-artefact".to_string(),
+            symbol_id: Some("historical-symbol".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/render.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/render.ts::renderInvoice".to_string(),
+            name: "renderInvoice".to_string(),
+            signature: Some("renderInvoice(orderId: string): string".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return orderId;".to_string(),
+            docstring: None,
+            parent_kind: Some("file".to_string()),
+            dependency_signals: Vec::new(),
+            content_hash: Some("hash-1".to_string()),
+        };
+        let current_by_key = HashMap::from([(
+            current_semantic_artefact_key_from_row(&current),
+            current.clone(),
+        )]);
+
+        let remapped = remap_semantic_input_to_current_artefact(historical, &current_by_key)
+            .expect("expected current artefact match");
+
+        assert_eq!(remapped.artefact_id, current.artefact_id);
+        assert_eq!(remapped.symbol_id, current.symbol_id);
+        assert_eq!(remapped.symbol_fqn, current.symbol_fqn);
     }
 }

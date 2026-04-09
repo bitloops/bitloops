@@ -587,6 +587,14 @@ async fn execute_ingest_inner(
                     &cfg.repo.repo_id,
                 )
                 .await?;
+                let semantic_feature_stats = upsert_semantic_feature_rows(
+                    &relational,
+                    &current_inputs,
+                    Arc::clone(&summary_provider),
+                )
+                .await?;
+                counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+                counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
                 let baseline_stats = upsert_symbol_embedding_rows(
                     &relational,
                     &current_inputs,

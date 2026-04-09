@@ -7,7 +7,6 @@ use crate::host::devql::{
     RelationalStorage, execute_ingest_with_observer, execute_sync, resolve_repo_identity,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
-use crate::test_support::process_state::enter_process_state;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -29,17 +28,27 @@ fn daemon_test_cfg_for_repo(repo_root: &Path) -> DevqlConfig {
 }
 
 #[cfg(unix)]
-fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+fn fake_runtime_command_and_args(
+    repo_root: &Path,
+    provider_name: &str,
+    model: &str,
+    dimension: usize,
+) -> (String, Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
 
     let script_path = repo_root.join(".bitloops/test-bin/fake-embeddings-runtime.sh");
     if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
-    let script = r#"#!/bin/sh
-provider=${BITLOOPS_TEST_EMBED_PROVIDER:-local_fastembed}
-model=${BITLOOPS_TEST_EMBED_MODEL:-bdd-test-model}
-dimension=${BITLOOPS_TEST_EMBED_DIMENSION:-3}
+    let vector = if dimension == 4 {
+        "[0.1,0.2,0.3,0.4]"
+    } else {
+        "[0.1,0.2,0.3]"
+    };
+    let script_template = r#"#!/bin/sh
+provider='__PROVIDER__'
+model='__MODEL__'
+dimension=__DIMENSION__
 profile_name=fake
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -52,10 +61,7 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
-case "$dimension" in
-  4) vector='[0.1,0.2,0.3,0.4]' ;;
-  *) vector='[0.1,0.2,0.3]' ;;
-esac
+vector='__VECTOR__'
 while IFS= read -r line; do
   req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
   case "$line" in
@@ -74,7 +80,13 @@ while IFS= read -r line; do
       ;;
   esac
 done
+exit 0
 "#;
+    let script = script_template
+        .replace("__PROVIDER__", provider_name)
+        .replace("__MODEL__", model)
+        .replace("__DIMENSION__", &dimension.to_string())
+        .replace("__VECTOR__", vector);
     fs::write(&script_path, script).expect("write fake runtime script");
     let mut permissions = fs::metadata(&script_path)
         .expect("stat fake runtime script")
@@ -85,15 +97,25 @@ done
 }
 
 #[cfg(windows)]
-fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+fn fake_runtime_command_and_args(
+    repo_root: &Path,
+    provider_name: &str,
+    model: &str,
+    dimension: usize,
+) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-embeddings-runtime.ps1");
     if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
-    let script = r#"
-$provider = if ($env:BITLOOPS_TEST_EMBED_PROVIDER) { $env:BITLOOPS_TEST_EMBED_PROVIDER } else { "local_fastembed" }
-$model = if ($env:BITLOOPS_TEST_EMBED_MODEL) { $env:BITLOOPS_TEST_EMBED_MODEL } else { "bdd-test-model" }
-$dimension = if ($env:BITLOOPS_TEST_EMBED_DIMENSION) { [int]$env:BITLOOPS_TEST_EMBED_DIMENSION } else { 3 }
+    let vector = if dimension == 4 {
+        "@(0.1, 0.2, 0.3, 0.4)"
+    } else {
+        "@(0.1, 0.2, 0.3)"
+    };
+    let script_template = r#"
+$provider = "__PROVIDER__"
+$model = "__MODEL__"
+$dimension = __DIMENSION__
 $profileName = "fake"
 for ($i = 0; $i -lt $args.Length; $i++) {
   if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
@@ -101,7 +123,7 @@ for ($i = 0; $i -lt $args.Length; $i++) {
     break
   }
 }
-$vector = if ($dimension -eq 4) { @(0.1, 0.2, 0.3, 0.4) } else { @(0.1, 0.2, 0.3) }
+$vector = __VECTOR__
 $stdin = [Console]::In
 while (($line = $stdin.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -159,7 +181,13 @@ while (($line = $stdin.ReadLine()) -ne $null) {
   }
   $response | ConvertTo-Json -Compress
 }
+exit 0
 "#;
+    let script = script_template
+        .replace("__PROVIDER__", provider_name)
+        .replace("__MODEL__", model)
+        .replace("__DIMENSION__", &dimension.to_string())
+        .replace("__VECTOR__", vector);
     fs::write(&script_path, script).expect("write fake runtime script");
     (
         "powershell".to_string(),
@@ -173,8 +201,14 @@ while (($line = $stdin.ReadLine()) -ne $null) {
     )
 }
 
-fn write_daemon_embedding_config(repo_root: &Path, profile_name: &str) {
-    let (command, args) = fake_runtime_command_and_args(repo_root);
+fn write_daemon_embedding_config(
+    repo_root: &Path,
+    profile_name: &str,
+    provider_name: &str,
+    model: &str,
+    dimension: usize,
+) {
+    let (command, args) = fake_runtime_command_and_args(repo_root, provider_name, model, dimension);
     let runtime_args = args
         .iter()
         .map(|arg| format!("{arg:?}"))
@@ -201,6 +235,9 @@ summary_mode = "off"
 embedding_mode = "deterministic"
 embedding_profile = "{profile_name}"
 
+# test_runtime_provider = "{provider_name}"
+# test_runtime_model = "{model}"
+# test_runtime_dimension = {dimension}
 [embeddings.runtime]
 command = {command:?}
 args = [{runtime_args}]
@@ -218,6 +255,21 @@ model = "ignored-by-fake-runtime"
         ),
     )
     .expect("write daemon embedding config");
+}
+
+#[test]
+fn fake_runtime_scripts_bake_runtime_metadata_without_process_env() {
+    let repo = TempDir::new().expect("temp dir");
+    let (_command, args) = fake_runtime_command_and_args(repo.path(), "voyage", "model-b", 4);
+    let script_path = PathBuf::from(args.last().expect("script path arg"));
+    let script = fs::read_to_string(script_path).expect("read fake runtime script");
+
+    assert!(script.contains("voyage"));
+    assert!(script.contains("model-b"));
+    assert!(script.contains('4'));
+    assert!(!script.contains("BITLOOPS_TEST_EMBED_PROVIDER"));
+    assert!(!script.contains("BITLOOPS_TEST_EMBED_MODEL"));
+    assert!(!script.contains("BITLOOPS_TEST_EMBED_DIMENSION"));
 }
 
 fn daemon_checkpoint_write_options(
@@ -406,29 +458,15 @@ async fn seed_current_state_and_semantics(
     Vec<semantic_features::SemanticFeatureInput>,
     BTreeMap<String, String>,
 ) {
-    write_daemon_embedding_config(repo_root, profile_name);
+    let dimension = dimension
+        .parse::<usize>()
+        .expect("parse daemon test dimension");
+    write_daemon_embedding_config(repo_root, profile_name, provider_name, model, dimension);
     let sqlite_path = daemon_relational_sqlite_path(repo_root);
     if let Some(parent) = sqlite_path.parent() {
         fs::create_dir_all(parent).expect("create daemon relational db parent");
     }
     rusqlite::Connection::open(&sqlite_path).expect("create daemon relational db file");
-    let home = TempDir::new().expect("home dir");
-    let home_path = home.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(repo_root),
-        &[
-            ("HOME", Some(home_path.as_str())),
-            ("USERPROFILE", Some(home_path.as_str())),
-            ("BITLOOPS_DEVQL_PG_DSN", None),
-            ("BITLOOPS_DEVQL_CH_URL", None),
-            ("BITLOOPS_DEVQL_CH_USER", None),
-            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
-            ("BITLOOPS_DEVQL_CH_DATABASE", None),
-            ("BITLOOPS_TEST_EMBED_PROVIDER", Some(provider_name)),
-            ("BITLOOPS_TEST_EMBED_MODEL", Some(model)),
-            ("BITLOOPS_TEST_EMBED_DIMENSION", Some(dimension)),
-        ],
-    );
     let head_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
     let first_sha = git_ok(repo_root, &["rev-parse", "HEAD~1"]);
     write_committed(
@@ -544,22 +582,19 @@ async fn run_embedding_job_with_env(
     model: &str,
     dimension: &str,
 ) -> JobExecutionOutcome {
-    let home = TempDir::new().expect("home dir");
-    let home_path = home.path().to_string_lossy().to_string();
-    let _guard = enter_process_state(
-        Some(&job.repo_root),
-        &[
-            ("HOME", Some(home_path.as_str())),
-            ("USERPROFILE", Some(home_path.as_str())),
-            ("BITLOOPS_DEVQL_PG_DSN", None),
-            ("BITLOOPS_DEVQL_CH_URL", None),
-            ("BITLOOPS_DEVQL_CH_USER", None),
-            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
-            ("BITLOOPS_DEVQL_CH_DATABASE", None),
-            ("BITLOOPS_TEST_EMBED_PROVIDER", Some(provider_name)),
-            ("BITLOOPS_TEST_EMBED_MODEL", Some(model)),
-            ("BITLOOPS_TEST_EMBED_DIMENSION", Some(dimension)),
-        ],
+    let profile_name = resolve_embedding_capability_config_for_repo(&job.config_root)
+        .semantic_clones
+        .embedding_profile
+        .unwrap_or_else(|| "alpha".to_string());
+    let dimension = dimension
+        .parse::<usize>()
+        .expect("parse daemon test dimension");
+    write_daemon_embedding_config(
+        &job.repo_root,
+        &profile_name,
+        provider_name,
+        model,
+        dimension,
     );
     let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
     let provider_config = EmbeddingProviderConfig {
@@ -580,12 +615,7 @@ async fn run_embedding_job_with_env(
     .expect("resolve fake embedding setup for daemon test");
     assert_eq!(setup.provider, provider_name);
     assert_eq!(setup.model, model);
-    assert_eq!(
-        setup.dimension,
-        dimension
-            .parse::<usize>()
-            .expect("parse daemon test dimension")
-    );
+    assert_eq!(setup.dimension, dimension);
     execute_job(job).await
 }
 

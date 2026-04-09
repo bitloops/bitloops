@@ -325,30 +325,56 @@ fn TestCodexAgentHooksSessionIOAndResumeCommand() {
     let agent = CodexAgent;
     assert_eq!(
         agent.hook_names(),
-        vec!["session-start".to_string(), "stop".to_string()]
+        vec![
+            "session-start".to_string(),
+            "user-prompt-submit".to_string(),
+            "pre-tool-use".to_string(),
+            "post-tool-use".to_string(),
+            "stop".to_string(),
+        ]
     );
 
-    let cases = [
+    let cases: [(&str, &str, &[u8], bool); 5] = [
         (
             "session-start hook parsing",
             "session-start",
-            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl"}"#,
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl"}"#.as_slice(),
+            true,
+        ),
+        (
+            "user-prompt-submit hook parsing",
+            "user-prompt-submit",
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl","prompt":"Refactor tracked file"}"#.as_slice(),
+            true,
+        ),
+        (
+            "pre-tool-use hook parsing",
+            "pre-tool-use",
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"}}"#.as_slice(),
+            false,
+        ),
+        (
+            "post-tool-use hook parsing",
+            "post-tool-use",
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"},"tool_response":"clean"}"#.as_slice(),
+            false,
         ),
         (
             "stop hook parsing",
             "stop",
-            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl"}"#,
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl"}"#.as_slice(),
+            true,
         ),
     ];
 
-    for (name, hook_name, payload) in cases {
+    for (name, hook_name, payload, expect_lifecycle_event) in cases {
         let mut stdin = Cursor::new(payload);
         let event = agent
             .parse_hook_event(hook_name, &mut stdin)
             .expect("hook parsing should succeed");
         assert!(
-            event.is_some(),
-            "case {name} should parse a lifecycle event"
+            event.is_some() == expect_lifecycle_event,
+            "case {name} lifecycle event mismatch"
         );
     }
 

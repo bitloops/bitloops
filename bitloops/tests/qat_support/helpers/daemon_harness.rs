@@ -26,7 +26,6 @@ fn daemon_candidate_ports(run_dir: &Path) -> Vec<String> {
     {
         ports.push(configured_port);
     }
-    #[cfg(not(target_os = "macos"))]
     if !ports.iter().any(|port| port == "0") {
         ports.push("0".to_string());
     }

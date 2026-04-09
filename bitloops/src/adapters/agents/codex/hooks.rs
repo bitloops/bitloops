@@ -2,11 +2,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
+
+use super::config::{codex_hooks_feature_enabled_at, ensure_codex_hooks_feature_enabled_at};
 
 const HOOKS_FILE_NAME: &str = "hooks.json";
 
 const HOOK_KEY_SESSION_START: &str = "SessionStart";
+const HOOK_KEY_USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
+const HOOK_KEY_PRE_TOOL_USE: &str = "PreToolUse";
+const HOOK_KEY_POST_TOOL_USE: &str = "PostToolUse";
 const HOOK_KEY_STOP: &str = "Stop";
 
 const BITLOOPS_HOOK_PREFIX: &str = "bitloops hooks codex ";
@@ -14,14 +19,26 @@ const LOCAL_DEV_HOOK_PREFIX: &str = "cargo run -- hooks codex ";
 const MANAGED_HOOK_PREFIXES: [&str; 2] = [BITLOOPS_HOOK_PREFIX, LOCAL_DEV_HOOK_PREFIX];
 
 const STATUS_MESSAGE_SESSION_START: &str = "Initializing session...";
+const STATUS_MESSAGE_USER_PROMPT_SUBMIT: &str = "Submitting prompt...";
+const STATUS_MESSAGE_PRE_TOOL_USE: &str = "Preparing tool call...";
+const STATUS_MESSAGE_POST_TOOL_USE: &str = "Processing tool response...";
 const STATUS_MESSAGE_STOP: &str = "Wrapping up turn...";
+const TOOL_MATCHER_BASH: &str = "Bash";
 const HOOK_TIMEOUT_SECONDS: i64 = 10;
 
-fn managed_hook_keys() -> [&'static str; 2] {
-    [HOOK_KEY_SESSION_START, HOOK_KEY_STOP]
+fn managed_hook_keys() -> [&'static str; 5] {
+    [
+        HOOK_KEY_SESSION_START,
+        HOOK_KEY_USER_PROMPT_SUBMIT,
+        HOOK_KEY_PRE_TOOL_USE,
+        HOOK_KEY_POST_TOOL_USE,
+        HOOK_KEY_STOP,
+    ]
 }
 
-fn hook_commands(local_dev: bool) -> [(&'static str, String, &'static str); 2] {
+fn hook_commands(
+    local_dev: bool,
+) -> [(&'static str, String, &'static str, Option<&'static str>); 5] {
     let prefix = if local_dev {
         LOCAL_DEV_HOOK_PREFIX
     } else {
@@ -35,6 +52,25 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String, &'static str); 2] {
                 crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START
             )),
             STATUS_MESSAGE_SESSION_START,
+            None,
+        ),
+        (
+            HOOK_KEY_USER_PROMPT_SUBMIT,
+            crate::adapters::agents::managed_hook_command(&format!("{prefix}user-prompt-submit")),
+            STATUS_MESSAGE_USER_PROMPT_SUBMIT,
+            None,
+        ),
+        (
+            HOOK_KEY_PRE_TOOL_USE,
+            crate::adapters::agents::managed_hook_command(&format!("{prefix}pre-tool-use")),
+            STATUS_MESSAGE_PRE_TOOL_USE,
+            Some(TOOL_MATCHER_BASH),
+        ),
+        (
+            HOOK_KEY_POST_TOOL_USE,
+            crate::adapters::agents::managed_hook_command(&format!("{prefix}post-tool-use")),
+            STATUS_MESSAGE_POST_TOOL_USE,
+            Some(TOOL_MATCHER_BASH),
         ),
         (
             HOOK_KEY_STOP,
@@ -43,6 +79,7 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String, &'static str); 2] {
                 crate::adapters::agents::codex::lifecycle::HOOK_NAME_STOP
             )),
             STATUS_MESSAGE_STOP,
+            None,
         ),
     ]
 }
@@ -106,17 +143,25 @@ fn command_of(entry: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn managed_hook_value(command: &str, status_message: &str) -> Value {
-    json!({
-        "hooks": [
-            {
-                "type": "command",
-                "command": command,
-                "statusMessage": status_message,
-                "timeout": HOOK_TIMEOUT_SECONDS
-            }
-        ]
-    })
+fn managed_hook_value(command: &str, status_message: &str, matcher: Option<&str>) -> Value {
+    let mut hook = Map::new();
+    hook.insert("type".to_string(), Value::String("command".to_string()));
+    hook.insert("command".to_string(), Value::String(command.to_string()));
+    hook.insert(
+        "statusMessage".to_string(),
+        Value::String(status_message.to_string()),
+    );
+    hook.insert(
+        "timeout".to_string(),
+        Value::Number(HOOK_TIMEOUT_SECONDS.into()),
+    );
+
+    let mut entry = Map::new();
+    if let Some(matcher) = matcher {
+        entry.insert("matcher".to_string(), Value::String(matcher.to_string()));
+    }
+    entry.insert("hooks".to_string(), Value::Array(vec![Value::Object(hook)]));
+    Value::Object(entry)
 }
 
 fn strip_managed_from_entries(
@@ -197,6 +242,7 @@ fn normalize_entries_for_install(
     entries: &mut Vec<Value>,
     desired_command: &str,
     status_message: &str,
+    matcher: Option<&'static str>,
     force: bool,
 ) -> (bool, bool) {
     let before = entries.clone();
@@ -206,7 +252,7 @@ fn normalize_entries_for_install(
     strip_managed_from_entries(entries, desired_command, !force, &mut desired_kept);
 
     if !desired_kept {
-        entries.push(managed_hook_value(desired_command, status_message));
+        entries.push(managed_hook_value(desired_command, status_message, matcher));
         inserted = true;
     }
 
@@ -214,6 +260,7 @@ fn normalize_entries_for_install(
 }
 
 pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    ensure_codex_hooks_feature_enabled_at(repo_root)?;
     let path = hooks_file_path_for(repo_root);
     let existing_data = fs::read(&path).ok();
 
@@ -231,10 +278,10 @@ pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Resul
     let mut installed = 0usize;
     let mut changed = false;
 
-    for (hook_key, command, status_message) in hook_commands(local_dev) {
+    for (hook_key, command, status_message, matcher) in hook_commands(local_dev) {
         let mut entries = parse_hook_entries(&raw_hooks, hook_key);
         let (hook_changed, inserted) =
-            normalize_entries_for_install(&mut entries, &command, status_message, force);
+            normalize_entries_for_install(&mut entries, &command, status_message, matcher, force);
         if hook_changed {
             changed = true;
         }
@@ -310,6 +357,10 @@ pub fn uninstall_hooks() -> Result<()> {
 }
 
 pub fn are_hooks_installed_at(repo_root: &Path) -> bool {
+    if !codex_hooks_feature_enabled_at(repo_root) {
+        return false;
+    }
+
     let path = hooks_file_path_for(repo_root);
     let Ok(data) = fs::read(&path) else {
         return false;
@@ -320,16 +371,30 @@ pub fn are_hooks_installed_at(repo_root: &Path) -> bool {
     };
 
     [
-        parsed.hooks.session_start.as_slice(),
-        parsed.hooks.stop.as_slice(),
+        (parsed.hooks.session_start.as_slice(), None),
+        (parsed.hooks.user_prompt_submit.as_slice(), None),
+        (
+            parsed.hooks.pre_tool_use.as_slice(),
+            Some(TOOL_MATCHER_BASH),
+        ),
+        (
+            parsed.hooks.post_tool_use.as_slice(),
+            Some(TOOL_MATCHER_BASH),
+        ),
+        (parsed.hooks.stop.as_slice(), None),
     ]
     .into_iter()
-    .all(|entries| {
+    .all(|(entries, matcher)| {
         entries.iter().any(|entry| {
-            entry
-                .hooks
-                .iter()
-                .any(|hook| is_bitloops_hook(hook.command.as_str()))
+            let matcher_matches = match matcher {
+                Some(expected) => entry.matcher == expected,
+                None => true,
+            };
+            matcher_matches
+                && entry
+                    .hooks
+                    .iter()
+                    .any(|hook| is_bitloops_hook(hook.command.as_str()))
         })
     })
 }

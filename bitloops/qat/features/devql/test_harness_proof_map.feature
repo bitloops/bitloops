@@ -1,6 +1,6 @@
-Feature: Test Harness proof-map for pre-change safety assessment
+Feature: TestHarness proof-map for pre-change safety assessment
 
-  The Test Harness must help developers and agents assess whether a code
+  The TestHarness must help developers and agents assess whether a code
   area is well-tested before making changes. It must surface covering tests,
   classification, strength, and coverage gaps.
 
@@ -16,26 +16,26 @@ Feature: Test Harness proof-map for pre-change safety assessment
     And I run TestHarness ingest-tests for latest commit in bitloops
     And I run TestHarness ingest-coverage for latest commit in bitloops
 
-  @devql @testlens
-  Scenario: Test summary returns counts for a tested artefact
-    Then TestHarness query for "createUser" at current workspace state with view "summary" returns results in bitloops
+  @devql @testharness
+  Scenario: Test summary returns counts for `UserService.createUser`
+    Then TestHarness query for "UserService.createUser" at current workspace state with view "summary" returns results in bitloops
     And TestHarness summary shows non-zero test count in bitloops
 
-  @devql @testlens
-  Scenario: Tests query returns individual covering tests
-    Then TestHarness query for "createUser" at current workspace state with view "tests" returns results in bitloops
+  @devql @testharness
+  Scenario: Tests query returns individual covering tests for `UserService.createUser`
+    Then TestHarness query for "UserService.createUser" at current workspace state with view "tests" returns results in bitloops
     And TestHarness tests include at least 1 test with a classification in bitloops
 
-  @devql @testlens
-  Scenario: Coverage query returns line coverage data
-    Then TestHarness query for "createUser" at current workspace state with view "coverage" returns results in bitloops
+  @devql @testharness
+  Scenario: Coverage query returns line coverage data for `UserService.createUser`
+    Then TestHarness query for "UserService.createUser" at current workspace state with view "coverage" returns results in bitloops
     And TestHarness coverage shows line coverage percentage in bitloops
 
-  @devql @testlens
-  Scenario: Untested artefact is clearly identified
-    Then TestHarness query for "UntestableSingleton" at current workspace state with view "summary" returns empty or zero-count in bitloops
+  @devql @testharness
+  Scenario: Untested artefact is clearly identified for `UntestableSingleton.getInstance`
+    Then TestHarness query for "UntestableSingleton.getInstance" at current workspace state with view "summary" returns empty or zero-count in bitloops
 
-  @devql @testlens
+  @devql @testharness
   Scenario: Failing test is distinguishable from passing test
     Given I run TestHarness ingest-results with a failing test for latest commit in bitloops
-    Then TestHarness query for "createUser" at current workspace state with view "tests" includes a failing test in bitloops
+    Then TestHarness query for "UserService.createUser" at current workspace state with view "tests" includes a failing test in bitloops

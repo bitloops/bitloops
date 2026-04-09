@@ -102,6 +102,12 @@ pub struct CodexHooksArgs {
 pub enum CodexHookVerb {
     #[command(name = "session-start")]
     SessionStart,
+    #[command(name = "user-prompt-submit")]
+    UserPromptSubmit,
+    #[command(name = "pre-tool-use")]
+    PreToolUse,
+    #[command(name = "post-tool-use")]
+    PostToolUse,
     #[command(name = "stop")]
     Stop,
 }
@@ -230,9 +236,18 @@ impl CodexHookVerb {
     pub fn hook_name(&self) -> &'static str {
         match self {
             Self::SessionStart => {
-                crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_SESSION_START
             }
-            Self::Stop => crate::adapters::agents::codex::lifecycle::HOOK_NAME_STOP,
+            Self::UserPromptSubmit => {
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_USER_PROMPT_SUBMIT
+            }
+            Self::PreToolUse => {
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_PRE_TOOL_USE
+            }
+            Self::PostToolUse => {
+                crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_POST_TOOL_USE
+            }
+            Self::Stop => crate::host::checkpoints::lifecycle::adapters::CODEX_HOOK_STOP,
         }
     }
 }
@@ -359,6 +374,11 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
             crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP,
         ) => "subagent",
         (AGENT_NAME_GEMINI, GEMINI_HOOK_BEFORE_TOOL | GEMINI_HOOK_AFTER_TOOL) => "tool",
+        (
+            AGENT_NAME_CODEX,
+            crate::adapters::agents::codex::lifecycle::HOOK_NAME_PRE_TOOL_USE
+            | crate::adapters::agents::codex::lifecycle::HOOK_NAME_POST_TOOL_USE,
+        ) => "tool",
         (AGENT_NAME_COPILOT, COPILOT_HOOK_PRE_TOOL_USE | COPILOT_HOOK_POST_TOOL_USE) => "tool",
         _ => "agent",
     }
@@ -877,6 +897,10 @@ fn read_stdin() -> Result<String> {
 #[cfg(test)]
 mod telemetry_tests {
     use super::*;
+    use crate::host::checkpoints::lifecycle::adapters::{
+        CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START,
+        CODEX_HOOK_STOP, CODEX_HOOK_USER_PROMPT_SUBMIT,
+    };
     use serde_json::Value;
 
     #[test]
@@ -910,5 +934,29 @@ mod telemetry_tests {
             4,
             "hook telemetry should not include payload/session data"
         );
+    }
+
+    #[test]
+    fn codex_hook_verb_names_cover_full_surface() {
+        let expected = [
+            (CodexHookVerb::SessionStart, CODEX_HOOK_SESSION_START),
+            (
+                CodexHookVerb::UserPromptSubmit,
+                CODEX_HOOK_USER_PROMPT_SUBMIT,
+            ),
+            (CodexHookVerb::PreToolUse, CODEX_HOOK_PRE_TOOL_USE),
+            (CodexHookVerb::PostToolUse, CODEX_HOOK_POST_TOOL_USE),
+            (CodexHookVerb::Stop, CODEX_HOOK_STOP),
+        ];
+
+        for (verb, hook_name) in expected {
+            assert_eq!(verb.hook_name(), hook_name);
+        }
+    }
+
+    #[test]
+    fn codex_bash_hooks_are_classified_as_tool_hooks() {
+        assert_eq!(get_hook_type(AGENT_NAME_CODEX, "pre-tool-use"), "tool");
+        assert_eq!(get_hook_type(AGENT_NAME_CODEX, "post-tool-use"), "tool");
     }
 }

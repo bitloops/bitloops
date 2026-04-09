@@ -28,6 +28,7 @@ pub(crate) enum RepoEmbeddingSyncAction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CurrentRepoEmbeddingRefreshResult {
+    pub semantic_feature_stats: semantic::SemanticFeatureIngestionStats,
     pub embedding_stats: embeddings::SymbolEmbeddingIngestionStats,
     pub clone_build: crate::capability_packs::semantic_clones::scoring::SymbolCloneBuildResult,
 }
@@ -249,21 +250,33 @@ pub(crate) async fn determine_repo_embedding_sync_action(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     setup: &embeddings::EmbeddingSetup,
 ) -> Result<RepoEmbeddingSyncAction> {
-    if let Some(active) = load_active_embedding_setup(relational, repo_id).await? {
-        return Ok(
-            if active.representation_kind == representation_kind && active.setup == *setup {
-                RepoEmbeddingSyncAction::Incremental
-            } else {
-                RepoEmbeddingSyncAction::RefreshCurrentRepo
-            },
-        );
+    let current_coverage_complete = current_repo_semantic_clone_rows_are_complete(
+        relational,
+        repo_id,
+        representation_kind,
+        setup,
+    )
+    .await?;
+    if let Some(active) = load_active_embedding_setup(relational, repo_id).await?
+        && active.representation_kind == representation_kind
+        && active.setup == *setup
+    {
+        return Ok(if current_coverage_complete {
+            RepoEmbeddingSyncAction::Incremental
+        } else {
+            RepoEmbeddingSyncAction::RefreshCurrentRepo
+        });
     }
 
     let current_states =
         load_current_repo_embedding_states(relational, repo_id, Some(representation_kind)).await?;
     Ok(
         if current_states.len() == 1 && current_states[0].setup == *setup {
-            RepoEmbeddingSyncAction::AdoptExisting
+            if current_coverage_complete {
+                RepoEmbeddingSyncAction::AdoptExisting
+            } else {
+                RepoEmbeddingSyncAction::RefreshCurrentRepo
+            }
         } else {
             RepoEmbeddingSyncAction::RefreshCurrentRepo
         },
@@ -274,6 +287,7 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
     relational: &RelationalStorage,
     repo_root: &Path,
     repo_id: &str,
+    summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
     representation_kind: embeddings::EmbeddingRepresentationKind,
     embedding_provider: Arc<dyn EmbeddingProvider>,
 ) -> Result<CurrentRepoEmbeddingRefreshResult> {
@@ -282,6 +296,8 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
     let current_inputs =
         super::load_semantic_feature_inputs_for_current_repo(relational, repo_root, repo_id)
             .await?;
+    let semantic_feature_stats =
+        super::upsert_semantic_feature_rows(relational, &current_inputs, summary_provider).await?;
     let embedding_stats = upsert_symbol_embedding_rows(
         relational,
         &current_inputs,
@@ -291,6 +307,7 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
     .await?;
     if embedding_stats.eligible == 0 {
         return Ok(CurrentRepoEmbeddingRefreshResult {
+            semantic_feature_stats,
             embedding_stats,
             clone_build: Default::default(),
         });
@@ -308,9 +325,37 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
         .await?;
 
     Ok(CurrentRepoEmbeddingRefreshResult {
+        semantic_feature_stats,
         embedding_stats,
         clone_build,
     })
+}
+
+async fn current_repo_semantic_clone_rows_are_complete(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup: &embeddings::EmbeddingSetup,
+) -> Result<bool> {
+    let rows = relational
+        .query_rows(&build_current_repo_semantic_clone_coverage_sql(
+            repo_id,
+            representation_kind,
+            setup,
+        ))
+        .await?;
+    let Some(row) = rows.first() else {
+        return Ok(true);
+    };
+    let eligible_current_artefacts = row
+        .get("eligible_current_artefacts")
+        .and_then(value_as_positive_usize)
+        .unwrap_or_default();
+    let fully_indexed_current_artefacts = row
+        .get("fully_indexed_current_artefacts")
+        .and_then(value_as_positive_usize)
+        .unwrap_or_default();
+    Ok(eligible_current_artefacts == fully_indexed_current_artefacts)
 }
 
 async fn load_symbol_embedding_index_state(
@@ -500,6 +545,34 @@ FROM ( \
 ORDER BY representation_kind, provider, model, dimension",
         repo_id = esc_pg(repo_id),
         representation_filter = representation_filter,
+    )
+}
+
+fn build_current_repo_semantic_clone_coverage_sql(
+    repo_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup: &embeddings::EmbeddingSetup,
+) -> String {
+    format!(
+        "SELECT \
+            (SELECT COUNT(*) FROM artefacts_current a \
+             WHERE a.repo_id = '{repo_id}' \
+               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import') AS eligible_current_artefacts, \
+            (SELECT COUNT(DISTINCT a.artefact_id) FROM artefacts_current a \
+             JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
+             JOIN symbol_features sf ON sf.artefact_id = a.artefact_id \
+             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
+             WHERE a.repo_id = '{repo_id}' \
+               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+               AND e.representation_kind = '{representation_kind}' \
+               AND e.provider = '{provider}' \
+               AND e.model = '{model}' \
+               AND e.dimension = {dimension}) AS fully_indexed_current_artefacts",
+        repo_id = esc_pg(repo_id),
+        representation_kind = esc_pg(&representation_kind.to_string()),
+        provider = esc_pg(&setup.provider),
+        model = esc_pg(&setup.model),
+        dimension = setup.dimension,
     )
 }
 
