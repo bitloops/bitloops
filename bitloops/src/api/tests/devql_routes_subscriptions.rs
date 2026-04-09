@@ -427,7 +427,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
     assert_eq!(payload["data"]["file"]["language"], "typescript");
     assert_eq!(payload["data"]["file"]["blobSha"], "blob-caller");
     assert_eq!(payload["data"]["file"]["artefacts"]["totalCount"], 2);
-    assert_eq!(payload["data"]["file"]["deps"]["totalCount"], 1);
+    assert_eq!(payload["data"]["file"]["deps"]["totalCount"], 2);
     assert_eq!(payload["data"]["files"].as_array().map(Vec::len), Some(3));
     assert_eq!(payload["data"]["artefacts"]["totalCount"], 4);
     assert_eq!(

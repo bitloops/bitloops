@@ -210,7 +210,7 @@ impl ArtefactSelection {
         let checkpoints = self.resolve_checkpoint_stage_data(ctx, None, None).await?;
         let clones = self.resolve_clone_stage_data(ctx, None).await?;
         let deps = self
-            .resolve_dependency_stage_data(ctx, None, DepsDirection::Both, false)
+            .resolve_dependency_stage_data(ctx, None, DepsDirection::Both, true)
             .await?;
         let tests = self.resolve_tests_stage_data(ctx, None, None).await?;
 
@@ -260,7 +260,7 @@ impl ArtefactSelection {
         ctx: &Context<'_>,
         kind: Option<EdgeKind>,
         #[graphql(default_with = "DepsDirection::Both")] direction: DepsDirection,
-        #[graphql(name = "includeUnresolved", default = false)] include_unresolved: bool,
+        #[graphql(name = "includeUnresolved", default = true)] include_unresolved: bool,
     ) -> Result<DependencyStageResult> {
         Ok(self
             .resolve_dependency_stage_data(ctx, kind, direction, include_unresolved)
@@ -746,7 +746,7 @@ type Clone {
 }"#;
 
 const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false): DependencyStageResult!
+  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 }
 
 type DependencyStageResult {

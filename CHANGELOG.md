@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Dashboard git blob REST endpoint**: added `GET /api/blobs/{repo_id}/{blob_sha}` so clients can fetch raw bytes for Git blob objects identified by 40- or 64-character hex ids (matching DevQL `blobSha` values from normal ingest). Checkout resolution is shared through `handlers/repo` with the repo-aware checkpoint route, git subprocess calls run under `tokio::task::spawn_blocking`, existence and type are verified with `git cat-file -t` (non-blob objects return 400), size is enforced with `git cat-file -s` before materialising content (default maximum 10 MiB with 413 `payload_too_large` via `ApiError::payload_too_large`), and successful responses use `application/octet-stream`. The route is registered in the dashboard OpenAPI document and covered by regression tests for happy path, oid validation, missing objects, non-blob revisions, and oversize blobs.
 - **Daemon structured logging and log inspection CLI**: added a dedicated daemon-owned `daemon.log` under the Bitloops state directory together with `bitloops daemon logs` for raw JSONL inspection via `--tail`, `--follow`, and `--path`. Daemon, supervisor, and daemon lifecycle CLI flows now emit structured start/stop/restart records with process and mode metadata, `bitloops daemon status` reports the log file path, and daemon log level now resolves from `BITLOOPS_LOG_LEVEL` first and daemon config `[logging].level` second.
 - QAT for devql ingestion was added
+- Capture calls edges inside macros for Rust 
 
 ### Changed
 
@@ -64,6 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Java adapter edge and test-support stability fixes**: Java import-edge extraction now deduplicates repeated import declarations within a file, field type-reference edges now resolve the exact field owner deterministically from the enclosing type and declarator instead of relying on `HashMap` iteration order, and Java test-path detection now recognizes repo-relative `src/test/java/...` files even when they do not end with `*Test.java`, `*Tests.java`, or `*IT.java`.
 - **Language-kind ambiguity regression coverage**: strengthened `LanguageKind::try_from` tests so shared raw tree-sitter kinds such as Java/TS `class_declaration`, `interface_declaration`, and `enum_declaration`, plus Go/Java `method_declaration`, are explicitly asserted as ambiguous while per-language parsers remain the language-aware escape hatch.
 - **Transcript read resilience in turn-end handler**: replaced the misleading parent-directory existence check with explicit retry-with-timeout logic (3 s, 50 ms intervals) that only retries `NotFound` errors when the parent directory exists, giving agents time to flush asynchronous transcript writes while immediately failing on permission errors or truly missing paths.
+-
 
 ### Changed
 

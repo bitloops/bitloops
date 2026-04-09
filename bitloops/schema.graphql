@@ -301,7 +301,7 @@ enum DepsDirection {
 input DepsFilterInput {
 	kind: EdgeKind
 	direction: DepsDirection! = OUT
-	includeUnresolved: Boolean! = false
+	includeUnresolved: Boolean! = true
 }
 
 type DepsSummary {

@@ -97,7 +97,7 @@ type ArtefactSelection {
   artefacts(first: Int! = 20): [Artefact!]!
   checkpoints(agent: String, since: DateTime): CheckpointStageResult!
   clones(relationKind: String, minScore: Float): CloneStageResult!
-  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false): DependencyStageResult!
+  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
   tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }
 ```
