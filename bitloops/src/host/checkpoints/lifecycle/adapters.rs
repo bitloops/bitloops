@@ -11,7 +11,6 @@ use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 use crate::host::hooks::augmentation::builder::{
     build_devql_hook_augmentation, build_devql_session_start_augmentation,
 };
-use crate::host::hooks::augmentation::prompt_target::extract_primary_prompt_target;
 
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event,
@@ -436,7 +435,7 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
 }
 
 fn build_prompt_augmentation_stdout(
-    repo_root: &Path,
+    _repo_root: &Path,
     hook_name: &str,
     event: &LifecycleEvent,
     registration: &crate::adapters::agents::AgentAdapterRegistration,
@@ -444,8 +443,7 @@ fn build_prompt_augmentation_stdout(
     let augmentation = match event.event_type {
         Some(LifecycleEventType::SessionStart) => build_devql_session_start_augmentation(),
         Some(LifecycleEventType::TurnStart) if !event.prompt.trim().is_empty() => {
-            let target = extract_primary_prompt_target(repo_root, &event.prompt);
-            build_devql_hook_augmentation(target.as_ref())
+            build_devql_hook_augmentation()
         }
         _ => return None,
     };
@@ -728,7 +726,7 @@ mod route_tests {
     }
 
     #[test]
-    fn route_codex_user_prompt_submit_returns_additional_context_stdout() -> Result<()> {
+    fn route_codex_user_prompt_submit_returns_generic_additional_context_stdout() -> Result<()> {
         let repo = seed_repo();
         let session_id = "codex-session-prompt";
         let transcript_path = repo.path().join("codex-transcript.json");
@@ -775,18 +773,26 @@ mod route_tests {
                 serde_json::Value::String("UserPromptSubmit".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage DevQL"));
+            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" })"));
+            assert!(context.contains("selectArtefacts(by: { path: \"<repo-relative-path>\" })"));
+            assert!(context.contains(
+                "selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } })"
+            ));
             assert!(context.contains("selectArtefacts"));
-            assert!(context.contains("tracked.txt"));
             assert!(context.contains("summary"));
-            assert!(context.contains("schema"));
-            assert!(!context.contains("<repo-relative-path>"));
+            assert!(context.contains("inspect returned `schema` only if needed"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("tracked.txt"));
+            assert!(!context.contains("src/main.rs"));
             Ok(())
         })
     }
 
     #[test]
-    fn route_claude_user_prompt_submit_returns_targeted_context_stdout() -> Result<()> {
+    fn route_claude_user_prompt_submit_returns_generic_context_stdout() -> Result<()> {
         let repo = seed_repo();
         let session_id = "claude-session-prompt";
         let transcript_path = repo.path().join("claude-transcript.json");
@@ -833,12 +839,20 @@ mod route_tests {
                 serde_json::Value::String("UserPromptSubmit".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage DevQL"));
+            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" })"));
+            assert!(context.contains("selectArtefacts(by: { path: \"<repo-relative-path>\" })"));
+            assert!(context.contains(
+                "selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } })"
+            ));
             assert!(context.contains("selectArtefacts"));
-            assert!(context.contains("tracked.txt"));
             assert!(context.contains("summary"));
-            assert!(context.contains("schema"));
-            assert!(!context.contains("<repo-relative-path>"));
+            assert!(context.contains("inspect returned `schema` only if needed"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("tracked.txt"));
+            assert!(!context.contains("src/main.rs"));
             Ok(())
         })
     }
@@ -874,7 +888,7 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage it"));
+            assert!(context.contains("You have DevQL available in this repo."));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
@@ -919,7 +933,7 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage it"));
+            assert!(context.contains("You have DevQL available in this repo."));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
@@ -934,7 +948,7 @@ mod route_tests {
     }
 
     #[test]
-    fn route_gemini_before_agent_returns_additional_context_stdout() -> Result<()> {
+    fn route_gemini_before_agent_returns_generic_additional_context_stdout() -> Result<()> {
         let repo = seed_repo();
         let session_id = "gemini-session-prompt";
         let transcript_path = repo.path().join("gemini-transcript.json");
@@ -981,12 +995,20 @@ mod route_tests {
                 serde_json::Value::String("BeforeAgent".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage DevQL"));
+            assert!(context.contains("You have DevQL available in this repo."));
+            assert!(context.contains("selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" })"));
+            assert!(context.contains("selectArtefacts(by: { path: \"<repo-relative-path>\" })"));
+            assert!(context.contains(
+                "selectArtefacts(by: { path: \"<repo-relative-path>\", lines: { start: <start>, end: <end> } })"
+            ));
             assert!(context.contains("selectArtefacts"));
-            assert!(context.contains("tracked.txt"));
             assert!(context.contains("summary"));
-            assert!(context.contains("schema"));
-            assert!(!context.contains("<repo-relative-path>"));
+            assert!(context.contains("inspect returned `schema` only if needed"));
+            assert!(context.contains("items(first:"));
+            assert!(context.contains("bitloops devql schema --global"));
+            assert!(context.contains("<repo-relative-path>"));
+            assert!(!context.contains("tracked.txt"));
+            assert!(!context.contains("src/main.rs"));
             Ok(())
         })
     }
@@ -1022,7 +1044,7 @@ mod route_tests {
                 serde_json::Value::String("SessionStart".to_string())
             );
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage it"));
+            assert!(context.contains("You have DevQL available in this repo."));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
@@ -1063,7 +1085,7 @@ mod route_tests {
                 .as_str()
                 .expect("additional_context");
             assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You should leverage it"));
+            assert!(context.contains("You have DevQL available in this repo."));
             assert!(context.contains("selectArtefacts"));
             assert!(context.contains("summary"));
             assert!(context.contains("schema"));
@@ -1111,7 +1133,7 @@ mod route_tests {
                     .as_str()
                     .expect("additionalContext");
                 assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-                assert!(context.contains("You should leverage it"));
+                assert!(context.contains("You have DevQL available in this repo."));
                 assert!(context.contains("selectArtefacts"));
                 assert!(context.contains("summary"));
                 assert!(context.contains("schema"));
