@@ -237,6 +237,7 @@ impl Project {
     ) -> Result<CloneConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
+            filter.validate_project_scope()?;
         }
         let pagination = ConnectionPagination::from_graphql(
             50,

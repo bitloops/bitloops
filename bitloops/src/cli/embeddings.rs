@@ -730,11 +730,17 @@ request_timeout_secs = 5
         let repo = TempDir::new().expect("tempdir");
         let home = TempDir::new().expect("home dir");
         let home_path = home.path().to_string_lossy().to_string();
+        let config_root = TempDir::new().expect("config tempdir");
+        let config_root_value = config_root.path().to_string_lossy().into_owned();
         let _guard = enter_process_state(
             Some(repo.path()),
             &[
                 ("HOME", Some(home_path.as_str())),
                 ("USERPROFILE", Some(home_path.as_str())),
+                (
+                    "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                    Some(config_root_value.as_str()),
+                ),
             ],
         );
         crate::test_support::git_fixtures::init_test_repo(

@@ -96,6 +96,21 @@ pub fn build_symbol_clone_edges(
     scoring::build_symbol_clone_edges(inputs)
 }
 
+pub fn build_symbol_clone_edges_with_options(
+    inputs: &[scoring::SymbolCloneCandidateInput],
+    options: scoring::CloneScoringOptions,
+) -> scoring::SymbolCloneBuildResult {
+    scoring::build_symbol_clone_edges_with_options(inputs, options)
+}
+
+pub fn build_symbol_clone_edges_for_source_with_options(
+    inputs: &[scoring::SymbolCloneCandidateInput],
+    source_symbol_id: &str,
+    options: scoring::CloneScoringOptions,
+) -> scoring::SymbolCloneBuildResult {
+    scoring::build_symbol_clone_edges_for_source_with_options(inputs, source_symbol_id, options)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

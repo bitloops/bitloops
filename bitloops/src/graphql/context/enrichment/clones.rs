@@ -1,9 +1,11 @@
 use crate::artefact_query_planner::{ArtefactQuerySpec, plan_graphql_artefact_query};
+use crate::capability_packs::semantic_clones::scoring::SymbolCloneEdgeRow;
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{ArtefactFilterInput, ClonesFilterInput, SemanticClone};
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
 use crate::host::devql::{esc_pg, escape_like_pattern, sql_like_with_escape};
-use anyhow::{Context, Result, anyhow};
+use crate::host::relational_store::DefaultRelationalStore;
+use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -17,6 +19,12 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
         filter: Option<&ClonesFilterInput>,
     ) -> Result<Vec<SemanticClone>> {
+        if filter
+            .and_then(ClonesFilterInput::neighbors_override)
+            .is_some()
+        {
+            bail!("`neighbors` override is only supported for artefact-scoped `clones` queries");
+        }
         let Some(project_path) = scope.project_path() else {
             return Ok(Vec::new());
         };
@@ -45,6 +53,41 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
     ) -> Result<Vec<SemanticClone>> {
         let repo_id = self.repo_id_for_scope(scope)?;
+        if let Some(options) = filter.and_then(ClonesFilterInput::neighbors_override) {
+            let Some(source_symbol_id) = self
+                .load_symbol_id_for_artefact(&repo_id, artefact_id)
+                .await?
+            else {
+                return Ok(Vec::new());
+            };
+            let repo_root = self.repo_root_for_scope(scope)?;
+            let relational_store = DefaultRelationalStore::open_local_for_repo_root(&repo_root)
+                .context("opening relational store for GraphQL clone neighbors query")?;
+            let relational = relational_store.to_local_inner();
+            let mut edges = crate::capability_packs::semantic_clones::pipeline::score_symbol_clone_edges_for_source_with_options(
+                &relational,
+                &repo_id,
+                &source_symbol_id,
+                options,
+            )
+            .await?
+            .edges;
+            edges.retain(|edge| {
+                edge.source_artefact_id == artefact_id && clone_edge_matches_filter(edge, filter)
+            });
+            edges.sort_by(|left, right| {
+                right
+                    .score
+                    .partial_cmp(&left.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.target_artefact_id.cmp(&right.target_artefact_id))
+            });
+            return edges
+                .into_iter()
+                .map(clone_from_edge)
+                .map(|result| result.map(|clone| clone.with_scope(scope.clone())))
+                .collect();
+        }
         let spec = plan_graphql_artefact_query(
             &repo_id,
             &self.current_branch_name(scope),
@@ -61,6 +104,25 @@ impl DevqlGraphqlContext {
             .collect()
     }
 
+    async fn load_symbol_id_for_artefact(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+    ) -> Result<Option<String>> {
+        let sql = format!(
+            "SELECT symbol_id \
+FROM artefacts_current \
+WHERE repo_id = '{}' AND artefact_id = '{}' \
+LIMIT 1",
+            esc_pg(repo_id),
+            esc_pg(artefact_id),
+        );
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        Ok(rows
+            .into_iter()
+            .find_map(|row| optional_string(&row, "symbol_id")))
+    }
+
     pub(crate) async fn list_selected_clones(
         &self,
         artefact_ids: &[String],
@@ -69,6 +131,12 @@ impl DevqlGraphqlContext {
     ) -> Result<Vec<SemanticClone>> {
         if artefact_ids.is_empty() {
             return Ok(Vec::new());
+        }
+        if filter
+            .and_then(ClonesFilterInput::neighbors_override)
+            .is_some()
+        {
+            bail!("`neighbors` override is only supported for artefact-scoped `clones` queries");
         }
 
         let repo_id = self.repo_id_for_scope(scope)?;
@@ -232,7 +300,10 @@ fn build_clone_filters(repo_id: &str, filter: Option<&ClonesFilterInput>) -> Vec
     clauses
 }
 
-fn build_clone_summary_sql(spec: &ArtefactQuerySpec, filter: Option<&ClonesFilterInput>) -> String {
+pub(super) fn build_clone_summary_sql(
+    spec: &ArtefactQuerySpec,
+    filter: Option<&ClonesFilterInput>,
+) -> String {
     let filtered_cte = build_filtered_artefacts_cte_sql(spec);
     let (clone_edges_table, _) = clone_projection_tables(spec);
     let clauses = build_clone_filters(spec.repo_id.as_str(), filter);
@@ -262,7 +333,7 @@ fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
     )
 }
 
-fn clone_from_row(row: Value) -> Result<SemanticClone> {
+pub(super) fn clone_from_row(row: Value) -> Result<SemanticClone> {
     let source_artefact_id = required_string(&row, "source_artefact_id")?;
     let target_artefact_id = required_string(&row, "target_artefact_id")?;
     let relation_kind = required_string(&row, "relation_kind")?;
@@ -294,6 +365,61 @@ fn clone_from_row(row: Value) -> Result<SemanticClone> {
         metadata: (!metadata.is_empty()).then_some(Json(Value::Object(metadata))),
         scope: ResolverScope::default(),
     })
+}
+
+pub(super) fn clone_from_edge(edge: SymbolCloneEdgeRow) -> Result<SemanticClone> {
+    let mut metadata = Map::new();
+    metadata.insert(
+        "semanticScore".to_string(),
+        Value::from(f64::from(edge.semantic_score)),
+    );
+    metadata.insert(
+        "lexicalScore".to_string(),
+        Value::from(f64::from(edge.lexical_score)),
+    );
+    metadata.insert(
+        "structuralScore".to_string(),
+        Value::from(f64::from(edge.structural_score)),
+    );
+    metadata.insert("explanation".to_string(), edge.explanation_json);
+
+    Ok(SemanticClone {
+        id: format!(
+            "clone::{}::{}::{}",
+            edge.source_artefact_id, edge.target_artefact_id, edge.relation_kind
+        )
+        .into(),
+        source_artefact_id: edge.source_artefact_id.into(),
+        target_artefact_id: edge.target_artefact_id.into(),
+        source_start_line: None,
+        source_end_line: None,
+        target_start_line: None,
+        target_end_line: None,
+        relation_kind: edge.relation_kind,
+        score: f64::from(edge.score),
+        metadata: Some(Json(Value::Object(metadata))),
+        scope: ResolverScope::default(),
+    })
+}
+
+pub(super) fn clone_edge_matches_filter(
+    edge: &SymbolCloneEdgeRow,
+    filter: Option<&ClonesFilterInput>,
+) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    if let Some(relation_kind) = filter.relation_kind()
+        && !edge.relation_kind.eq_ignore_ascii_case(relation_kind)
+    {
+        return false;
+    }
+    if let Some(min_score) = filter.min_score
+        && f64::from(edge.score) < min_score.clamp(0.0, 1.0)
+    {
+        return false;
+    }
+    true
 }
 
 fn clone_summary_group_from_row(row: Value) -> Result<(String, usize)> {
@@ -420,6 +546,7 @@ mod clone_summary_tests {
             Some(&ClonesFilterInput {
                 relation_kind: Some("similar_implementation".to_string()),
                 min_score: Some(0.75),
+                neighbors: None,
             }),
         );
 
@@ -456,6 +583,7 @@ mod clone_summary_tests {
             Some(&ClonesFilterInput {
                 relation_kind: Some("similar_implementation".to_string()),
                 min_score: Some(0.75),
+                neighbors: None,
             }),
         );
 

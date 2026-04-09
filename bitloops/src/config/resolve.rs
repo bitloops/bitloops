@@ -17,11 +17,12 @@ use super::store_config_utils::{
     resolve_configured_path, resolve_optional_env_indirection, resolve_required_provider_string,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EmbeddingCapabilityConfig,
-    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
-    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
-    SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
-    StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+    DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingProfileConfig, EmbeddingsConfig,
+    EmbeddingsRuntimeConfig, EventsBackendConfig, GithubProviderConfig,
+    MAX_SEMANTIC_CLONES_ANN_NEIGHBORS, MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig,
+    RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
+    StoreBackendConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 use super::unified_config::{
     UnifiedSettings, resolve_dashboard_from_unified, resolve_embedding_capability_from_unified,
@@ -416,6 +417,22 @@ where
                 "none" | "disabled" | "off"
             )
         });
+    let ann_neighbors = root
+        .and_then(|map| {
+            read_any_u64(map, &["ann_neighbors"])
+                .map(|value| clamp_semantic_clones_ann_neighbors(value as i64))
+                .or_else(|| {
+                    read_any_string(map, &["ann_neighbors"])
+                        .and_then(|value| value.trim().parse::<i64>().ok())
+                        .map(clamp_semantic_clones_ann_neighbors)
+                })
+        })
+        .or_else(|| {
+            read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_ANN_NEIGHBORS")
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .map(clamp_semantic_clones_ann_neighbors)
+        })
+        .unwrap_or(DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS);
     let enrichment_workers = root
         .and_then(|map| read_any_u64(map, &["enrichment_workers"]))
         .or_else(|| {
@@ -430,8 +447,19 @@ where
         summary_mode,
         embedding_mode,
         embedding_profile,
+        ann_neighbors,
         enrichment_workers,
     }
+}
+
+fn clamp_semantic_clones_ann_neighbors(value: i64) -> usize {
+    if value < MIN_SEMANTIC_CLONES_ANN_NEIGHBORS as i64 {
+        return MIN_SEMANTIC_CLONES_ANN_NEIGHBORS;
+    }
+    if value > MAX_SEMANTIC_CLONES_ANN_NEIGHBORS as i64 {
+        return MAX_SEMANTIC_CLONES_ANN_NEIGHBORS;
+    }
+    value as usize
 }
 
 pub(crate) fn resolve_embeddings_from_unified_with<F>(

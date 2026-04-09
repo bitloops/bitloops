@@ -290,10 +290,10 @@ END $$;
 }
 
 pub(crate) async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
+    upgrade_sqlite_semantic_embeddings_schema(sqlite_path).await?;
     sqlite_exec_path_allow_create(sqlite_path, semantic_embeddings_sqlite_schema_sql())
         .await
         .context("creating SQLite semantic embedding tables")?;
-    upgrade_sqlite_semantic_embeddings_schema(sqlite_path).await?;
     Ok(())
 }
 

@@ -151,6 +151,7 @@ futures-util = "0.3"
 bitloops-embeddings = { path = "../bitloops-embeddings" }
 bitloops-embeddings-protocol = { path = "../bitloops-embeddings-protocol" }
 libc = "0.2"
+hnsw_rs = "0.3.4"
 
 [dev-dependencies]
 cucumber = "0.22.1"

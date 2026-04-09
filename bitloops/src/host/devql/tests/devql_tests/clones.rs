@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6,raw:true)->limit(5)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->clones(relation_kind:"similar_implementation",min_score:0.6,neighbors:9,raw:true)->limit(5)"#,
     )
     .unwrap();
 
@@ -13,6 +13,7 @@ fn parse_devql_clones_stage_basic() {
         Some("similar_implementation")
     );
     assert_eq!(parsed.clones.min_score, Some(0.6));
+    assert_eq!(parsed.clones.neighbors, Some(9));
     assert!(parsed.clones.raw);
 }
 
@@ -52,6 +53,27 @@ async fn execute_devql_query_rejects_clones_without_artefacts_stage() {
     assert!(
         err.to_string()
             .contains("clones() requires an artefacts() stage")
+    );
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_rejects_neighbors_without_single_source() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones(neighbors:5)->limit(10)"#,
+    )
+    .expect("parse clone query");
+    let err = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect_err("neighbors override should require one source");
+    assert_eq!(
+        err.to_string(),
+        "clones(neighbors:...) requires the source artefact set to resolve to exactly one source symbol"
     );
 }
 
@@ -411,6 +433,32 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     )
     .expect("insert target embedding");
 
+    let parsed_neighbors = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/pdf.ts::createInvoicePdf")->clones(neighbors:5,min_score:0.5)->limit(10)"#,
+    )
+    .expect("parse clone neighbors query");
+    let on_demand_rows =
+        execute_relational_pipeline(&cfg, &events_cfg, &parsed_neighbors, &relational)
+            .await
+            .expect("execute on-demand neighbors query");
+    assert_eq!(on_demand_rows.len(), 1);
+    assert_eq!(
+        on_demand_rows[0]["target_symbol_fqn"],
+        Value::String("src/render.ts::renderInvoiceDocument".to_string())
+    );
+    assert_eq!(
+        on_demand_rows[0]["relation_kind"],
+        Value::String("similar_implementation".to_string())
+    );
+    assert!(on_demand_rows[0]["score"].is_number());
+    assert!(on_demand_rows[0]["semantic_score"].is_number());
+    assert!(on_demand_rows[0]["lexical_score"].is_number());
+    assert!(on_demand_rows[0]["structural_score"].is_number());
+    assert_eq!(
+        on_demand_rows[0]["source_symbol_fqn"],
+        Value::String("src/pdf.ts::createInvoicePdf".to_string())
+    );
+    assert!(on_demand_rows[0]["explanation_json"].is_object());
     let clone_result =
         crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
             &relational,
@@ -438,6 +486,320 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
         Value::String("similar_implementation".to_string())
     );
     assert!(rows[0]["explanation_json"].is_object());
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_clones_without_neighbors_reads_persisted_edges_without_scoring_inputs()
+ {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+
+    for (symbol_id, artefact_id, path, symbol_fqn) in [
+        (
+            "sym::persisted_source",
+            "artefact::persisted_source",
+            "src/source.ts",
+            "src/source.ts::persistedSource",
+        ),
+        (
+            "sym::persisted_target",
+            "artefact::persisted_target",
+            "src/target.ts",
+            "src/target.ts::persistedTarget",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+                end_byte, signature, modifiers, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 8, 0, 80, ?10, '[]', ?11)",
+            rusqlite::params![
+                repo_id,
+                path,
+                format!("blob-{symbol_id}"),
+                symbol_id,
+                artefact_id,
+                "typescript",
+                "function",
+                "function_declaration",
+                symbol_fqn,
+                format!(
+                    "function {}",
+                    symbol_fqn.rsplit("::").next().unwrap_or("run")
+                ),
+                "2026-03-26T09:00:00Z",
+            ],
+        )
+        .expect("insert current artefact");
+    }
+
+    conn.execute(
+        "INSERT INTO symbol_clone_edges_current (
+            repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+            relation_kind, score, semantic_score, lexical_score, structural_score,
+            clone_input_hash, explanation_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            repo_id,
+            "sym::persisted_source",
+            "artefact::persisted_source",
+            "sym::persisted_target",
+            "artefact::persisted_target",
+            "similar_implementation",
+            0.77_f64,
+            0.80_f64,
+            0.63_f64,
+            0.55_f64,
+            "clone-hash-persisted",
+            r#"{"source":"persisted_only"}"#,
+        ],
+    )
+    .expect("insert persisted clone edge");
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/source.ts::persistedSource")->clones(min_score:0.7)->limit(10)"#,
+    )
+    .expect("parse persisted clone query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute persisted clone query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["source_symbol_fqn"],
+        Value::String("src/source.ts::persistedSource".to_string())
+    );
+    assert_eq!(
+        rows[0]["target_symbol_fqn"],
+        Value::String("src/target.ts::persistedTarget".to_string())
+    );
+    assert_eq!(
+        rows[0]["relation_kind"],
+        Value::String("similar_implementation".to_string())
+    );
+    assert!(rows[0]["score"].is_number());
+    assert!(rows[0]["semantic_score"].is_number());
+    assert!(rows[0]["lexical_score"].is_number());
+    assert!(rows[0]["structural_score"].is_number());
+    assert!(rows[0]["explanation_json"].is_object());
+    assert!(rows[0]["target_summary"].is_null());
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_neighbors_and_persisted_paths_share_ordering_contract() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+    crate::capability_packs::semantic_clones::ensure_semantic_features_schema(&relational)
+        .await
+        .expect("ensure current semantic feature schema");
+    crate::capability_packs::semantic_clones::ensure_semantic_embeddings_schema(&relational)
+        .await
+        .expect("ensure current semantic embedding schema");
+
+    for (
+        symbol_id,
+        artefact_id,
+        path,
+        symbol_fqn,
+        normalized_name,
+        normalized_signature,
+        summary,
+        embedding,
+    ) in [
+        (
+            "sym::source",
+            "artefact::source",
+            "src/source.ts",
+            "src/source.ts::process",
+            "process",
+            "function process(orderId: string)",
+            "Processes an order payload.",
+            "[0.98,0.02,0.0]",
+        ),
+        (
+            "sym::target_a",
+            "artefact::target_a",
+            "src/target-a.ts",
+            "src/target-a.ts::process",
+            "process",
+            "function process(orderId: string)",
+            "Processes an order payload copy.",
+            "[0.75,0.25,0.0]",
+        ),
+        (
+            "sym::target_b",
+            "artefact::target_b",
+            "src/target-b.ts",
+            "src/target-b.ts::process",
+            "process",
+            "function process(orderId: string)",
+            "Processes an order payload copy.",
+            "[0.74,0.26,0.0]",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+                end_byte, signature, modifiers, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function_declaration', ?6, 1, 12, 0, 120, ?7, '[]', '2026-03-26T09:00:00Z')",
+            rusqlite::params![
+                repo_id,
+                path,
+                format!("blob-{symbol_id}"),
+                symbol_id,
+                artefact_id,
+                symbol_fqn,
+                normalized_signature,
+            ],
+        )
+        .expect("insert current artefact");
+
+        conn.execute(
+            "INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                template_summary, summary, confidence
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                artefact_id,
+                repo_id,
+                path,
+                format!("blob-{symbol_id}"),
+                symbol_id,
+                format!("semantic-hash-{symbol_id}"),
+                summary,
+                summary,
+                0.92_f64,
+            ],
+        )
+        .expect("insert current semantic summary");
+
+        conn.execute(
+            "INSERT INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                artefact_id,
+                repo_id,
+                path,
+                format!("blob-{symbol_id}"),
+                symbol_id,
+                format!("semantic-hash-{symbol_id}"),
+                normalized_name,
+                normalized_signature,
+                r#"["process","order","payload"]"#,
+                r#"["validate","order","payload","return"]"#,
+                "module",
+                r#"["src","orders"]"#,
+            ],
+        )
+        .expect("insert current semantic features");
+
+        conn.execute(
+            "INSERT INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                artefact_id,
+                repo_id,
+                path,
+                format!("blob-{symbol_id}"),
+                symbol_id,
+                "code",
+                "provider=local|model=jinaai/jina-embeddings-v2-base-code|dimension=3",
+                "local",
+                "jinaai/jina-embeddings-v2-base-code",
+                3,
+                format!("embed-hash-{symbol_id}"),
+                embedding,
+            ],
+        )
+        .expect("insert current embedding");
+    }
+
+    let parsed_neighbors = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/source.ts::process")->clones(neighbors:5,min_score:0.4)->limit(10)"#,
+    )
+    .expect("parse on-demand clone query");
+    let on_demand_rows =
+        execute_relational_pipeline(&cfg, &events_cfg, &parsed_neighbors, &relational)
+            .await
+            .expect("execute on-demand clone query");
+
+    assert_eq!(on_demand_rows.len(), 2);
+    for row in &on_demand_rows {
+        assert!(row["relation_kind"].is_string());
+        assert!(row["score"].is_number());
+        assert!(row["semantic_score"].is_number());
+        assert!(row["lexical_score"].is_number());
+        assert!(row["structural_score"].is_number());
+        assert!(row["explanation_json"].is_object());
+    }
+
+    for pair in on_demand_rows.windows(2) {
+        let left_score = pair[0]["score"].as_f64().expect("left score");
+        let right_score = pair[1]["score"].as_f64().expect("right score");
+        assert!(left_score >= right_score);
+        if (left_score - right_score).abs() < f64::EPSILON {
+            let left_target = pair[0]["target_symbol_fqn"]
+                .as_str()
+                .expect("left target symbol fqn");
+            let right_target = pair[1]["target_symbol_fqn"]
+                .as_str()
+                .expect("right target symbol fqn");
+            assert!(left_target <= right_target);
+        }
+    }
+
+    crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+        &relational,
+        repo_id,
+    )
+    .await
+    .expect("rebuild persisted current clone edges");
+    let parsed_persisted = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/source.ts::process")->clones(min_score:0.4)->limit(10)"#,
+    )
+    .expect("parse persisted clone query");
+    let persisted_rows =
+        execute_relational_pipeline(&cfg, &events_cfg, &parsed_persisted, &relational)
+            .await
+            .expect("execute persisted clone query");
+
+    assert_eq!(persisted_rows.len(), 2);
+    let on_demand_targets = on_demand_rows
+        .iter()
+        .map(|row| {
+            row["target_symbol_fqn"]
+                .as_str()
+                .expect("on-demand target symbol fqn")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    let persisted_targets = persisted_rows
+        .iter()
+        .map(|row| {
+            row["target_symbol_fqn"]
+                .as_str()
+                .expect("persisted target symbol fqn")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(on_demand_targets, persisted_targets);
 }
 
 #[tokio::test]

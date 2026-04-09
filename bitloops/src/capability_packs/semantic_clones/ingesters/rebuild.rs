@@ -10,6 +10,7 @@ use crate::host::capability_host::registrar::{
 use super::super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
 };
+use crate::config::resolve_embedding_capability_config_for_repo;
 
 pub struct SymbolCloneEdgesRebuildIngester;
 
@@ -25,12 +26,15 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
                 .context("clone-edge rebuild relational for semantic clone-edge rebuild")?;
 
             let repo_id = ctx.repo().repo_id.clone();
-            let build =
-                crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
-                    relational, &repo_id,
-                )
-                .await
-                .context("rebuilding symbol clone edges")?;
+            let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
+            let options = clone_rebuild_scoring_options(&capability);
+            let build = crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
+                relational,
+                &repo_id,
+                options,
+            )
+            .await
+            .context("rebuilding symbol clone edges")?;
             Ok(IngestResult::new(
                 json!({
                     "symbol_clone_edges_upserted": build.edges.len(),
@@ -46,10 +50,36 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
     }
 }
 
+fn clone_rebuild_scoring_options(
+    capability: &crate::config::EmbeddingCapabilityConfig,
+) -> crate::capability_packs::semantic_clones::scoring::CloneScoringOptions {
+    crate::capability_packs::semantic_clones::scoring::CloneScoringOptions::new(
+        capability.semantic_clones.ann_neighbors,
+    )
+}
+
 pub fn build_symbol_clone_edges_rebuild_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
         SEMANTIC_CLONES_CAPABILITY_ID,
         SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
         Arc::new(SymbolCloneEdgesRebuildIngester),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_rebuild_scoring_options_uses_semantic_clone_ann_neighbors() {
+        let capability = crate::config::EmbeddingCapabilityConfig {
+            semantic_clones: crate::config::SemanticClonesConfig {
+                ann_neighbors: 23,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = clone_rebuild_scoring_options(&capability);
+        assert_eq!(options.ann_neighbors, 23);
+    }
 }
