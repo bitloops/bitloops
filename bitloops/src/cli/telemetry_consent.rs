@@ -44,9 +44,15 @@ type GlobalGraphqlExecutorHook =
 thread_local! {
     static GLOBAL_GRAPHQL_EXECUTOR_HOOK: RefCell<Option<Rc<GlobalGraphqlExecutorHook>>> =
         RefCell::new(None);
+    static TEST_TTY_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
+    static TEST_ASSUME_DAEMON_RUNNING_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn can_prompt_interactively() -> bool {
+    #[cfg(test)]
+    if let Some(value) = test_tty_override() {
+        return value;
+    }
     if let Ok(value) = env::var("BITLOOPS_TEST_TTY") {
         return value == "1";
     }
@@ -136,11 +142,17 @@ pub(crate) async fn ensure_existing_config_telemetry_consent(
 
 pub(crate) async fn ensure_default_daemon_running() -> Result<()> {
     #[cfg(test)]
-    if env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
-    {
-        return Ok(());
+    match test_assume_daemon_running_override() {
+        Some(true) => return Ok(()),
+        Some(false) => {}
+        None => {
+            if env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
+            {
+                return Ok(());
+            }
+        }
     }
 
     let status = crate::daemon::status().await?;
@@ -227,4 +239,43 @@ fn maybe_execute_global_graphql_via_hook(
             .as_ref()
             .map(|hook| hook(runtime_root, query, variables))
     })
+}
+
+#[cfg(test)]
+pub(crate) fn test_tty_override() -> Option<bool> {
+    TEST_TTY_OVERRIDE.with(|cell| *cell.borrow())
+}
+
+#[cfg(test)]
+fn test_assume_daemon_running_override() -> Option<bool> {
+    TEST_ASSUME_DAEMON_RUNNING_OVERRIDE.with(|cell| *cell.borrow())
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_tty_override<T>(value: bool, f: impl FnOnce() -> T) -> T {
+    TEST_TTY_OVERRIDE.with(|cell| {
+        assert!(cell.borrow().is_none(), "test tty override already installed");
+        *cell.borrow_mut() = Some(value);
+    });
+    let result = f();
+    TEST_TTY_OVERRIDE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_assume_daemon_running<T>(value: bool, f: impl FnOnce() -> T) -> T {
+    TEST_ASSUME_DAEMON_RUNNING_OVERRIDE.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "test daemon-running override already installed"
+        );
+        *cell.borrow_mut() = Some(value);
+    });
+    let result = f();
+    TEST_ASSUME_DAEMON_RUNNING_OVERRIDE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }

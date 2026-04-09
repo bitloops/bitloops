@@ -89,15 +89,24 @@ pub async fn run(args: InitArgs) -> Result<()> {
 }
 
 #[cfg(test)]
-fn run_with_writer(
+fn run_with_writer_for_project_root(
     args: InitArgs,
+    project_root: &Path,
     out: &mut dyn Write,
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new().context("creating runtime for `bitloops init`")?;
-    let stdin = io::stdin();
-    let mut input = stdin.lock();
-    runtime.block_on(run_with_io_async(args, out, &mut input, select_fn))
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating runtime for `bitloops init`")?;
+    let mut input = io::Cursor::new(Vec::<u8>::new());
+    runtime.block_on(run_with_io_async_for_project_root(
+        args,
+        project_root,
+        out,
+        &mut input,
+        select_fn,
+    ))
 }
 
 async fn run_with_io_async(
@@ -107,7 +116,17 @@ async fn run_with_io_async(
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
     let project_root = std::env::current_dir().context("getting current directory")?;
-    let git_root = crate::cli::enable::find_repo_root(&project_root)?;
+    run_with_io_async_for_project_root(args, &project_root, out, input, select_fn).await
+}
+
+async fn run_with_io_async_for_project_root(
+    args: InitArgs,
+    project_root: &Path,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    select_fn: Option<&AgentSelector>,
+) -> Result<()> {
+    let git_root = crate::cli::enable::find_repo_root(project_root)?;
     let daemon_config_existed_at_entry = default_daemon_config_exists()?;
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
@@ -140,7 +159,7 @@ async fn run_with_io_async(
     telemetry_consent::ensure_default_daemon_running().await?;
     if daemon_config_existed_at_entry {
         telemetry_consent::ensure_existing_config_telemetry_consent(
-            project_root.as_path(),
+            project_root,
             telemetry_choice,
             out,
             input,
@@ -148,7 +167,7 @@ async fn run_with_io_async(
         .await?;
     } else if let Some(choice) = telemetry_choice {
         let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
-            project_root.as_path(),
+            project_root,
             Some(choice),
         )
         .await?;
@@ -156,27 +175,27 @@ async fn run_with_io_async(
             bail!("failed to persist telemetry consent");
         }
     }
-    ensure_repo_local_policy_excluded(&git_root, &project_root)?;
+    ensure_repo_local_policy_excluded(&git_root, project_root)?;
 
     let selected_agents = if let Some(agent) = args.agent.as_deref() {
         vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
     } else {
-        detect_or_select_agent(&project_root, out, select_fn)?
+        detect_or_select_agent(project_root, out, select_fn)?
     };
-    let strategy = load_settings(&project_root)
+    let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
     write_project_bootstrap_settings(&local_policy_path, &strategy, &selected_agents)?;
 
-    let settings = load_settings(&project_root).unwrap_or_default();
+    let settings = load_settings(project_root).unwrap_or_default();
     let git_count = git_hooks::install_git_hooks(&git_root, settings.local_dev)?;
     if git_count > 0 {
         writeln!(out, "Installed {git_count} git hook(s).")?;
     }
 
     reconcile_agent_hooks(
-        &project_root,
+        project_root,
         &selected_agents,
         settings.local_dev,
         args.force,
@@ -184,7 +203,7 @@ async fn run_with_io_async(
     )?;
 
     if args.install_default_daemon {
-        match install_or_bootstrap_embeddings(&project_root) {
+        match install_or_bootstrap_embeddings(project_root) {
             Ok(lines) => {
                 for line in lines {
                     writeln!(out, "{line}")?;
@@ -199,7 +218,7 @@ async fn run_with_io_async(
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
     if should_sync || should_ingest {
-        let scope = discover_slim_cli_repo_scope(Some(project_root.as_path()))?;
+        let scope = discover_slim_cli_repo_scope(Some(project_root))?;
         if should_sync {
             let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
                 &scope, false, None, false, false, "init", false,

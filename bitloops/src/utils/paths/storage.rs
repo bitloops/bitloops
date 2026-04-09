@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::utils::platform_dirs::bitloops_state_dir;
 #[cfg(test)]
-use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
+use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir, explicit_test_state_dir};
 #[cfg(not(test))]
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
 use sha2::{Digest, Sha256};
@@ -27,10 +27,8 @@ fn should_use_test_app_dirs(repo_root: &Path) -> bool {
 
 #[cfg(test)]
 fn test_runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
-    if let Some(path) =
-        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
-    {
-        return Some(PathBuf::from(path).join("bitloops").join("daemon"));
+    if let Some(path) = explicit_test_state_dir() {
+        return Some(path.join("daemon"));
     }
 
     if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
@@ -42,10 +40,8 @@ fn test_runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 fn test_global_runtime_state_dir() -> PathBuf {
-    if let Some(path) =
-        std::env::var_os("BITLOOPS_TEST_STATE_DIR_OVERRIDE").filter(|v| !v.is_empty())
-    {
-        return PathBuf::from(path).join("bitloops").join("daemon");
+    if let Some(path) = explicit_test_state_dir() {
+        return path.join("daemon");
     }
 
     std::env::temp_dir()
