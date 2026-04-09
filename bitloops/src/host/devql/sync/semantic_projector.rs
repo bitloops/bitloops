@@ -96,6 +96,40 @@ pub(crate) async fn project_path(
     Ok(())
 }
 
+pub(crate) fn pre_stage_artefacts_for_projection(
+    cfg: &DevqlConfig,
+    desired: &DesiredFileState,
+    extraction: &CachedExtraction,
+) -> Result<Vec<semantic::PreStageArtefactRow>> {
+    let materialized_artefacts = derive_materialized_artefacts(cfg, desired, extraction)?;
+    Ok(materialized_artefacts
+        .iter()
+        .map(|artefact| pre_stage_artefact_row(cfg, desired, extraction, artefact))
+        .collect())
+}
+
+pub(crate) fn pre_stage_dependencies_for_projection(
+    cfg: &DevqlConfig,
+    desired: &DesiredFileState,
+    extraction: &CachedExtraction,
+) -> Result<Vec<semantic::PreStageDependencyRow>> {
+    let materialized_artefacts = derive_materialized_artefacts(cfg, desired, extraction)?;
+    let artefacts_by_key = materialized_artefacts
+        .iter()
+        .map(|artefact| (artefact.artifact_key.clone(), artefact.clone()))
+        .collect::<HashMap<_, _>>();
+    let materialized_edges =
+        derive_materialized_edges(cfg, desired, extraction, &artefacts_by_key)?;
+    let artefacts_by_artefact_id = materialized_artefacts
+        .iter()
+        .map(|artefact| (artefact.artefact_id.clone(), artefact))
+        .collect::<HashMap<_, _>>();
+    Ok(materialized_edges
+        .iter()
+        .filter_map(|edge| pre_stage_dependency_row(edge, &artefacts_by_artefact_id))
+        .collect())
+}
+
 pub(crate) async fn remove_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,

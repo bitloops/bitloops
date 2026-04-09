@@ -171,6 +171,7 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
     let settings = UnifiedSettings {
         semantic_clones: Some(json!({
             "summary_mode": "auto",
+            "summary_profile": "default",
             "embedding_mode": "semantic_aware_once",
             "embedding_profile": "local",
             "enrichment_workers": 12
@@ -193,6 +194,7 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
 
     let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
     assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Auto);
+    assert_eq!(semantic_clones.summary_profile.as_deref(), Some("default"));
     assert_eq!(
         semantic_clones.embedding_mode,
         SemanticCloneEmbeddingMode::SemanticAwareOnce
@@ -238,6 +240,7 @@ fn semantic_clones_from_unified_reads_mode_fields() {
     let settings = UnifiedSettings {
         semantic_clones: Some(json!({
             "summary_mode": "off",
+            "summary_profile": "off",
             "embedding_mode": "refresh_on_upgrade",
             "ann_neighbors": 17,
         })),
@@ -246,6 +249,7 @@ fn semantic_clones_from_unified_reads_mode_fields() {
 
     let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
     assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Off);
+    assert_eq!(semantic_clones.summary_profile, None);
     assert_eq!(
         semantic_clones.embedding_mode,
         SemanticCloneEmbeddingMode::RefreshOnUpgrade

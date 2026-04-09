@@ -97,9 +97,11 @@ pub const DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 5;
 pub const MIN_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 1;
 pub const MAX_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 50;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SemanticClonesConfig {
     pub summary_mode: SemanticSummaryMode,
+    #[serde(default)]
+    pub summary_profile: Option<String>,
     pub embedding_mode: SemanticCloneEmbeddingMode,
     pub embedding_profile: Option<String>,
     pub ann_neighbors: usize,
@@ -110,6 +112,7 @@ impl Default for SemanticClonesConfig {
     fn default() -> Self {
         Self {
             summary_mode: SemanticSummaryMode::default(),
+            summary_profile: None,
             embedding_mode: SemanticCloneEmbeddingMode::default(),
             embedding_profile: None,
             ann_neighbors: DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,

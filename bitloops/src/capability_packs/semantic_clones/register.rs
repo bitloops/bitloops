@@ -2,12 +2,17 @@ use anyhow::Result;
 
 use crate::host::capability_host::CapabilityRegistrar;
 
-use super::ingesters::build_symbol_clone_edges_rebuild_ingester;
+use super::ingesters::{
+    build_semantic_features_refresh_ingester, build_symbol_clone_edges_rebuild_ingester,
+    build_symbol_embeddings_refresh_ingester,
+};
 use super::query_examples::SEMANTIC_CLONES_QUERY_EXAMPLES;
 use super::schema_module::SEMANTIC_CLONES_SCHEMA_MODULE;
 use super::stages::build_summary_stage;
 
 pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
+    registrar.register_ingester(build_semantic_features_refresh_ingester())?;
+    registrar.register_ingester(build_symbol_embeddings_refresh_ingester())?;
     registrar.register_ingester(build_symbol_clone_edges_rebuild_ingester())?;
     registrar.register_stage(build_summary_stage())?;
     registrar.register_schema_module(SEMANTIC_CLONES_SCHEMA_MODULE)?;
@@ -20,7 +25,8 @@ mod tests {
     use super::*;
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-        SEMANTIC_CLONES_SUMMARY_STAGE_ID,
+        SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, SEMANTIC_CLONES_SUMMARY_STAGE_ID,
+        SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
     };
     use crate::host::capability_host::{
         IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
@@ -70,10 +76,20 @@ mod tests {
         );
         assert_eq!(
             registrar.ingesters,
-            vec![(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID
-            )]
+            vec![
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID
+                )
+            ]
         );
         assert_eq!(
             registrar.schema_modules,

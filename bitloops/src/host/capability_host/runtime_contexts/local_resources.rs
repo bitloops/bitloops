@@ -10,12 +10,14 @@ use crate::capability_packs::test_harness::storage::{
     BitloopsTestHarnessRepository, open_repository_for_repo,
 };
 use crate::config::{
-    ProviderConfig, StoreBackendConfig, resolve_provider_config_for_repo,
-    resolve_store_backend_config_for_repo,
+    ProviderConfig, StoreBackendConfig, resolve_daemon_config_path_for_repo,
+    resolve_embedding_capability_config_for_repo, resolve_provider_config_for_repo,
+    resolve_store_backend_config_for_repo, resolve_store_semantic_config_for_repo,
 };
 use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::LocalInferenceGateway;
 use crate::host::relational_store::DefaultRelationalStore;
 
 use super::capability_config::build_capability_config_root;
@@ -39,6 +41,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provenance: DefaultProvenanceBuilder,
     pub graph: LocalCanonicalGraphGateway,
     pub stores: LocalStoreHealthGateway,
+    pub inference: LocalInferenceGateway,
     pub test_harness: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
     pub languages: &'static BuiltinLanguageServicesGateway,
 }
@@ -47,6 +50,10 @@ impl LocalCapabilityRuntimeResources {
     pub fn new(repo_root: &Path, repo: RepoIdentity) -> Result<Self> {
         let backends = resolve_store_backend_config_for_repo(repo_root)?;
         let provider_config = resolve_provider_config_for_repo(repo_root)?;
+        let embedding_capability = resolve_embedding_capability_config_for_repo(repo_root);
+        let legacy_semantic = resolve_store_semantic_config_for_repo(repo_root);
+        let daemon_config_path = resolve_daemon_config_path_for_repo(repo_root)
+            .unwrap_or_else(|_| repo_root.join("config.toml"));
 
         let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
         let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
@@ -57,11 +64,22 @@ impl LocalCapabilityRuntimeResources {
         let blob_payloads = BlobKnowledgePayloadStore::from_backend_config(repo_root, &backends)?;
         let connectors = BuiltinConnectorRegistry::new(provider_config.clone())?;
 
-        let config_root = build_capability_config_root(&backends, &provider_config);
+        let config_root = build_capability_config_root(
+            &backends,
+            &provider_config,
+            &embedding_capability.semantic_clones,
+            &embedding_capability.embeddings,
+        );
         let stores = LocalStoreHealthGateway;
         let test_harness = open_repository_for_repo(repo_root)
             .ok()
             .map(std::sync::Mutex::new);
+        let inference = LocalInferenceGateway::new(
+            repo_root,
+            daemon_config_path,
+            embedding_capability.embeddings,
+            legacy_semantic,
+        );
 
         Ok(Self {
             repo_root: repo_root.to_path_buf(),
@@ -77,6 +95,7 @@ impl LocalCapabilityRuntimeResources {
             provenance: DefaultProvenanceBuilder,
             graph: LocalCanonicalGraphGateway,
             stores,
+            inference,
             test_harness,
             languages: builtin_language_services()?,
         })
@@ -105,6 +124,7 @@ impl LocalCapabilityRuntimeResources {
             &self.provenance,
             &self.graph,
             &self.stores,
+            &self.inference,
             self.test_harness.as_ref(),
             self.languages,
             devql_relational,

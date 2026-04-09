@@ -1,15 +1,19 @@
 use super::*;
+use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::clear_repo_symbol_embedding_rows;
 use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
+use crate::capability_packs::semantic_clones::runtime_config::resolve_semantic_clones_config;
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 use crate::host::devql::{
-    RelationalStorage, execute_ingest_with_observer, execute_sync, resolve_repo_identity,
+    RelationalStorage, build_capability_host, execute_ingest_with_observer, execute_sync,
+    resolve_repo_identity,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -583,9 +587,14 @@ async fn run_embedding_job_with_env(
     model: &str,
     dimension: &str,
 ) -> JobExecutionOutcome {
-    let profile_name = resolve_embedding_capability_config_for_repo(&job.config_root)
-        .semantic_clones
+    let repo = resolve_repo_identity(&job.repo_root).expect("resolve repo identity for host");
+    let capability_host =
+        build_capability_host(&job.repo_root, repo).expect("build capability host");
+    let semantic_clones =
+        resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
+    let profile_name = semantic_clones
         .embedding_profile
+        .clone()
         .unwrap_or_else(|| "alpha".to_string());
     let dimension = dimension
         .parse::<usize>()
@@ -597,26 +606,16 @@ async fn run_embedding_job_with_env(
         model,
         dimension,
     );
-    let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
-    let provider_config = EmbeddingProviderConfig {
-        daemon_config_path: job.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
-        embedding_profile: capability.semantic_clones.embedding_profile,
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    };
-    let provider = build_symbol_embedding_provider(&provider_config, Some(&job.repo_root))
-        .expect("build fake embedding provider for daemon test")
-        .expect("expected fake embedding provider for daemon test");
-    let setup = crate::capability_packs::semantic_clones::embeddings::resolve_embedding_setup(
-        provider.as_ref(),
-    )
-    .expect("resolve fake embedding setup for daemon test");
-    assert_eq!(setup.provider, provider_name);
-    assert_eq!(setup.model, model);
-    assert_eq!(setup.dimension, dimension);
+    let repo = resolve_repo_identity(&job.repo_root).expect("resolve repo identity for inference");
+    let capability_host =
+        build_capability_host(&job.repo_root, repo).expect("build capability host");
+    let provider = capability_host
+        .inference()
+        .embeddings(&profile_name)
+        .expect("build fake embedding service for daemon test");
+    assert_eq!(provider.provider_name(), provider_name);
+    assert_eq!(provider.model_name(), model);
+    assert_eq!(provider.output_dimension(), Some(dimension));
     execute_job(job).await
 }
 

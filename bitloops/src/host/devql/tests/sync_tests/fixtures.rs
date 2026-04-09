@@ -59,10 +59,6 @@ pub(super) fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
-        semantic_provider: None,
-        semantic_model: None,
-        semantic_api_key: None,
-        semantic_base_url: None,
     }
 }
 
@@ -85,10 +81,6 @@ pub(super) fn sync_test_cfg_for_repo(repo_root: &Path) -> crate::host::devql::De
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
-        semantic_provider: None,
-        semantic_model: None,
-        semantic_api_key: None,
-        semantic_base_url: None,
     }
 }
 

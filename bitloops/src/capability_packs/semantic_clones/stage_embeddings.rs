@@ -200,29 +200,6 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
         .await
 }
 
-pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    representation_kind: embeddings::EmbeddingRepresentationKind,
-) -> Result<()> {
-    ensure_semantic_embeddings_schema(relational).await?;
-    let predicate = representation_kind_sql_predicate("representation_kind", representation_kind);
-    relational
-        .exec_batch_transactional(&[
-            format!(
-                "DELETE FROM symbol_embeddings WHERE repo_id = '{repo_id}' AND {predicate}",
-                repo_id = esc_pg(repo_id),
-                predicate = predicate,
-            ),
-            format!(
-                "DELETE FROM symbol_embeddings_current WHERE repo_id = '{repo_id}' AND {predicate}",
-                repo_id = esc_pg(repo_id),
-                predicate = predicate,
-            ),
-        ])
-        .await
-}
-
 #[allow(dead_code)]
 pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
     relational: &RelationalStorage,
@@ -246,21 +223,6 @@ pub(crate) async fn clear_repo_active_embedding_setup(
     let sql = format!(
         "DELETE FROM semantic_clone_embedding_setup_state WHERE repo_id = '{}'",
         esc_pg(repo_id),
-    );
-    relational.exec(&sql).await
-}
-
-pub(crate) async fn clear_repo_active_embedding_setup_for_representation(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    representation_kind: embeddings::EmbeddingRepresentationKind,
-) -> Result<()> {
-    ensure_semantic_embeddings_schema(relational).await?;
-    let sql = format!(
-        "DELETE FROM semantic_clone_embedding_setup_state WHERE repo_id = '{repo_id}' AND {representation_predicate}",
-        repo_id = esc_pg(repo_id),
-        representation_predicate =
-            representation_kind_sql_predicate("representation_kind", representation_kind),
     );
     relational.exec(&sql).await
 }

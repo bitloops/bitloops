@@ -1,43 +1,35 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::config::{
-    SemanticCloneEmbeddingMode, SemanticSummaryMode, resolve_daemon_config_path_for_repo,
-    resolve_embedding_capability_config_for_repo, resolve_store_semantic_config_for_repo,
-};
+use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
 use crate::host::capability_host::CapabilityHealthContext;
 use crate::host::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
 
-use super::embeddings::{EmbeddingProviderConfig, build_symbol_embedding_provider};
-use super::extension_descriptor::build_semantic_summary_provider;
-use super::features::SemanticSummaryProviderConfig;
+use super::runtime_config::{resolve_selected_summary_profile, resolve_semantic_clones_config};
+use super::types::SEMANTIC_CLONES_CAPABILITY_ID;
 
 fn check_semantic_clones_semantic_summaries(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if capability.semantic_clones.summary_mode == SemanticSummaryMode::Off {
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.semantic_summaries",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    if config.summary_mode == SemanticSummaryMode::Off {
         return CapabilityHealthResult::ok("semantic summaries disabled");
     }
 
-    let semantic_cfg = resolve_store_semantic_config_for_repo(ctx.repo_root());
-    let provider = semantic_cfg
-        .semantic_provider
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if provider.is_empty() || matches!(provider.as_str(), "none" | "disabled") {
+    let Some(profile_name) = resolve_selected_summary_profile(&config, ctx.inference()) else {
         return CapabilityHealthResult::ok("semantic summaries use deterministic fallback only");
-    }
+    };
 
-    match build_semantic_summary_provider(&SemanticSummaryProviderConfig {
-        semantic_provider: semantic_cfg.semantic_provider,
-        semantic_model: semantic_cfg.semantic_model,
-        semantic_api_key: semantic_cfg.semantic_api_key,
-        semantic_base_url: semantic_cfg.semantic_base_url,
-    }) {
-        Ok(_) => CapabilityHealthResult::ok("semantic summary provider ready"),
+    match ctx.inference().text_generation(&profile_name) {
+        Ok(_) => {
+            CapabilityHealthResult::ok(format!("semantic summary provider `{profile_name}` ready"))
+        }
         Err(err) => {
             CapabilityHealthResult::failed("semantic_clones.semantic_summaries", format!("{err:#}"))
         }
@@ -47,12 +39,18 @@ fn check_semantic_clones_semantic_summaries(
 fn check_semantic_clones_profile_resolution(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if embeddings_disabled(&capability) {
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.profile_resolution",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    if embeddings_disabled(&config) {
         return CapabilityHealthResult::ok("semantic_clones embeddings disabled");
     }
-    if let Some(profile_name) = capability.semantic_clones.embedding_profile.as_deref() {
-        if capability.embeddings.profiles.contains_key(profile_name) {
+    if let Some(profile_name) = config.embedding_profile.as_deref() {
+        if ctx.inference().has_embedding_profile(profile_name) {
             CapabilityHealthResult::ok(format!(
                 "semantic_clones embedding profile `{profile_name}` resolved"
             ))
@@ -70,79 +68,72 @@ fn check_semantic_clones_profile_resolution(
 fn check_semantic_clones_runtime_command(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if embeddings_disabled(&capability) {
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.runtime_command",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    if embeddings_disabled(&config) {
         return CapabilityHealthResult::ok(
             "semantic_clones embeddings disabled (runtime command not required)",
         );
     }
-    let Some(profile_name) = capability.semantic_clones.embedding_profile.as_deref() else {
-        return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime command not required)",
-        );
-    };
-
-    if command_exists(&capability.embeddings.runtime.command) {
-        CapabilityHealthResult::ok(format!(
-            "semantic_clones runtime command available for profile `{profile_name}`"
-        ))
+    let command = view
+        .root()
+        .pointer("/embeddings/runtime/command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if let Some(profile_name) = config.embedding_profile.as_deref() {
+        if command_exists(command) {
+            CapabilityHealthResult::ok(format!(
+                "semantic_clones runtime command available for profile `{profile_name}`"
+            ))
+        } else {
+            CapabilityHealthResult::failed(
+                "semantic_clones.runtime_command",
+                format!("embedding runtime command `{command}` was not found in PATH"),
+            )
+        }
     } else {
-        CapabilityHealthResult::failed(
-            "semantic_clones.runtime_command",
-            format!(
-                "embedding runtime command `{}` was not found in PATH",
-                capability.embeddings.runtime.command
-            ),
-        )
+        CapabilityHealthResult::ok("semantic_clones embeddings disabled")
     }
 }
 
 fn check_semantic_clones_runtime_handshake(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if embeddings_disabled(&capability) {
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.runtime_handshake",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    if embeddings_disabled(&config) {
         return CapabilityHealthResult::ok(
             "semantic_clones embeddings disabled (runtime handshake skipped)",
         );
     }
-    let Some(profile_name) = capability.semantic_clones.embedding_profile.clone() else {
+    let Some(profile_name) = config.embedding_profile.as_deref() else {
         return CapabilityHealthResult::ok(
             "semantic_clones embeddings disabled (runtime handshake skipped)",
         );
     };
 
-    let config_path = daemon_config_path_for_health(ctx.repo_root());
-    let config = EmbeddingProviderConfig {
-        daemon_config_path: config_path,
-        embedding_profile: Some(profile_name.clone()),
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    };
-
-    match build_symbol_embedding_provider(&config, Some(ctx.repo_root())) {
-        Ok(Some(_provider)) => CapabilityHealthResult::ok(format!(
+    match ctx.inference().embeddings(profile_name) {
+        Ok(_) => CapabilityHealthResult::ok(format!(
             "semantic_clones runtime describe succeeded for profile `{profile_name}`"
         )),
-        Ok(None) => CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime handshake skipped)",
-        ),
         Err(err) => {
             CapabilityHealthResult::failed("semantic_clones.runtime_handshake", format!("{err:#}"))
         }
     }
 }
 
-fn embeddings_disabled(capability: &crate::config::EmbeddingCapabilityConfig) -> bool {
-    capability.semantic_clones.embedding_mode == SemanticCloneEmbeddingMode::Off
-        || capability.semantic_clones.embedding_profile.is_none()
-}
-
-fn daemon_config_path_for_health(repo_root: &Path) -> PathBuf {
-    resolve_daemon_config_path_for_repo(repo_root).unwrap_or_else(|_| repo_root.join("config.toml"))
+fn embeddings_disabled(config: &crate::config::SemanticClonesConfig) -> bool {
+    config.embedding_mode == SemanticCloneEmbeddingMode::Off || config.embedding_profile.is_none()
 }
 
 fn command_exists(command: &str) -> bool {

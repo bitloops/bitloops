@@ -29,6 +29,7 @@ use super::registrar::{
     StageRegistration, StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
+use crate::host::inference::InferenceGateway;
 
 #[derive(Clone)]
 enum RegisteredStage {
@@ -118,6 +119,10 @@ impl DevqlCapabilityHost {
 
     pub fn invocation_policy(&self) -> &HostInvocationPolicy {
         &self.invocation_policy
+    }
+
+    pub fn inference(&self) -> &dyn InferenceGateway {
+        &self.runtime.inference
     }
 
     pub fn cross_pack_access(&self) -> &CrossPackAccessPolicy {

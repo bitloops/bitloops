@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::adapters::model_providers::embeddings::{
     EmbeddingProvider, EmbeddingRuntimeClientConfig, build_embedding_provider,
@@ -11,6 +12,7 @@ use crate::adapters::model_providers::embeddings::{
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, render_dependency_context,
 };
+use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 
 const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
@@ -99,6 +101,10 @@ fn resolve_embedding_profile(cfg: &EmbeddingProviderConfig) -> Option<String> {
     Some(profile)
 }
 
+pub fn provider_from_service(service: Arc<dyn EmbeddingService>) -> Arc<dyn EmbeddingProvider> {
+    Arc::new(EmbeddingServiceAdapter { service })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SymbolEmbeddingInput {
     pub artefact_id: String,
@@ -117,6 +123,44 @@ pub struct SymbolEmbeddingInput {
     pub dependency_signals: Vec<String>,
     pub parent_kind: Option<String>,
     pub content_hash: Option<String>,
+}
+
+struct EmbeddingServiceAdapter {
+    service: Arc<dyn EmbeddingService>,
+}
+
+impl EmbeddingProvider for EmbeddingServiceAdapter {
+    fn provider_name(&self) -> &str {
+        self.service.provider_name()
+    }
+
+    fn model_name(&self) -> &str {
+        self.service.model_name()
+    }
+
+    fn output_dimension(&self) -> Option<usize> {
+        self.service.output_dimension()
+    }
+
+    fn cache_key(&self) -> String {
+        self.service.cache_key()
+    }
+
+    fn embed(
+        &self,
+        input: &str,
+        input_type: crate::adapters::model_providers::embeddings::EmbeddingInputType,
+    ) -> Result<Vec<f32>> {
+        let host_input_type = match input_type {
+            crate::adapters::model_providers::embeddings::EmbeddingInputType::Document => {
+                HostEmbeddingInputType::Document
+            }
+            crate::adapters::model_providers::embeddings::EmbeddingInputType::Query => {
+                HostEmbeddingInputType::Query
+            }
+        };
+        self.service.embed(input, host_input_type)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

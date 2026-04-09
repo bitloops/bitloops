@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{resolve_daemon_config_root_for_repo, resolve_store_semantic_config_for_repo};
+use crate::config::resolve_daemon_config_root_for_repo;
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -20,10 +20,6 @@ pub struct DevqlConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: String,
-    pub(crate) semantic_provider: Option<String>,
-    pub(crate) semantic_model: Option<String>,
-    pub(crate) semantic_api_key: Option<String>,
-    pub(crate) semantic_base_url: Option<String>,
 }
 
 impl DevqlConfig {
@@ -39,7 +35,6 @@ impl DevqlConfig {
     ) -> Result<Self> {
         let backend_cfg = resolve_store_backend_config_for_repo(&daemon_config_root)
             .context("resolving backend config for DevQL runtime")?;
-        let semantic_cfg = resolve_store_semantic_config_for_repo(&daemon_config_root);
         Ok(Self {
             daemon_config_root,
             repo_root,
@@ -55,10 +50,6 @@ impl DevqlConfig {
                 .events
                 .clickhouse_database
                 .unwrap_or_else(|| "default".to_string()),
-            semantic_provider: semantic_cfg.semantic_provider,
-            semantic_model: semantic_cfg.semantic_model,
-            semantic_api_key: semantic_cfg.semantic_api_key,
-            semantic_base_url: semantic_cfg.semantic_base_url,
         })
     }
 
@@ -191,10 +182,6 @@ mod tests {
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: "default".to_string(),
-            semantic_provider: None,
-            semantic_model: None,
-            semantic_api_key: None,
-            semantic_base_url: None,
         }
     }
 

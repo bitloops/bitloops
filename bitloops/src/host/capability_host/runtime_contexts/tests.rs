@@ -20,6 +20,7 @@ use crate::host::capability_host::gateways::{
     RelationalGateway, StoreHealthGateway,
 };
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::EmptyInferenceGateway;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -294,7 +295,12 @@ fn postgres_backends(repo_root: &Path) -> StoreBackendConfig {
 fn build_capability_config_root_uses_sqlite_duckdb_labels() {
     let temp = tempdir().expect("tempdir");
     let backends = sqlite_backends(temp.path());
-    let root = build_capability_config_root(&backends, &ProviderConfig::default());
+    let root = build_capability_config_root(
+        &backends,
+        &ProviderConfig::default(),
+        &crate::config::SemanticClonesConfig::default(),
+        &crate::config::EmbeddingsConfig::default(),
+    );
 
     assert_eq!(root["knowledge"]["backends"]["relational"], json!("sqlite"));
     assert_eq!(root["knowledge"]["backends"]["events"], json!("duckdb"));
@@ -304,7 +310,12 @@ fn build_capability_config_root_uses_sqlite_duckdb_labels() {
 fn build_capability_config_root_uses_postgres_clickhouse_labels() {
     let temp = tempdir().expect("tempdir");
     let backends = postgres_backends(temp.path());
-    let root = build_capability_config_root(&backends, &ProviderConfig::default());
+    let root = build_capability_config_root(
+        &backends,
+        &ProviderConfig::default(),
+        &crate::config::SemanticClonesConfig::default(),
+        &crate::config::EmbeddingsConfig::default(),
+    );
 
     assert_eq!(
         root["knowledge"]["backends"]["relational"],
@@ -345,6 +356,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -359,6 +371,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,
@@ -395,6 +408,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -409,6 +423,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,
@@ -444,6 +459,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -458,6 +474,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,
@@ -520,6 +537,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -534,6 +552,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,
@@ -567,6 +586,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -581,6 +601,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,
@@ -615,6 +636,7 @@ fn health_context_config_view_reads_capability_slice() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -629,6 +651,7 @@ fn health_context_config_view_reads_capability_slice() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,
@@ -658,6 +681,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let inference = EmptyInferenceGateway;
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
         repo_root,
@@ -672,6 +696,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
         &provenance,
         &graph,
         &stores,
+        &inference,
         None,
         languages,
         None,

@@ -14,8 +14,7 @@ use self::storage::{
     build_delete_current_symbol_features_sql, build_delete_current_symbol_semantics_sql,
     build_semantic_get_artefacts_by_ids_sql, build_semantic_get_artefacts_sql,
     build_semantic_get_dependencies_sql, build_semantic_get_index_state_sql,
-    build_semantic_get_summary_sql, build_semantic_persist_rows_sql,
-    build_semantic_persist_summary_sql, parse_semantic_artefact_rows,
+    build_semantic_get_summary_sql, build_semantic_persist_rows_sql, parse_semantic_artefact_rows,
     parse_semantic_dependency_rows, parse_semantic_index_state_rows,
     semantic_features_postgres_schema_sql, semantic_features_postgres_upgrade_sql,
     semantic_features_sqlite_schema_sql, upgrade_sqlite_semantic_features_schema,
@@ -378,20 +377,6 @@ pub(crate) async fn load_semantic_summary_snapshot(
         llm_summary,
         source_model,
     }))
-}
-
-pub(crate) async fn persist_semantic_summary_row(
-    relational: &RelationalStorage,
-    semantics: &semantic::SymbolSemanticsRow,
-    semantic_features_input_hash: &str,
-) -> Result<()> {
-    relational
-        .exec(&build_semantic_persist_summary_sql(
-            semantics,
-            semantic_features_input_hash,
-            relational.dialect(),
-        )?)
-        .await
 }
 
 async fn load_semantic_index_state(

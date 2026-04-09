@@ -406,6 +406,16 @@ where
         .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE"))
         .map(|value| parse_embedding_mode(&value))
         .unwrap_or_default();
+    let summary_profile = root
+        .and_then(|map| read_any_string(map, &["summary_profile"]))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            !matches!(
+                value.to_ascii_lowercase().as_str(),
+                "none" | "disabled" | "off"
+            )
+        });
     let embedding_profile = root
         .and_then(|map| read_any_string(map, &["embedding_profile"]))
         .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_PROFILE"))
@@ -445,6 +455,7 @@ where
 
     SemanticClonesConfig {
         summary_mode,
+        summary_profile,
         embedding_mode,
         embedding_profile,
         ann_neighbors,
