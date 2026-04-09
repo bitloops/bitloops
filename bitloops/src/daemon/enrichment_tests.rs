@@ -107,7 +107,7 @@ fn sample_embedding_job(
             artefact_ids: vec![format!("artefact-{batch_key}")],
             input_hashes: BTreeMap::from([(format!("artefact-{batch_key}"), "hash".to_string())]),
             batch_key: batch_key.to_string(),
-            representation_kind: EmbeddingRepresentationKind::Baseline,
+            representation_kind: EmbeddingRepresentationKind::Code,
         },
     }
 }
@@ -256,7 +256,7 @@ async fn enqueue_symbol_embeddings_splits_large_batches_into_smaller_jobs() {
             sample_target(repo_id),
             inputs,
             input_hashes,
-            EmbeddingRepresentationKind::Baseline,
+            EmbeddingRepresentationKind::Code,
         )
         .await
         .expect("enqueue embedding jobs");

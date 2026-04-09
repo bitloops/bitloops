@@ -289,7 +289,7 @@ fn build_fixture_embedding_provider(
 ) -> Result<Arc<dyn EmbeddingProvider>> {
     let embedding_inputs = semantic_embeddings::build_symbol_embedding_inputs(
         inputs,
-        semantic_embeddings::EmbeddingRepresentationKind::Baseline,
+        semantic_embeddings::EmbeddingRepresentationKind::Code,
         summary_by_artefact_id,
     );
     let mut embeddings_by_document = HashMap::with_capacity(embedding_inputs.len());
@@ -1226,7 +1226,7 @@ async fn build_prepared_real_clone_fixture_db(
     upsert_symbol_embedding_rows(
         &relational,
         &all_semantic_inputs,
-        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
         embedding_provider,
     )
     .await
@@ -2522,7 +2522,7 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
             upsert_symbol_embedding_rows(
                 &relational,
                 &initial_inputs,
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
                 initial_embedding_provider,
             )
             .await
@@ -2584,7 +2584,7 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
             upsert_symbol_embedding_rows(
                 &relational,
                 &updated_inputs,
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
                 updated_embedding_provider,
             )
             .await

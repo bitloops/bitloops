@@ -10,7 +10,8 @@ use crate::capability_packs::semantic_clones::extension_descriptor::{
 use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::capability_packs::semantic_clones::features::SemanticSummaryProviderConfig;
 use crate::capability_packs::semantic_clones::{
-    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
+    clear_repo_active_embedding_setup_for_representation,
     determine_repo_embedding_sync_action, load_semantic_feature_inputs_for_artefacts,
     load_semantic_summary_snapshot, persist_active_embedding_setup, persist_semantic_summary_row,
     refresh_current_repo_symbol_embeddings_and_clone_edges, upsert_symbol_embedding_rows,
@@ -251,7 +252,13 @@ async fn execute_semantic_job(
             job,
             &artefact_ids,
             input_hashes,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        ));
+        outcome.follow_ups.push(symbol_embeddings_follow_up(
+            job,
+            &artefact_ids,
+            input_hashes,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
         ));
     }
     outcome
@@ -288,7 +295,13 @@ async fn execute_embedding_job(
         Err(err) => {
             let error = format!("{err:#}");
             evict_cached_embedding_provider(&provider_config, &job.repo_root);
-            return match clear_embedding_outputs(relational, &job.repo_id).await {
+            return match clear_embedding_representation(
+                relational,
+                &job.repo_id,
+                representation_kind,
+            )
+            .await
+            {
                 Ok(()) => JobExecutionOutcome {
                     error: Some(error),
                     follow_ups: Vec::new(),
@@ -298,7 +311,9 @@ async fn execute_embedding_job(
         }
     };
     let Some(provider) = provider else {
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
+        return match clear_embedding_representation(relational, &job.repo_id, representation_kind)
+            .await
+        {
             Ok(()) => JobExecutionOutcome::ok(),
             Err(err) => JobExecutionOutcome::failed(err),
         };
@@ -323,9 +338,6 @@ async fn execute_embedding_job(
     };
 
     if sync_action == RepoEmbeddingSyncAction::RefreshCurrentRepo {
-        if let Err(err) = clear_embedding_outputs(relational, &job.repo_id).await {
-            return JobExecutionOutcome::failed(err);
-        }
         return match refresh_current_repo_symbol_embeddings_and_clone_edges(
             relational,
             &job.repo_root,
@@ -362,6 +374,14 @@ async fn execute_embedding_job(
         Err(err) => return JobExecutionOutcome::failed(err),
     };
     if current_inputs.is_empty() {
+        if sync_action == RepoEmbeddingSyncAction::AdoptExisting
+            && representation_kind
+                == crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+        {
+            let mut outcome = JobExecutionOutcome::ok();
+            outcome.follow_ups.push(clone_edges_rebuild_follow_up(job));
+            return outcome;
+        }
         return JobExecutionOutcome::ok();
     }
 
@@ -377,7 +397,13 @@ async fn execute_embedding_job(
         Err(err) => {
             evict_cached_embedding_provider(&provider_config, &job.repo_root);
             let error = format!("{err:#}");
-            return match clear_embedding_outputs(relational, &job.repo_id).await {
+            return match clear_embedding_representation(
+                relational,
+                &job.repo_id,
+                representation_kind,
+            )
+            .await
+            {
                 Ok(()) => JobExecutionOutcome {
                     error: Some(error),
                     follow_ups: Vec::new(),
@@ -404,7 +430,11 @@ async fn execute_embedding_job(
     }
 
     let mut outcome = JobExecutionOutcome::ok();
-    outcome.follow_ups.push(clone_edges_rebuild_follow_up(job));
+    if representation_kind
+        == crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+    {
+        outcome.follow_ups.push(clone_edges_rebuild_follow_up(job));
+    }
     outcome
 }
 
@@ -460,12 +490,29 @@ fn clone_edges_rebuild_follow_up(job: &EnrichmentJob) -> FollowUpJob {
 }
 
 async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {
-    clear_repo_symbol_embedding_rows(relational, repo_id).await?;
     clear_repo_active_embedding_setup(relational, repo_id).await?;
     crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
         relational, repo_id,
     )
     .await
+}
+
+async fn clear_embedding_representation(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
+) -> Result<()> {
+    clear_repo_active_embedding_setup_for_representation(relational, repo_id, representation_kind)
+        .await?;
+    if representation_kind
+        == crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+    {
+        crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
+            relational, repo_id,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn embeddings_enabled(config_root: &std::path::Path) -> bool {
