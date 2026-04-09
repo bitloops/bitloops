@@ -45,6 +45,14 @@ pub struct PersistedSyncQueueState {
     pub updated_at_unix: u64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedCapabilityEventQueueState {
+    pub version: u8,
+    pub runs: Vec<crate::daemon::CapabilityEventRunRecord>,
+    pub last_action: Option<String>,
+    pub updated_at_unix: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeMetadataBlobType {
     Transcript,
@@ -163,6 +171,17 @@ impl Default for PersistedSyncQueueState {
         Self {
             version: 1,
             tasks: Vec::new(),
+            last_action: Some("initialized".to_string()),
+            updated_at_unix: 0,
+        }
+    }
+}
+
+impl Default for PersistedCapabilityEventQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            runs: Vec::new(),
             last_action: Some("initialized".to_string()),
             updated_at_unix: 0,
         }

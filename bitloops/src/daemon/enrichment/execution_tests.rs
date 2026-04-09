@@ -1,6 +1,7 @@
 use super::*;
 use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
+use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 use crate::host::devql::{
     RelationalStorage, execute_ingest_with_observer, execute_sync, resolve_repo_identity,
@@ -531,7 +532,8 @@ fn build_embedding_job(
                 .unwrap_or_else(|| "batch".to_string()),
             artefact_ids,
             input_hashes,
-            embedding_mode: SemanticCloneEmbeddingMode::Deterministic,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
         },
     }
 }

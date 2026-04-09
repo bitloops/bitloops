@@ -8,9 +8,10 @@ use super::unified_config::{
     resolve_semantic_from_unified, resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL,
-    ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
-    SemanticCloneEmbeddingMode, SemanticSummaryMode,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DashboardLocalDashboardConfig,
+    ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL, ENV_SEMANTIC_PROVIDER,
+    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS, SemanticCloneEmbeddingMode,
+    SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -171,7 +172,8 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
         semantic_clones: Some(json!({
             "summary_mode": "auto",
             "embedding_mode": "semantic_aware_once",
-            "embedding_profile": "local"
+            "embedding_profile": "local",
+            "enrichment_workers": 12
         })),
         embeddings: Some(json!({
             "runtime": {
@@ -196,6 +198,7 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
         SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
     assert_eq!(semantic_clones.embedding_profile.as_deref(), Some("local"));
+    assert_eq!(semantic_clones.enrichment_workers, 12);
 
     let embeddings = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
     assert_eq!(embeddings.runtime.command, "bitloops-embeddings");
@@ -246,6 +249,20 @@ fn semantic_clones_from_unified_reads_mode_fields() {
         SemanticCloneEmbeddingMode::RefreshOnUpgrade
     );
     assert_eq!(semantic_clones.embedding_profile, None);
+    assert_eq!(
+        semantic_clones.enrichment_workers,
+        DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
+    );
+}
+
+#[test]
+fn semantic_clones_from_unified_reads_enrichment_workers_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS" => Some("16".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.enrichment_workers, 16);
 }
 
 // ---------------------------------------------------------------------------

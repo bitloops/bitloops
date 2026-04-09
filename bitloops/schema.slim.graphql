@@ -79,6 +79,22 @@ input ArtefactFilterInput {
 	since: DateTime
 }
 
+type ArtefactSelection {
+	count: Int!
+	summary: JSON!
+	artefacts(first: Int! = 20): [Artefact!]!
+	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
+	clones(relationKind: String, minScore: Float): CloneStageResult!
+	deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false): DependencyStageResult!
+	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
+}
+
+input ArtefactSelectorInput {
+	symbolFqn: String
+	path: String
+	lines: LineRangeInput
+}
+
 input AsOfInput {
 	ref: String
 	commit: String
@@ -192,6 +208,12 @@ type CheckpointFileRelation {
 	copiedFromBlobSha: String
 }
 
+type CheckpointStageResult {
+	summary: JSON!
+	schema: String
+	items(first: Int! = 20): [Checkpoint!]!
+}
+
 type CheckpointTokenUsage {
 	inputTokens: Int!
 	outputTokens: Int!
@@ -225,6 +247,12 @@ type CloneConnection {
 type CloneEdge {
 	node: Clone!
 	cursor: String!
+}
+
+type CloneStageResult {
+	summary: JSON!
+	schema: String
+	items(first: Int! = 20): [Clone!]!
 }
 
 type CloneSummary {
@@ -290,6 +318,12 @@ type DependencyEdgeConnection {
 	edges: [DependencyConnectionEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type DependencyStageResult {
+	summary: JSON!
+	schema: String
+	items(first: Int! = 20): [DependencyEdge!]!
 }
 
 enum DepsDirection {
@@ -598,6 +632,7 @@ type SlimQueryRoot {
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!
 	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
@@ -836,6 +871,12 @@ type TestHarnessTestsSummary {
 	crossCutting: Boolean!
 	dataSources: [String!]!
 	diagnosticCount: Int!
+}
+
+type TestsStageResult {
+	summary: JSON!
+	schema: String
+	items(first: Int! = 20): [TestHarnessTestsResult!]!
 }
 
 type UpdateCliTelemetryConsentResult {

@@ -13,6 +13,68 @@ use std::path::Path;
 use tokio::task;
 
 impl DevqlGraphqlContext {
+    pub(crate) async fn list_selected_symbol_checkpoints(
+        &self,
+        scope: &ResolverScope,
+        symbol_ids: &[String],
+        agent: Option<&str>,
+        since: Option<&DateTimeScalar>,
+    ) -> Result<Vec<Checkpoint>> {
+        if symbol_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let relational_store =
+            crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
+                &repo_root,
+            )?;
+        let sqlite_path = relational_store.sqlite_path().to_path_buf();
+        if !sqlite_path.is_file() {
+            return Ok(Vec::new());
+        }
+        relational_store
+            .initialise_local_relational_checkpoint_schema()
+            .context("initialising relational checkpoint schema for selected symbol checkpoints")?;
+
+        let relational = relational_store.to_local_inner();
+        let matches =
+            crate::host::devql::checkpoint_provenance::CheckpointFileGateway::new(&relational)
+                .list_checkpoint_ids_for_symbol_ids(
+                    &repo_id,
+                    symbol_ids,
+                    crate::host::devql::checkpoint_provenance::CheckpointFileActivityFilter {
+                        agent,
+                        since: since.map(DateTimeScalar::as_str),
+                    },
+                )
+                .await?;
+        if matches.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let checkpoint_commits = read_latest_checkpoint_commit_mappings(repo_root.as_path())
+            .unwrap_or_else(|_| HashMap::new());
+        let mut checkpoints = Vec::new();
+        for checkpoint_match in matches {
+            let Some(info) =
+                read_committed_info(repo_root.as_path(), &checkpoint_match.checkpoint_id)?
+            else {
+                continue;
+            };
+            let checkpoint = Checkpoint::from_ingested(
+                &info,
+                checkpoint_commits
+                    .get(&checkpoint_match.checkpoint_id)
+                    .map(String::as_str),
+            )
+            .with_scope(scope.clone());
+            checkpoints.push(checkpoint);
+        }
+        Ok(checkpoints)
+    }
+
     pub(crate) async fn list_committed_checkpoints(
         &self,
         scope: &ResolverScope,

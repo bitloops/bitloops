@@ -188,22 +188,27 @@ async fn clone_summary_ignores_limit_and_aggregates_full_filtered_clone_set() {
             0.89_f64,
         ),
     ] {
-        conn.execute(
-            "INSERT INTO symbol_clone_edges (
-                repo_id, source_symbol_id, source_artefact_id, target_symbol_id,
-                target_artefact_id, relation_kind, score, semantic_score, lexical_score,
-                structural_score, clone_input_hash, explanation_json
-            ) VALUES (?1, 'sym::source', 'artefact::source', ?2, ?3, ?4, ?5, ?5, 0.6, 0.5, ?6, '{}')",
-            rusqlite::params![
-                repo_id,
-                target_symbol_id,
-                target_artefact_id,
-                relation_kind,
-                score,
-                format!("clone-hash-{target_symbol_id}"),
-            ],
-        )
-        .expect("insert clone edge");
+        for table in ["symbol_clone_edges", "symbol_clone_edges_current"] {
+            let sql = format!(
+                "INSERT INTO {table} (
+                    repo_id, source_symbol_id, source_artefact_id, target_symbol_id,
+                    target_artefact_id, relation_kind, score, semantic_score, lexical_score,
+                    structural_score, clone_input_hash, explanation_json
+                ) VALUES (?1, 'sym::source', 'artefact::source', ?2, ?3, ?4, ?5, ?5, 0.6, 0.5, ?6, '{{}}')"
+            );
+            conn.execute(
+                &sql,
+                rusqlite::params![
+                    repo_id,
+                    target_symbol_id,
+                    target_artefact_id,
+                    relation_kind,
+                    score,
+                    format!("clone-hash-{target_symbol_id}"),
+                ],
+            )
+            .expect("insert clone edge");
+        }
     }
 
     let parsed = parse_devql_query(

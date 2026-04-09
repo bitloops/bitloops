@@ -24,6 +24,8 @@ use tokio::sync::Mutex;
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
+#[path = "daemon/capability_events.rs"]
+mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
 #[path = "daemon/enrichment.rs"]
@@ -57,6 +59,7 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
@@ -64,11 +67,13 @@ pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueu
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
 pub use self::types::{
-    DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
-    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
-    EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
-    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+    CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
+    CapabilityEventRunStatus, DaemonHealthSummary, DaemonMode, DaemonProcessModeArg,
+    DaemonRuntimeState, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, InternalDaemonProcessArgs,
+    InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
+    SupervisorServiceMetadata, SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord,
+    SyncTaskSource, SyncTaskStatus,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -248,6 +253,10 @@ pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
     enrichment::snapshot()
 }
 
+pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+    CapabilityEventCoordinator::shared().snapshot(repo_id)
+}
+
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     enrichment::pause_enrichments(reason)
 }
@@ -264,11 +273,16 @@ pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
     EnrichmentCoordinator::shared()
 }
 
+pub fn shared_capability_event_coordinator() -> Arc<CapabilityEventCoordinator> {
+    CapabilityEventCoordinator::shared()
+}
+
 pub fn shared_sync_coordinator() -> Arc<SyncCoordinator> {
     SyncCoordinator::shared()
 }
 
 pub(crate) fn activate_sync_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
+    CapabilityEventCoordinator::shared().activate_worker();
     SyncCoordinator::shared().activate_worker(Some(subscription_hub));
 }
 

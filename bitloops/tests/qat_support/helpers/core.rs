@@ -1057,6 +1057,11 @@ fn run_change_using_agent_for_repo(
 
 // ── DevQL sync helpers ───────────────────────────────────────
 
+const DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV: &str =
+    "BITLOOPS_QAT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS";
+const DEFAULT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS: u64 = 60;
+const DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS: u64 = 250;
+
 pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
@@ -1232,6 +1237,91 @@ pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout);
     ensure_success(&output, "bitloops devql sync --validate --status")
+}
+
+pub fn wait_for_test_harness_capability_event_completion_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let timeout = parse_timeout_seconds(
+        std::env::var(DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV)
+            .ok()
+            .as_deref(),
+        DEFAULT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS,
+    );
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+    let mut last_payload = serde_json::json!({});
+
+    loop {
+        attempts += 1;
+        let output = run_command_capture(
+            world,
+            "bitloops daemon status --json",
+            build_bitloops_command(world, &["daemon", "status", "--json"])?,
+        )?;
+        world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        world.last_command_stdout = Some(stdout.clone());
+        ensure_success(&output, "bitloops daemon status --json")?;
+
+        let payload: serde_json::Value = serde_json::from_str(stdout.trim())
+            .context("parsing bitloops daemon status --json output")?;
+        if let Some(current_repo_run) = payload
+            .get("capability_events")
+            .and_then(|value| value.get("current_repo_run"))
+            .filter(|current_repo_run| {
+                current_repo_run
+                    .get("capability_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("test_harness")
+            })
+        {
+            match current_repo_run
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("completed") => return Ok(()),
+                Some("failed") => {
+                    let run_id = current_repo_run
+                        .get("run_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let handler_id = current_repo_run
+                        .get("handler_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let event_kind = current_repo_run
+                        .get("event_kind")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>");
+                    let error = current_repo_run
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<no error>");
+                    bail!(
+                        "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        last_payload = payload;
+        if started.elapsed() >= timeout {
+            let last_payload = serde_json::to_string(&last_payload)
+                .unwrap_or_else(|_| "<failed to serialize payload>".to_string());
+            bail!(
+                "timed out after {}s waiting for test_harness capability-event completion in {}; attempts={attempts}; last payload={last_payload}",
+                timeout.as_secs(),
+                repo_name
+            );
+        }
+        std::thread::sleep(StdDuration::from_millis(
+            DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS,
+        ));
+    }
 }
 
 fn resolve_qat_sync_state_path(

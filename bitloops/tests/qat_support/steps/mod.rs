@@ -515,6 +515,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^daemon capability-event status shows TestHarness sync handler completed in (\S+)$"),
+            step_fn(then_daemon_capability_event_status_test_harness_completed),
+        )
+        .then(
+            None,
             regex(r#"^DevQL clones query for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
             step_fn(then_devql_clones_returns_at_least),
         )

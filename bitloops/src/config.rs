@@ -19,13 +19,15 @@ pub use daemon_config::{
     ensure_daemon_config_exists, ensure_daemon_store_artifacts, load_daemon_settings,
     persist_daemon_cli_settings, persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
+pub(crate) use daemon_config::{DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install};
 pub use repo_policy::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
     RepoPolicySnapshot, discover_repo_policy, discover_repo_policy_optional,
 };
 pub use resolve::{
-    resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_daemon_config_root_for_repo,
-    resolve_dashboard_config, resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo,
+    resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_daemon_config_path_for_repo,
+    resolve_daemon_config_root_for_repo, resolve_dashboard_config,
+    resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo,
     resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
     resolve_provider_config, resolve_provider_config_for_repo,
     resolve_repo_runtime_db_path_for_config_root, resolve_repo_runtime_db_path_for_repo,
@@ -35,11 +37,12 @@ pub use resolve::{
     resolve_store_semantic_config_for_repo, resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, DashboardLocalDashboardConfig,
-    EmbeddingCapabilityConfig, EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig,
-    EventsBackendConfig, GithubProviderConfig, ProviderConfig, RelationalBackendConfig,
-    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig,
-    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
+    DashboardFileConfig, DashboardLocalDashboardConfig, EmbeddingCapabilityConfig,
+    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
+    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
+    SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
+    StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 
 #[cfg(test)]

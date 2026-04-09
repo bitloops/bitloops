@@ -89,11 +89,11 @@ pub(super) fn next_pending_task_index(state: &PersistedSyncQueueState) -> Option
         .iter()
         .enumerate()
         .filter(|(_, task)| task.status == SyncTaskStatus::Queued)
-        .min_by_key(|(_, task)| pending_sort_key(task))
+        .min_by_key(|(index, task)| pending_sort_key(*index, task))
         .map(|(index, _)| index)
 }
 
-fn pending_sort_key(task: &SyncTaskRecord) -> (u8, u64, String) {
+fn pending_sort_key(index: usize, task: &SyncTaskRecord) -> (u8, u64, usize) {
     (
         if matches!(task.mode, SyncTaskMode::Validate) {
             1
@@ -101,7 +101,7 @@ fn pending_sort_key(task: &SyncTaskRecord) -> (u8, u64, String) {
             0
         },
         task.submitted_at_unix,
-        task.task_id.clone(),
+        index,
     )
 }
 
@@ -124,7 +124,7 @@ pub(super) fn recompute_queue_positions(tasks: &mut [SyncTaskRecord]) {
             (
                 index,
                 task.status == SyncTaskStatus::Running,
-                pending_sort_key(task),
+                pending_sort_key(index, task),
             )
         })
         .collect::<Vec<_>>();
@@ -306,5 +306,80 @@ pub(super) fn progress_from_summary(summary: &SyncSummary) -> SyncProgressUpdate
         cache_hits: summary.cache_hits,
         cache_misses: summary.cache_misses,
         parse_errors: summary.parse_errors,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn queued_task(task_id: &str, repo_id: &str, submitted_at_unix: u64) -> SyncTaskRecord {
+        SyncTaskRecord {
+            task_id: task_id.to_string(),
+            repo_id: repo_id.to_string(),
+            repo_name: "demo".to_string(),
+            repo_provider: "local".to_string(),
+            repo_organisation: "local".to_string(),
+            repo_identity: format!("local/{repo_id}"),
+            daemon_config_root: PathBuf::from("/tmp/repo"),
+            repo_root: PathBuf::from("/tmp/repo"),
+            source: SyncTaskSource::ManualCli,
+            mode: SyncTaskMode::Full,
+            status: SyncTaskStatus::Queued,
+            submitted_at_unix,
+            started_at_unix: None,
+            updated_at_unix: submitted_at_unix,
+            completed_at_unix: None,
+            queue_position: None,
+            tasks_ahead: None,
+            progress: SyncProgressUpdate::default(),
+            error: None,
+            summary: None,
+        }
+    }
+
+    #[test]
+    fn next_pending_task_preserves_insertion_order_with_same_timestamp() {
+        let state = PersistedSyncQueueState {
+            version: 1,
+            tasks: vec![
+                queued_task("sync-task-z", "repo-1", 1),
+                queued_task("sync-task-a", "repo-2", 1),
+            ],
+            last_action: Some("enqueue".to_string()),
+            updated_at_unix: 1,
+        };
+
+        let index = next_pending_task_index(&state).expect("expected pending task");
+        assert_eq!(state.tasks[index].task_id, "sync-task-z");
+    }
+
+    #[test]
+    fn queue_positions_and_current_repo_task_preserve_insertion_order_with_same_timestamp() {
+        let mut tasks = vec![
+            queued_task("sync-task-z", "repo-1", 1),
+            queued_task("sync-task-a", "repo-1", 1),
+        ];
+        recompute_queue_positions(&mut tasks);
+
+        assert_eq!(tasks[0].queue_position, Some(1));
+        assert_eq!(tasks[1].queue_position, Some(2));
+
+        let state = PersistedSyncQueueState {
+            version: 1,
+            tasks,
+            last_action: Some("enqueue".to_string()),
+            updated_at_unix: 1,
+        };
+
+        let projected = project_status(&state, Some("repo-1"), true);
+        assert_eq!(
+            projected
+                .current_repo_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("sync-task-z")
+        );
     }
 }

@@ -18,9 +18,9 @@ use crate::capability_packs::semantic_clones::{
     upsert_symbol_embedding_rows,
 };
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, EventsBackendConfig, RelationalBackendConfig,
-    StoreBackendConfig, resolve_embedding_capability_config_for_repo, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo,
+    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig,
+    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
+    resolve_store_backend_config, resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
@@ -633,8 +633,8 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
 fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
     let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
     embeddings::EmbeddingProviderConfig {
-        daemon_config_path: crate::config::default_daemon_config_path()
-            .unwrap_or_else(|_| cfg.daemon_config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
+        daemon_config_path: resolve_daemon_config_path_for_repo(&cfg.repo_root)
+            .unwrap_or_else(|_| cfg.daemon_config_root.join("config.toml")),
         embedding_profile: capability.semantic_clones.embedding_profile,
         runtime_command: capability.embeddings.runtime.command,
         runtime_args: capability.embeddings.runtime.args,

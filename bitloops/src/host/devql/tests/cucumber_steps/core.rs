@@ -251,7 +251,9 @@ async fn load_persisted_summary_map(
         .join(", ");
     let rows = relational
         .query_rows(&format!(
-            "SELECT artefact_id, summary FROM symbol_semantics WHERE artefact_id IN ({ids_sql})"
+            "SELECT artefact_id, template_summary, docstring_summary \
+             FROM symbol_semantics \
+             WHERE artefact_id IN ({ids_sql})"
         ))
         .await?;
     let mut summaries = HashMap::with_capacity(rows.len());
@@ -259,10 +261,23 @@ async fn load_persisted_summary_map(
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
             continue;
         };
-        let Some(summary) = row.get("summary").and_then(Value::as_str) else {
+        let Some(template_summary) = row
+            .get("template_summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             continue;
         };
-        summaries.insert(artefact_id.to_string(), summary.to_string());
+        let docstring_summary = row
+            .get("docstring_summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        summaries.insert(
+            artefact_id.to_string(),
+            semantic::synthesize_deterministic_summary(template_summary, docstring_summary),
+        );
     }
     Ok(summaries)
 }
@@ -272,8 +287,11 @@ fn build_fixture_embedding_provider(
     summary_by_artefact_id: &HashMap<String, String>,
     embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
 ) -> Result<Arc<dyn EmbeddingProvider>> {
-    let embedding_inputs =
-        semantic_embeddings::build_symbol_embedding_inputs(inputs, summary_by_artefact_id);
+    let embedding_inputs = semantic_embeddings::build_symbol_embedding_inputs(
+        inputs,
+        semantic_embeddings::EmbeddingRepresentationKind::Baseline,
+        summary_by_artefact_id,
+    );
     let mut embeddings_by_document = HashMap::with_capacity(embedding_inputs.len());
     for input in embedding_inputs {
         let embedding = embeddings_by_artefact_id
@@ -1205,9 +1223,14 @@ async fn build_prepared_real_clone_fixture_db(
         &embeddings_by_artefact_id,
     )
     .context("build fixture embedding provider for real-path fixture")?;
-    upsert_symbol_embedding_rows(&relational, &all_semantic_inputs, embedding_provider)
-        .await
-        .context("upsert symbol embedding rows for real-path fixture")?;
+    upsert_symbol_embedding_rows(
+        &relational,
+        &all_semantic_inputs,
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+        embedding_provider,
+    )
+    .await
+    .context("upsert symbol embedding rows for real-path fixture")?;
 
     rebuild_symbol_clone_edges(&relational, &repo_id)
         .await
@@ -2496,9 +2519,14 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         )
         .expect("build snapshot one fixture embedding provider");
         let initial_stage2_stats =
-            upsert_symbol_embedding_rows(&relational, &initial_inputs, initial_embedding_provider)
-                .await
-                .expect("run stage 2 for incremental snapshot one");
+            upsert_symbol_embedding_rows(
+                &relational,
+                &initial_inputs,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                initial_embedding_provider,
+            )
+            .await
+            .expect("run stage 2 for incremental snapshot one");
         assert_eq!(
             initial_stage2_stats.upserted,
             snapshot_one.len(),
@@ -2553,9 +2581,14 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         )
         .expect("build snapshot two fixture embedding provider");
         let stage2_stats =
-            upsert_symbol_embedding_rows(&relational, &updated_inputs, updated_embedding_provider)
-                .await
-                .expect("run stage 2 for incremental snapshot two");
+            upsert_symbol_embedding_rows(
+                &relational,
+                &updated_inputs,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
+                updated_embedding_provider,
+            )
+            .await
+            .expect("run stage 2 for incremental snapshot two");
         rebuild_symbol_clone_edges(&relational, &repo_id)
             .await
             .expect("rebuild clone edges for snapshot two");
