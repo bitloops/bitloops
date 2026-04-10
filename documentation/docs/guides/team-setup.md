@@ -64,6 +64,8 @@ This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and install
 
 When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile and warms it before any init-triggered sync runs.
 
+In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
+
 `bitloops init` can also queue an initial DevQL current-state sync after hooks are installed. Use `--sync=true` to run it immediately, or `--sync=false` to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook setup whether you want to sync the codebase.
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.

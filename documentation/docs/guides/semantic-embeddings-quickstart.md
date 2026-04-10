@@ -15,10 +15,10 @@ Run the repo-scoped commands below from inside a Git repository or Bitloops proj
 ## What You Need
 
 - `bitloops`
-- `bitloops-embeddings`
+- either the Bitloops-managed embeddings install flow or a manually installed `bitloops-embeddings` binary
 - a text-generation provider API key if you want LLM semantic summaries
 
-In a source checkout, build and install `bitloops`, then install the matching standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform and make sure it is on `PATH`:
+In a source checkout, build and install `bitloops`. For the default local Bitloops-managed runtime, explicit setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the standalone `bitloops-embeddings` binary for you. If you are wiring a custom runtime manually, install the matching standalone binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform:
 
 ```bash
 cargo build
@@ -89,7 +89,7 @@ code_embeddings = "local_code"
 summary_embeddings = "local_code"
 
 [inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
 args = []
 startup_timeout_secs = 60
 request_timeout_secs = 300
@@ -106,7 +106,8 @@ Notes:
 - `local_code` is the default auto-created local embeddings profile name.
 - `bitloops_embeddings_ipc` is the default auto-created local embeddings driver.
 - `bge-m3` is the default auto-created local embeddings model.
-- The runtime command is the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases, so no Python installation is required.
+- When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above.
+- Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
 - If an active embedding profile already exists, Bitloops does not overwrite it.
 - If that existing active profile is local, Bitloops still runs the normal warm/bootstrap path for it.
 - If that existing active profile is hosted or otherwise non-local, Bitloops treats embeddings as already enabled and skips local runtime bootstrap.
@@ -148,7 +149,7 @@ What this does:
 - warms the local model cache
 - downloads the model if it is missing
 
-This is the best first check that `bitloops-embeddings` is installed and reachable on `PATH`.
+This is the best first check that the configured embeddings runtime command works.
 
 `bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` reuse this same warm/bootstrap path automatically; `bitloops embeddings pull local_code` remains useful when you want to rerun it explicitly.
 
@@ -231,7 +232,14 @@ bitloops daemon enrichments retry-failed
 
 ### `bitloops-embeddings` not found
 
-Make sure the standalone binary is installed and on `PATH`:
+If you are using the Bitloops-managed runtime, run:
+
+```bash
+bitloops embeddings install
+bitloops embeddings doctor
+```
+
+If you are managing the runtime yourself, make sure the standalone binary is installed and on `PATH`:
 
 ```bash
 which bitloops-embeddings

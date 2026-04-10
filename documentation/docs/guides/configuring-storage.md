@@ -93,7 +93,7 @@ code_embeddings = "local_code"
 summary_embeddings = "local_code"
 
 [inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
 args = []
 startup_timeout_secs = 60
 request_timeout_secs = 300
@@ -115,7 +115,7 @@ base_url = "https://api.openai.com/v1"
 
 `bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create that default local profile for you. Edit the daemon config manually only when you need a different profile name, model, or hosted provider.
 
-The `bitloops-embeddings` runtime entry points at the standalone binary from the `bitloops/bitloops-embeddings` releases, so you do not need Python installed for this setup.
+When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above. Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
 
 Embedding model downloads are cache, not durable relational or event store data.
 
