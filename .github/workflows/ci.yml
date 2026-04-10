@@ -53,7 +53,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Compile test targets
-        run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
+        run: cargo test -p bitloops --no-default-features
 
   test-full:
     name: Full test suite
@@ -124,31 +124,31 @@ jobs:
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         env:
           DUCKDB_DOWNLOAD_LIB: '0'
-        run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }} --features duckdb-bundled
+        run: cross build --release -p bitloops --target ${{ matrix.target }} --features duckdb-bundled
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
-        run: cargo build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }}
+        run: cargo build --release -p bitloops --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: ./bitloops/target/${{ matrix.target }}/release/bitloops --version
+        run: ./target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Linux arm64 via qemu)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: qemu-aarch64 ./bitloops/target/${{ matrix.target }}/release/bitloops --version
+        run: qemu-aarch64 ./target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          & "bitloops/target/${{ matrix.target }}/release/bitloops.exe" --version
+          & "target/${{ matrix.target }}/release/bitloops.exe" --version
 
       - name: Validate Windows arm64 build output
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $path = "bitloops/target/${{ matrix.target }}/release/bitloops.exe"
+          $path = "target/${{ matrix.target }}/release/bitloops.exe"
           if (-not (Test-Path $path)) {
             throw "Missing expected binary: $path"
           }
