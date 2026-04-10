@@ -55,7 +55,7 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
         return match execute_sync_validation(cfg, &relational).await {
             Ok(summary) => Ok((summary, SyncFileDiff::default(), SyncArtefactDiff::default())),
             Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
-                "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync --validate`.",
+                "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql tasks enqueue --kind sync --validate --status`.",
             ),
             Err(err) => Err(err),
         };
@@ -67,7 +67,7 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
             Ok((summary, file_diff, artefact_diff))
         }
         Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
-            "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync`.",
+            "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql tasks enqueue --kind sync --status`.",
         ),
         Err(err) => Err(err),
     }

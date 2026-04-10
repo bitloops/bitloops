@@ -4,14 +4,13 @@ use async_graphql::futures_util::{Stream, stream};
 use async_graphql::{Context, Subscription};
 
 use super::context::DevqlGraphqlContext;
-use super::types::{Checkpoint, IngestionProgressEvent, SyncProgressEvent};
+use super::types::{Checkpoint, TaskProgressEvent};
 
 #[derive(Default)]
 pub struct SlimSubscriptionRoot;
 
 type CheckpointStream = Pin<Box<dyn Stream<Item = Checkpoint> + Send>>;
-type IngestionProgressStream = Pin<Box<dyn Stream<Item = IngestionProgressEvent> + Send>>;
-type SyncProgressStream = Pin<Box<dyn Stream<Item = SyncProgressEvent> + Send>>;
+type TaskProgressStream = Pin<Box<dyn Stream<Item = TaskProgressEvent> + Send>>;
 
 #[Subscription]
 impl SlimSubscriptionRoot {
@@ -40,38 +39,13 @@ impl SlimSubscriptionRoot {
         ))
     }
 
-    async fn ingestion_progress(&self, ctx: &Context<'_>) -> IngestionProgressStream {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        let receiver = context.subscriptions().subscribe_progress();
-        let repo_name = context.repo_name_for_scope(&context.slim_root_scope()).ok();
-
-        Box::pin(stream::unfold(
-            (receiver, repo_name),
-            |(mut receiver, repo_name)| async move {
-                let repo_name = repo_name.clone()?;
-                loop {
-                    match receiver.recv().await {
-                        Ok(event) => {
-                            if event.repo_name != repo_name {
-                                continue;
-                            }
-                            return Some((event.event, (receiver, Some(repo_name))));
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-                    }
-                }
-            },
-        ))
-    }
-
-    async fn sync_progress(
+    async fn task_progress(
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "taskId")] task_id: String,
-    ) -> SyncProgressStream {
+    ) -> TaskProgressStream {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        let receiver = context.subscriptions().subscribe_sync_progress();
+        let receiver = context.subscriptions().subscribe_task_progress();
 
         Box::pin(stream::unfold(
             (receiver, task_id),
@@ -85,7 +59,7 @@ impl SlimSubscriptionRoot {
                             return Some((event.task.into(), (receiver, task_id)));
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            if let Ok(Some(task)) = crate::daemon::sync_task(task_id.as_str()) {
+                            if let Ok(Some(task)) = crate::daemon::devql_task(task_id.as_str()) {
                                 return Some((task.into(), (receiver, task_id)));
                             }
                             continue;

@@ -791,13 +791,27 @@ fn TestTelemetryAction_DaemonStartCanonicalCommandUsesSameEventName() {
 
 #[test]
 #[allow(non_snake_case)]
-fn TestTelemetryAction_DevqlSyncTracksSafeProperties() {
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--paths", "a,b", "--status"])
-        .expect("devql sync should parse");
+fn TestTelemetryAction_DevqlTasksEnqueueSyncTracksSafeProperties() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "tasks",
+        "enqueue",
+        "--kind",
+        "sync",
+        "--paths",
+        "a,b",
+        "--status",
+    ])
+    .expect("devql tasks enqueue should parse");
     let command = parsed.command.as_ref().expect("command");
     let action = telemetry_action_for_command(command).expect("telemetry action");
 
-    assert_eq!(action.event, "bitloops devql sync");
+    assert_eq!(action.event, "bitloops devql tasks enqueue");
+    assert_eq!(
+        action.properties.get("task_kind").and_then(Value::as_str),
+        Some("sync")
+    );
     assert_eq!(
         action.properties.get("sync_mode").and_then(Value::as_str),
         Some("paths")

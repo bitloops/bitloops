@@ -649,17 +649,24 @@ mod query_pipeline;
 
 #[test]
 fn devql_cli_parses_ingest_defaults() {
-    let parsed =
-        Cli::try_parse_from(["bitloops", "devql", "ingest"]).expect("devql ingest should parse");
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "tasks", "enqueue", "--kind", "ingest"])
+        .expect("devql task ingest enqueue should parse");
 
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
-        panic!("expected devql ingest command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
     };
-
-    let _ = ingest;
+    match tasks.command {
+        crate::cli::devql::DevqlTasksCommand::Enqueue(enqueue) => {
+            assert!(matches!(
+                enqueue.kind,
+                crate::cli::devql::DevqlTaskKindArg::Ingest
+            ));
+        }
+        other => panic!("expected task enqueue command, got {other:?}"),
+    }
 }
 
 #[test]

@@ -371,9 +371,25 @@ pub struct CapabilityEventQueueStatus {
     pub current_repo_run: Option<CapabilityEventRunRecord>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DevqlTaskKind {
+    Sync,
+    Ingest,
+}
+
+impl fmt::Display for DevqlTaskKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sync => write!(f, "sync"),
+            Self::Ingest => write!(f, "ingest"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SyncTaskSource {
+pub enum DevqlTaskSource {
     Init,
     ManualCli,
     Watcher,
@@ -382,7 +398,7 @@ pub enum SyncTaskSource {
     PostCheckout,
 }
 
-impl fmt::Display for SyncTaskSource {
+impl fmt::Display for DevqlTaskSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Init => write!(f, "init"),
@@ -419,7 +435,7 @@ impl fmt::Display for SyncTaskMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SyncTaskStatus {
+pub enum DevqlTaskStatus {
     Queued,
     Running,
     Completed,
@@ -427,7 +443,7 @@ pub enum SyncTaskStatus {
     Cancelled,
 }
 
-impl fmt::Display for SyncTaskStatus {
+impl fmt::Display for DevqlTaskStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Queued => write!(f, "queued"),
@@ -440,7 +456,38 @@ impl fmt::Display for SyncTaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SyncTaskRecord {
+pub struct SyncTaskSpec {
+    pub mode: SyncTaskMode,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IngestTaskSpec {
+    pub backfill: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum DevqlTaskSpec {
+    Sync(SyncTaskSpec),
+    Ingest(IngestTaskSpec),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum DevqlTaskProgress {
+    Sync(crate::host::devql::SyncProgressUpdate),
+    Ingest(crate::host::devql::IngestionProgressUpdate),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum DevqlTaskResult {
+    Sync(crate::host::devql::SyncSummary),
+    Ingest(crate::host::devql::IngestionCounters),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DevqlTaskRecord {
     pub task_id: String,
     pub repo_id: String,
     pub repo_name: String,
@@ -450,47 +497,109 @@ pub struct SyncTaskRecord {
     #[serde(alias = "config_root", default)]
     pub daemon_config_root: PathBuf,
     pub repo_root: PathBuf,
-    pub source: SyncTaskSource,
-    pub mode: SyncTaskMode,
-    pub status: SyncTaskStatus,
+    pub kind: DevqlTaskKind,
+    pub source: DevqlTaskSource,
+    pub spec: DevqlTaskSpec,
+    pub status: DevqlTaskStatus,
     pub submitted_at_unix: u64,
     pub started_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub completed_at_unix: Option<u64>,
     pub queue_position: Option<u64>,
     pub tasks_ahead: Option<u64>,
-    pub progress: crate::host::devql::SyncProgressUpdate,
+    pub progress: DevqlTaskProgress,
     pub error: Option<String>,
-    pub summary: Option<crate::host::devql::SyncSummary>,
+    pub result: Option<DevqlTaskResult>,
 }
 
-impl SyncTaskRecord {
+impl DevqlTaskRecord {
     pub fn normalise_legacy_values(&mut self) {
         if self.daemon_config_root.as_os_str().is_empty() {
             self.daemon_config_root = self.repo_root.clone();
         }
     }
+
+    pub fn sync_spec(&self) -> Option<&SyncTaskSpec> {
+        match &self.spec {
+            DevqlTaskSpec::Sync(spec) => Some(spec),
+            DevqlTaskSpec::Ingest(_) => None,
+        }
+    }
+
+    pub fn ingest_spec(&self) -> Option<&IngestTaskSpec> {
+        match &self.spec {
+            DevqlTaskSpec::Sync(_) => None,
+            DevqlTaskSpec::Ingest(spec) => Some(spec),
+        }
+    }
+
+    pub fn sync_progress(&self) -> Option<&crate::host::devql::SyncProgressUpdate> {
+        match &self.progress {
+            DevqlTaskProgress::Sync(progress) => Some(progress),
+            DevqlTaskProgress::Ingest(_) => None,
+        }
+    }
+
+    pub fn ingest_progress(&self) -> Option<&crate::host::devql::IngestionProgressUpdate> {
+        match &self.progress {
+            DevqlTaskProgress::Sync(_) => None,
+            DevqlTaskProgress::Ingest(progress) => Some(progress),
+        }
+    }
+
+    pub fn sync_result(&self) -> Option<&crate::host::devql::SyncSummary> {
+        match &self.result {
+            Some(DevqlTaskResult::Sync(result)) => Some(result),
+            _ => None,
+        }
+    }
+
+    pub fn ingest_result(&self) -> Option<&crate::host::devql::IngestionCounters> {
+        match &self.result {
+            Some(DevqlTaskResult::Ingest(result)) => Some(result),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncQueueState {
-    pub version: u8,
-    pub pending_tasks: u64,
+pub struct RepoTaskControlState {
+    pub repo_id: String,
+    pub paused: bool,
+    pub paused_reason: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevqlTaskKindCounts {
+    pub kind: DevqlTaskKind,
+    pub queued_tasks: u64,
     pub running_tasks: u64,
     pub failed_tasks: u64,
     pub completed_recent_tasks: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevqlTaskQueueState {
+    pub version: u8,
+    pub queued_tasks: u64,
+    pub running_tasks: u64,
+    pub failed_tasks: u64,
+    pub completed_recent_tasks: u64,
+    pub by_kind: Vec<DevqlTaskKindCounts>,
     pub last_action: Option<String>,
     pub last_updated_unix: u64,
 }
 
-impl Default for SyncQueueState {
+impl Default for DevqlTaskQueueState {
     fn default() -> Self {
         Self {
             version: 1,
-            pending_tasks: 0,
+            queued_tasks: 0,
             running_tasks: 0,
             failed_tasks: 0,
             completed_recent_tasks: 0,
+            by_kind: default_devql_task_kind_counts(),
             last_action: Some("initialized".to_string()),
             last_updated_unix: 0,
         }
@@ -498,10 +607,36 @@ impl Default for SyncQueueState {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SyncQueueStatus {
-    pub state: SyncQueueState,
+pub struct DevqlTaskQueueStatus {
+    pub state: DevqlTaskQueueState,
     pub persisted: bool,
-    pub current_repo_task: Option<SyncTaskRecord>,
+    pub current_repo_tasks: Vec<DevqlTaskRecord>,
+    pub current_repo_control: Option<RepoTaskControlState>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DevqlTaskControlResult {
+    pub message: String,
+    pub control: RepoTaskControlState,
+}
+
+fn default_devql_task_kind_counts() -> Vec<DevqlTaskKindCounts> {
+    vec![
+        DevqlTaskKindCounts {
+            kind: DevqlTaskKind::Sync,
+            queued_tasks: 0,
+            running_tasks: 0,
+            failed_tasks: 0,
+            completed_recent_tasks: 0,
+        },
+        DevqlTaskKindCounts {
+            kind: DevqlTaskKind::Ingest,
+            queued_tasks: 0,
+            running_tasks: 0,
+            failed_tasks: 0,
+            completed_recent_tasks: 0,
+        },
+    ]
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -512,7 +647,7 @@ pub struct DaemonStatusReport {
     pub health: Option<DaemonHealthSummary>,
     pub capability_events: Option<CapabilityEventQueueStatus>,
     pub enrichment: Option<EnrichmentQueueStatus>,
-    pub sync: Option<SyncQueueStatus>,
+    pub devql_tasks: Option<DevqlTaskQueueStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

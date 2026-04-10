@@ -12,8 +12,9 @@ use super::types::{
     CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
     DepsFilterInput, FileContext, HealthStatus, KnowledgeItemConnection, KnowledgeItemEdge,
-    KnowledgeProvider, SyncTaskObject, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
-    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
+    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
+    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -240,8 +241,7 @@ impl SlimQueryRoot {
             .map_err(|err| backend_error(format!("failed to query repository users: {err:#}")))
     }
 
-    #[graphql(name = "syncTask")]
-    async fn sync_task(&self, ctx: &Context<'_>, id: String) -> Result<Option<SyncTaskObject>> {
+    async fn task(&self, ctx: &Context<'_>, id: String) -> Result<Option<TaskObject>> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         context
             .require_slim_request_scope()
@@ -249,17 +249,18 @@ impl SlimQueryRoot {
         let repo_id = context
             .repo_id_for_scope(&context.slim_root_scope())
             .map_err(|err| backend_error(format!("failed to resolve repository scope: {err:#}")))?;
-        let task = crate::daemon::sync_task(id.as_str())
-            .map_err(|err| backend_error(format!("failed to load sync task: {err:#}")))?;
+        let task = crate::daemon::devql_task(id.as_str())
+            .map_err(|err| backend_error(format!("failed to load task: {err:#}")))?;
         Ok(task.filter(|task| task.repo_id == repo_id).map(Into::into))
     }
 
-    #[graphql(name = "syncTasks")]
-    async fn sync_tasks(
+    async fn tasks(
         &self,
         ctx: &Context<'_>,
+        kind: Option<TaskKind>,
+        status: Option<TaskStatus>,
         limit: Option<i32>,
-    ) -> Result<Vec<SyncTaskObject>> {
+    ) -> Result<Vec<TaskObject>> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         context
             .require_slim_request_scope()
@@ -270,9 +271,28 @@ impl SlimQueryRoot {
         let limit = limit
             .map(|limit| usize::try_from(limit.max(0)).unwrap_or(usize::MAX))
             .or(Some(25));
-        crate::daemon::sync_tasks(Some(repo_id.as_str()), limit)
+        crate::daemon::devql_tasks(
+            Some(repo_id.as_str()),
+            kind.map(Into::into),
+            status.map(Into::into),
+            limit,
+        )
             .map(|tasks| tasks.into_iter().map(Into::into).collect())
-            .map_err(|err| backend_error(format!("failed to list sync tasks: {err:#}")))
+            .map_err(|err| backend_error(format!("failed to list tasks: {err:#}")))
+    }
+
+    #[graphql(name = "taskQueue")]
+    async fn task_queue(&self, ctx: &Context<'_>) -> Result<TaskQueueStatusObject> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let repo_id = context
+            .repo_id_for_scope(&context.slim_root_scope())
+            .map_err(|err| backend_error(format!("failed to resolve repository scope: {err:#}")))?;
+        crate::daemon::devql_task_status(Some(repo_id.as_str()))
+            .map(Into::into)
+            .map_err(|err| backend_error(format!("failed to load task queue status: {err:#}")))
     }
 
     async fn agents(&self, ctx: &Context<'_>) -> Result<Vec<String>> {

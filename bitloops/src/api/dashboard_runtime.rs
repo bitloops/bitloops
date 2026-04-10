@@ -232,7 +232,7 @@ pub(super) async fn run(
         devql_schema,
         devql_slim_schema,
     };
-    crate::daemon::activate_sync_worker(state.subscription_hub());
+    crate::daemon::activate_task_worker(state.subscription_hub());
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {

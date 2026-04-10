@@ -4,14 +4,14 @@ use std::time::Duration;
 use anyhow::Result;
 use terminal_size::{Width, terminal_size};
 
-use super::types::SyncTaskGraphqlRecord;
+use super::types::TaskGraphqlRecord;
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, color_hex_if_enabled};
 
-pub(super) const SYNC_PROGRESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
-pub(super) const SYNC_RENDER_TICK_INTERVAL: Duration = Duration::from_millis(120);
-const SYNC_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+pub(super) const TASK_PROGRESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
+pub(super) const TASK_RENDER_TICK_INTERVAL: Duration = Duration::from_millis(120);
+const TASK_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub(super) struct SyncProgressRenderer {
+pub(super) struct TaskProgressRenderer {
     interactive: bool,
     terminal_width: Option<usize>,
     spinner_index: usize,
@@ -19,7 +19,7 @@ pub(super) struct SyncProgressRenderer {
     wrote_in_place: bool,
 }
 
-impl SyncProgressRenderer {
+impl TaskProgressRenderer {
     pub(super) fn new() -> Self {
         Self {
             interactive: std::io::stdout().is_terminal() && std::env::var("ACCESSIBLE").is_err(),
@@ -34,16 +34,16 @@ impl SyncProgressRenderer {
         self.interactive
     }
 
-    pub(super) fn render(&mut self, task: &SyncTaskGraphqlRecord) -> Result<()> {
+    pub(super) fn render(&mut self, task: &TaskGraphqlRecord) -> Result<()> {
         let frame = self.render_frame(task);
         self.write_frame(frame, false)
     }
 
-    pub(super) fn tick(&mut self, task: &SyncTaskGraphqlRecord) -> Result<()> {
-        if !self.interactive || !matches!(task.status.as_str(), "queued" | "running") {
+    pub(super) fn tick(&mut self, task: &TaskGraphqlRecord) -> Result<()> {
+        if !self.interactive || !matches!(status_key(task).as_str(), "queued" | "running") {
             return Ok(());
         }
-        self.spinner_index = (self.spinner_index + 1) % SYNC_SPINNER_FRAMES.len();
+        self.spinner_index = (self.spinner_index + 1) % TASK_SPINNER_FRAMES.len();
         let frame = self.render_frame(task);
         self.write_frame(frame, true)
     }
@@ -59,18 +59,18 @@ impl SyncProgressRenderer {
     }
 
     fn spinner_frame(&self) -> String {
-        color_hex_if_enabled(SYNC_SPINNER_FRAMES[self.spinner_index], BITLOOPS_PURPLE_HEX)
+        color_hex_if_enabled(TASK_SPINNER_FRAMES[self.spinner_index], BITLOOPS_PURPLE_HEX)
     }
 
-    fn render_frame(&self, task: &SyncTaskGraphqlRecord) -> String {
+    fn render_frame(&self, task: &TaskGraphqlRecord) -> String {
         if self.interactive {
             let bar =
-                format_live_sync_progress_bar_line(task, self.spinner_index, self.terminal_width);
+                format_live_task_progress_bar_line(task, self.spinner_index, self.terminal_width);
             let status =
-                format_live_sync_task_status_line(task, &self.spinner_frame(), self.terminal_width);
+                format_live_task_status_line(task, &self.spinner_frame(), self.terminal_width);
             format!("{bar}\n{status}")
         } else {
-            format_live_sync_task_status_line(task, &self.spinner_frame(), self.terminal_width)
+            format_live_task_status_line(task, &self.spinner_frame(), self.terminal_width)
         }
     }
 
@@ -99,36 +99,82 @@ impl SyncProgressRenderer {
     }
 }
 
-pub(super) fn format_live_sync_task_status_line(
-    task: &SyncTaskGraphqlRecord,
+pub(super) fn format_live_task_status_line(
+    task: &TaskGraphqlRecord,
     spinner: &str,
     terminal_width: Option<usize>,
 ) -> String {
-    let status = match task.status.as_str() {
-        "queued" => format!(
+    let status = match (kind_key(task).as_str(), status_key(task).as_str()) {
+        ("sync", "queued") => format!(
             "Sync queued for {} · mode={} · {} ahead",
             task.repo_name,
-            task.mode,
+            task.sync_spec
+                .as_ref()
+                .map(|spec| spec.mode.as_str())
+                .unwrap_or("auto"),
             task.tasks_ahead.unwrap_or(0),
         ),
-        "running" => {
+        ("sync", "running") => {
+            let progress = task.sync_progress.as_ref();
             let mut line = format!(
                 "Syncing {} · {}",
                 task.repo_name,
-                humanise_sync_phase(task.phase.as_str()),
+                progress
+                    .map(|progress| humanise_sync_phase(progress.phase.as_str()))
+                    .unwrap_or("working"),
             );
-            if task.paths_total > 0 {
-                line.push_str(&format!(" · {}/{}", task.paths_completed, task.paths_total));
-            }
-            if let Some(path) = task.current_path.as_ref() {
-                line.push_str(&format!(" · {path}"));
+            if let Some(progress) = progress {
+                if progress.paths_total > 0 {
+                    line.push_str(&format!(
+                        " · {}/{}",
+                        progress.paths_completed, progress.paths_total
+                    ));
+                }
+                if let Some(path) = progress.current_path.as_ref() {
+                    line.push_str(&format!(" · {path}"));
+                }
             }
             line
         }
-        "completed" => format!("✓ Sync complete for {}", task.repo_name),
-        "failed" => format!("✖ Sync failed for {}", task.repo_name),
-        "cancelled" => format!("✖ Sync cancelled for {}", task.repo_name),
-        other => format!("Sync {other} for {}", task.repo_name),
+        ("ingest", "queued") => format!(
+            "Ingest queued for {} · {} ahead",
+            task.repo_name,
+            task.tasks_ahead.unwrap_or(0),
+        ),
+        ("ingest", "running") => {
+            let progress = task.ingest_progress.as_ref();
+            let mut line = format!(
+                "Ingesting {} · {}",
+                task.repo_name,
+                progress
+                    .map(|progress| humanise_ingest_phase(progress.phase.as_str()))
+                    .unwrap_or("working"),
+            );
+            if let Some(progress) = progress {
+                if progress.commits_total > 0 {
+                    line.push_str(&format!(
+                        " · {}/{}",
+                        progress.commits_processed, progress.commits_total
+                    ));
+                }
+                if let Some(commit_sha) = progress.current_commit_sha.as_ref() {
+                    line.push_str(&format!(" · {commit_sha}"));
+                }
+            }
+            line
+        }
+        ("sync", "completed") => format!("✓ Sync complete for {}", task.repo_name),
+        ("ingest", "completed") => format!("✓ Ingest complete for {}", task.repo_name),
+        ("sync", "failed") => format!("✖ Sync failed for {}", task.repo_name),
+        ("ingest", "failed") => format!("✖ Ingest failed for {}", task.repo_name),
+        ("sync", "cancelled") => format!("✖ Sync cancelled for {}", task.repo_name),
+        ("ingest", "cancelled") => format!("✖ Ingest cancelled for {}", task.repo_name),
+        _ => format!(
+            "{} {} for {}",
+            humanise_kind(task),
+            status_key(task),
+            task.repo_name
+        ),
     };
     let fitted = fit_live_status_text(
         status.as_str(),
@@ -137,22 +183,17 @@ pub(super) fn format_live_sync_task_status_line(
     format!("{spinner} {fitted}")
 }
 
-pub(super) fn format_live_sync_progress_bar_line(
-    task: &SyncTaskGraphqlRecord,
+pub(super) fn format_live_task_progress_bar_line(
+    task: &TaskGraphqlRecord,
     spinner_index: usize,
     terminal_width: Option<usize>,
 ) -> String {
     let available_width = terminal_width.unwrap_or(80).max(16);
     let ratio = progress_ratio(task);
-    let summary = if let Some(ratio) = ratio {
-        format!(
-            " {:>3}% {}/{}",
-            (ratio * 100.0).round() as usize,
-            task.paths_completed,
-            task.paths_total
-        )
+    let summary = if let Some((ratio, done, total)) = ratio {
+        format!(" {:>3}% {done}/{total}", (ratio * 100.0).round() as usize)
     } else {
-        format!(" {} ", humanise_sync_phase(task.phase.as_str()))
+        format!(" {} ", humanise_phase(task))
     };
     let reserved = summary.chars().count() + 2;
     if available_width <= reserved + 1 {
@@ -160,7 +201,7 @@ pub(super) fn format_live_sync_progress_bar_line(
     }
 
     let bar_width = available_width - reserved;
-    let bar = if let Some(ratio) = ratio {
+    let bar = if let Some((ratio, _, _)) = ratio {
         render_determinate_progress_bar(bar_width, ratio)
     } else {
         render_indeterminate_progress_bar(bar_width, spinner_index)
@@ -169,19 +210,35 @@ pub(super) fn format_live_sync_progress_bar_line(
     format!("[{bar}]{summary}")
 }
 
-fn progress_ratio(task: &SyncTaskGraphqlRecord) -> Option<f64> {
-    match task.status.as_str() {
-        "completed" => Some(1.0),
-        "failed" | "cancelled" => {
-            if task.paths_total > 0 {
-                Some((task.paths_completed as f64 / task.paths_total as f64).clamp(0.0, 1.0))
+fn progress_ratio(task: &TaskGraphqlRecord) -> Option<(f64, i32, i32)> {
+    match kind_key(task).as_str() {
+        "sync" => task.sync_progress.as_ref().and_then(|progress| {
+            if progress.paths_total > 0 {
+                Some((
+                    (progress.paths_completed as f64 / progress.paths_total as f64).clamp(0.0, 1.0),
+                    progress.paths_completed,
+                    progress.paths_total,
+                ))
+            } else if status_key(task) == "completed" {
+                Some((1.0, 1, 1))
             } else {
-                Some(0.0)
+                None
             }
-        }
-        _ if task.paths_total > 0 => {
-            Some((task.paths_completed as f64 / task.paths_total as f64).clamp(0.0, 1.0))
-        }
+        }),
+        "ingest" => task.ingest_progress.as_ref().and_then(|progress| {
+            if progress.commits_total > 0 {
+                Some((
+                    (progress.commits_processed as f64 / progress.commits_total as f64)
+                        .clamp(0.0, 1.0),
+                    progress.commits_processed,
+                    progress.commits_total,
+                ))
+            } else if status_key(task) == "completed" {
+                Some((1.0, 1, 1))
+            } else {
+                None
+            }
+        }),
         _ => None,
     }
 }
@@ -244,6 +301,38 @@ fn elide_middle(text: &str, max_width: usize) -> String {
     format!("{prefix}…{suffix}")
 }
 
+fn kind_key(task: &TaskGraphqlRecord) -> String {
+    task.kind.to_ascii_lowercase()
+}
+
+fn status_key(task: &TaskGraphqlRecord) -> String {
+    task.status.to_ascii_lowercase()
+}
+
+fn humanise_kind(task: &TaskGraphqlRecord) -> &'static str {
+    match kind_key(task).as_str() {
+        "sync" => "Sync",
+        "ingest" => "Ingest",
+        _ => "Task",
+    }
+}
+
+fn humanise_phase(task: &TaskGraphqlRecord) -> &'static str {
+    match kind_key(task).as_str() {
+        "sync" => task
+            .sync_progress
+            .as_ref()
+            .map(|progress| humanise_sync_phase(progress.phase.as_str()))
+            .unwrap_or("working"),
+        "ingest" => task
+            .ingest_progress
+            .as_ref()
+            .map(|progress| humanise_ingest_phase(progress.phase.as_str()))
+            .unwrap_or("working"),
+        _ => "working",
+    }
+}
+
 fn humanise_sync_phase(phase: &str) -> &'static str {
     match phase {
         "queued" => "waiting in queue",
@@ -256,6 +345,17 @@ fn humanise_sync_phase(phase: &str) -> &'static str {
         "extracting_paths" => "extracting artefacts",
         "materialising_paths" => "materialising artefacts",
         "running_gc" => "cleaning caches",
+        "complete" => "complete",
+        "failed" => "failed",
+        _ => "working",
+    }
+}
+
+fn humanise_ingest_phase(phase: &str) -> &'static str {
+    match phase.to_ascii_lowercase().as_str() {
+        "initializing" => "initialising",
+        "extracting" => "extracting checkpoints",
+        "persisting" => "persisting state",
         "complete" => "complete",
         "failed" => "failed",
         _ => "working",

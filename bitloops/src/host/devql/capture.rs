@@ -158,7 +158,7 @@ async fn sync_changed_paths(
     {
         crate::daemon::enqueue_sync_for_config(
             cfg,
-            crate::daemon::SyncTaskSource::Watcher,
+            crate::daemon::DevqlTaskSource::Watcher,
             crate::host::devql::SyncMode::Paths(paths),
         )
         .context("queueing DevQL sync for watcher capture paths")?;

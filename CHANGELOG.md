@@ -8,7 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Shared DevQL task orchestration for sync and ingest**: replaced the sync-only daemon queue with a generic persisted DevQL task subsystem that manages both sync and ingest work. The daemon now stores typed task records and repo control state, migrates legacy sync queue documents into the new task state on recovery, supports repo-scoped pause/resume plus queued-task cancellation, and schedules independent per-repo `sync` and `ingest` lanes so one sync and one ingest can run concurrently for the same repository. Ingest correctness remains owned by `commit_ingest_ledger` and branch watermarks rather than orchestration state.
+
 ### Changed
+
+- **DevQL GraphQL and CLI surfaces are now task-first**: removed the sync-only GraphQL task fields and the direct/local ingest execution path, and switched the public interface to generic tasks. GraphQL now exposes `enqueueTask`, `task`, `tasks`, `taskQueue`, `pauseTaskQueue`, `resumeTaskQueue`, `cancelTask`, and `taskProgress`, while the CLI now uses `bitloops devql tasks enqueue|watch|status|list|pause|resume|cancel`. `bitloops init`, `bitloops status`, `bitloops daemon status`, and existing sync producers now route through the shared task coordinator, and the checked-in SDL snapshots were refreshed for the new schema.
 
 ### Fixed
 

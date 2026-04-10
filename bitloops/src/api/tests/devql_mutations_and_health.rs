@@ -574,7 +574,7 @@ async fn slim_graphql_health_and_default_branch_after_init() {
 }
 
 #[tokio::test]
-async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
+async fn devql_mutations_initialise_schema_and_enqueue_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
@@ -640,22 +640,30 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     assert_eq!(second_init_json["initSchema"]["success"], true);
     write_current_repo_runtime_state(repo.path());
 
-    let ingest_response = schema
+    let enqueue_response = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest {
-                success
-                commitsProcessed
-                checkpointCompanionsProcessed
-                eventsInserted
-                artefactsUpserted
-                semanticFeatureRowsUpserted
-                semanticFeatureRowsSkipped
-                symbolEmbeddingRowsUpserted
-                symbolEmbeddingRowsSkipped
-                symbolCloneEdgesUpserted
-                symbolCloneSourcesScored
+              enqueueTask(input: { kind: INGEST, ingest: { backfill: 50 } }) {
+                merged
+                task {
+                  kind
+                  status
+                  ingestSpec {
+                    backfill
+                  }
+                  ingestProgress {
+                    phase
+                    commitsTotal
+                    commitsProcessed
+                    checkpointCompanionsProcessed
+                    eventsInserted
+                    artefactsUpserted
+                  }
+                  ingestResult {
+                    success
+                  }
+                }
               }
             }
             "#,
@@ -663,35 +671,58 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
         .await;
 
     assert!(
-        ingest_response.errors.is_empty(),
+        enqueue_response.errors.is_empty(),
         "graphql errors: {:?}",
-        ingest_response.errors
+        enqueue_response.errors
     );
-    let ingest_json = ingest_response
+    let enqueue_json = enqueue_response
         .data
         .into_json()
         .expect("graphql data to json");
-    assert_eq!(ingest_json["ingest"]["success"], true);
-    assert_eq!(ingest_json["ingest"]["commitsProcessed"], 1);
-    assert_eq!(ingest_json["ingest"]["checkpointCompanionsProcessed"], 0);
-    assert_eq!(ingest_json["ingest"]["eventsInserted"], 0);
-    assert_eq!(ingest_json["ingest"]["artefactsUpserted"], 1);
-    assert_eq!(ingest_json["ingest"]["semanticFeatureRowsUpserted"], 2);
-    assert_eq!(ingest_json["ingest"]["semanticFeatureRowsSkipped"], 0);
-    assert_eq!(ingest_json["ingest"]["symbolEmbeddingRowsUpserted"], 0);
-    assert_eq!(ingest_json["ingest"]["symbolEmbeddingRowsSkipped"], 0);
-    assert_eq!(ingest_json["ingest"]["symbolCloneEdgesUpserted"], 0);
-    assert_eq!(ingest_json["ingest"]["symbolCloneSourcesScored"], 0);
+    assert_eq!(enqueue_json["enqueueTask"]["merged"], false);
+    assert_eq!(enqueue_json["enqueueTask"]["task"]["kind"], "INGEST");
+    assert_eq!(enqueue_json["enqueueTask"]["task"]["status"], "QUEUED");
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestSpec"]["backfill"],
+        50
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestProgress"]["phase"],
+        "INITIALIZING"
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestProgress"]["commitsTotal"],
+        0
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestProgress"]["commitsProcessed"],
+        0
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestProgress"]["checkpointCompanionsProcessed"],
+        0
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestProgress"]["eventsInserted"],
+        0
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestProgress"]["artefactsUpserted"],
+        0
+    );
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestResult"],
+        serde_json::Value::Null
+    );
 
     let repository_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
         .expect("count repositories");
-    assert_eq!(repository_count, 1, "expected repository row after ingest");
+    assert_eq!(repository_count, 0, "enqueueing should not execute ingest inline");
 }
 
 #[tokio::test]
-async fn devql_ingest_mutation_with_backfill_limits_history_window() {
-    use rusqlite::OptionalExtension;
+async fn enqueue_task_ingest_accepts_backfill_input() {
 
     let repo = seed_graphql_mutation_repo();
     fs::write(
@@ -701,10 +732,6 @@ async fn devql_ingest_mutation_with_backfill_limits_history_window() {
     .expect("write second revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add second"]);
-    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
-    let previous_sha = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
-
-    let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
     let init_response = schema
@@ -725,13 +752,19 @@ async fn devql_ingest_mutation_with_backfill_limits_history_window() {
     );
     write_current_repo_runtime_state(repo.path());
 
-    let ingest_response = schema
+    let enqueue_response = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { backfill: 1 }) {
-                success
-                commitsProcessed
+              enqueueTask(input: { kind: INGEST, ingest: { backfill: 1 } }) {
+                merged
+                task {
+                  kind
+                  ingestSpec {
+                    backfill
+                  }
+                  status
+                }
               }
             }
             "#,
@@ -739,46 +772,21 @@ async fn devql_ingest_mutation_with_backfill_limits_history_window() {
         .await;
 
     assert!(
-        ingest_response.errors.is_empty(),
+        enqueue_response.errors.is_empty(),
         "graphql errors: {:?}",
-        ingest_response.errors
+        enqueue_response.errors
     );
-    let ingest_json = ingest_response
+    let enqueue_json = enqueue_response
         .data
         .into_json()
         .expect("graphql data to json");
-    assert_eq!(ingest_json["ingest"]["success"], true);
-    assert_eq!(ingest_json["ingest"]["commitsProcessed"], 1);
-
-    let sqlite = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
-    let previous_ledger: Option<String> = sqlite
-        .query_row(
-            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
-            rusqlite::params![previous_sha.as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .expect("read previous ledger");
-    let head_ledger: Option<String> = sqlite
-        .query_row(
-            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
-            rusqlite::params![head_sha.as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .expect("read head ledger");
-
-    assert!(
-        previous_ledger.is_none(),
-        "backfill=1 should skip older history"
-    );
-    assert_eq!(head_ledger.as_deref(), Some("completed"));
+    assert_eq!(enqueue_json["enqueueTask"]["task"]["kind"], "INGEST");
+    assert_eq!(enqueue_json["enqueueTask"]["task"]["ingestSpec"]["backfill"], 1);
+    assert_eq!(enqueue_json["enqueueTask"]["task"]["status"], "QUEUED");
 }
 
 #[tokio::test]
-async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
-    use rusqlite::OptionalExtension;
-
+async fn enqueue_task_ingest_without_backfill_defaults_to_null_backfill() {
     let repo = seed_graphql_mutation_repo();
     fs::write(
         repo.path().join("src/lib.rs"),
@@ -787,10 +795,6 @@ async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
     .expect("write second revision");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add second"]);
-    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
-    let previous_sha = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
-
-    let sqlite_path = checkpoint_sqlite_path(repo.path());
     let schema = slim_schema_for_repo(repo.path());
 
     let init_response = schema
@@ -811,13 +815,17 @@ async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
     );
     write_current_repo_runtime_state(repo.path());
 
-    let ingest_response = schema
+    let enqueue_response = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest {
-                success
-                commitsProcessed
+              enqueueTask(input: { kind: INGEST, ingest: {} }) {
+                task {
+                  kind
+                  ingestSpec {
+                    backfill
+                  }
+                }
               }
             }
             "#,
@@ -825,41 +833,23 @@ async fn devql_ingest_mutation_without_backfill_keeps_full_missing_segment() {
         .await;
 
     assert!(
-        ingest_response.errors.is_empty(),
+        enqueue_response.errors.is_empty(),
         "graphql errors: {:?}",
-        ingest_response.errors
+        enqueue_response.errors
     );
-    let ingest_json = ingest_response
+    let enqueue_json = enqueue_response
         .data
         .into_json()
         .expect("graphql data to json");
-    assert_eq!(ingest_json["ingest"]["success"], true);
-    assert_eq!(ingest_json["ingest"]["commitsProcessed"], 2);
-
-    let sqlite = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
-    let previous_ledger: Option<String> = sqlite
-        .query_row(
-            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
-            rusqlite::params![previous_sha.as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .expect("read previous ledger");
-    let head_ledger: Option<String> = sqlite
-        .query_row(
-            "SELECT history_status FROM commit_ingest_ledger WHERE commit_sha = ?1",
-            rusqlite::params![head_sha.as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .expect("read head ledger");
-
-    assert_eq!(previous_ledger.as_deref(), Some("completed"));
-    assert_eq!(head_ledger.as_deref(), Some("completed"));
+    assert_eq!(enqueue_json["enqueueTask"]["task"]["kind"], "INGEST");
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestSpec"]["backfill"],
+        serde_json::Value::Null
+    );
 }
 
 #[tokio::test]
-async fn enqueue_sync_rejects_conflicting_mode_selectors() {
+async fn enqueue_task_sync_rejects_conflicting_mode_selectors() {
     let repo = seed_graphql_mutation_repo();
     let schema = slim_schema_for_repo(repo.path());
 
@@ -867,7 +857,7 @@ async fn enqueue_sync_rejects_conflicting_mode_selectors() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              enqueueSync(input: { validate: true, full: true }) {
+              enqueueTask(input: { kind: SYNC, sync: { validate: true, full: true } }) {
                 merged
               }
             }
@@ -876,7 +866,7 @@ async fn enqueue_sync_rejects_conflicting_mode_selectors() {
         .await;
     assert_bad_user_input_error(
         &validate_and_full,
-        "enqueueSync",
+        "enqueueTask",
         "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
     );
 
@@ -884,7 +874,7 @@ async fn enqueue_sync_rejects_conflicting_mode_selectors() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              enqueueSync(input: { repair: true, paths: ["src/lib.rs"] }) {
+              enqueueTask(input: { kind: SYNC, sync: { repair: true, paths: ["src/lib.rs"] } }) {
                 merged
               }
             }
@@ -893,13 +883,13 @@ async fn enqueue_sync_rejects_conflicting_mode_selectors() {
         .await;
     assert_bad_user_input_error(
         &repair_and_paths,
-        "enqueueSync",
+        "enqueueTask",
         "at most one of `full`, `paths`, `repair`, or `validate` may be specified",
     );
 }
 
 #[tokio::test]
-async fn graphql_sync_mutation_is_not_exposed() {
+async fn graphql_sync_and_ingest_mutations_are_not_exposed() {
     let repo = seed_graphql_mutation_repo();
     let schema = slim_schema_for_repo(repo.path());
 
@@ -922,10 +912,30 @@ async fn graphql_sync_mutation_is_not_exposed() {
         "expected GraphQL schema validation error for removed sync mutation, got {:?}",
         response.errors
     );
+
+    let ingest_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(ingest_response.errors.len(), 1, "expected one graphql error");
+    assert!(
+        ingest_response.errors[0].message.contains("Unknown field")
+            && ingest_response.errors[0].message.contains("ingest"),
+        "expected GraphQL schema validation error for removed ingest mutation, got {:?}",
+        ingest_response.errors
+    );
 }
 
 #[tokio::test]
-async fn enqueue_sync_without_selector_defaults_to_auto_mode() {
+async fn enqueue_task_sync_without_selector_defaults_to_auto_mode() {
     let repo = seed_graphql_mutation_repo();
     let schema = slim_schema_for_repo(repo.path());
 
@@ -933,10 +943,12 @@ async fn enqueue_sync_without_selector_defaults_to_auto_mode() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              enqueueSync(input: {}) {
+              enqueueTask(input: { kind: SYNC, sync: {} }) {
                 merged
                 task {
-                  mode
+                  syncSpec {
+                    mode
+                  }
                 }
               }
             }
@@ -950,7 +962,7 @@ async fn enqueue_sync_without_selector_defaults_to_auto_mode() {
         response.errors
     );
     let json = response.data.into_json().expect("graphql data to json");
-    assert_eq!(json["enqueueSync"]["task"]["mode"], "auto");
+    assert_eq!(json["enqueueTask"]["task"]["syncSpec"]["mode"], "auto");
 }
 
 #[tokio::test]
@@ -1031,19 +1043,43 @@ async fn devql_mutations_report_validation_and_backend_errors() {
     let repo = seed_graphql_mutation_repo();
     let schema = slim_schema_for_repo(repo.path());
 
-    let missing_schema = schema
+    let invalid_input = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest {
+              enqueueTask(input: { kind: INGEST, ingest: {}, sync: { full: true } }) {
+                merged
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_bad_user_input_error(
+        &invalid_input,
+        "enqueueTask",
+        "`sync` must not be provided when kind is INGEST",
+    );
+
+    let sqlite_file_path = repo.path().join(".bitloops/stores/mutations.sqlite");
+    if sqlite_file_path.exists() {
+        fs::remove_file(&sqlite_file_path).expect("remove seeded sqlite file");
+    }
+    fs::create_dir_all(&sqlite_file_path)
+        .expect("create directory in place of sqlite file");
+    let backend_schema = slim_schema_for_repo(repo.path());
+    let backend_error = backend_schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
                 success
               }
             }
             "#,
         ))
         .await;
-    assert_eq!(missing_schema.errors.len(), 1, "expected one graphql error");
-    let backend_extensions = missing_schema.errors[0]
+    assert_eq!(backend_error.errors.len(), 1, "expected one graphql error");
+    let backend_extensions = backend_error.errors[0]
         .extensions
         .as_ref()
         .expect("graphql error extensions");
@@ -1053,11 +1089,11 @@ async fn devql_mutations_report_validation_and_backend_errors() {
     );
     assert_eq!(
         backend_extensions.get("kind"),
-        Some(&async_graphql::Value::from("configuration"))
+        Some(&async_graphql::Value::from("initialisation"))
     );
     assert_eq!(
         backend_extensions.get("operation"),
-        Some(&async_graphql::Value::from("ingest"))
+        Some(&async_graphql::Value::from("initSchema"))
     );
 }
 
@@ -1427,8 +1463,8 @@ async fn devql_global_repo_mutations_require_slim_cli_scope() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest {
-                success
+              enqueueTask(input: { kind: INGEST, ingest: {} }) {
+                merged
               }
             }
             "#,
@@ -1450,7 +1486,7 @@ async fn devql_global_repo_mutations_require_slim_cli_scope() {
     );
     assert_eq!(
         extensions.get("operation"),
-        Some(&async_graphql::Value::from("ingest"))
+        Some(&async_graphql::Value::from("enqueueTask"))
     );
     assert!(
         response.errors[0]

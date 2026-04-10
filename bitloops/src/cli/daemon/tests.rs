@@ -3,8 +3,10 @@ use crate::cli::{Cli, Commands};
 use crate::daemon::{
     CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
     CapabilityEventRunStatus, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, ServiceManagerKind, SyncQueueState,
-    SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+    EnrichmentQueueState, EnrichmentQueueStatus, ServiceManagerKind, DevqlTaskKind,
+    DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState, DevqlTaskQueueStatus,
+    DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, RepoTaskControlState,
+    SyncTaskMode, SyncTaskSpec,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
 use clap::Parser;
@@ -498,7 +500,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
             },
             persisted: true,
         }),
-        sync: None,
+        devql_tasks: None,
     };
 
     assert_eq!(
@@ -560,7 +562,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         health: None,
         capability_events: None,
         enrichment: None,
-        sync: None,
+        devql_tasks: None,
     };
 
     let lines = super::display::status_lines_with_log_path(&report, &log_path);
@@ -578,7 +580,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         health: None,
         capability_events: None,
         enrichment: None,
-        sync: None,
+        devql_tasks: None,
     };
 
     assert_eq!(
@@ -621,18 +623,34 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
         health: None,
         capability_events: None,
         enrichment: None,
-        sync: Some(SyncQueueStatus {
-            state: SyncQueueState {
+        devql_tasks: Some(DevqlTaskQueueStatus {
+            state: DevqlTaskQueueState {
                 version: 1,
-                pending_tasks: 2,
+                queued_tasks: 2,
                 running_tasks: 1,
                 failed_tasks: 3,
                 completed_recent_tasks: 4,
+                by_kind: vec![
+                    DevqlTaskKindCounts {
+                        kind: DevqlTaskKind::Sync,
+                        queued_tasks: 2,
+                        running_tasks: 1,
+                        failed_tasks: 3,
+                        completed_recent_tasks: 4,
+                    },
+                    DevqlTaskKindCounts {
+                        kind: DevqlTaskKind::Ingest,
+                        queued_tasks: 0,
+                        running_tasks: 0,
+                        failed_tasks: 0,
+                        completed_recent_tasks: 0,
+                    },
+                ],
                 last_action: Some("running".to_string()),
                 last_updated_unix: 0,
             },
             persisted: true,
-            current_repo_task: Some(SyncTaskRecord {
+            current_repo_tasks: vec![DevqlTaskRecord {
                 task_id: "sync-task-1".to_string(),
                 repo_id: "repo-1".to_string(),
                 repo_name: "demo".to_string(),
@@ -641,16 +659,19 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
                 repo_identity: "local/demo".to_string(),
                 daemon_config_root: std::path::PathBuf::from("/tmp/repo"),
                 repo_root: std::path::PathBuf::from("/tmp/repo"),
-                source: SyncTaskSource::ManualCli,
-                mode: SyncTaskMode::Full,
-                status: SyncTaskStatus::Running,
+                kind: DevqlTaskKind::Sync,
+                source: DevqlTaskSource::ManualCli,
+                spec: DevqlTaskSpec::Sync(SyncTaskSpec {
+                    mode: SyncTaskMode::Full,
+                }),
+                status: DevqlTaskStatus::Running,
                 submitted_at_unix: 1,
                 started_at_unix: Some(2),
                 updated_at_unix: 3,
                 completed_at_unix: None,
                 queue_position: Some(1),
                 tasks_ahead: Some(0),
-                progress: SyncProgressUpdate {
+                progress: DevqlTaskProgress::Sync(SyncProgressUpdate {
                     phase: SyncProgressPhase::ExtractingPaths,
                     current_path: Some("src/lib.rs".to_string()),
                     paths_total: 10,
@@ -663,21 +684,27 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
                     cache_hits: 3,
                     cache_misses: 2,
                     parse_errors: 0,
-                },
+                }),
                 error: None,
-                summary: None,
+                result: None,
+            }],
+            current_repo_control: Some(RepoTaskControlState {
+                repo_id: "repo-1".to_string(),
+                paused: false,
+                paused_reason: None,
+                updated_at_unix: 3,
             }),
         }),
     };
 
     let lines = status_lines(&report);
-    assert!(lines.contains(&"Sync pending tasks: 2".to_string()));
-    assert!(lines.contains(&"Sync running tasks: 1".to_string()));
-    assert!(lines.contains(&"Sync failed tasks: 3".to_string()));
-    assert!(lines.contains(&"Sync completed recent tasks: 4".to_string()));
-    assert!(lines.contains(&"Sync last action: running".to_string()));
+    assert!(lines.contains(&"DevQL queued tasks: 2".to_string()));
+    assert!(lines.contains(&"DevQL running tasks: 1".to_string()));
+    assert!(lines.contains(&"DevQL failed tasks: 3".to_string()));
+    assert!(lines.contains(&"DevQL completed recent tasks: 4".to_string()));
+    assert!(lines.contains(&"DevQL last action: running".to_string()));
     assert!(lines.contains(
-        &"Current repo sync task: sync-task-1 (running, mode=full, source=manual_cli)".to_string()
+        &"Current repo task: sync-task-1 (running, kind=sync, source=manual_cli)".to_string()
     ));
     assert!(lines.contains(&"Current repo sync phase: extracting_paths".to_string()));
     assert!(
@@ -685,7 +712,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
             .contains(&"Current repo sync progress: 4/10 paths complete (6 remaining)".to_string())
     );
     assert!(lines.contains(&"Current repo sync path: src/lib.rs".to_string()));
-    assert!(lines.contains(&"Sync persisted: yes".to_string()));
+    assert!(lines.contains(&"DevQL persisted: yes".to_string()));
 }
 
 #[test]
@@ -703,7 +730,7 @@ fn status_lines_include_capability_event_queue_and_current_repo_run() {
             status
         }),
         enrichment: None,
-        sync: None,
+        devql_tasks: None,
     };
 
     let lines = status_lines(&report);
@@ -729,7 +756,7 @@ fn run_status_writes_json_when_requested() {
         health: None,
         capability_events: Some(sample_capability_event_status()),
         enrichment: None,
-        sync: None,
+        devql_tasks: None,
     };
     let mut out = SharedBuffer::default();
 

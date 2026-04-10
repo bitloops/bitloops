@@ -1028,85 +1028,118 @@ fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_i
                                     {
                                         let events = std::rc::Rc::clone(&events);
                                         move |_repo_root, query, variables| {
-                                            if query.contains("enqueueSync") {
+                                            if query.contains("enqueueTask")
+                                                && variables["input"]["kind"] == "SYNC"
+                                            {
                                                 events.borrow_mut().push("sync");
                                                 assert_eq!(
                                                     variables,
                                                     &serde_json::json!({
                                                         "input": {
-                                                            "full": false,
-                                                            "paths": serde_json::Value::Null,
-                                                            "repair": false,
-                                                            "validate": false,
-                                                            "source": "init"
+                                                            "kind": "SYNC",
+                                                            "sync": {
+                                                                "full": false,
+                                                                "paths": serde_json::Value::Null,
+                                                                "repair": false,
+                                                                "validate": false,
+                                                                "source": "init"
+                                                            }
                                                         }
                                                     })
                                                 );
                                                 return Ok(serde_json::json!({
-                                                    "enqueueSync": {
+                                                    "enqueueTask": {
                                                         "merged": false,
                                                         "task": {
                                                             "taskId": "sync-task-1",
                                                             "repoId": "repo-1",
                                                             "repoName": "demo",
                                                             "repoIdentity": "local/demo",
+                                                            "kind": "SYNC",
                                                             "source": "init",
-                                                            "mode": "auto",
-                                                            "status": "queued",
-                                                            "phase": "queued",
+                                                            "status": "QUEUED",
                                                             "submittedAtUnix": 1,
                                                             "startedAtUnix": null,
                                                             "updatedAtUnix": 1,
                                                             "completedAtUnix": null,
                                                             "queuePosition": 1,
                                                             "tasksAhead": 0,
-                                                            "currentPath": null,
-                                                            "pathsTotal": 0,
-                                                            "pathsCompleted": 0,
-                                                            "pathsRemaining": 0,
-                                                            "pathsUnchanged": 0,
-                                                            "pathsAdded": 0,
-                                                            "pathsChanged": 0,
-                                                            "pathsRemoved": 0,
-                                                            "cacheHits": 0,
-                                                            "cacheMisses": 0,
-                                                            "parseErrors": 0,
                                                             "error": null,
-                                                            "summary": null
+                                                            "syncSpec": {
+                                                                "mode": "auto",
+                                                                "paths": []
+                                                            },
+                                                            "ingestSpec": null,
+                                                            "syncProgress": {
+                                                                "phase": "queued",
+                                                                "currentPath": null,
+                                                                "pathsTotal": 0,
+                                                                "pathsCompleted": 0,
+                                                                "pathsRemaining": 0,
+                                                                "pathsUnchanged": 0,
+                                                                "pathsAdded": 0,
+                                                                "pathsChanged": 0,
+                                                                "pathsRemoved": 0,
+                                                                "cacheHits": 0,
+                                                                "cacheMisses": 0,
+                                                                "parseErrors": 0
+                                                            },
+                                                            "ingestProgress": null,
+                                                            "syncResult": null,
+                                                            "ingestResult": null
                                                         }
                                                     }
                                                 }));
                                             }
 
-                                            if query.contains("syncTask") {
+                                            if query.contains("task(") || query.contains("query Task") {
                                                 return Ok(serde_json::json!({
-                                                    "syncTask": null
+                                                    "task": null
                                                 }));
                                             }
 
-                                            if query.contains("ingest") {
+                                            if query.contains("enqueueTask")
+                                                && variables["input"]["kind"] == "INGEST"
+                                            {
                                                 events.borrow_mut().push("ingest");
                                                 assert_eq!(
                                                     variables,
                                                     &serde_json::json!({
                                                         "input": {
-                                                            "backfill": 50
+                                                            "kind": "INGEST",
+                                                            "ingest": {
+                                                                "backfill": 50
+                                                            }
                                                         }
                                                     })
                                                 );
                                                 return Ok(serde_json::json!({
-                                                    "ingest": {
-                                                        "success": true,
-                                                        "commitsProcessed": 1,
-                                                        "checkpointCompanionsProcessed": 0,
-                                                        "eventsInserted": 0,
-                                                        "artefactsUpserted": 1,
-                                                        "semanticFeatureRowsUpserted": 0,
-                                                        "semanticFeatureRowsSkipped": 0,
-                                                        "symbolEmbeddingRowsUpserted": 0,
-                                                        "symbolEmbeddingRowsSkipped": 0,
-                                                        "symbolCloneEdgesUpserted": 0,
-                                                        "symbolCloneSourcesScored": 0
+                                                    "enqueueTask": {
+                                                        "merged": false,
+                                                        "task": {
+                                                            "taskId": "ingest-task-1",
+                                                            "repoId": "repo-1",
+                                                            "repoName": "demo",
+                                                            "repoIdentity": "local/demo",
+                                                            "kind": "INGEST",
+                                                            "source": "manual_cli",
+                                                            "status": "QUEUED",
+                                                            "submittedAtUnix": 1,
+                                                            "startedAtUnix": null,
+                                                            "updatedAtUnix": 1,
+                                                            "completedAtUnix": null,
+                                                            "queuePosition": 1,
+                                                            "tasksAhead": 0,
+                                                            "error": null,
+                                                            "syncSpec": null,
+                                                            "ingestSpec": {
+                                                                "backfill": 50
+                                                            },
+                                                            "syncProgress": null,
+                                                            "ingestProgress": null,
+                                                            "syncResult": null,
+                                                            "ingestResult": null
+                                                        }
                                                     }
                                                 }));
                                             }
@@ -1311,34 +1344,61 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                     .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                 assert_eq!(actual_repo_root, expected_repo_root);
 
-                                if query.contains("enqueueSync") {
+                                if query.contains("enqueueTask")
+                                    && variables["input"]["kind"] == "SYNC"
+                                {
                                     panic!("init should not enqueue sync when sync=false");
                                 }
 
-                                if query.contains("ingest") {
+                                if query.contains("enqueueTask")
+                                    && variables["input"]["kind"] == "INGEST"
+                                {
                                     *saw_ingest.borrow_mut() = true;
                                     assert_eq!(
                                         variables,
                                         &serde_json::json!({
                                             "input": {
-                                                "backfill": 50
+                                                "kind": "INGEST",
+                                                "ingest": {
+                                                    "backfill": 50
+                                                }
                                             }
                                         })
                                     );
                                     return Ok(serde_json::json!({
-                                        "ingest": {
-                                            "success": true,
-                                            "commitsProcessed": 1,
-                                            "checkpointCompanionsProcessed": 0,
-                                            "eventsInserted": 0,
-                                            "artefactsUpserted": 1,
-                                            "semanticFeatureRowsUpserted": 0,
-                                            "semanticFeatureRowsSkipped": 0,
-                                            "symbolEmbeddingRowsUpserted": 0,
-                                            "symbolEmbeddingRowsSkipped": 0,
-                                            "symbolCloneEdgesUpserted": 0,
-                                            "symbolCloneSourcesScored": 0
+                                        "enqueueTask": {
+                                            "merged": false,
+                                            "task": {
+                                                "taskId": "ingest-task-2",
+                                                "repoId": "repo-1",
+                                                "repoName": "demo",
+                                                "repoIdentity": "local/demo",
+                                                "kind": "INGEST",
+                                                "source": "manual_cli",
+                                                "status": "QUEUED",
+                                                "submittedAtUnix": 1,
+                                                "startedAtUnix": null,
+                                                "updatedAtUnix": 1,
+                                                "completedAtUnix": null,
+                                                "queuePosition": 1,
+                                                "tasksAhead": 0,
+                                                "error": null,
+                                                "syncSpec": null,
+                                                "ingestSpec": {
+                                                    "backfill": 50
+                                                },
+                                                "syncProgress": null,
+                                                "ingestProgress": null,
+                                                "syncResult": null,
+                                                "ingestResult": null
+                                            }
                                         }
+                                    }));
+                                }
+
+                                if query.contains("task(") || query.contains("query Task") {
+                                    return Ok(serde_json::json!({
+                                        "task": null
                                     }));
                                 }
 
@@ -1426,34 +1486,63 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                         assert_eq!(actual_repo_root, expected_repo_root);
 
-                                        if query.contains("enqueueSync") {
+                                        if query.contains("enqueueTask")
+                                            && variables["input"]["kind"] == "SYNC"
+                                        {
                                             panic!("init should not enqueue sync when sync=false");
                                         }
 
-                                        if query.contains("ingest") {
+                                        if query.contains("enqueueTask")
+                                            && variables["input"]["kind"] == "INGEST"
+                                        {
                                             *saw_ingest.borrow_mut() = true;
                                             assert_eq!(
                                                 variables,
                                                 &serde_json::json!({
                                                     "input": {
-                                                        "backfill": 10
+                                                        "kind": "INGEST",
+                                                        "ingest": {
+                                                            "backfill": 10
+                                                        }
                                                     }
                                                 })
                                             );
                                             return Ok(serde_json::json!({
-                                                "ingest": {
-                                                    "success": true,
-                                                    "commitsProcessed": 1,
-                                                    "checkpointCompanionsProcessed": 0,
-                                                    "eventsInserted": 0,
-                                                    "artefactsUpserted": 1,
-                                                    "semanticFeatureRowsUpserted": 0,
-                                                    "semanticFeatureRowsSkipped": 0,
-                                                    "symbolEmbeddingRowsUpserted": 0,
-                                                    "symbolEmbeddingRowsSkipped": 0,
-                                                    "symbolCloneEdgesUpserted": 0,
-                                                    "symbolCloneSourcesScored": 0
+                                                "enqueueTask": {
+                                                    "merged": false,
+                                                    "task": {
+                                                        "taskId": "ingest-task-3",
+                                                        "repoId": "repo-1",
+                                                        "repoName": "demo",
+                                                        "repoIdentity": "local/demo",
+                                                        "kind": "INGEST",
+                                                        "source": "manual_cli",
+                                                        "status": "QUEUED",
+                                                        "submittedAtUnix": 1,
+                                                        "startedAtUnix": null,
+                                                        "updatedAtUnix": 1,
+                                                        "completedAtUnix": null,
+                                                        "queuePosition": 1,
+                                                        "tasksAhead": 0,
+                                                        "error": null,
+                                                        "syncSpec": null,
+                                                        "ingestSpec": {
+                                                            "backfill": 10
+                                                        },
+                                                        "syncProgress": null,
+                                                        "ingestProgress": null,
+                                                        "syncResult": null,
+                                                        "ingestResult": null
+                                                    }
                                                 }
+                                            }));
+                                        }
+
+                                        if query.contains("task(")
+                                            || query.contains("query Task")
+                                        {
+                                            return Ok(serde_json::json!({
+                                                "task": null
                                             }));
                                         }
 

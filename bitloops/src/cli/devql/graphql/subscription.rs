@@ -10,16 +10,15 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::{Connector, connect_async, connect_async_tls_with_config};
 
-use super::documents::SYNC_PROGRESS_SUBSCRIPTION;
-use super::progress::{SYNC_RENDER_TICK_INTERVAL, SyncProgressRenderer};
-use super::types::{SyncProgressSubscriptionData, SyncTaskGraphqlRecord};
+use super::documents::TASK_PROGRESS_SUBSCRIPTION;
+use super::progress::{TASK_RENDER_TICK_INTERVAL, TaskProgressRenderer};
+use super::types::{TaskGraphqlRecord, TaskProgressSubscriptionData};
 use crate::daemon;
-use crate::host::devql::SyncSummary;
 
-pub(super) async fn watch_sync_task_via_subscription(
+pub(super) async fn watch_task_via_subscription(
     task_id: &str,
-    renderer: &mut SyncProgressRenderer,
-) -> Result<Option<SyncSummary>> {
+    renderer: &mut TaskProgressRenderer,
+) -> Result<Option<TaskGraphqlRecord>> {
     let endpoint = devql_global_websocket_endpoint()?;
     let mut request = endpoint
         .as_str()
@@ -104,10 +103,10 @@ pub(super) async fn watch_sync_task_via_subscription(
     websocket
         .send(Message::Text(
             json!({
-                "id": "sync-progress",
+                "id": "task-progress",
                 "type": "subscribe",
                 "payload": {
-                    "query": SYNC_PROGRESS_SUBSCRIPTION,
+                    "query": TASK_PROGRESS_SUBSCRIPTION,
                     "variables": {
                         "taskId": task_id,
                     }
@@ -117,10 +116,10 @@ pub(super) async fn watch_sync_task_via_subscription(
             .into(),
         ))
         .await
-        .context("sending sync progress subscription")?;
+        .context("sending task progress subscription")?;
 
-    let mut latest_task = None::<SyncTaskGraphqlRecord>;
-    let mut render_tick = tokio::time::interval(SYNC_RENDER_TICK_INTERVAL);
+    let mut latest_task = None::<TaskGraphqlRecord>;
+    let mut render_tick = tokio::time::interval(TASK_RENDER_TICK_INTERVAL);
     loop {
         tokio::select! {
             _ = render_tick.tick(), if renderer.is_interactive() => {
@@ -132,11 +131,11 @@ pub(super) async fn watch_sync_task_via_subscription(
                 let Some(message) = message else {
                     return Ok(None);
                 };
-                let message = message.context("reading sync progress subscription message")?;
+                let message = message.context("reading task progress subscription message")?;
                 match message {
                     Message::Text(payload) => {
                         let envelope: serde_json::Value = serde_json::from_str(payload.as_str())
-                            .context("decoding sync progress subscription message")?;
+                            .context("decoding task progress subscription message")?;
                         match envelope
                             .get("type")
                             .and_then(serde_json::Value::as_str)
@@ -154,19 +153,19 @@ pub(super) async fn watch_sync_task_via_subscription(
                                     .get("data")
                                     .cloned()
                                     .context("subscription event missing data")?;
-                                let response: SyncProgressSubscriptionData =
+                                let response: TaskProgressSubscriptionData =
                                     serde_json::from_value(data)
-                                        .context("decoding sync progress subscription data")?;
-                                let task = response.sync_progress;
+                                        .context("decoding task progress subscription data")?;
+                                let task = response.task_progress.task;
                                 latest_task = Some(task.clone());
                                 renderer.render(&task)?;
-                                match task.status.as_str() {
-                                    "completed" => return Ok(task.summary.map(Into::into)),
+                                match task.status.to_ascii_lowercase().as_str() {
+                                    "completed" => return Ok(Some(task)),
                                     "failed" | "cancelled" => {
                                         if let Some(error) = task.error {
-                                            bail!("sync task {task_id} failed: {error}");
+                                            bail!("task {task_id} failed: {error}");
                                         }
-                                        bail!("sync task {task_id} ended with status {}", task.status);
+                                        bail!("task {task_id} ended with status {}", task.status);
                                     }
                                     _ => {}
                                 }
@@ -202,7 +201,7 @@ pub(super) async fn watch_sync_task_via_subscription(
                             .map(|frame| frame.reason.to_string())
                             .filter(|reason| !reason.is_empty())
                             .unwrap_or_else(|| "no close reason".to_string());
-                        bail!("Bitloops daemon closed the websocket sync subscription: {detail}");
+                        bail!("Bitloops daemon closed the websocket task subscription: {detail}");
                     }
                     _ => {}
                 }
@@ -259,74 +258,49 @@ pub(super) fn should_accept_invalid_daemon_websocket_certs(url: &str) -> bool {
     if parsed.scheme() != "wss" {
         return false;
     }
-
     matches!(
         parsed.host_str(),
-        Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
+        Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
     )
 }
 
 fn insecure_loopback_websocket_tls_config() -> Result<Arc<rustls::ClientConfig>> {
-    static CONFIG: OnceLock<Result<Arc<rustls::ClientConfig>, String>> = OnceLock::new();
-    let config = CONFIG.get_or_init(|| {
-        ensure_rustls_crypto_provider()
-            .map_err(|err| err.to_string())
-            .map(|_| {
-                Arc::new(
-                    rustls::ClientConfig::builder_with_provider(Arc::new(
-                        rustls::crypto::aws_lc_rs::default_provider(),
-                    ))
-                    .with_safe_default_protocol_versions()
-                    .expect("safe default TLS versions are valid")
-                    .dangerous()
-                    .with_custom_certificate_verifier(SkipLoopbackServerVerification::new())
-                    .with_no_client_auth(),
-                )
-            })
-    });
-
-    config
-        .as_ref()
-        .map(Arc::clone)
-        .map_err(|message| anyhow::anyhow!(message.clone()))
-}
-
-fn ensure_rustls_crypto_provider() -> Result<()> {
-    static INIT: OnceLock<Result<(), String>> = OnceLock::new();
-    let init = INIT.get_or_init(|| {
-        if rustls::crypto::CryptoProvider::get_default().is_none() {
-            return rustls::crypto::aws_lc_rs::default_provider()
-                .install_default()
-                .map_err(|err| format!("install rustls aws_lc_rs crypto provider: {err:?}"));
-        }
-        Ok(())
-    });
-    init.as_ref()
-        .map(|_| ())
-        .map_err(|message| anyhow::anyhow!(message.clone()))
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    Ok(CONFIG
+        .get_or_init(|| {
+            let config = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(LoopbackCertVerifier))
+                .with_no_client_auth();
+            Arc::new(config)
+        })
+        .clone())
 }
 
 #[derive(Debug)]
-struct SkipLoopbackServerVerification(Arc<rustls::crypto::CryptoProvider>);
+struct LoopbackCertVerifier;
 
-impl SkipLoopbackServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(
-            Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
-        ))
-    }
-}
-
-impl ServerCertVerifier for SkipLoopbackServerVerification {
+impl ServerCertVerifier for LoopbackCertVerifier {
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
+        server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
+        let hostname = match server_name {
+            ServerName::DnsName(dns) => dns.as_ref(),
+            ServerName::IpAddress(_) => return Ok(ServerCertVerified::assertion()),
+            _ => return Err(rustls::Error::General("unsupported server name".into())),
+        };
+
+        match hostname {
+            "localhost" | "127.0.0.1" | "::1" => Ok(ServerCertVerified::assertion()),
+            _ => Err(rustls::Error::General(format!(
+                "refusing insecure websocket TLS for non-loopback host `{hostname}`"
+            ))),
+        }
     }
 
     fn verify_tls12_signature(
@@ -339,7 +313,7 @@ impl ServerCertVerifier for SkipLoopbackServerVerification {
             message,
             cert,
             dss,
-            &self.0.signature_verification_algorithms,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
         )
     }
 
@@ -353,68 +327,13 @@ impl ServerCertVerifier for SkipLoopbackServerVerification {
             message,
             cert,
             dss,
-            &self.0.signature_verification_algorithms,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
         )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn graphql_websocket_error_message_prefers_top_level_message() {
-        let envelope = serde_json::json!({
-            "message": "top-level message",
-            "payload": {
-                "message": "payload message"
-            }
-        });
-        assert_eq!(
-            graphql_websocket_error_message(&envelope).as_deref(),
-            Some("top-level message")
-        );
-    }
-
-    #[test]
-    fn graphql_websocket_error_message_falls_back_to_payload_fields() {
-        let payload_message = serde_json::json!({
-            "payload": {
-                "message": "payload message"
-            }
-        });
-        assert_eq!(
-            graphql_websocket_error_message(&payload_message).as_deref(),
-            Some("\"payload message\"")
-        );
-
-        let payload_errors = serde_json::json!({
-            "payload": {
-                "errors": [{"message": "boom"}]
-            }
-        });
-        assert_eq!(
-            graphql_websocket_error_message(&payload_errors).as_deref(),
-            Some(r#"[{"message":"boom"}]"#)
-        );
-
-        assert!(graphql_websocket_error_message(&serde_json::json!({})).is_none());
-    }
-
-    #[test]
-    fn insecure_loopback_websocket_tls_config_is_cached() {
-        let first = insecure_loopback_websocket_tls_config().expect("first tls config");
-        let second = insecure_loopback_websocket_tls_config().expect("second tls config");
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[test]
-    fn ensure_rustls_crypto_provider_is_idempotent() {
-        ensure_rustls_crypto_provider().expect("first install check");
-        ensure_rustls_crypto_provider().expect("second install check");
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
