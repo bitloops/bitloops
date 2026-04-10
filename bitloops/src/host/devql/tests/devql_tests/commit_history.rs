@@ -12,6 +12,24 @@ duckdb_path = ".bitloops/stores/events.duckdb"
     );
 }
 
+fn rewrite_local_events_path(repo_root: &Path, replacement: &Path) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let content = fs::read_to_string(&config_path).expect("read local devql config");
+    let updated = content
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("duckdb_path =") {
+                format!("duckdb_path = {:?}", replacement.to_string_lossy())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&config_path, updated).expect("rewrite local events path");
+}
+
 fn cfg_for_repo(repo_root: &Path) -> DevqlConfig {
     let repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
     DevqlConfig::from_env(repo_root.to_path_buf(), repo).expect("build devql cfg from repo")
@@ -359,6 +377,55 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 }
 
 #[tokio::test]
+async fn execute_ingest_skips_events_backend_for_unmapped_commits_when_events_store_is_unavailable()
+{
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String { format!(\"hi {name}\") }\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add lib"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history unmapped events-unavailable test")
+        .await
+        .expect("initialise local devql store for unmapped events-unavailable test");
+
+    let blocked_parent = repo.path().join("blocked-events-parent");
+    std::fs::write(&blocked_parent, "not a directory").expect("write blocking file");
+    rewrite_local_events_path(repo.path(), &blocked_parent.join("events.duckdb"));
+
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest for unmapped commits without events backend");
+    assert!(
+        summary.success,
+        "ingest summary should report success when unmapped commits do not require the events backend"
+    );
+    assert_eq!(summary.commits_processed, 2);
+    assert_eq!(summary.checkpoint_companions_processed, 0);
+    assert_eq!(summary.events_inserted, 0);
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let file_state_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical file_state rows");
+    assert!(
+        file_state_count > 0,
+        "historical ingest should still persist file_state rows when no checkpoint companions are present"
+    );
+}
+
+#[tokio::test]
 async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits() {
     use crate::host::checkpoints::strategy::manual_commit::{
         WriteCommittedOptions, write_committed,
@@ -463,7 +530,7 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
 }
 
 #[tokio::test]
-async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_breaking_commit_queries()
+async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_without_breaking_commit_queries()
  {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
@@ -506,9 +573,21 @@ async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_b
             |row| row.get(0),
         )
         .expect("count stable historical artefacts");
+    let stable_symbol_id_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(DISTINCT symbol_id) FROM artefacts
+             WHERE repo_id = ?1 AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count stable historical symbol ids");
     assert_eq!(
-        stable_row_count, 1,
-        "historical ingest should reuse the same symbol artefact row when the symbol content hash is unchanged"
+        stable_row_count, 2,
+        "historical ingest should persist one symbol artefact row per blob-scoped revision"
+    );
+    assert_eq!(
+        stable_symbol_id_count, 1,
+        "historical ingest should preserve the same structural symbol identity when only the blob changes"
     );
 
     let first_rows = execute_query_json_for_repo_root(

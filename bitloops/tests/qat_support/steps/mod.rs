@@ -478,7 +478,7 @@ pub fn collection() -> Collection<QatWorld> {
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
             ),
             step_fn(then_testlens_query_returns_results),
         )
@@ -502,14 +502,14 @@ pub fn collection() -> Collection<QatWorld> {
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
             ),
             step_fn(then_testlens_query_empty_or_zero),
         )
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
             ),
             step_fn(then_testlens_includes_failing_test),
         )

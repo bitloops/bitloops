@@ -1,0 +1,30 @@
+[profile.default]
+fail-fast = false
+test-threads = 8
+
+[[profile.default.overrides]]
+filter = 'binary(=production_seed) or binary(=graphql_smoke) or binary(=graphql) or binary(=performance) or binary(=testlens_gherkin) or binary(=testlens_sqlite_acceptance) or binary(=agent_cli_smoke) or binary(=claude_git_hooks_integration) or binary(=checkpoint_rewind_smoke) or binary(=copilot_integration) or binary(=cursor_e2e_scenarios) or binary(=dashboard_bundle_lifecycle_e2e) or binary(=e2e_scenario_groups)'
+test-group = 'env-mutating'
+
+[[profile.default.overrides]]
+filter = 'binary(=qat_acceptance)'
+test-group = 'qat'
+
+[profile.ci]
+fail-fast = false
+test-threads = 6
+
+[profile.ci.junit]
+path = "junit.xml"
+
+[[profile.ci.overrides]]
+filter = 'binary(=production_seed) or binary(=graphql_smoke) or binary(=graphql) or binary(=performance) or binary(=testlens_gherkin) or binary(=testlens_sqlite_acceptance) or binary(=agent_cli_smoke) or binary(=claude_git_hooks_integration) or binary(=checkpoint_rewind_smoke) or binary(=copilot_integration) or binary(=cursor_e2e_scenarios) or binary(=dashboard_bundle_lifecycle_e2e) or binary(=e2e_scenario_groups)'
+test-group = 'env-mutating'
+
+[[profile.ci.overrides]]
+filter = 'binary(=qat_acceptance)'
+test-group = 'qat'
+
+[test-groups]
+env-mutating = { max-threads = 1 }
+qat = { max-threads = 1 }

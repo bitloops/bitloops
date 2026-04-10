@@ -180,7 +180,7 @@ async fn execute_ingest_inner(
     );
 
     let checkpoint_mappings = read_commit_checkpoint_mappings(&cfg.repo_root).unwrap_or_default();
-    let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
+    let mut existing_event_ids: Option<std::collections::HashSet<String>> = None;
 
     for commit_sha in commits {
         let checkpoint_id = checkpoint_mappings.get(&commit_sha).cloned();
@@ -437,6 +437,16 @@ async fn execute_ingest_inner(
                         checkpoint_id,
                     )?
                     .ok_or_else(|| anyhow!("checkpoint mapping exists but metadata is missing for `{checkpoint_id}`"))?;
+                    let existing_event_ids = match existing_event_ids.as_mut() {
+                        Some(ids) => ids,
+                        None => {
+                            existing_event_ids =
+                                Some(fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?);
+                            existing_event_ids
+                                .as_mut()
+                                .expect("checkpoint event ids must be initialised")
+                        }
+                    };
                     let event_id = deterministic_uuid(&format!(
                         "{}|{}|{}|checkpoint_committed",
                         cfg.repo.repo_id, checkpoint.checkpoint_id, checkpoint.session_id

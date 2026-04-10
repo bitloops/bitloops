@@ -368,6 +368,71 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn ann_ab_script_emits_json_safe_speedup_percent_under_decimal_comma_locale() {
+    use std::fs;
+    use std::process::Command;
+
+    let locale_output = Command::new("locale")
+        .arg("-a")
+        .output()
+        .expect("list locales");
+    assert!(locale_output.status.success(), "locale -a should succeed");
+    let locales = String::from_utf8_lossy(&locale_output.stdout);
+    let locale = locales
+        .lines()
+        .find(|line| {
+            matches!(
+                *line,
+                "de_DE.UTF-8" | "fr_FR.UTF-8" | "it_IT.UTF-8" | "nl_NL.UTF-8" | "el_GR.UTF-8"
+            )
+        })
+        .map(str::to_string);
+
+    let Some(locale) = locale else {
+        return;
+    };
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+
+    let report_path = temp.path().join("ann-ab-locale.json");
+    let output = run_ann_ab_script(
+        &repo_dir,
+        &[
+            "--symbol-fqn",
+            "src/services/orders.ts::OrderService.create",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--output",
+            report_path.to_str().expect("report path utf8"),
+        ],
+        &[("BITLOOPS_ANN_AB_MOCK", "1"), ("LC_ALL", locale.as_str())],
+    );
+
+    assert!(
+        output.status.success(),
+        "script failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report_raw = fs::read_to_string(&report_path).expect("read report json");
+    let report: serde_json::Value = serde_json::from_str(&report_raw).expect("parse report json");
+    assert_eq!(
+        report["metrics"]["ingest_ms"]["speedup_percent_ann_on_vs_ann_off"].as_f64(),
+        Some(39.02)
+    );
+    assert_eq!(
+        report["metrics"]["query_ms"]["speedup_percent_ann_on_vs_ann_off"].as_f64(),
+        Some(48.13)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn ann_ab_script_rejects_empty_query_results_when_nonempty_required() {
     use std::fs;
 
@@ -559,6 +624,20 @@ fn run_ann_ab_script(
         .arg("--repo")
         .arg(repo_dir)
         .args(args);
+    // Keep these integration tests hermetic even when the parent process exports
+    // script-specific overrides such as ORT_DYLIB_PATH or mock controls.
+    for key in [
+        "BITLOOPS_ANN_AB_BINARY",
+        "BITLOOPS_ANN_AB_MOCK",
+        "BITLOOPS_ANN_AB_MOCK_QUERY_ROWS",
+        "BITLOOPS_ANN_AB_MOCK_QUERY_NESTED_EMPTY",
+        "BITLOOPS_ANN_AB_MOCK_INVALID_QUERY_JSON",
+        "BITLOOPS_ANN_AB_MOCK_INGEST_ERROR",
+        "BITLOOPS_SEMANTIC_CLONES_DISABLE_ANN",
+        "ORT_DYLIB_PATH",
+    ] {
+        command.env_remove(key);
+    }
     for (key, value) in envs {
         command.env(key, value);
     }

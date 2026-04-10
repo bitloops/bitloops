@@ -1567,20 +1567,24 @@ pub fn assert_bitloops_stores_exist_for_repo(world: &QatWorld, repo_name: &str) 
             repo_stores_dir.join("event").join("events.duckdb"),
         )
     } else {
-        let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
-            .context("resolving store backend config for QAT store assertions")?;
-        let relational = resolve_sqlite_db_path_for_repo(
-            world.repo_dir(),
-            cfg.relational.sqlite_path.as_deref(),
-        )
-        .context("resolving relational store path for QAT store assertions")?;
-        let events =
-            resolve_duckdb_db_path_for_repo(world.repo_dir(), cfg.events.duckdb_path.as_deref());
-        let stores_dir = relational
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
-        (stores_dir, relational, events)
+        with_scenario_app_env(world, || {
+            let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
+                .context("resolving store backend config for QAT store assertions")?;
+            let relational = resolve_sqlite_db_path_for_repo(
+                world.repo_dir(),
+                cfg.relational.sqlite_path.as_deref(),
+            )
+            .context("resolving relational store path for QAT store assertions")?;
+            let events = resolve_duckdb_db_path_for_repo(
+                world.repo_dir(),
+                cfg.events.duckdb_path.as_deref(),
+            );
+            let stores_dir = relational
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
+            Ok::<_, anyhow::Error>((stores_dir, relational, events))
+        })?
     };
     ensure!(
         stores_dir.exists(),

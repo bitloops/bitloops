@@ -25,7 +25,6 @@ permissions:
 
 env:
   DUCKDB_DOWNLOAD_LIB: '1'
-  BITLOOPS_TEST_THREADS: '6'
 
 jobs:
   rust-file-size:
@@ -74,6 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -89,6 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -104,6 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target

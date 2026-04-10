@@ -30,7 +30,7 @@ pub(super) fn symbol_content_hash(item: &LanguageArtefact, content: &str) -> Str
 pub(super) fn build_symbol_records(
     cfg: &DevqlConfig,
     path: &str,
-    _blob_sha: &str,
+    blob_sha: &str,
     file_artefact: &FileArtefactRow,
     items: &[LanguageArtefact],
     content: &str,
@@ -49,8 +49,7 @@ pub(super) fn build_symbol_records(
             .map(String::as_str);
         let symbol_id = structural_symbol_id_for_artefact(item, semantic_parent_symbol_id);
         let content_hash = symbol_content_hash(item, content);
-        let artefact_id =
-            historical_symbol_artefact_id(&cfg.repo.repo_id, &symbol_id, &content_hash);
+        let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
         let parent_symbol_id = item
             .parent_symbol_fqn
             .as_ref()
@@ -200,6 +199,50 @@ mod tests {
         assert!(
             sql.contains("ON CONFLICT (artefact_id) DO UPDATE"),
             "historical builder should upsert on artefact_id"
+        );
+    }
+
+    #[test]
+    fn build_symbol_records_aligns_symbol_artefact_ids_with_revision_identity() {
+        let cfg = sample_cfg();
+        let file_artefact = FileArtefactRow {
+            artefact_id: revision_artefact_id("repo-id", "blob-sha", &file_symbol_id("src/lib.rs")),
+            symbol_id: file_symbol_id("src/lib.rs"),
+            language: "rust".to_string(),
+            end_line: 2,
+            end_byte: 32,
+        };
+        let item = LanguageArtefact {
+            canonical_kind: Some("function".to_string()),
+            language_kind: crate::host::language_adapter::LanguageKind::rust(
+                crate::host::language_adapter::RustKind::FunctionItem,
+            ),
+            name: "name".to_string(),
+            symbol_fqn: "src/lib.rs::name".to_string(),
+            parent_symbol_fqn: None,
+            start_line: 1,
+            end_line: 2,
+            start_byte: 0,
+            end_byte: 16,
+            signature: "fn name()".to_string(),
+            modifiers: vec!["pub".to_string()],
+            docstring: Some("docs".to_string()),
+        };
+
+        let records = build_symbol_records(
+            &cfg,
+            "src/lib.rs",
+            "blob-sha",
+            &file_artefact,
+            std::slice::from_ref(&item),
+            "pub fn name() {}\n",
+        );
+        let record = records.first().expect("expected symbol record");
+        let symbol_id = structural_symbol_id_for_artefact(&item, None);
+
+        assert_eq!(
+            record.artefact_id,
+            revision_artefact_id(&cfg.repo.repo_id, "blob-sha", &symbol_id)
         );
     }
 }
