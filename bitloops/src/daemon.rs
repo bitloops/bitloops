@@ -318,6 +318,14 @@ pub async fn execute_graphql<T: DeserializeOwned>(
     graphql_client::execute_graphql(repo_root, query, variables).await
 }
 
+pub async fn execute_repo_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    graphql_client::execute_repo_graphql(repo_root, query, variables).await
+}
+
 pub(crate) async fn execute_slim_graphql<T: DeserializeOwned>(
     repo_root: &Path,
     scope: &SlimCliRepoScope,

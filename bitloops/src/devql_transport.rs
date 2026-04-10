@@ -3,6 +3,7 @@ use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -22,6 +23,7 @@ pub(crate) const HEADER_SCOPE_BRANCH: &str = "x-bitloops-cli-branch";
 pub(crate) const HEADER_SCOPE_PROJECT_PATH: &str = "x-bitloops-cli-project-path";
 pub(crate) const HEADER_SCOPE_GIT_DIR_RELATIVE_PATH: &str = "x-bitloops-cli-git-dir-relative-path";
 pub(crate) const HEADER_SCOPE_CONFIG_FINGERPRINT: &str = "x-bitloops-cli-config-fingerprint";
+pub(crate) const HEADER_DAEMON_BINDING: &str = "x-bitloops-daemon-binding";
 
 #[derive(Debug, Clone)]
 pub(crate) struct SlimCliRepoScope {
@@ -150,6 +152,34 @@ pub(crate) fn attach_slim_cli_scope_headers(
         ),
         None => request,
     }
+}
+
+pub(crate) fn daemon_binding_identifier_for_config_path(config_path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(config_path.to_string_lossy().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+pub(crate) fn attach_repo_daemon_binding_headers(
+    request: RequestBuilder,
+    repo_root: &Path,
+) -> Result<RequestBuilder> {
+    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)?;
+    let binding = daemon_binding_identifier_for_config_path(&config_path);
+    Ok(request
+        .header(
+            HEADER_SCOPE_REPO_ROOT,
+            encode_scope_header_value(&repo_root.to_string_lossy()),
+        )
+        .header(HEADER_DAEMON_BINDING, binding))
+}
+
+pub(crate) fn parse_repo_root_header(headers: &HeaderMap) -> Result<Option<PathBuf>> {
+    decode_scope_header_value(headers, HEADER_SCOPE_REPO_ROOT).map(|value| value.map(PathBuf::from))
+}
+
+pub(crate) fn parse_daemon_binding_header(headers: &HeaderMap) -> Result<Option<String>> {
+    header_value(headers, HEADER_DAEMON_BINDING)
 }
 
 pub(crate) fn parse_slim_cli_scope_headers(

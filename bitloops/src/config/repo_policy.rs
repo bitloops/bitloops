@@ -14,6 +14,7 @@ pub struct RepoPolicySnapshot {
     pub root: Option<PathBuf>,
     pub shared_path: Option<PathBuf>,
     pub local_path: Option<PathBuf>,
+    pub daemon_config_path: Option<PathBuf>,
     pub capture: Value,
     pub watch: Value,
     pub scope: Value,
@@ -48,7 +49,16 @@ struct RepoPolicyTomlFile {
     #[serde(default)]
     agents: Option<Value>,
     #[serde(default)]
+    daemon: RepoPolicyDaemon,
+    #[serde(default)]
     imports: RepoPolicyImports,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RepoPolicyDaemon {
+    #[serde(default)]
+    config_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -91,6 +101,30 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         .as_deref()
         .map(load_policy_file)
         .transpose()?;
+
+    if shared
+        .as_ref()
+        .and_then(|value| value.daemon.config_path.as_deref())
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        let shared_path = location
+            .shared_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| REPO_POLICY_FILE_NAME.to_string());
+        anyhow::bail!(
+            "Bitloops daemon binding must be local-only. Move `[daemon].config_path` from {} into `{}`.",
+            shared_path,
+            REPO_POLICY_LOCAL_FILE_NAME
+        );
+    }
+
+    let daemon_config_path = local
+        .as_ref()
+        .and_then(|value| value.daemon.config_path.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
 
     let capture = merge_optional_values(
         shared.as_ref().and_then(|value| value.capture.clone()),
@@ -142,6 +176,7 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         root: Some(location.root),
         shared_path: location.shared_path,
         local_path: location.local_path,
+        daemon_config_path,
         capture,
         watch,
         scope,
@@ -173,6 +208,7 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
         root: None,
         shared_path: None,
         local_path: None,
+        daemon_config_path: None,
         capture,
         watch,
         scope,
@@ -370,5 +406,96 @@ fn canonicalize_value(value: &Value) -> Value {
         }
         Value::Array(values) => Value::Array(values.iter().map(canonicalize_value).collect()),
         _ => value.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn discover_repo_policy_reads_local_daemon_binding() {
+        let repo = tempdir().expect("temp dir");
+        let local_policy = repo.path().join(REPO_POLICY_LOCAL_FILE_NAME);
+        fs::write(
+            &local_policy,
+            r#"
+[daemon]
+config_path = "/tmp/daemon/config.toml"
+"#,
+        )
+        .expect("write local repo policy");
+
+        let snapshot = discover_repo_policy(repo.path()).expect("discover repo policy");
+
+        assert_eq!(
+            snapshot.daemon_config_path,
+            Some(PathBuf::from("/tmp/daemon/config.toml"))
+        );
+    }
+
+    #[test]
+    fn discover_repo_policy_rejects_shared_daemon_binding() {
+        let repo = tempdir().expect("temp dir");
+        let shared_policy = repo.path().join(REPO_POLICY_FILE_NAME);
+        fs::write(
+            &shared_policy,
+            r#"
+[daemon]
+config_path = "/tmp/daemon/config.toml"
+"#,
+        )
+        .expect("write shared repo policy");
+
+        let err = discover_repo_policy(repo.path()).expect_err("shared daemon binding must fail");
+
+        assert!(
+            err.to_string()
+                .contains("Bitloops daemon binding must be local-only"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn daemon_binding_does_not_change_repo_policy_fingerprint() {
+        let repo = tempdir().expect("temp dir");
+        let shared_policy = repo.path().join(REPO_POLICY_FILE_NAME);
+        let local_policy = repo.path().join(REPO_POLICY_LOCAL_FILE_NAME);
+        fs::write(
+            &shared_policy,
+            r#"
+[capture]
+enabled = true
+"#,
+        )
+        .expect("write shared repo policy");
+        fs::write(
+            &local_policy,
+            r#"
+[daemon]
+config_path = "/tmp/daemon-a/config.toml"
+"#,
+        )
+        .expect("write first local repo policy");
+
+        let first = discover_repo_policy(repo.path())
+            .expect("discover first repo policy")
+            .fingerprint;
+
+        fs::write(
+            &local_policy,
+            r#"
+[daemon]
+config_path = "/tmp/daemon-b/config.toml"
+"#,
+        )
+        .expect("write second local repo policy");
+
+        let second = discover_repo_policy(repo.path())
+            .expect("discover second repo policy")
+            .fingerprint;
+
+        assert_eq!(first, second);
     }
 }

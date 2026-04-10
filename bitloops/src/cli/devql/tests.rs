@@ -34,6 +34,7 @@ fn test_daemon_state_root(repo_root: &Path) -> PathBuf {
 }
 
 fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
     let sqlite_path = settings["stores"]["relational"]["sqlite_path"]
         .as_str()
         .expect("relational sqlite path");
@@ -42,7 +43,7 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
         .expect("events duckdb path");
 
     fs::write(
-        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        &config_path,
         format!(
             r#"[stores]
 [stores.relational]
@@ -54,6 +55,11 @@ duckdb_path = {duckdb_path:?}
         ),
     )
     .expect("write config");
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
 }
 
 fn seed_devql_cli_repo() -> TempDir {

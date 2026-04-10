@@ -206,7 +206,7 @@ async fn execute_global_graphql<T: for<'de> Deserialize<'de>>(
         return Ok(serde_json::from_value(data?)?);
     }
 
-    crate::daemon::execute_graphql(runtime_root, query, variables).await
+    crate::daemon::execute_repo_graphql(runtime_root, query, variables).await
 }
 
 #[cfg(test)]

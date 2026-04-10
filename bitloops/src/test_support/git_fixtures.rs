@@ -73,6 +73,11 @@ local_path = {blob_path:?}
 "#,
     );
     std::fs::write(&config_path, config_contents).expect("write test daemon config");
+    crate::config::settings::write_repo_daemon_binding(
+        &config_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write test repo daemon binding");
     config_path
 }
 

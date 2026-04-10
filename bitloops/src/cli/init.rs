@@ -14,7 +14,10 @@ use crate::cli::embeddings::{
     EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
 };
 use crate::cli::telemetry_consent;
-use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
+use crate::config::settings::{
+    DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings_with_daemon_binding,
+    write_repo_daemon_binding,
+};
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
 };
@@ -159,6 +162,9 @@ async fn run_with_io_async_for_project_root(
 
     maybe_install_default_daemon(args.install_default_daemon).await?;
     telemetry_consent::ensure_default_daemon_running().await?;
+    let daemon_config_path = bound_running_daemon_config_path().await?;
+    let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
+    write_repo_daemon_binding(&local_policy_path, &daemon_config_path)?;
     if daemon_config_existed_at_entry {
         telemetry_consent::ensure_existing_config_telemetry_consent(
             project_root,
@@ -185,8 +191,12 @@ async fn run_with_io_async_for_project_root(
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
-    let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
-    write_project_bootstrap_settings(&local_policy_path, &strategy, &selected_agents)?;
+    write_project_bootstrap_settings_with_daemon_binding(
+        &local_policy_path,
+        &strategy,
+        &selected_agents,
+        Some(&daemon_config_path),
+    )?;
 
     let settings = load_settings(project_root).unwrap_or_default();
     let git_count = git_hooks::install_git_hooks(&git_root, settings.local_dev)?;
@@ -255,6 +265,17 @@ async fn run_with_io_async_for_project_root(
         install_embeddings_during_init(project_root, out)?;
     }
     Ok(())
+}
+
+async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
+    let runtime = crate::daemon::status()
+        .await?
+        .runtime
+        .context("Bitloops daemon is not running")?;
+    Ok(runtime
+        .config_path
+        .canonicalize()
+        .unwrap_or(runtime.config_path))
 }
 
 fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {

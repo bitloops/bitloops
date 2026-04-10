@@ -271,6 +271,59 @@ fn resolve_store_backend_config_for_repo_reads_nearest_ancestor_daemon_config() 
 }
 
 #[test]
+fn resolve_bound_store_backend_config_for_repo_uses_repo_daemon_binding() {
+    let daemon_root = tempfile::tempdir().expect("daemon temp dir");
+    let repo = tempfile::tempdir().expect("repo temp dir");
+
+    write_envelope_config(
+        daemon_root.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/bound.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/bound.duckdb"
+                }
+            }
+        }),
+    );
+    crate::config::settings::write_repo_daemon_binding(
+        &repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &daemon_root.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("write repo daemon binding");
+
+    let _guard = enter_process_state(None, &[]);
+    let cfg = crate::config::resolve_bound_store_backend_config_for_repo(repo.path())
+        .expect("bound store backend config");
+
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some(resolved_path(daemon_root.path(), "stores/relational/bound.db").as_str())
+    );
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some(resolved_path(daemon_root.path(), "stores/event/bound.duckdb").as_str())
+    );
+}
+
+#[test]
+fn resolve_bound_store_backend_config_for_repo_rejects_missing_daemon_binding() {
+    let repo = tempfile::tempdir().expect("repo temp dir");
+
+    let _guard = enter_process_state(None, &[]);
+    let err = crate::config::resolve_bound_store_backend_config_for_repo(repo.path())
+        .expect_err("missing binding should fail");
+
+    assert!(
+        err.to_string()
+            .contains("Bitloops repo daemon binding is missing"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn resolve_store_backend_config_for_repo_prefers_repo_scoped_config_over_explicit_override_in_tests()
  {
     let repo = tempfile::tempdir().expect("repo temp dir");
