@@ -530,7 +530,7 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
 }
 
 #[tokio::test]
-async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_breaking_commit_queries()
+async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_without_breaking_commit_queries()
  {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
@@ -573,9 +573,21 @@ async fn execute_ingest_dedupes_historical_symbol_rows_by_content_hash_without_b
             |row| row.get(0),
         )
         .expect("count stable historical artefacts");
+    let stable_symbol_id_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(DISTINCT symbol_id) FROM artefacts
+             WHERE repo_id = ?1 AND symbol_fqn = 'src/lib.rs::stable' AND canonical_kind = 'function'",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count stable historical symbol ids");
     assert_eq!(
-        stable_row_count, 1,
-        "historical ingest should reuse the same symbol artefact row when the symbol content hash is unchanged"
+        stable_row_count, 2,
+        "historical ingest should persist one symbol artefact row per blob-scoped revision"
+    );
+    assert_eq!(
+        stable_symbol_id_count, 1,
+        "historical ingest should preserve the same structural symbol identity when only the blob changes"
     );
 
     let first_rows = execute_query_json_for_repo_root(
