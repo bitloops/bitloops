@@ -1,5 +1,8 @@
 use crate::test_support::process_state::with_env_vars;
 
+use serde_json::json;
+use std::path::Path;
+
 use super::progress::{format_live_task_progress_bar_line, format_live_task_status_line};
 use super::subscription::should_accept_invalid_daemon_websocket_certs;
 use super::types::{
@@ -46,6 +49,52 @@ fn sample_task(status: &str) -> TaskGraphqlRecord {
         sync_result: None,
         ingest_result: None,
     }
+}
+
+fn sample_task_json(status: &str) -> serde_json::Value {
+    json!({
+        "taskId": "sync-task-1",
+        "repoId": "repo-1",
+        "repoName": "bitloops",
+        "repoIdentity": "local/bitloops",
+        "kind": "SYNC",
+        "source": "init",
+        "status": status.to_ascii_uppercase(),
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": if status.eq_ignore_ascii_case("completed") { json!(4) } else { serde_json::Value::Null },
+        "queuePosition": 1,
+        "tasksAhead": 0,
+        "error": serde_json::Value::Null,
+        "syncSpec": {
+            "mode": "auto",
+            "paths": []
+        },
+        "ingestSpec": serde_json::Value::Null,
+        "syncProgress": {
+            "phase": "complete",
+            "currentPath": serde_json::Value::Null,
+            "pathsTotal": 12,
+            "pathsCompleted": 12,
+            "pathsRemaining": 0,
+            "pathsUnchanged": 1,
+            "pathsAdded": 1,
+            "pathsChanged": 2,
+            "pathsRemoved": 0,
+            "cacheHits": 1,
+            "cacheMisses": 2,
+            "parseErrors": 0
+        },
+        "ingestProgress": serde_json::Value::Null
+    })
+}
+
+fn test_scope() -> crate::devql_transport::SlimCliRepoScope {
+    crate::devql_transport::discover_slim_cli_repo_scope(Some(Path::new(env!(
+        "CARGO_MANIFEST_DIR"
+    ))))
+    .expect("discover test repo scope")
 }
 
 #[test]
@@ -273,4 +322,94 @@ fn sync_mutation_result_converts_to_sync_summary_with_validation_details() {
     assert!(!validation.valid);
     assert_eq!(validation.files_with_drift.len(), 1);
     assert_eq!(validation.files_with_drift[0].path, "src/lib.rs");
+}
+
+#[test]
+fn tasks_query_omits_result_payloads_and_deserializes_completed_tasks() {
+    let scope = test_scope();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+
+    super::with_graphql_executor_hook(
+        |_, query, _| {
+            assert_eq!(query, super::documents::TASKS_QUERY);
+            assert!(!query.contains("syncResult"));
+            assert!(!query.contains("ingestResult"));
+            Ok(json!({
+                "tasks": [sample_task_json("completed")]
+            }))
+        },
+        || {
+            let tasks = runtime
+                .block_on(super::list_tasks_via_graphql(
+                    &scope,
+                    Some("sync"),
+                    Some("completed"),
+                    Some(1),
+                ))
+                .expect("list tasks via graphql");
+            assert_eq!(tasks.len(), 1);
+            assert!(tasks[0].is_terminal());
+            assert!(tasks[0].sync_result.is_none());
+            assert!(tasks[0].ingest_result.is_none());
+        },
+    );
+}
+
+#[test]
+fn task_queue_query_omits_result_payloads_and_deserializes_current_repo_tasks() {
+    let scope = test_scope();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+
+    super::with_graphql_executor_hook(
+        |_, query, _| {
+            assert_eq!(query, super::documents::TASK_QUEUE_QUERY);
+            assert!(!query.contains("syncResult"));
+            assert!(!query.contains("ingestResult"));
+            Ok(json!({
+                "taskQueue": {
+                    "persisted": true,
+                    "queuedTasks": 0,
+                    "runningTasks": 0,
+                    "failedTasks": 0,
+                    "completedRecentTasks": 1,
+                    "byKind": [
+                        {
+                            "kind": "SYNC",
+                            "queuedTasks": 0,
+                            "runningTasks": 0,
+                            "failedTasks": 0,
+                            "completedRecentTasks": 1
+                        },
+                        {
+                            "kind": "INGEST",
+                            "queuedTasks": 0,
+                            "runningTasks": 0,
+                            "failedTasks": 0,
+                            "completedRecentTasks": 0
+                        }
+                    ],
+                    "paused": false,
+                    "pausedReason": serde_json::Value::Null,
+                    "lastAction": "completed",
+                    "lastUpdatedUnix": 3,
+                    "currentRepoTasks": [sample_task_json("completed")]
+                }
+            }))
+        },
+        || {
+            let status = runtime
+                .block_on(super::task_queue_status_via_graphql(&scope))
+                .expect("load task queue via graphql");
+            assert_eq!(status.current_repo_tasks.len(), 1);
+            assert!(status.current_repo_tasks[0].is_terminal());
+            assert!(status.current_repo_tasks[0].sync_result.is_none());
+            assert!(status.current_repo_tasks[0].ingest_result.is_none());
+        },
+    );
 }

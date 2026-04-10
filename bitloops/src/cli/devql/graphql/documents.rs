@@ -267,16 +267,6 @@ pub(super) const TASKS_QUERY: &str = r#"
           eventsInserted
           artefactsUpserted
         }
-        syncResult {
-          success
-          mode
-        }
-        ingestResult {
-          success
-          commitsProcessed
-          eventsInserted
-          artefactsUpserted
-        }
       }
     }
 "#;
@@ -343,16 +333,6 @@ pub(super) const TASK_QUEUE_QUERY: &str = r#"
             checkpointCompanionsProcessed
             currentCheckpointId
             currentCommitSha
-            eventsInserted
-            artefactsUpserted
-          }
-          syncResult {
-            success
-            mode
-          }
-          ingestResult {
-            success
-            commitsProcessed
             eventsInserted
             artefactsUpserted
           }

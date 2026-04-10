@@ -285,20 +285,41 @@ pub(super) fn should_accept_invalid_daemon_websocket_certs(url: &str) -> bool {
 }
 
 fn insecure_loopback_websocket_tls_config() -> Result<Arc<rustls::ClientConfig>> {
-    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    Ok(CONFIG
-        .get_or_init(|| {
-            let config = rustls::ClientConfig::builder()
+    static CONFIG: OnceLock<std::result::Result<Arc<rustls::ClientConfig>, String>> =
+        OnceLock::new();
+    let config = CONFIG.get_or_init(|| {
+        let provider = crate::api::tls::rustls_crypto_provider().map_err(|err| err.to_string())?;
+        let verifier = Arc::new(LoopbackCertVerifier::new(
+            provider.signature_verification_algorithms,
+        ));
+        Ok(Arc::new(
+            rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .expect("safe default TLS versions are valid")
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(LoopbackCertVerifier))
-                .with_no_client_auth();
-            Arc::new(config)
-        })
-        .clone())
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth(),
+        ))
+    });
+
+    config
+        .as_ref()
+        .map(Arc::clone)
+        .map_err(|message| anyhow::anyhow!(message.clone()))
 }
 
 #[derive(Debug)]
-struct LoopbackCertVerifier;
+struct LoopbackCertVerifier {
+    supported_algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
+}
+
+impl LoopbackCertVerifier {
+    fn new(supported_algorithms: rustls::crypto::WebPkiSupportedAlgorithms) -> Self {
+        Self {
+            supported_algorithms,
+        }
+    }
+}
 
 impl ServerCertVerifier for LoopbackCertVerifier {
     fn verify_server_cert(
@@ -329,12 +350,7 @@ impl ServerCertVerifier for LoopbackCertVerifier {
         cert: &CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-        )
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.supported_algorithms)
     }
 
     fn verify_tls13_signature(
@@ -343,17 +359,10 @@ impl ServerCertVerifier for LoopbackCertVerifier {
         cert: &CertificateDer<'_>,
         dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-        )
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.supported_algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
+        self.supported_algorithms.supported_schemes()
     }
 }
