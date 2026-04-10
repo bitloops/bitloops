@@ -2,6 +2,7 @@ use async_graphql::{Context, Error, ErrorExtensions, InputObject, Object, Result
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
+use std::path::Path;
 
 use super::{
     DevqlGraphqlContext,
@@ -13,6 +14,14 @@ use super::{
 
 #[derive(Default)]
 pub struct MutationRoot;
+
+fn ensure_knowledge_document_schema(repo_root: &Path) -> anyhow::Result<()> {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)?;
+    let documents = crate::capability_packs::knowledge::storage::DuckdbKnowledgeDocumentStore::new(
+        backends.events.resolve_duckdb_db_path_for_repo(repo_root),
+    );
+    documents.initialise_schema()
+}
 
 #[derive(Debug, Clone, InputObject)]
 pub struct AddKnowledgeInput {
@@ -553,6 +562,8 @@ impl MutationRoot {
             report.migration_plan
         };
         host.ensure_migrations_applied_sync()
+            .map_err(|err| operation_error("BACKEND_ERROR", "migration", "applyMigrations", err))?;
+        ensure_knowledge_document_schema(host.repo_root())
             .map_err(|err| operation_error("BACKEND_ERROR", "migration", "applyMigrations", err))?;
 
         let applied_at = DateTimeScalar::from_rfc3339(Utc::now().to_rfc3339())
