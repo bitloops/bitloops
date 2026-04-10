@@ -150,7 +150,7 @@ async fn devql_global_route_rejects_mismatched_daemon_binding_for_repo_scoped_re
         temp.path().to_path_buf(),
     ));
     let repo_root = temp.path().to_string_lossy().to_string();
-    let headers = vec![
+    let headers = [
         (
             crate::devql_transport::HEADER_SCOPE_REPO_ROOT,
             crate::devql_transport::encode_scope_header_value(&repo_root),

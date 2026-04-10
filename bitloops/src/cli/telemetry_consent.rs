@@ -206,7 +206,7 @@ async fn execute_global_graphql<T: for<'de> Deserialize<'de>>(
         return Ok(serde_json::from_value(data?)?);
     }
 
-    crate::daemon::execute_repo_graphql(runtime_root, query, variables).await
+    crate::daemon::execute_graphql(runtime_root, query, variables).await
 }
 
 #[cfg(test)]
@@ -247,7 +247,7 @@ pub(crate) fn test_tty_override() -> Option<bool> {
 }
 
 #[cfg(test)]
-fn test_assume_daemon_running_override() -> Option<bool> {
+pub(crate) fn test_assume_daemon_running_override() -> Option<bool> {
     TEST_ASSUME_DAEMON_RUNNING_OVERRIDE.with(|cell| *cell.borrow())
 }
 

@@ -155,6 +155,9 @@ pub(crate) fn attach_slim_cli_scope_headers(
 }
 
 pub(crate) fn daemon_binding_identifier_for_config_path(config_path: &Path) -> String {
+    let config_path = config_path
+        .canonicalize()
+        .unwrap_or_else(|_| config_path.to_path_buf());
     let mut hasher = Sha256::new();
     hasher.update(config_path.to_string_lossy().as_bytes());
     hex::encode(hasher.finalize())

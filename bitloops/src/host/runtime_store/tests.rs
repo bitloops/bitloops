@@ -30,7 +30,16 @@ local_path = "stores/blob"
 "#,
     )
     .expect("write test daemon config");
+    crate::config::settings::write_repo_daemon_binding(
+        &config_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
     config_path
+}
+
+fn canonical_root(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[test]
@@ -41,8 +50,8 @@ fn repo_runtime_store_uses_config_root_runtime_sqlite_path() {
     init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
     let config_path = write_test_daemon_config(dir.path());
     let config_path_string = config_path.to_string_lossy().to_string();
-    let expected = dir
-        .path()
+    let expected = dir.path();
+    let expected = canonical_root(expected)
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");
@@ -68,26 +77,30 @@ fn repo_runtime_store_fails_without_daemon_config() {
         let err = RepoSqliteRuntimeStore::open(dir.path()).expect_err("runtime store should fail");
         let message = format!("{err:#}");
         assert!(
-            message
-                .contains("Bitloops daemon config is required to resolve the repo runtime store"),
+            message.contains("Bitloops repo daemon binding is missing"),
             "expected missing-config runtime store failure, got: {message}"
         );
     });
 }
 
 #[test]
-fn repo_runtime_store_uses_nearest_ancestor_daemon_config_root() {
+fn repo_runtime_store_uses_repo_daemon_binding() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().join("bitloops");
     fs::create_dir_all(&repo_root).expect("create repo root");
     init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
-    let expected = dir
-        .path()
+    let expected = dir.path();
+    let expected = canonical_root(expected)
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");
 
     write_test_daemon_config(dir.path());
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &dir.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("write repo daemon binding");
 
     with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
         let actual = RepoSqliteRuntimeStore::open(&repo_root)
@@ -110,8 +123,8 @@ fn repo_runtime_store_shares_runtime_sqlite_and_fences_rows_by_repo() {
 
     let config_path = write_test_daemon_config(dir.path());
     let config_path_string = config_path.to_string_lossy().to_string();
-    let expected_db_path = dir
-        .path()
+    let expected_db_path = dir.path();
+    let expected_db_path = canonical_root(expected_db_path)
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");

@@ -209,22 +209,12 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
     assert!(!cfg.relational.has_postgres());
     assert_eq!(
         cfg.relational.sqlite_path.as_deref(),
-        Some(
-            temp.path()
-                .join("data/devql.sqlite")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(temp.path(), "data/devql.sqlite").as_str())
     );
     assert!(!cfg.events.has_clickhouse());
     assert_eq!(
         cfg.events.duckdb_path.as_deref(),
-        Some(
-            temp.path()
-                .join("data/events.duckdb")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(temp.path(), "data/events.duckdb").as_str())
     );
 }
 
@@ -252,21 +242,11 @@ fn resolve_store_backend_config_for_repo_reads_nearest_ancestor_daemon_config() 
     let cfg = resolve_store_backend_config_for_repo(&repo_root).expect("store backend config");
     assert_eq!(
         cfg.relational.sqlite_path.as_deref(),
-        Some(
-            temp.path()
-                .join("stores/relational/relational.db")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(temp.path(), "stores/relational/relational.db").as_str())
     );
     assert_eq!(
         cfg.events.duckdb_path.as_deref(),
-        Some(
-            temp.path()
-                .join("stores/event/events.duckdb")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(temp.path(), "stores/event/events.duckdb").as_str())
     );
 }
 
@@ -372,21 +352,11 @@ fn resolve_store_backend_config_for_repo_prefers_repo_scoped_config_over_explici
     let cfg = resolve_store_backend_config_for_repo(repo.path()).expect("store backend config");
     assert_eq!(
         cfg.relational.sqlite_path.as_deref(),
-        Some(
-            repo.path()
-                .join("stores/relational/local.db")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(repo.path(), "stores/relational/local.db").as_str())
     );
     assert_eq!(
         cfg.events.duckdb_path.as_deref(),
-        Some(
-            repo.path()
-                .join("stores/event/local.duckdb")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(repo.path(), "stores/event/local.duckdb").as_str())
     );
 }
 
@@ -445,21 +415,11 @@ fn resolve_store_backend_config_honours_explicit_daemon_config_override_inside_g
     assert!(!cfg.relational.has_postgres());
     assert_eq!(
         cfg.relational.sqlite_path.as_deref(),
-        Some(
-            nested
-                .join("stores/relational/relational.db")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(&nested, "stores/relational/relational.db").as_str())
     );
     assert!(!cfg.events.has_clickhouse());
     assert_eq!(
         cfg.events.duckdb_path.as_deref(),
-        Some(
-            nested
-                .join("stores/event/events.duckdb")
-                .to_string_lossy()
-                .as_ref()
-        )
+        Some(resolved_path(&nested, "stores/event/events.duckdb").as_str())
     );
 }

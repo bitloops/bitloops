@@ -265,8 +265,12 @@ fn TestRootCommand_ResolveWatcherAutostartConfigRoot_UsesDaemonOverrideRoot() {
         || {
             let config_root = resolve_watcher_autostart_config_root(&repo_root, &repo_root)
                 .expect("watcher autostart should resolve daemon config root");
+            let expected_root = dir
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| dir.path().to_path_buf());
 
-            assert_eq!(config_root, dir.path());
+            assert_eq!(config_root, expected_root);
             assert_ne!(config_root, repo_root);
         },
     );

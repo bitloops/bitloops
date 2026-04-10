@@ -73,13 +73,6 @@ fn with_temp_app_dirs<T>(
     f: impl FnOnce() -> T,
 ) -> T {
     with_test_platform_dir_overrides(app_dir_overrides(temp), || {
-        if assume_daemon_running {
-            let config_path = ensure_daemon_config_exists().expect("create default daemon config");
-            let config_root = config_path
-                .parent()
-                .expect("daemon config should have a parent directory");
-            write_current_daemon_runtime_state(config_root);
-        }
         with_test_tty_override(tty, || {
             with_test_assume_daemon_running(assume_daemon_running, f)
         })
