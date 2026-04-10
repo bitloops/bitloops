@@ -1,0 +1,637 @@
+use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
+#[cfg(test)]
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use anyhow::{Context, Result, anyhow};
+use futures_util::FutureExt;
+use rusqlite::params;
+use tokio::sync::Notify;
+use tokio::time::{Duration, sleep};
+
+use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
+use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
+use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+
+use super::super::types::{
+    CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
+    CapabilityEventRunStatus, unix_timestamp_now,
+};
+use super::plan::{build_execution_plan, find_current_state_consumer, validate_consumer_result};
+use super::queue::{
+    StoredRunRecord, ensure_consumer_run, insert_artefact_changes, insert_file_changes,
+    load_run_by_id, load_runs, next_generation_seq, prune_terminal_runs, sql_i64,
+    upsert_consumer_row,
+};
+
+const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_RUN_ATTEMPTS: u32 = 5;
+
+#[derive(Debug, Clone)]
+pub struct CapabilityEventEnqueueResult {
+    pub runs: Vec<CapabilityEventRunRecord>,
+}
+
+#[derive(Debug)]
+pub struct CapabilityEventCoordinator {
+    runtime_store: DaemonSqliteRuntimeStore,
+    lock: Mutex<()>,
+    notify: Notify,
+    worker_started: AtomicBool,
+}
+
+struct WorkerStartedGuard {
+    coordinator: Arc<CapabilityEventCoordinator>,
+}
+
+impl Drop for WorkerStartedGuard {
+    fn drop(&mut self) {
+        self.coordinator
+            .worker_started
+            .store(false, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug)]
+enum RunCompletion {
+    Completed {
+        run: CapabilityEventRunRecord,
+        applied_to_generation_seq: u64,
+    },
+    RetryableFailure {
+        run: CapabilityEventRunRecord,
+        error: String,
+    },
+    Failed {
+        run: CapabilityEventRunRecord,
+        error: String,
+    },
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn test_shared_instance_at(db_path: PathBuf) -> Arc<CapabilityEventCoordinator> {
+    CapabilityEventCoordinator::new_shared_instance(
+        DaemonSqliteRuntimeStore::open_at(db_path)
+            .expect("opening test daemon runtime store for current-state consumers"),
+    )
+}
+
+impl CapabilityEventCoordinator {
+    pub(crate) fn shared() -> Arc<Self> {
+        let runtime_store = DaemonSqliteRuntimeStore::open()
+            .expect("opening daemon runtime store for current-state consumers");
+        static INSTANCE: OnceLock<Mutex<Arc<CapabilityEventCoordinator>>> = OnceLock::new();
+        let slot =
+            INSTANCE.get_or_init(|| Mutex::new(Self::new_shared_instance(runtime_store.clone())));
+        let coordinator = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        #[cfg(test)]
+        let mut coordinator = coordinator;
+
+        #[cfg(test)]
+        if coordinator.runtime_store.db_path() != runtime_store.db_path() {
+            *coordinator = Self::new_shared_instance(runtime_store);
+        }
+
+        Arc::clone(&coordinator)
+    }
+
+    fn new_shared_instance(runtime_store: DaemonSqliteRuntimeStore) -> Arc<Self> {
+        Arc::new(Self {
+            runtime_store,
+            lock: Mutex::new(()),
+            notify: Notify::new(),
+            worker_started: AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn activate_worker(self: &Arc<Self>) {
+        if self.worker_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Err(err) = self.recover_running_runs() {
+            log::warn!("failed to recover current-state consumer runs: {err:#}");
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            self.worker_started.store(false, Ordering::SeqCst);
+            log::warn!(
+                "current-state consumer worker activation requested without an active tokio runtime"
+            );
+            return;
+        };
+        let coordinator = Arc::clone(self);
+        handle.spawn(async move {
+            let _guard = WorkerStartedGuard {
+                coordinator: Arc::clone(&coordinator),
+            };
+            coordinator.run_loop().await;
+        });
+    }
+
+    pub(crate) fn record_sync_generation(
+        &self,
+        host: &DevqlCapabilityHost,
+        cfg: &DevqlConfig,
+        summary: &SyncSummary,
+        file_diff: SyncFileDiff,
+        artefact_diff: SyncArtefactDiff,
+        source_task_id: Option<&str>,
+    ) -> Result<CapabilityEventEnqueueResult> {
+        if !summary.success || summary.mode == "validate" {
+            return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
+        }
+
+        let has_changes = !file_diff.added.is_empty()
+            || !file_diff.changed.is_empty()
+            || !file_diff.removed.is_empty()
+            || !artefact_diff.added.is_empty()
+            || !artefact_diff.changed.is_empty()
+            || !artefact_diff.removed.is_empty();
+        if !has_changes {
+            return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
+        }
+
+        let registrations = host.current_state_consumers().to_vec();
+        let now = unix_timestamp_now();
+        let repo_id = cfg.repo.repo_id.clone();
+        let repo_root = cfg.repo_root.clone();
+        let source_task_id = source_task_id.map(str::to_string);
+        let requires_full_reconcile = matches!(summary.mode.as_str(), "full" | "repair");
+
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
+        let runs = self.runtime_store.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting current-state generation transaction")?;
+            let result = (|| {
+                let generation_seq = next_generation_seq(conn, &repo_id)?;
+                conn.execute(
+                    "INSERT INTO pack_reconcile_generations (repo_id, generation_seq, source_task_id, sync_mode, active_branch, head_commit_sha, requires_full_reconcile, created_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        &repo_id,
+                        sql_i64(generation_seq)?,
+                        source_task_id.as_deref(),
+                        &summary.mode,
+                        summary.active_branch.as_deref(),
+                        summary.head_commit_sha.as_deref(),
+                        if requires_full_reconcile { 1_i64 } else { 0_i64 },
+                        sql_i64(now)?,
+                    ],
+                )
+                .context("inserting current-state generation")?;
+                insert_file_changes(conn, &repo_id, generation_seq, &file_diff)?;
+                insert_artefact_changes(conn, &repo_id, generation_seq, &artefact_diff)?;
+
+                let mut scheduled_runs = Vec::new();
+                for registration in &registrations {
+                    upsert_consumer_row(
+                        conn,
+                        &repo_id,
+                        registration.capability_id,
+                        registration.consumer_id,
+                        now,
+                    )?;
+                    if let Some(run) = ensure_consumer_run(
+                        conn,
+                        &repo_id,
+                        &repo_root,
+                        registration.capability_id,
+                        registration.consumer_id,
+                        now,
+                    )? {
+                        scheduled_runs.push(run.record);
+                    }
+                }
+
+                prune_terminal_runs(conn)?;
+                Ok(scheduled_runs)
+            })();
+
+            match result {
+                Ok(runs) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing current-state generation transaction")?;
+                    Ok(runs)
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })?;
+
+        if !runs.is_empty() {
+            self.notify.notify_waiters();
+        }
+
+        Ok(CapabilityEventEnqueueResult { runs })
+    }
+
+    pub(crate) fn snapshot(&self, repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+        self.runtime_store.with_connection(|conn| {
+            let pending_runs = count_runs_with_status(conn, CapabilityEventRunStatus::Queued)?;
+            let running_runs = count_runs_with_status(conn, CapabilityEventRunStatus::Running)?;
+            let failed_runs = count_runs_with_status(conn, CapabilityEventRunStatus::Failed)?;
+            let completed_recent_runs =
+                count_runs_with_status(conn, CapabilityEventRunStatus::Completed)?;
+            let current_repo_run = repo_id
+                .map(|repo_id| load_current_repo_run(conn, repo_id))
+                .transpose()?
+                .flatten();
+
+            Ok(CapabilityEventQueueStatus {
+                state: CapabilityEventQueueState {
+                    version: 1,
+                    pending_runs,
+                    running_runs,
+                    failed_runs,
+                    completed_recent_runs,
+                    last_action: Some("current_state_consumers_available".to_string()),
+                    last_updated_unix: unix_timestamp_now(),
+                },
+                persisted: true,
+                current_repo_run,
+            })
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn run(&self, run_id: &str) -> Result<Option<CapabilityEventRunRecord>> {
+        self.runtime_store.with_connection(|conn| {
+            load_run_by_id(conn, run_id).map(|record| record.map(|r| r.record))
+        })
+    }
+
+    async fn run_loop(self: Arc<Self>) {
+        loop {
+            if let Err(err) = self.launch_runnable_runs() {
+                log::warn!("current-state consumer scheduling failed: {err:#}");
+            }
+            tokio::select! {
+                _ = self.notify.notified() => {}
+                _ = sleep(WORKER_POLL_INTERVAL) => {}
+            }
+        }
+    }
+
+    fn launch_runnable_runs(self: &Arc<Self>) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
+        let runs = self.runtime_store.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting current-state consumer claim transaction")?;
+            let result = (|| {
+                let candidates = load_claimable_runs(conn)?;
+                let mut claimed = Vec::new();
+                let now = unix_timestamp_now();
+                for run in candidates {
+                    conn.execute(
+                        "UPDATE pack_reconcile_runs SET status = ?1, attempts = ?2, started_at_unix = ?3, updated_at_unix = ?4 WHERE run_id = ?5",
+                        params![
+                            CapabilityEventRunStatus::Running.to_string(),
+                            run.record.attempts + 1,
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                            run.record.run_id,
+                        ],
+                    )
+                    .with_context(|| {
+                        format!("marking current-state consumer run `{}` as running", run.record.run_id)
+                    })?;
+                    let mut claimed_run = run.record.clone();
+                    claimed_run.status = CapabilityEventRunStatus::Running;
+                    claimed_run.attempts += 1;
+                    claimed_run.started_at_unix = Some(now);
+                    claimed_run.updated_at_unix = now;
+                    claimed.push(StoredRunRecord {
+                        record: claimed_run,
+                        repo_root: run.repo_root.clone(),
+                    });
+                }
+                Ok(claimed)
+            })();
+
+            match result {
+                Ok(runs) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing current-state consumer claim transaction")?;
+                    Ok(runs)
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })?;
+
+        for run in runs {
+            self.spawn_execution_task(run);
+        }
+        Ok(())
+    }
+
+    fn spawn_execution_task(self: &Arc<Self>, run: StoredRunRecord) {
+        let coordinator = Arc::clone(self);
+        tokio::spawn(async move {
+            let completion = coordinator.execute_run(run).await;
+            if let Err(err) = coordinator.apply_completion(completion) {
+                log::warn!("failed to persist current-state consumer completion: {err:#}");
+            }
+            coordinator.notify.notify_waiters();
+        });
+    }
+
+    async fn execute_run(&self, run: StoredRunRecord) -> RunCompletion {
+        let plan = match self
+            .runtime_store
+            .with_connection(|conn| build_execution_plan(conn, &run.record, &run.repo_root))
+        {
+            Ok(Some(plan)) => plan,
+            Ok(None) => {
+                let applied_to_generation_seq = run.record.to_generation_seq;
+                return RunCompletion::Completed {
+                    run: run.record,
+                    applied_to_generation_seq,
+                };
+            }
+            Err(err) => {
+                return terminal_or_retry(run.record, err);
+            }
+        };
+
+        let repo = match resolve_repo_identity(&plan.repo_root) {
+            Ok(repo) => repo,
+            Err(err) => {
+                return terminal_or_retry(plan.record, err.context("resolving repo identity"));
+            }
+        };
+        let host = match DevqlCapabilityHost::builtin(plan.repo_root.clone(), repo) {
+            Ok(host) => host,
+            Err(err) => {
+                return terminal_or_retry(plan.record, err.context("building capability host"));
+            }
+        };
+        let Some(consumer) = find_current_state_consumer(&host, &plan.record) else {
+            let capability_id = plan.record.capability_id.clone();
+            let consumer_id = plan.record.consumer_id.clone();
+            return terminal_or_retry(
+                plan.record,
+                anyhow!(
+                    "current-state consumer `{}` for capability `{}` is not registered",
+                    consumer_id,
+                    capability_id
+                ),
+            );
+        };
+        let context = match host.build_current_state_consumer_context() {
+            Ok(context) => context,
+            Err(err) => {
+                return terminal_or_retry(
+                    plan.record,
+                    err.context("building current-state consumer context"),
+                );
+            }
+        };
+
+        let outcome = AssertUnwindSafe(consumer.reconcile(&plan.request, &context))
+            .catch_unwind()
+            .await;
+        match outcome {
+            Ok(Ok(result)) => match validate_consumer_result(&plan.request, &result) {
+                Ok(()) => RunCompletion::Completed {
+                    run: plan.record,
+                    applied_to_generation_seq: result.applied_to_generation_seq,
+                },
+                Err(err) => terminal_or_retry(plan.record, err),
+            },
+            Ok(Err(err)) => terminal_or_retry(plan.record, err),
+            Err(_) => terminal_or_retry(plan.record, anyhow!("current-state consumer panicked")),
+        }
+    }
+
+    fn apply_completion(&self, completion: RunCompletion) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
+        self.runtime_store.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting current-state consumer completion transaction")?;
+            let result = (|| {
+                let now = unix_timestamp_now();
+                match completion {
+                    RunCompletion::Completed {
+                        run,
+                        applied_to_generation_seq,
+                    } => {
+                        conn.execute(
+                            "UPDATE pack_reconcile_consumers SET last_applied_generation_seq = ?1, last_error = NULL, updated_at_unix = ?2 WHERE repo_id = ?3 AND consumer_id = ?4",
+                            params![
+                                sql_i64(applied_to_generation_seq)?,
+                                sql_i64(now)?,
+                                run.repo_id,
+                                run.consumer_id,
+                            ],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "advancing current-state consumer cursor for run `{}`",
+                                run.run_id
+                            )
+                        })?;
+                        conn.execute(
+                            "UPDATE pack_reconcile_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
+                            params![
+                                sql_i64(run.from_generation_seq)?,
+                                sql_i64(run.to_generation_seq)?,
+                                run.reconcile_mode,
+                                CapabilityEventRunStatus::Completed.to_string(),
+                                sql_i64(now)?,
+                                sql_i64(now)?,
+                                run.run_id,
+                            ],
+                        )
+                        .with_context(|| {
+                            format!("marking current-state consumer run `{}` complete", run.run_id)
+                        })?;
+                    }
+                    RunCompletion::RetryableFailure { run, error } => {
+                        conn.execute(
+                            "UPDATE pack_reconcile_consumers SET last_error = ?1, updated_at_unix = ?2 WHERE repo_id = ?3 AND consumer_id = ?4",
+                            params![error, sql_i64(now)?, run.repo_id, run.consumer_id],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "updating retryable current-state consumer error for run `{}`",
+                                run.run_id
+                            )
+                        })?;
+                        conn.execute(
+                            "UPDATE pack_reconcile_runs SET status = ?1, updated_at_unix = ?2, completed_at_unix = NULL, error = ?3 WHERE run_id = ?4",
+                            params![
+                                CapabilityEventRunStatus::Queued.to_string(),
+                                sql_i64(now)?,
+                                error,
+                                run.run_id,
+                            ],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "re-queueing current-state consumer run `{}` after retryable failure",
+                                run.run_id
+                            )
+                        })?;
+                    }
+                    RunCompletion::Failed { run, error } => {
+                        conn.execute(
+                            "UPDATE pack_reconcile_consumers SET last_error = ?1, updated_at_unix = ?2 WHERE repo_id = ?3 AND consumer_id = ?4",
+                            params![error, sql_i64(now)?, run.repo_id, run.consumer_id],
+                        )
+                        .with_context(|| {
+                            format!("persisting terminal current-state consumer error for `{}`", run.run_id)
+                        })?;
+                        conn.execute(
+                            "UPDATE pack_reconcile_runs SET status = ?1, updated_at_unix = ?2, completed_at_unix = ?3, error = ?4 WHERE run_id = ?5",
+                            params![
+                                CapabilityEventRunStatus::Failed.to_string(),
+                                sql_i64(now)?,
+                                sql_i64(now)?,
+                                error,
+                                run.run_id,
+                            ],
+                        )
+                        .with_context(|| {
+                            format!("marking current-state consumer run `{}` failed", run.run_id)
+                        })?;
+                    }
+                }
+                prune_terminal_runs(conn)?;
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing current-state consumer completion transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    fn recover_running_runs(&self) -> Result<()> {
+        self.runtime_store.with_connection(|conn| {
+            conn.execute(
+                "UPDATE pack_reconcile_runs SET status = ?1, updated_at_unix = ?2 WHERE status = ?3",
+                params![
+                    CapabilityEventRunStatus::Queued.to_string(),
+                    sql_i64(unix_timestamp_now())?,
+                    CapabilityEventRunStatus::Running.to_string(),
+                ],
+            )
+            .context("recovering in-flight current-state consumer runs")?;
+            Ok(())
+        })
+    }
+}
+
+fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecord>> {
+    let now = unix_timestamp_now();
+    let candidates = load_runs(
+        conn,
+        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE status = ?1 ORDER BY submitted_at_unix ASC",
+        params![CapabilityEventRunStatus::Queued.to_string()],
+    )?;
+    let mut running_lanes = BTreeMap::<String, ()>::new();
+    for run in load_runs(
+        conn,
+        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE status = ?1",
+        params![CapabilityEventRunStatus::Running.to_string()],
+    )? {
+        running_lanes.insert(run.record.lane_key.clone(), ());
+    }
+
+    let mut claimable = Vec::new();
+    for run in candidates {
+        if running_lanes.contains_key(&run.record.lane_key) {
+            continue;
+        }
+        if run.record.updated_at_unix + retry_backoff_seconds(run.record.attempts) > now {
+            continue;
+        }
+        running_lanes.insert(run.record.lane_key.clone(), ());
+        claimable.push(run);
+    }
+    Ok(claimable)
+}
+
+fn count_runs_with_status(
+    conn: &rusqlite::Connection,
+    status: CapabilityEventRunStatus,
+) -> Result<u64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM pack_reconcile_runs WHERE status = ?1",
+        params![status.to_string()],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| u64::try_from(value).unwrap_or_default())
+    .map_err(anyhow::Error::from)
+}
+
+fn load_current_repo_run(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<Option<CapabilityEventRunRecord>> {
+    if let Some(run) = load_runs(
+        conn,
+        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
+        params![repo_id, CapabilityEventRunStatus::Running.to_string()],
+    )?
+    .into_iter()
+    .next()
+    {
+        return Ok(Some(run.record));
+    }
+
+    Ok(load_runs(
+        conn,
+        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
+        params![repo_id, CapabilityEventRunStatus::Queued.to_string()],
+    )?
+    .into_iter()
+    .next()
+    .map(|run| run.record))
+}
+
+fn terminal_or_retry(
+    run: CapabilityEventRunRecord,
+    err: impl Into<anyhow::Error>,
+) -> RunCompletion {
+    let error = format!("{:#}", err.into());
+    if run.attempts >= MAX_RUN_ATTEMPTS {
+        RunCompletion::Failed { run, error }
+    } else {
+        RunCompletion::RetryableFailure { run, error }
+    }
+}
+
+fn retry_backoff_seconds(attempts: u32) -> u64 {
+    match attempts {
+        0 | 1 => 0,
+        2 => 5,
+        3 => 15,
+        4 => 30,
+        _ => 60,
+    }
+}
