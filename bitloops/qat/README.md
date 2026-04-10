@@ -12,9 +12,9 @@ The explicit `cargo test` forms also work from the `bitloops/` crate directory w
 
 ## Implemented test suites
 
-### Onboarding + DevQL sync, then Smoke, then DevQL capabilities (CI bundle)
+### All bundled QAT suites in parallel (CI bundle)
 
-Runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite (59 scenarios total).
+Runs onboarding, smoke, DevQL sync, DevQL capabilities, and DevQL ingest in parallel.
 
 - PRs targeting `main`: runs automatically in `.github/workflows/ci.yml`
 - For develop-target work: run `.github/workflows/develop-qat.yml` manually from the GitHub Actions UI and select the branch you want to test
@@ -25,7 +25,7 @@ cargo qat
 
 Works from both the `bitloops/` crate directory and the repository root.
 
-The DevQL capabilities suite is part of `cargo qat`, and the focused aliases remain available for targeted runs.
+The bundled suites are all part of `cargo qat`, and the focused aliases remain available for targeted runs.
 
 ### 1. Smoke (13 scenarios across 2 features)
 
@@ -123,7 +123,7 @@ cargo test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignore
 | 14  | Init sync=true — incremental sync for new files    | `SyncInitSyncTrueIncremental`   |
 | 15  | Init sync=true — validation stays clean            | `SyncInitSyncTrueValidateClean` |
 
-### 4. DevQL capabilities (`cargo qat-devql`, 21 scenarios)
+### 4. DevQL capabilities (`cargo qat-devql-capabilities`, 21 scenarios)
 
 Exercises the strict offline DevQL capability surface: agent queryability,
 checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
@@ -133,7 +133,7 @@ cross-capability smoke. The default semantic-clones lane validates the offline
 fake-runtime path rather than real local-model warm-cache behavior.
 
 ```bash
-cargo qat-devql
+cargo qat-devql-capabilities
 ```
 
 Or equivalently:
@@ -216,7 +216,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 ## Environment variables
 
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
-- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the onboarding and DevQL sync parallel phase under `cargo qat`, before smoke and the final DevQL capability stage)
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the aggregate all-suite parallel fan-out under `cargo qat`)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)
@@ -228,7 +228,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 Example:
 
 ```bash
-BITLOOPS_QAT_COMMAND_TIMEOUT_SECS=300 cargo qat-devql
+BITLOOPS_QAT_COMMAND_TIMEOUT_SECS=300 cargo qat-devql-capabilities
 ```
 
 ## Troubleshooting
