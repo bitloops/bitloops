@@ -34,6 +34,65 @@ pub fn ensure_bitloops_repo_name(repo_name: &str) -> Result<()> {
     Ok(())
 }
 
+const QAT_EVENTUAL_TIMEOUT_ENV: &str = "BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS";
+const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 15;
+const QAT_EVENTUAL_POLL_INTERVAL_MILLIS: u64 = 250;
+
+fn qat_eventual_timeout() -> StdDuration {
+    parse_timeout_seconds(
+        std::env::var(QAT_EVENTUAL_TIMEOUT_ENV).ok().as_deref(),
+        DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS,
+    )
+}
+
+fn qat_eventual_poll_interval() -> StdDuration {
+    StdDuration::from_millis(QAT_EVENTUAL_POLL_INTERVAL_MILLIS)
+}
+
+fn wait_for_qat_condition<T, Observe, Ready, Describe>(
+    timeout: StdDuration,
+    poll_interval: StdDuration,
+    expected: &str,
+    mut observe: Observe,
+    is_ready: Ready,
+    describe: Describe,
+) -> Result<T>
+where
+    Observe: FnMut() -> Result<T>,
+    Ready: Fn(&T) -> bool,
+    Describe: Fn(&T) -> String,
+{
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+    let mut last_observation = String::from("none");
+
+    loop {
+        attempts += 1;
+        match observe() {
+            Ok(value) => {
+                let summary = describe(&value);
+                if is_ready(&value) {
+                    return Ok(value);
+                }
+                last_observation = format!("value: {summary}");
+            }
+            Err(err) => {
+                last_observation = format!("error: {err:#}");
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out after {}s waiting for {expected}; attempts={attempts}; last observation={}",
+                timeout.as_secs(),
+                last_observation
+            );
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
 pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     stop_daemon_for_scenario(world).ok();
 
@@ -1695,9 +1754,17 @@ pub fn assert_agent_session_exists_for_repo(
 
 pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading Bitloops checkpoint mappings")?;
+    let mappings = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        "Bitloops checkpoint mappings to be persisted",
+        || {
+            with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+                .context("reading Bitloops checkpoint mappings")
+        },
+        |mappings| !mappings.is_empty(),
+        |mappings| format!("mappings={}", mappings.len()),
+    )?;
     if mappings.is_empty() && claude_fallback_marker_exists(world) {
         append_world_log(
             world,
@@ -1724,9 +1791,17 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading Bitloops checkpoint mappings")?;
+    let mappings = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("at least {min_count} Bitloops checkpoint mappings"),
+        || {
+            with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+                .context("reading Bitloops checkpoint mappings")
+        },
+        |mappings| mappings.len() >= min_count,
+        |mappings| format!("mappings={}", mappings.len()),
+    )?;
     if mappings.len() < min_count && claude_fallback_marker_exists(world) {
         append_world_log(
             world,
@@ -1801,7 +1876,14 @@ pub fn assert_devql_artefacts_query_returns_results(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let count = count_artefacts_across_source_files(world)?;
+    let count = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        "DevQL artefacts query to return results",
+        || count_artefacts_across_source_files(world),
+        |count| *count >= 1,
+        |count| format!("artefacts={count}"),
+    )?;
     world.last_query_result_count = Some(count);
     ensure!(
         count >= 1,
