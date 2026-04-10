@@ -20,6 +20,7 @@ use crate::host::capability_host::gateways::{
 };
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::{InferenceGateway, LocalInferenceGateway, ScopedInferenceGateway};
 use crate::host::relational_store::DefaultRelationalStore;
 
 use super::language_services::BuiltinLanguageServicesGateway;
@@ -37,6 +38,7 @@ pub struct LocalCapabilityRuntime<'a> {
     provenance: &'a dyn ProvenanceBuilder,
     graph: &'a dyn CanonicalGraphGateway,
     stores: &'a dyn StoreHealthGateway,
+    inference: ScopedInferenceGateway<'a>,
     test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
     languages: &'a BuiltinLanguageServicesGateway,
     devql_relational: Option<&'a RelationalStorage>,
@@ -59,6 +61,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
         provenance: &'a dyn ProvenanceBuilder,
         graph: &'a dyn CanonicalGraphGateway,
         stores: &'a dyn StoreHealthGateway,
+        inference: &'a LocalInferenceGateway,
         test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
         languages: &'a BuiltinLanguageServicesGateway,
         devql_relational: Option<&'a RelationalStorage>,
@@ -78,6 +81,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
             provenance,
             graph,
             stores,
+            inference: inference.scoped(invoking_capability_id),
             test_harness,
             languages,
             devql_relational,
@@ -102,6 +106,10 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
 
     fn host_relational(&self) -> &dyn RelationalGateway {
         self.relational
+    }
+
+    fn inference(&self) -> &dyn InferenceGateway {
+        &self.inference
     }
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
@@ -147,6 +155,10 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
 
     fn host_relational(&self) -> &dyn RelationalGateway {
         self.relational
+    }
+
+    fn inference(&self) -> &dyn InferenceGateway {
+        &self.inference
     }
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
@@ -251,5 +263,9 @@ impl CapabilityHealthContext for LocalCapabilityRuntime<'_> {
 
     fn stores(&self) -> &dyn StoreHealthGateway {
         self.stores
+    }
+
+    fn inference(&self) -> &dyn InferenceGateway {
+        &self.inference
     }
 }

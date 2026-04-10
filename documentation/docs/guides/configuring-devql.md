@@ -46,31 +46,44 @@ Queries are DSL only when the input contains `->`. Otherwise the CLI treats the 
 
 ## Semantic And Embedding Settings
 
-Semantic and embedding provider settings belong in the global daemon config:
+Inference provider settings belong in the global daemon config:
 
 ```toml
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
-api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
-
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local"
+ann_neighbors = 5
+enrichment_workers = 1
 
-[embeddings.runtime]
-command = "bitloops-embeddings"
-startup_timeout_secs = 10
-request_timeout_secs = 60
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
-cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
+[inference.runtimes.bitloops_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+cache_dir = "/Users/alex/.cache/bitloops-embeddings"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
 ```
 
 `bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` can create the default local profile for you. Edit the daemon config manually only when you want a hosted profile or a customised local profile.
+
+When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above. Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
 
 ## Watch Behaviour
 

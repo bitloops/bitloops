@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.13] - 2026-04-10
+
+### Added
+
+- **Host-owned inference slots and standalone embeddings IPC runtime**: added a unified host-owned inference substrate under `host/inference` with typed embedding and text-generation services, capability-local inference slot bindings, and pack-scoped resolution through capability-host contexts. `semantic_clones` now consumes `summary_generation`, `code_embeddings`, and `summary_embeddings` slots instead of constructing providers directly, local embeddings now run through the standalone `bitloops-embeddings` binary over stdio IPC, and `bitloops embeddings` now manages that runtime with the default local `local_code` / `bge-m3` profile.
 - **Expanded Codex hook support**: Codex now supports the full currently documented hook surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
 - **Repo-local Codex hooks config bootstrap**: `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
 - **Codex Bash hook installation/parsing**: Codex Bash tool hooks are now installed and parsed, but remain non-mutating/no-op in Bitloops until dedicated Bash-level checkpoint capture is added.
@@ -40,6 +49,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Breaking — semantic inference configuration is now slot-based**: replaced legacy `[semantic]`, `[embeddings]`, and `semantic_clones.{summary_profile, embedding_profile}` configuration with unified `[inference]` runtimes/profiles plus `[semantic_clones.inference]` slot bindings. Production runtime selection now belongs entirely to the host layer.
+- **Semantic-clone enrichment now runs through the capability host**: DevQL ingest, current-state sync projection, semantic-clone health checks, and daemon enrichment now resolve slot-scoped host inference/config surfaces and execute semantic summary refresh, symbol embedding refresh, and clone-edge rebuild via `DevqlCapabilityHost` ingesters instead of constructing semantic-clone providers directly in host and daemon runtime paths.
+- **Inference and embeddings documentation refreshed**: updated the changelog-adjacent docs, configuration reference, CLI reference, DevQL guidance, storage guidance, quick-start material, and `RUN.md` examples so they describe the unified `[inference]` configuration model, `semantic_clones.inference` slot bindings, and the standalone `bitloops-embeddings` IPC runtime.
 - **Artefact selection stage schemas are now actionable**: `CheckpointStageResult`, `CloneStageResult`, `DependencyStageResult`, and `TestsStageResult` now expose `items(first: ...)` detail selectors alongside `summary` and `schema`, so the stage-local SDL fragments describe selectable GraphQL fields rather than dangling result types. The slim SDL snapshot and runtime coverage were updated accordingly, and selected-symbol checkpoint resolution now uses symbol-based checkpoint provenance lookups plus `checkpoint_artefacts` symbol indexes for stable cross-revision checkpoint matching.
 - **Storage responsibilities are now split by purpose**: queryable checkpoint and DevQL relational state continue to live behind `RelationalStore`, while local workflow state such as sessions, temporary checkpoints, pre-prompt markers, pre-task markers, daemon runtime documents, queue state, and the interaction spool now live behind `RuntimeStore`.
 - **Event-first checkpoint derivation hardening**: `post_commit` now treats the Event DB as the normal interaction read path, while the local spool remains a write-ahead buffer and local mirror only. Checkpoint condensation now prefers captured interaction turns for prompts, token usage, file overlap, and transcript scoping, with transcript-file fallback limited to the committed transcript blob when turn offsets are unavailable. Post-commit coverage is now split between fast fake repository/spool tests and ignored real-DB derivation coverage for DuckDB and ClickHouse.
@@ -56,6 +68,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Inference migration test and CLI drift**: updated embeddings, enable/init, DevQL resilience, and related config-consumer coverage to the unified inference model and Python IPC daemon protocol, fixing stale assertions around `local_fastembed`, legacy `[embeddings]` config, and unscoped semantic-clone health checks in test harnesses.
+- **Inference-refactor dead-code cleanup**: removed obsolete semantic-clone and DevQL helper paths left behind by the host-owned inference migration, keeping the runtime surface aligned with the new architecture and restoring a clean `cargo dev-clippy` run.
 - **Explicit daemon config startup inside nested Git repos**: daemon startup and dashboard DB initialisation now honour the selected explicit config path even when that config lives inside a larger Git repository. This fixes false startup health-check failures and detached-start timeouts caused by resolving store backends from the wrong repo root, and makes `--bootstrap-local-stores` work reliably for repo-scoped test configs.
 - **Stop Daemon on Uninstall**: made sure that the Bitloops daemon is stopped when the service is uninstalled in order to release the port.
 - **DevQL ingest telemetry metadata**: removed the stale `max_checkpoints` property from the `bitloops devql ingest` telemetry action after the CLI command stopped exposing that flag, restoring clean compilation of the CLI telemetry surface and adding regression coverage for the current empty-args ingest command.

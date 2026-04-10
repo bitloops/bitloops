@@ -701,7 +701,10 @@ fn cursor_stop_persists_interactions_before_save_step_failure() {
 
 #[test]
 fn cursor_before_submit_prompt_creates_pre_prompt_state() {
-    let (dir, backend, strat) = setup();
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = NoOpStrategy;
 
     with_process_state(Some(dir.path()), &[], || {
         dispatch_cursor_hook(

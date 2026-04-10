@@ -11,7 +11,7 @@ pub const CACHE_FILE_NAME: &str = "version_check.json";
 pub const DEFAULT_GITHUB_API_URL: &str =
     "https://api.github.com/repos/bitloops/bitloops/releases/latest";
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-pub const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+pub const HTTP_TIMEOUT: Duration = Duration::from_secs(1);
 pub const DISABLE_VERSION_CHECK_ENV: &str = "BITLOOPS_DISABLE_VERSION_CHECK";
 #[cfg(test)]
 const CONFIG_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE";

@@ -10,7 +10,9 @@ mod agent_hooks;
 mod agent_selection;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
-use crate::cli::embeddings::install_or_bootstrap_embeddings;
+use crate::cli::embeddings::{
+    EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+};
 use crate::cli::telemetry_consent;
 use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
 use crate::config::{
@@ -200,17 +202,16 @@ async fn run_with_io_async_for_project_root(
         out,
     )?;
 
-    if args.install_default_daemon {
-        match install_or_bootstrap_embeddings(project_root) {
-            Ok(lines) => {
-                for line in lines {
-                    writeln!(out, "{line}")?;
-                }
-            }
-            Err(err) => {
-                bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
-            }
-        }
+    let should_install_embeddings = should_install_embeddings_during_init(
+        project_root,
+        args.install_default_daemon,
+        out,
+        input,
+    )?;
+    let defer_embeddings_install_until_after_sync =
+        should_install_embeddings && args.install_default_daemon;
+    if should_install_embeddings && !defer_embeddings_install_until_after_sync {
+        install_embeddings_during_init(project_root, out)?;
     }
 
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
@@ -218,6 +219,8 @@ async fn run_with_io_async_for_project_root(
     if should_sync || should_ingest {
         let scope = discover_slim_cli_repo_scope(Some(project_root))?;
         if should_sync {
+            writeln!(out, "Starting initial DevQL sync...")?;
+            out.flush()?;
             let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
                 &scope, false, None, false, false, "init", false,
             )
@@ -234,6 +237,12 @@ async fn run_with_io_async_for_project_root(
             }
         }
         if should_ingest {
+            if should_sync {
+                writeln!(out, "Starting initial DevQL ingest after sync...")?;
+            } else {
+                writeln!(out, "Starting initial DevQL ingest...")?;
+            }
+            out.flush()?;
             crate::cli::devql::graphql::run_ingest_via_graphql(
                 &scope,
                 Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
@@ -242,7 +251,79 @@ async fn run_with_io_async_for_project_root(
             .await?;
         }
     }
+    if defer_embeddings_install_until_after_sync {
+        install_embeddings_during_init(project_root, out)?;
+    }
     Ok(())
+}
+
+fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
+    writeln!(out, "Preparing local embeddings setup...")?;
+    writeln!(
+        out,
+        "This can take a moment if the managed runtime needs to be downloaded."
+    )?;
+    out.flush()?;
+    match install_or_bootstrap_embeddings(project_root) {
+        Ok(lines) => {
+            for line in lines {
+                writeln!(out, "{line}")?;
+            }
+            Ok(())
+        }
+        Err(err) => {
+            bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
+        }
+    }
+}
+
+fn should_install_embeddings_during_init(
+    repo_root: &Path,
+    explicit_install: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if explicit_install {
+        return Ok(true);
+    }
+
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(false);
+    }
+
+    if !matches!(
+        inspect_embeddings_install_state(repo_root),
+        EmbeddingsInstallState::NotConfigured
+    ) {
+        return Ok(false);
+    }
+
+    prompt_install_embeddings(out, input)
+}
+
+fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
+    writeln!(out)?;
+    writeln!(out, "Install local embeddings as well?")?;
+    writeln!(
+        out,
+        "This is recommended and lets sync and ingest include them."
+    )?;
+
+    loop {
+        writeln!(out, "Install embeddings now? (Y/n)")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading init embeddings install prompt response")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(out, "Please answer yes or no.")?,
+        }
+    }
 }
 
 fn should_run_initial_sync(

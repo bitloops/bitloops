@@ -10,12 +10,14 @@ use crate::capability_packs::test_harness::storage::{
     BitloopsTestHarnessRepository, open_repository_for_repo,
 };
 use crate::config::{
-    ProviderConfig, StoreBackendConfig, resolve_provider_config_for_repo,
+    InferenceCapabilityConfig, ProviderConfig, StoreBackendConfig,
+    resolve_inference_capability_config_for_repo, resolve_provider_config_for_repo,
     resolve_store_backend_config_for_repo,
 };
 use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::LocalInferenceGateway;
 use crate::host::relational_store::DefaultRelationalStore;
 
 use super::capability_config::build_capability_config_root;
@@ -31,6 +33,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub config_root: serde_json::Value,
     pub backends: StoreBackendConfig,
     pub provider_config: ProviderConfig,
+    pub inference_config: InferenceCapabilityConfig,
     pub relational: SqliteRelationalGateway,
     pub knowledge_relational: SqliteKnowledgeRelationalRepository,
     pub knowledge_documents: DuckdbKnowledgeDocumentStore,
@@ -39,6 +42,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provenance: DefaultProvenanceBuilder,
     pub graph: LocalCanonicalGraphGateway,
     pub stores: LocalStoreHealthGateway,
+    pub inference: LocalInferenceGateway,
     pub test_harness: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
     pub languages: &'static BuiltinLanguageServicesGateway,
 }
@@ -47,6 +51,7 @@ impl LocalCapabilityRuntimeResources {
     pub fn new(repo_root: &Path, repo: RepoIdentity) -> Result<Self> {
         let backends = resolve_store_backend_config_for_repo(repo_root)?;
         let provider_config = resolve_provider_config_for_repo(repo_root)?;
+        let inference_config = resolve_inference_capability_config_for_repo(repo_root);
 
         let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
         let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
@@ -57,11 +62,21 @@ impl LocalCapabilityRuntimeResources {
         let blob_payloads = BlobKnowledgePayloadStore::from_backend_config(repo_root, &backends)?;
         let connectors = BuiltinConnectorRegistry::new(provider_config.clone())?;
 
-        let config_root = build_capability_config_root(&backends, &provider_config);
+        let config_root = build_capability_config_root(
+            &backends,
+            &provider_config,
+            &inference_config.semantic_clones,
+            &inference_config.inference,
+        );
         let stores = LocalStoreHealthGateway;
         let test_harness = open_repository_for_repo(repo_root)
             .ok()
             .map(std::sync::Mutex::new);
+        let inference = LocalInferenceGateway::new(
+            repo_root,
+            inference_config.inference.clone(),
+            build_slot_bindings(&inference_config),
+        );
 
         Ok(Self {
             repo_root: repo_root.to_path_buf(),
@@ -69,6 +84,7 @@ impl LocalCapabilityRuntimeResources {
             config_root,
             backends,
             provider_config,
+            inference_config,
             relational,
             knowledge_relational,
             knowledge_documents,
@@ -77,6 +93,7 @@ impl LocalCapabilityRuntimeResources {
             provenance: DefaultProvenanceBuilder,
             graph: LocalCanonicalGraphGateway,
             stores,
+            inference,
             test_harness,
             languages: builtin_language_services()?,
         })
@@ -84,6 +101,13 @@ impl LocalCapabilityRuntimeResources {
 
     pub fn runtime(&self) -> LocalCapabilityRuntime<'_> {
         self.runtime_with_relational(None, None, None)
+    }
+
+    pub fn runtime_for_capability<'a>(
+        &'a self,
+        capability_id: &'a str,
+    ) -> LocalCapabilityRuntime<'a> {
+        self.runtime_with_relational(None, Some(capability_id), None)
     }
 
     pub fn runtime_with_relational<'a>(
@@ -105,6 +129,7 @@ impl LocalCapabilityRuntimeResources {
             &self.provenance,
             &self.graph,
             &self.stores,
+            &self.inference,
             self.test_harness.as_ref(),
             self.languages,
             devql_relational,
@@ -112,4 +137,22 @@ impl LocalCapabilityRuntimeResources {
             invoking_ingester_id,
         )
     }
+}
+
+fn build_slot_bindings(
+    config: &InferenceCapabilityConfig,
+) -> std::collections::HashMap<String, std::collections::BTreeMap<String, String>> {
+    let mut bindings = std::collections::HashMap::new();
+    let mut semantic_clones = std::collections::BTreeMap::new();
+    if let Some(profile) = config.semantic_clones.inference.summary_generation.as_ref() {
+        semantic_clones.insert("summary_generation".to_string(), profile.clone());
+    }
+    if let Some(profile) = config.semantic_clones.inference.code_embeddings.as_ref() {
+        semantic_clones.insert("code_embeddings".to_string(), profile.clone());
+    }
+    if let Some(profile) = config.semantic_clones.inference.summary_embeddings.as_ref() {
+        semantic_clones.insert("summary_embeddings".to_string(), profile.clone());
+    }
+    bindings.insert("semantic_clones".to_string(), semantic_clones);
+    bindings
 }

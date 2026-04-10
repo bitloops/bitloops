@@ -1226,9 +1226,6 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
                 "events": {
                     "duckdb_path": ".bitloops/stores/subscriptions.duckdb"
                 }
-            },
-            "semantic": {
-                "provider": "disabled"
             }
         }),
     );

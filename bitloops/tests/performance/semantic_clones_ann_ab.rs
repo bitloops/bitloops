@@ -240,7 +240,9 @@ fn ann_ab_script_generates_mode_config_with_expected_timeouts_and_defaults() {
 
     assert!(mode_config.contains("summary_mode = \"off\""));
     assert!(mode_config.contains("embedding_mode = \"deterministic\""));
-    assert!(mode_config.contains("embedding_profile = \"local\""));
+    assert!(mode_config.contains("[semantic_clones.inference]"));
+    assert!(mode_config.contains("code_embeddings = \"local\""));
+    assert!(mode_config.contains("summary_embeddings = \"local\""));
     assert!(mode_config.contains("startup_timeout_secs = 180"));
     assert!(mode_config.contains("request_timeout_secs = 180"));
 }

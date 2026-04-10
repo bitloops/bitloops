@@ -8,18 +8,14 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::capability_packs::semantic_clones::embeddings;
-use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
-use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+    SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, load_pre_stage_artefacts_for_blob,
+    load_pre_stage_dependencies_for_blob,
 };
 use crate::config::{
-    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig,
-    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
-    resolve_store_backend_config, resolve_store_backend_config_for_repo,
+    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
@@ -618,29 +614,6 @@ async fn init_relational_schema_with_mode(
             )
         })?;
     Ok(outcome)
-}
-
-fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
-    semantic::SemanticSummaryProviderConfig {
-        semantic_provider: cfg.semantic_provider.clone(),
-        semantic_model: cfg.semantic_model.clone(),
-        semantic_api_key: cfg.semantic_api_key.clone(),
-        semantic_base_url: cfg.semantic_base_url.clone(),
-    }
-}
-
-fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
-    embeddings::EmbeddingProviderConfig {
-        daemon_config_path: resolve_daemon_config_path_for_repo(&cfg.repo_root)
-            .unwrap_or_else(|_| cfg.daemon_config_root.join("config.toml")),
-        embedding_profile: capability.semantic_clones.embedding_profile,
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    }
 }
 
 pub(crate) async fn ensure_devql_storage_current(

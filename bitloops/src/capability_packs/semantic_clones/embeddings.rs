@@ -2,15 +2,11 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::path::Path;
-use std::path::PathBuf;
 
-use crate::adapters::model_providers::embeddings::{
-    EmbeddingProvider, EmbeddingRuntimeClientConfig, build_embedding_provider,
-};
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, render_dependency_context,
 };
+use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 
 const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
@@ -52,51 +48,6 @@ impl EmbeddingRepresentationKind {
             Self::Summary => &["summary"],
         }
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct EmbeddingProviderConfig {
-    pub daemon_config_path: PathBuf,
-    pub embedding_profile: Option<String>,
-    pub runtime_command: String,
-    pub runtime_args: Vec<String>,
-    pub startup_timeout_secs: u64,
-    pub request_timeout_secs: u64,
-    pub warnings: Vec<String>,
-}
-
-pub fn build_symbol_embedding_provider(
-    cfg: &EmbeddingProviderConfig,
-    repo_root: Option<&Path>,
-) -> Result<Option<Box<dyn EmbeddingProvider>>> {
-    let Some(profile_name) = resolve_embedding_profile(cfg) else {
-        return Ok(None);
-    };
-
-    Ok(Some(build_embedding_provider(
-        &EmbeddingRuntimeClientConfig {
-            command: cfg.runtime_command.clone(),
-            args: cfg.runtime_args.clone(),
-            startup_timeout_secs: cfg.startup_timeout_secs,
-            request_timeout_secs: cfg.request_timeout_secs,
-            config_path: cfg.daemon_config_path.clone(),
-            profile_name,
-            repo_root: repo_root.map(Path::to_path_buf),
-        },
-    )?))
-}
-
-fn resolve_embedding_profile(cfg: &EmbeddingProviderConfig) -> Option<String> {
-    let profile = cfg
-        .embedding_profile
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if profile.is_empty() {
-        return None;
-    }
-    Some(profile)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -234,7 +185,7 @@ pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
 
 pub fn build_symbol_embedding_input_hash(
     input: &SymbolEmbeddingInput,
-    provider: &dyn EmbeddingProvider,
+    provider: &dyn EmbeddingService,
 ) -> String {
     let mut value = json!({
         "fingerprint_version": EMBEDDING_FINGERPRINT_VERSION,
@@ -275,7 +226,7 @@ pub fn build_symbol_embedding_input_hash(
     sha256_hex(&value.to_string())
 }
 
-fn embedding_provider_hash_identity(provider: &dyn EmbeddingProvider) -> serde_json::Value {
+fn embedding_provider_hash_identity(provider: &dyn EmbeddingService) -> serde_json::Value {
     match provider.output_dimension() {
         Some(dimension) => json!({
             "provider": provider.provider_name(),
@@ -297,7 +248,7 @@ pub fn symbol_embeddings_require_reindex(
     state.embedding_hash.as_deref() != Some(next_input_hash)
 }
 
-pub fn resolve_embedding_setup(provider: &dyn EmbeddingProvider) -> Result<EmbeddingSetup> {
+pub fn resolve_embedding_setup(provider: &dyn EmbeddingService) -> Result<EmbeddingSetup> {
     let dimension = provider
         .output_dimension()
         .ok_or_else(|| anyhow!("embedding provider did not expose an output dimension"))?;
@@ -310,12 +261,12 @@ pub fn resolve_embedding_setup(provider: &dyn EmbeddingProvider) -> Result<Embed
 
 pub fn build_symbol_embedding_row(
     input: &SymbolEmbeddingInput,
-    provider: &dyn EmbeddingProvider,
+    provider: &dyn EmbeddingService,
 ) -> Result<SymbolEmbeddingRow> {
     let setup = resolve_embedding_setup(provider)?;
     let embedding = provider.embed(
         &build_symbol_embedding_text(input),
-        crate::adapters::model_providers::embeddings::EmbeddingInputType::Document,
+        HostEmbeddingInputType::Document,
     )?;
     if embedding.is_empty() {
         bail!("embedding provider returned an empty vector");
@@ -411,11 +362,11 @@ fn build_embedding_setup_fingerprint(provider: &str, model: &str, dimension: usi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
+    use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 
     struct MockEmbeddingProvider;
 
-    impl EmbeddingProvider for MockEmbeddingProvider {
+    impl EmbeddingService for MockEmbeddingProvider {
         fn provider_name(&self) -> &str {
             "mock"
         }
@@ -432,8 +383,8 @@ mod tests {
             "provider=mock::model=voyage-code-3::dimension=3".to_string()
         }
 
-        fn embed(&self, _input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
-            assert_eq!(input_type, EmbeddingInputType::Document);
+        fn embed(&self, _input: &str, input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
+            assert_eq!(input_type, HostEmbeddingInputType::Document);
             Ok(vec![0.1, 0.2, 0.3])
         }
     }
@@ -442,7 +393,7 @@ mod tests {
         cache_key: String,
     }
 
-    impl EmbeddingProvider for MockEmbeddingSetupProvider {
+    impl EmbeddingService for MockEmbeddingSetupProvider {
         fn provider_name(&self) -> &str {
             "openai"
         }
@@ -459,7 +410,7 @@ mod tests {
             self.cache_key.clone()
         }
 
-        fn embed(&self, _input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+        fn embed(&self, _input: &str, _input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
             Ok(vec![0.1, 0.2, 0.3])
         }
     }
@@ -719,55 +670,6 @@ mod tests {
 
         assert_eq!(baseline, EmbeddingRepresentationKind::Code);
         assert_eq!(enriched, EmbeddingRepresentationKind::Code);
-    }
-
-    #[test]
-    fn symbol_embedding_provider_defaults_voyage_model_and_dimension() {
-        let profile = resolve_embedding_profile(&EmbeddingProviderConfig {
-            daemon_config_path: PathBuf::from("/config.toml"),
-            embedding_profile: Some("voyage-prod".to_string()),
-            runtime_command: "bitloops-embeddings".to_string(),
-            runtime_args: Vec::new(),
-            startup_timeout_secs: 10,
-            request_timeout_secs: 60,
-            warnings: Vec::new(),
-        });
-
-        assert_eq!(profile.as_deref(), Some("voyage-prod"));
-    }
-
-    #[test]
-    fn symbol_embedding_provider_returns_none_when_disabled() {
-        let provider = build_symbol_embedding_provider(
-            &EmbeddingProviderConfig {
-                daemon_config_path: PathBuf::from("/config.toml"),
-                embedding_profile: None,
-                runtime_command: "bitloops-embeddings".to_string(),
-                runtime_args: Vec::new(),
-                startup_timeout_secs: 10,
-                request_timeout_secs: 60,
-                warnings: Vec::new(),
-            },
-            None,
-        )
-        .expect("disabled provider should not error");
-
-        assert!(provider.is_none());
-    }
-
-    #[test]
-    fn symbol_embedding_provider_keeps_profile_name_case() {
-        let profile = resolve_embedding_profile(&EmbeddingProviderConfig {
-            daemon_config_path: PathBuf::from("/config.toml"),
-            embedding_profile: Some("Local-Code".to_string()),
-            runtime_command: "bitloops-embeddings".to_string(),
-            runtime_args: Vec::new(),
-            startup_timeout_secs: 10,
-            request_timeout_secs: 60,
-            warnings: Vec::new(),
-        });
-
-        assert_eq!(profile.as_deref(), Some("Local-Code"));
     }
 
     #[test]

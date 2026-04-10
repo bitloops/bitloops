@@ -28,9 +28,9 @@ bitloops start --create-default-config
 
 On a fresh machine, this creates the default daemon config and local default store paths. Interactive bootstrap can also ask for telemetry consent unless you pass an explicit telemetry flag.
 
-## 2) Configure stores and semantic provider
+## 2) Configure stores and inference profiles
 
-Edit the global daemon config (`config.toml`) and set the stores and semantic provider you want. Example:
+Edit the global daemon config (`config.toml`) and set the stores and inference profiles you want. Example:
 
 ```toml
 [stores.relational]
@@ -42,11 +42,18 @@ duckdb_path = "/absolute/path/to/bitloops/stores/event/events.duckdb"
 [stores.blob]
 local_path = "/absolute/path/to/bitloops/stores/blob"
 
-[semantic]
-provider = "openai_compatible"
-model = "gpt-4.1-mini"
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
+model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1"
+
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "summary_llm"
 ```
 
 What this does:

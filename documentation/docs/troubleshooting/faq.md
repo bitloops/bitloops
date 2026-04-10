@@ -50,7 +50,7 @@ Machine-scoped settings such as:
 
 - store paths and backends
 - provider credentials
-- embeddings profiles and runtime settings
+- inference profiles, runtimes, and capability bindings
 - dashboard defaults
 - daemon runtime defaults
 

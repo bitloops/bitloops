@@ -68,34 +68,24 @@ jobs:
           DUCKDB_DOWNLOAD_LIB: "0"
         run: |
           cross build --release --target ${{ matrix.target }} -p bitloops --features duckdb-bundled
-          cross build --release --target ${{ matrix.target }} -p bitloops-embeddings
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
-        run: cargo build --release --target ${{ matrix.target }} -p bitloops -p bitloops-embeddings
+        run: cargo build --release --target ${{ matrix.target }} -p bitloops
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
         run: ./target/${{ matrix.target }}/release/bitloops --version
 
-      - name: Smoke test embeddings runtime (Unix)
-        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: ./target/${{ matrix.target }}/release/bitloops-embeddings --help
-
       - name: Smoke test (Linux arm64 via qemu)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: qemu-aarch64 ./target/${{ matrix.target }}/release/bitloops --version
-
-      - name: Smoke test embeddings runtime (Linux arm64 via qemu)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: qemu-aarch64 ./target/${{ matrix.target }}/release/bitloops-embeddings --help
 
       - name: Smoke test (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           & "target/${{ matrix.target }}/release/bitloops.exe" --version
-          & "target/${{ matrix.target }}/release/bitloops-embeddings.exe" --help
 
       - name: Validate Windows arm64 build output
         if: matrix.target == 'aarch64-pc-windows-msvc'
@@ -103,8 +93,6 @@ jobs:
         run: |
           $path = "target/${{ matrix.target }}/release/bitloops.exe"
           if (-not (Test-Path $path)) { throw "Missing expected binary: $path" }
-          $embeddingsPath = "target/${{ matrix.target }}/release/bitloops-embeddings.exe"
-          if (-not (Test-Path $embeddingsPath)) { throw "Missing expected binary: $embeddingsPath" }
 
       - name: Import Apple signing certificate
         if: runner.os == 'macOS'
@@ -139,9 +127,6 @@ jobs:
           codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" \
             "target/${{ matrix.target }}/release/bitloops"
-          codesign --force --options runtime --timestamp \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            "target/${{ matrix.target }}/release/bitloops-embeddings"
 
       - name: Verify macOS signature
         if: runner.os == 'macOS'
@@ -149,9 +134,6 @@ jobs:
           codesign --verify --verbose=4 "target/${{ matrix.target }}/release/bitloops"
           codesign --display --verbose=4 "target/${{ matrix.target }}/release/bitloops"
           spctl -a -t exec -vv "target/${{ matrix.target }}/release/bitloops" || true
-          codesign --verify --verbose=4 "target/${{ matrix.target }}/release/bitloops-embeddings"
-          codesign --display --verbose=4 "target/${{ matrix.target }}/release/bitloops-embeddings"
-          spctl -a -t exec -vv "target/${{ matrix.target }}/release/bitloops-embeddings" || true
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -159,15 +141,13 @@ jobs:
           mkdir -p dist
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
-          cp "target/${{ matrix.target }}/release/bitloops-embeddings" dist/package/bitloops-embeddings
-          tar -C dist/package -czf dist/bitloops-${{ matrix.target }}.tar.gz bitloops bitloops-embeddings
+          tar -C dist/package -czf dist/bitloops-${{ matrix.target }}.tar.gz bitloops
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
-          cp "target/${{ matrix.target }}/release/bitloops-embeddings" dist/package/bitloops-embeddings
           ditto -c -k --keepParent dist/package "dist/bitloops-${{ matrix.target }}.zip"
 
       - name: Restore App Store Connect key
@@ -195,7 +175,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/bitloops.exe" "dist/package/bitloops.exe" -Force
-          Copy-Item "target/${{ matrix.target }}/release/bitloops-embeddings.exe" "dist/package/bitloops-embeddings.exe" -Force
           Compress-Archive -Path dist/package/* -DestinationPath dist/bitloops-${{ matrix.target }}.zip
 
       - name: Upload build artifact

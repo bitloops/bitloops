@@ -29,31 +29,29 @@ pub use resolve::{
     resolve_daemon_config_root_for_repo, resolve_dashboard_config,
     resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo,
     resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
+    resolve_inference_capability_config_for_repo, resolve_inference_config_for_repo,
     resolve_provider_config, resolve_provider_config_for_repo,
     resolve_repo_runtime_db_path_for_config_root, resolve_repo_runtime_db_path_for_repo,
     resolve_semantic_clones_config_for_repo, resolve_sqlite_db_path,
     resolve_sqlite_db_path_for_repo, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo, resolve_store_semantic_config,
-    resolve_store_semantic_config_for_repo, resolve_watch_runtime_config_for_repo,
+    resolve_store_backend_config_for_repo, resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
     AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
     DashboardFileConfig, DashboardLocalDashboardConfig, EmbeddingCapabilityConfig,
     EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
-    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
-    SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
-    StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig, InferenceProfileConfig,
+    InferenceRuntimeConfig, InferenceTask, ProviderConfig, RelationalBackendConfig,
+    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticClonesInferenceBindings,
+    SemanticSummaryMode, StoreBackendConfig, StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 
 #[cfg(test)]
-pub(crate) use constants::{
-    ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL, ENV_SEMANTIC_PROVIDER,
-    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
-};
+pub(crate) use constants::{ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS};
 #[cfg(test)]
 pub(crate) use resolve::{
     resolve_provider_config_for_tests, resolve_store_backend_config_for_tests,
-    resolve_store_semantic_config_for_tests, resolve_watch_runtime_config_for_tests,
+    resolve_watch_runtime_config_for_tests,
 };
 
 #[cfg(test)]

@@ -68,7 +68,7 @@ ORT provisioning behavior:
 - resolve in order: `--ort-dylib-path` -> `ORT_DYLIB_PATH` -> repo cache under
   `target/qa/tools/onnxruntime/...` -> auto-download to repo cache.
 - the library path is exported only to benchmark subprocesses, with no global install side effects.
-- each benchmark mode uses isolated app-state config with deterministic local semantic-clones embeddings (`embedding_profile="local"`).
+- each benchmark mode uses isolated app-state config with deterministic local semantic-clones embeddings (bind `code_embeddings = "local_code"` and `summary_embeddings = "local_code"`).
 
 Outputs:
 - terminal summary table (median/p95 + ANN speedup % for ingest/query)

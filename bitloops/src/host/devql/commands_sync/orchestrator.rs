@@ -1,12 +1,10 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
-use crate::adapters::model_providers::embeddings::EmbeddingProvider;
-use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
-use crate::capability_packs::semantic_clones::features as semantic;
+use crate::capability_packs::semantic_clones::features as semantic_features;
+use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
 use super::diff_collector::SyncDiffCollector;
@@ -23,11 +21,6 @@ use super::stats::SyncExecutionStats;
 use super::summary::SyncSummary;
 use super::validation::execute_sync_validation;
 use super::*;
-
-struct CurrentProjectionContext {
-    summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
-    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
-}
 
 pub async fn run_sync(cfg: &DevqlConfig, mode: sync::types::SyncMode) -> Result<()> {
     run_sync_with_summary(cfg, mode).await.map(|_| ())
@@ -316,7 +309,7 @@ async fn execute_sync_inner(
     let mut writer = SqliteSyncWriter::open(relational.sqlite_path())
         .await
         .context("opening persistent SQLite sync writer")?;
-    let current_projection = build_current_projection_context(cfg);
+    let current_projection = build_current_projection_context(cfg)?;
     let mut current_projection_dirty = false;
 
     let removals = classified
@@ -709,7 +702,7 @@ fn handle_prepared_outcome(
 async fn flush_pending_materialisations(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    current_projection: &CurrentProjectionContext,
+    current_projection: &DevqlCapabilityHost,
     writer: &mut SqliteSyncWriter,
     repo_id: &str,
     parser_version: &str,
@@ -817,68 +810,78 @@ fn estimate_sync_progress_paths_completed(
         .saturating_add(transform_credit)
 }
 
-fn build_current_projection_context(cfg: &DevqlConfig) -> CurrentProjectionContext {
-    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
-        match semantic_clones_pack::build_semantic_summary_provider(
-            &super::super::semantic_provider_config(cfg),
-        ) {
-            Ok(provider) => provider,
-            Err(err) => {
-                log::warn!(
-                    "semantic_clones current sync summaries degraded; using deterministic summaries only: {err:#}"
-                );
-                Arc::new(semantic::NoopSemanticSummaryProvider)
-            }
-        };
-    let embedding_config = super::super::embedding_provider_config(cfg);
-    for warning in &embedding_config.warnings {
-        log::warn!("semantic_clones current sync embeddings config warning: {warning}");
-    }
-    let embedding_provider = match semantic_clones_pack::build_symbol_embedding_provider(
-        &embedding_config,
-        Some(&cfg.repo_root),
-    ) {
-        Ok(provider) => provider,
-        Err(err) => {
-            log::warn!(
-                "semantic_clones current sync embeddings degraded; skipping current embedding projection: {err:#}"
-            );
-            None
-        }
-    };
-
-    CurrentProjectionContext {
-        summary_provider,
-        embedding_provider,
-    }
+fn build_current_projection_context(cfg: &DevqlConfig) -> Result<DevqlCapabilityHost> {
+    build_capability_host(&cfg.repo_root, cfg.repo.clone())
 }
 
 async fn project_materialized_items(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    current_projection: &CurrentProjectionContext,
+    current_projection: &DevqlCapabilityHost,
     items: &[super::sqlite_writer::PreparedSyncItem],
 ) -> Result<()> {
     for item in items {
-        sync::semantic_projector::project_path(
-            cfg,
-            relational,
-            &item.desired,
-            &item.extraction,
-            &item.effective_content,
-            Arc::clone(&current_projection.summary_provider),
-            current_projection
-                .embedding_provider
-                .as_ref()
-                .map(Arc::clone),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "projecting current semantic clone rows for `{}`",
-                item.desired.path
+        let inputs =
+            semantic_features::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+                &sync::semantic_projector::pre_stage_artefacts_for_projection(
+                    cfg,
+                    &item.desired,
+                    &item.extraction,
+                )?,
+                &sync::semantic_projector::pre_stage_dependencies_for_projection(
+                    cfg,
+                    &item.desired,
+                    &item.extraction,
+                )?,
+                &item.effective_content,
+            );
+        current_projection
+            .invoke_ingester_with_relational(
+                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
+                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
+                serde_json::to_value(
+                    crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshPayload {
+                        scope: crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshScope::CurrentPath,
+                        path: Some(item.desired.path.clone()),
+                        content_id: Some(item.desired.effective_content_id.clone()),
+                        inputs: inputs.clone(),
+                        mode: crate::capability_packs::semantic_clones::ingesters::SemanticSummaryRefreshMode::ConfiguredDegrade,
+                    }
+                )?,
+                Some(relational),
             )
-        })?;
+            .await
+            .with_context(|| format!("refreshing current semantic features for `{}`", item.desired.path))?;
+        for representation_kind in [
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+        ] {
+            current_projection
+                .invoke_ingester_with_relational(
+                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
+                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+                    serde_json::to_value(
+                        crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshPayload {
+                            scope: crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshScope::CurrentPath,
+                            path: Some(item.desired.path.clone()),
+                            content_id: Some(item.desired.effective_content_id.clone()),
+                            inputs: inputs.clone(),
+                            expected_input_hashes: Default::default(),
+                            representation_kind,
+                            mode: crate::capability_packs::semantic_clones::ingesters::EmbeddingRefreshMode::ConfiguredDegrade,
+                            manage_active_state: false,
+                        }
+                    )?,
+                    Some(relational),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "refreshing current symbol embeddings for `{}` ({representation_kind})",
+                        item.desired.path
+                    )
+                })?;
+        }
     }
 
     Ok(())
