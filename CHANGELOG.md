@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.13] - 2026-04-10
+
+### Added
+
 - **Host-owned inference slots and standalone embeddings IPC runtime**: added a unified host-owned inference substrate under `host/inference` with typed embedding and text-generation services, capability-local inference slot bindings, and pack-scoped resolution through capability-host contexts. `semantic_clones` now consumes `summary_generation`, `code_embeddings`, and `summary_embeddings` slots instead of constructing providers directly, local embeddings now run through the standalone `bitloops-embeddings` binary over stdio IPC, and `bitloops embeddings` now manages that runtime with the default local `local_code` / `bge-m3` profile.
 - **Expanded Codex hook support**: Codex now supports the full currently documented hook surface: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`.
 - **Repo-local Codex hooks config bootstrap**: `bitloops init --agent codex` now also writes repo-local `.codex/config.toml` with `[features].codex_hooks = true` so Codex can load project hooks in trusted projects.
