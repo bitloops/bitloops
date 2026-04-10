@@ -40,7 +40,7 @@ fn combine_bundle_results_returns_devql_ingest_error_when_only_ingest_fails() {
         BundleResult::ok("devql-capabilities"),
         BundleResult::err("devql-ingest", anyhow::anyhow!("ingest failed")),
     ])
-        .expect_err("sync failure should surface");
+    .expect_err("sync failure should surface");
     assert!(
         format!("{err:#}").contains("ingest failed"),
         "unexpected error: {err:#}"

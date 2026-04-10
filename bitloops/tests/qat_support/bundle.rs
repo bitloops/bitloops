@@ -27,10 +27,7 @@ pub fn combine_bundle_results(results: Vec<BundleResult>) -> Result<()> {
 
     match failures.len() {
         0 => Ok(()),
-        1 => Err(failures
-            .pop()
-            .expect("single failure must exist")
-            .1),
+        1 => Err(failures.pop().expect("single failure must exist").1),
         _ => {
             let mut message = String::from("QAT bundle reported failures:");
             for (suite, err) in failures {
