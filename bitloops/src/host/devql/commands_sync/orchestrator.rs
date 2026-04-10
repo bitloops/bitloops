@@ -579,14 +579,7 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_rows_written,
     );
 
-    if current_projection_dirty {
-        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
-            relational,
-            &cfg.repo.repo_id,
-        )
-        .await
-        .context("rebuilding current semantic clone edges after DevQL sync")?;
-    }
+    let _ = current_projection_dirty;
 
     emit_progress(
         observer,

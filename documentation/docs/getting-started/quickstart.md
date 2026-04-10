@@ -62,7 +62,7 @@ In an interactive terminal, plain `bitloops init` also asks whether you want to 
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
 
-That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql ingest` separately, when you want checkpoint, commit, and event history materialised.
+That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` separately, when you want checkpoint, commit, and event history materialised.
 
 If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 
@@ -104,7 +104,7 @@ bitloops start --until-stopped
 The daemon automatically initialises the DevQL schema on startup. You can ingest and query immediately:
 
 ```bash
-bitloops devql ingest
+bitloops devql tasks enqueue --kind ingest
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
 ```
 
@@ -115,16 +115,16 @@ DevQL CLI queries are DSL only when the input contains `->`. Otherwise the CLI t
 When you want to reconcile `artefacts_current`/`artefact_edges_current` with the current workspace:
 
 ```bash
-bitloops devql sync
-bitloops devql sync --status
+bitloops devql tasks enqueue --kind sync
+bitloops devql tasks enqueue --kind sync --status
 ```
 
-By default, `bitloops devql sync` queues a sync task and returns immediately after printing the task id. Use `--status` when you want the CLI to follow that task until it reaches a terminal state.
+By default, `bitloops devql tasks enqueue --kind sync` queues a sync task and returns immediately after printing the task id. Use `--status` when you want the CLI to follow that task until it reaches a terminal state.
 
 When you want to validate that current-state rows match a full-project reconciliation without writing changes:
 
 ```bash
-bitloops devql sync --validate --status
+bitloops devql tasks enqueue --kind sync --validate --status
 ```
 
 Use `--validate` as a diagnostic check when debugging drift between source files and current-state query results.

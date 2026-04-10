@@ -1,4 +1,5 @@
 pub const SEMANTIC_CLONES_CAPABILITY_ID: &str = "semantic_clones";
+pub const SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID: &str = "semantic_clones.current_state";
 pub const SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT: &str = "summary_generation";
 pub const SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT: &str = "code_embeddings";
 pub const SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT: &str = "summary_embeddings";

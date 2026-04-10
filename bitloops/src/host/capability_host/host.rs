@@ -13,7 +13,7 @@ use crate::host::relational_store::DefaultRelationalStore;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
-use super::events::{EventHandlerContext, HostEventHandler};
+use super::events::{CurrentStateConsumerContext, HostEventHandler};
 use super::gateways::{
     DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway,
     SqliteRelationalGateway,
@@ -23,10 +23,10 @@ use super::lifecycle;
 use super::migrations::CapabilityMigration;
 use super::policy::{CrossPackAccessPolicy, HostInvocationPolicy, with_timeout};
 use super::registrar::{
-    CapabilityPack, CapabilityRegistrar, IngestRequest, IngestResult, IngesterHandler,
-    IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
-    KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
-    StageRegistration, StageRequest, StageResponse,
+    CapabilityPack, CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest,
+    IngestResult, IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler,
+    KnowledgeIngesterRegistration, KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample,
+    SchemaModule, StageHandler, StageRegistration, StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
 use crate::host::inference::{InferenceGateway, ScopedInferenceGateway};
@@ -65,6 +65,7 @@ pub struct DevqlCapabilityHost {
     descriptors: HashMap<String, &'static CapabilityDescriptor>,
     stages: HashMap<(String, String), RegisteredStage>,
     ingesters: HashMap<(String, String), RegisteredIngester>,
+    current_state_consumers: Vec<CurrentStateConsumerRegistration>,
     event_handlers: Vec<Arc<dyn HostEventHandler>>,
     schema_modules: Vec<SchemaModule>,
     query_examples: Vec<&'static [QueryExample]>,
@@ -86,6 +87,7 @@ impl DevqlCapabilityHost {
             descriptors: HashMap::new(),
             stages: HashMap::new(),
             ingesters: HashMap::new(),
+            current_state_consumers: Vec::new(),
             event_handlers: Vec::new(),
             schema_modules: Vec::new(),
             query_examples: Vec::new(),
@@ -176,7 +178,11 @@ impl DevqlCapabilityHost {
         self.event_handlers.as_slice()
     }
 
-    pub fn build_event_handler_context(&self) -> Result<EventHandlerContext> {
+    pub fn current_state_consumers(&self) -> &[CurrentStateConsumerRegistration] {
+        self.current_state_consumers.as_slice()
+    }
+
+    pub fn build_current_state_consumer_context(&self) -> Result<CurrentStateConsumerContext> {
         let relational_store = DefaultRelationalStore::open_local_for_backend_config(
             self.repo_root(),
             &self.runtime.backends.relational,
@@ -192,12 +198,17 @@ impl DevqlCapabilityHost {
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
         );
 
-        Ok(EventHandlerContext {
+        Ok(CurrentStateConsumerContext {
+            config_root: self.runtime.config_root.clone(),
             storage: Arc::new(relational_store.to_local_inner()),
             relational,
             language_services,
             host_services,
         })
+    }
+
+    pub fn build_event_handler_context(&self) -> Result<CurrentStateConsumerContext> {
+        self.build_current_state_consumer_context()
     }
 
     /// Snapshot of registered packs, migrations, invocation policy, and cross-pack grants.
@@ -537,6 +548,25 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
 
     fn register_event_handler(&mut self, handler: Arc<dyn HostEventHandler>) -> Result<()> {
         self.event_handlers.push(handler);
+        Ok(())
+    }
+
+    fn register_current_state_consumer(
+        &mut self,
+        registration: CurrentStateConsumerRegistration,
+    ) -> Result<()> {
+        let duplicate = self.current_state_consumers.iter().any(|existing| {
+            existing.capability_id == registration.capability_id
+                && existing.consumer_id == registration.consumer_id
+        });
+        if duplicate {
+            bail!(
+                "[capability_pack:{}] [current_state_consumer:{}] duplicate registration",
+                registration.capability_id,
+                registration.consumer_id
+            );
+        }
+        self.current_state_consumers.push(registration);
         Ok(())
     }
 }

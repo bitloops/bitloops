@@ -151,6 +151,7 @@ mod tests {
         let sqlite_pool = crate::storage::SqliteConnectionPool::connect(db_path.clone())
             .expect("open sqlite pool for dispatch tests");
         Arc::new(EventHandlerContext {
+            config_root: serde_json::json!({}),
             storage: Arc::new(RelationalStorage::local_only(db_path)),
             relational: Arc::new(
                 crate::host::capability_host::gateways::SqliteRelationalGateway::new(sqlite_pool),

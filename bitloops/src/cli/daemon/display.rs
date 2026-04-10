@@ -2,6 +2,15 @@ use std::path::Path;
 
 use crate::daemon;
 
+fn current_state_consumer_status(
+    report: &daemon::DaemonStatusReport,
+) -> Option<&daemon::CapabilityEventQueueStatus> {
+    report
+        .current_state_consumers
+        .as_ref()
+        .or(report.capability_events.as_ref())
+}
+
 pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     let log_path = daemon::daemon_log_file_path();
     status_lines_with_log_path(report, &log_path)
@@ -27,7 +36,7 @@ pub(super) fn status_lines_with_log_path(
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
-        if let Some(capability_events) = report.capability_events.as_ref() {
+        if let Some(capability_events) = current_state_consumer_status(report) {
             append_capability_event_lines(&mut lines, capability_events);
         }
         if let Some(devql_tasks) = report.devql_tasks.as_ref() {
@@ -59,7 +68,7 @@ pub(super) fn status_lines_with_log_path(
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
-        if let Some(capability_events) = report.capability_events.as_ref() {
+        if let Some(capability_events) = current_state_consumer_status(report) {
             append_capability_event_lines(&mut lines, capability_events);
         }
         if let Some(devql_tasks) = report.devql_tasks.as_ref() {
@@ -74,7 +83,7 @@ pub(super) fn status_lines_with_log_path(
     if let Some(enrichment) = report.enrichment.as_ref() {
         append_enrichment_lines(&mut lines, enrichment);
     }
-    if let Some(capability_events) = report.capability_events.as_ref() {
+    if let Some(capability_events) = current_state_consumer_status(report) {
         append_capability_event_lines(&mut lines, capability_events);
     }
     if let Some(devql_tasks) = report.devql_tasks.as_ref() {
@@ -214,37 +223,45 @@ fn append_capability_event_lines(
     lines: &mut Vec<String>,
     status: &daemon::CapabilityEventQueueStatus,
 ) {
-    lines.push("Capability event queue: available".to_string());
+    lines.push("Current-state consumer queue: available".to_string());
     lines.push(format!(
-        "Capability event pending runs: {}",
+        "Current-state consumer pending runs: {}",
         status.state.pending_runs
     ));
     lines.push(format!(
-        "Capability event running runs: {}",
+        "Current-state consumer running runs: {}",
         status.state.running_runs
     ));
     lines.push(format!(
-        "Capability event failed runs: {}",
+        "Current-state consumer failed runs: {}",
         status.state.failed_runs
     ));
     lines.push(format!(
-        "Capability event completed recent runs: {}",
+        "Current-state consumer completed recent runs: {}",
         status.state.completed_recent_runs
     ));
     if let Some(action) = status.state.last_action.as_ref() {
-        lines.push(format!("Capability event last action: {action}"));
+        lines.push(format!("Current-state consumer last action: {action}"));
     }
     if let Some(run) = status.current_repo_run.as_ref() {
         lines.push(format!(
-            "Current repo capability event run: {} ({}, capability={}, handler={}, event_kind={})",
-            run.run_id, run.status, run.capability_id, run.handler_id, run.event_kind
+            "Current repo current-state consumer run: {} ({}, capability={}, consumer={}, mode={}, generations={}..={})",
+            run.run_id,
+            run.status,
+            run.capability_id,
+            run.consumer_id,
+            run.reconcile_mode,
+            run.from_generation_seq.saturating_add(1),
+            run.to_generation_seq
         ));
         if let Some(error) = run.error.as_ref() {
-            lines.push(format!("Current repo capability event error: {error}"));
+            lines.push(format!(
+                "Current repo current-state consumer error: {error}"
+            ));
         }
     }
     lines.push(format!(
-        "Capability event persisted: {}",
+        "Current-state consumer persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
 }

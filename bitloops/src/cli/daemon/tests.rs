@@ -50,20 +50,14 @@ fn sample_capability_event_run(status: CapabilityEventRunStatus) -> CapabilityEv
         run_id: "capability-event-run-1".to_string(),
         repo_id: "repo-1".to_string(),
         capability_id: "test_harness".to_string(),
-        handler_id: "sync_completed".to_string(),
-        event_kind: "sync_completed".to_string(),
-        lane_key: "repo-1:test_harness:sync_completed".to_string(),
-        event_payload_json: serde_json::json!({
-            "repo_id": "repo-1",
-            "repo_root": "/tmp/repo",
-            "active_branch": "main",
-            "head_commit_sha": "abc123",
-            "sync_mode": "full",
-            "sync_completed_at": "2026-04-06T00:00:00Z",
-            "files": {"added": [], "changed": [], "removed": []},
-            "artefacts": {"added": [], "changed": [], "removed": []},
-        })
-        .to_string(),
+        consumer_id: "test_harness.current_state".to_string(),
+        handler_id: "test_harness.current_state".to_string(),
+        from_generation_seq: 4,
+        to_generation_seq: 7,
+        reconcile_mode: "merged_delta".to_string(),
+        event_kind: "current_state_consumer".to_string(),
+        lane_key: "repo-1:test_harness.current_state".to_string(),
+        event_payload_json: String::new(),
         status,
         attempts: 1,
         submitted_at_unix: 1,
@@ -476,6 +470,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
         }),
         service_running: false,
         health: None,
+        current_state_consumers: None,
         capability_events: None,
         enrichment: Some(EnrichmentQueueStatus {
             state: EnrichmentQueueState {
@@ -560,6 +555,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         service: None,
         service_running: false,
         health: None,
+        current_state_consumers: None,
         capability_events: None,
         enrichment: None,
         devql_tasks: None,
@@ -578,6 +574,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         service: None,
         service_running: false,
         health: None,
+        current_state_consumers: None,
         capability_events: None,
         enrichment: None,
         devql_tasks: None,
@@ -621,6 +618,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
         service: None,
         service_running: false,
         health: None,
+        current_state_consumers: None,
         capability_events: None,
         enrichment: None,
         devql_tasks: Some(DevqlTaskQueueStatus {
@@ -722,6 +720,13 @@ fn status_lines_include_capability_event_queue_and_current_repo_run() {
         service: None,
         service_running: false,
         health: None,
+        current_state_consumers: Some({
+            let mut status = sample_capability_event_status();
+            status.current_repo_run = Some(sample_capability_event_run(
+                CapabilityEventRunStatus::Failed,
+            ));
+            status
+        }),
         capability_events: Some({
             let mut status = sample_capability_event_status();
             status.current_repo_run = Some(sample_capability_event_run(
@@ -734,17 +739,19 @@ fn status_lines_include_capability_event_queue_and_current_repo_run() {
     };
 
     let lines = status_lines(&report);
-    assert!(lines.contains(&"Capability event queue: available".to_string()));
-    assert!(lines.contains(&"Capability event pending runs: 2".to_string()));
-    assert!(lines.contains(&"Capability event running runs: 1".to_string()));
-    assert!(lines.contains(&"Capability event failed runs: 3".to_string()));
-    assert!(lines.contains(&"Capability event completed recent runs: 4".to_string()));
-    assert!(lines.contains(&"Capability event last action: running".to_string()));
+    assert!(lines.contains(&"Current-state consumer queue: available".to_string()));
+    assert!(lines.contains(&"Current-state consumer pending runs: 2".to_string()));
+    assert!(lines.contains(&"Current-state consumer running runs: 1".to_string()));
+    assert!(lines.contains(&"Current-state consumer failed runs: 3".to_string()));
+    assert!(lines.contains(&"Current-state consumer completed recent runs: 4".to_string()));
+    assert!(lines.contains(&"Current-state consumer last action: running".to_string()));
     assert!(lines.contains(
-        &"Current repo capability event run: capability-event-run-1 (failed, capability=test_harness, handler=sync_completed, event_kind=sync_completed)".to_string()
+        &"Current repo current-state consumer run: capability-event-run-1 (failed, capability=test_harness, consumer=test_harness.current_state, mode=merged_delta, generations=5..=7)".to_string()
     ));
-    assert!(lines.contains(&"Current repo capability event error: handler failed".to_string()));
-    assert!(lines.contains(&"Capability event persisted: yes".to_string()));
+    assert!(
+        lines.contains(&"Current repo current-state consumer error: handler failed".to_string())
+    );
+    assert!(lines.contains(&"Current-state consumer persisted: yes".to_string()));
 }
 
 #[test]
@@ -754,6 +761,7 @@ fn run_status_writes_json_when_requested() {
         service: None,
         service_running: false,
         health: None,
+        current_state_consumers: Some(sample_capability_event_status()),
         capability_events: Some(sample_capability_event_status()),
         enrichment: None,
         devql_tasks: None,
@@ -779,7 +787,7 @@ fn run_status_writes_json_when_requested() {
     );
     assert_eq!(
         value["capability_events"]["current_repo_run"]["handler_id"],
-        serde_json::json!("sync_completed")
+        serde_json::json!("test_harness.current_state")
     );
     assert_eq!(
         value["capability_events"]["current_repo_run"]["error"],

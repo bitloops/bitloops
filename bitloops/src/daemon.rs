@@ -259,6 +259,10 @@ pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQ
     CapabilityEventCoordinator::shared().snapshot(repo_id)
 }
 
+pub fn current_state_consumer_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+    capability_event_status(repo_id)
+}
+
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     enrichment::pause_enrichments(reason)
 }
@@ -277,6 +281,10 @@ pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
 
 pub fn shared_capability_event_coordinator() -> Arc<CapabilityEventCoordinator> {
     CapabilityEventCoordinator::shared()
+}
+
+pub fn shared_current_state_consumer_coordinator() -> Arc<CapabilityEventCoordinator> {
+    shared_capability_event_coordinator()
 }
 
 pub fn shared_devql_task_coordinator() -> Arc<DevqlTaskCoordinator> {

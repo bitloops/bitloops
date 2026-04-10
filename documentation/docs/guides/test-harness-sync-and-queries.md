@@ -13,7 +13,7 @@ This guide explains how `tests()` in DevQL gets populated, what `sync` updates a
 When you run:
 
 ```bash
-bitloops devql sync
+bitloops devql tasks enqueue --kind sync
 ```
 
 or:
@@ -29,7 +29,7 @@ the daemon runs a current-state sync. After a successful non-`validate` sync, it
 - removes rows for deleted files
 - removes edges pointing to deleted production symbols
 
-`bitloops devql sync --validate` is read-only and does not trigger this update path.
+`bitloops devql tasks enqueue --kind sync --validate` is read-only and does not trigger this update path.
 
 ## What Is Not Automatic
 

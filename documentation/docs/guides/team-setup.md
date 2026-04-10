@@ -70,7 +70,7 @@ In an interactive terminal, plain `bitloops init` also asks whether you want to 
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
 
-`bitloops init` still does not run DevQL ingest. Use `bitloops devql ingest` when you want to populate checkpoint, commit, and event history.
+`bitloops init` still does not run DevQL ingest. Use `bitloops devql tasks enqueue --kind ingest` when you want to populate checkpoint, commit, and event history.
 
 Use `--agent <name>` when a team wants to pin the supported agent set during bootstrap.
 

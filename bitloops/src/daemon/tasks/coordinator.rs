@@ -8,7 +8,7 @@ use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 use crate::graphql::{Checkpoint, SubscriptionHub};
-use crate::host::capability_host::{SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff};
+use crate::host::capability_host::{SyncArtefactDiff, SyncFileDiff};
 use crate::host::devql::{
     DevqlConfig, IngestedCheckpointNotification, IngestionCounters, IngestionObserver,
     IngestionProgressPhase, IngestionProgressUpdate, RepoIdentity, SyncObserver, SyncProgressPhase,
@@ -545,12 +545,13 @@ impl DevqlTaskCoordinator {
                         capability_event_coordinator.as_ref(),
                         host,
                         &cfg,
+                        &task.task_id,
                         &summary,
                         file_diff,
                         artefact_diff,
                     ) {
                         log::warn!(
-                            "failed to enqueue sync capability event runs (task_id={}): {err:#}",
+                            "failed to enqueue sync current-state consumer runs (task_id={}): {err:#}",
                             task.task_id
                         );
                     }
@@ -815,30 +816,23 @@ fn enqueue_sync_completed_runs(
     coordinator: &crate::daemon::CapabilityEventCoordinator,
     host: &crate::host::capability_host::DevqlCapabilityHost,
     cfg: &DevqlConfig,
+    source_task_id: &str,
     summary: &SyncSummary,
     file_diff: SyncFileDiff,
     artefact_diff: SyncArtefactDiff,
 ) -> Result<usize> {
-    if !summary.success || summary.mode == "validate" {
+    let runs = coordinator.record_sync_generation(
+        host,
+        cfg,
+        summary,
+        file_diff,
+        artefact_diff,
+        Some(source_task_id),
+    )?;
+    if runs.runs.is_empty() {
         return Ok(0);
     }
-
-    let payload = SyncCompletedPayload {
-        repo_id: cfg.repo.repo_id.clone(),
-        repo_root: cfg.repo_root.clone(),
-        active_branch: summary.active_branch.clone(),
-        head_commit_sha: summary.head_commit_sha.clone(),
-        sync_mode: summary.mode.clone(),
-        sync_completed_at: chrono::Utc::now().to_rfc3339(),
-        files: file_diff,
-        artefacts: artefact_diff,
-    };
-    let runs = crate::daemon::capability_events::build_sync_completed_runs(host, &payload)?;
-    if runs.is_empty() {
-        return Ok(0);
-    }
-    let run_count = runs.len();
-    coordinator.enqueue_runs(runs)?;
+    let run_count = runs.runs.len();
     Ok(run_count)
 }
 

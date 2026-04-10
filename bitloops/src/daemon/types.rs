@@ -326,9 +326,21 @@ pub struct CapabilityEventRunRecord {
     pub run_id: String,
     pub repo_id: String,
     pub capability_id: String,
+    #[serde(default)]
+    pub consumer_id: String,
+    #[serde(default)]
     pub handler_id: String,
+    #[serde(default)]
+    pub from_generation_seq: u64,
+    #[serde(default)]
+    pub to_generation_seq: u64,
+    #[serde(default)]
+    pub reconcile_mode: String,
+    #[serde(default)]
     pub event_kind: String,
+    #[serde(default)]
     pub lane_key: String,
+    #[serde(default)]
     pub event_payload_json: String,
     pub status: CapabilityEventRunStatus,
     pub attempts: u32,
@@ -645,6 +657,7 @@ pub struct DaemonStatusReport {
     pub service: Option<DaemonServiceMetadata>,
     pub service_running: bool,
     pub health: Option<DaemonHealthSummary>,
+    pub current_state_consumers: Option<CapabilityEventQueueStatus>,
     pub capability_events: Option<CapabilityEventQueueStatus>,
     pub enrichment: Option<EnrichmentQueueStatus>,
     pub devql_tasks: Option<DevqlTaskQueueStatus>,
