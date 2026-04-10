@@ -12,12 +12,14 @@ pub mod tls;
 use crate::graphql;
 use crate::graphql::SubscriptionHub;
 use anyhow::Result;
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 
@@ -50,6 +52,7 @@ pub struct DashboardRuntimeOptions {
     pub ready_subject: String,
     pub print_ready_banner: bool,
     pub open_browser: bool,
+    pub bootstrap_devql_schema: bool,
     pub shutdown_message: Option<String>,
     pub on_ready: Option<DashboardReadyHook>,
     pub on_shutdown: Option<DashboardShutdownHook>,
@@ -63,6 +66,7 @@ impl Default for DashboardRuntimeOptions {
             ready_subject: "Dashboard".to_string(),
             print_ready_banner: true,
             open_browser: true,
+            bootstrap_devql_schema: true,
             shutdown_message: Some("Dashboard server stopped.".to_string()),
             on_ready: None,
             on_shutdown: None,
@@ -164,6 +168,12 @@ struct LocalDashboardDiscovery {
     tls: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DashboardBundleSourceOverrides {
+    pub(super) cdn_base_url: Option<String>,
+    pub(super) manifest_url: Option<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct DashboardState {
     pub(super) config_root: PathBuf,
@@ -172,6 +182,7 @@ pub(crate) struct DashboardState {
     pub(super) mode: ServeMode,
     pub(super) db: db::DashboardDbPools,
     pub(super) bundle_dir: PathBuf,
+    pub(super) bundle_source_overrides: DashboardBundleSourceOverrides,
     pub(super) subscription_hub: Arc<SubscriptionHub>,
     pub(super) devql_schema: graphql::DevqlSchema,
     pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
@@ -196,6 +207,48 @@ impl DashboardState {
 
     pub(crate) fn subscription_hub(&self) -> Arc<SubscriptionHub> {
         Arc::clone(&self.subscription_hub)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_bundle_source_overrides(
+        mut self,
+        overrides: DashboardBundleSourceOverrides,
+    ) -> Self {
+        self.bundle_source_overrides = overrides;
+        self
+    }
+}
+
+pub(super) fn track_repo_action(
+    repo_root: &Path,
+    descriptor: crate::telemetry::analytics::ActionDescriptor,
+    success: bool,
+    duration: Duration,
+) {
+    let Some(dispatch_context) =
+        crate::telemetry::analytics::load_dispatch_context_for_repo(repo_root)
+    else {
+        return;
+    };
+
+    crate::telemetry::analytics::track_action_detached(
+        Some(&descriptor),
+        &dispatch_context,
+        env!("CARGO_PKG_VERSION"),
+        Some(repo_root),
+        success,
+        duration.as_millis(),
+    );
+}
+
+pub(super) fn status_code_class(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        100..=199 => "1xx",
+        200..=299 => "2xx",
+        300..=399 => "3xx",
+        400..=499 => "4xx",
+        500..=599 => "5xx",
+        _ => "unknown",
     }
 }
 
@@ -296,6 +349,10 @@ pub(super) fn has_bundle_index(bundle_dir: &Path) -> bool {
 
 pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Option<PathBuf> {
     dashboard_paths::resolve_bundle_file(bundle_dir, request_path)
+}
+
+pub(super) fn request_path_looks_like_asset(request_path: &str) -> bool {
+    dashboard_paths::request_path_looks_like_asset(request_path)
 }
 
 #[cfg(test)]

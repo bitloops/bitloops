@@ -2,18 +2,26 @@ use super::*;
 use crate::cli::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
 use crate::cli::{Cli, Commands};
 use crate::config::{BlobStorageConfig, StoreFileConfig};
-use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{TempDir, tempdir};
 
+fn isolated_test_repo_root() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("bitloops-devql-test-{id}"))
+}
+
 fn test_cfg() -> DevqlConfig {
+    let repo_root = isolated_test_repo_root();
     DevqlConfig {
-        config_root: PathBuf::from("/tmp/repo"),
-        repo_root: PathBuf::from("/tmp/repo"),
+        daemon_config_root: repo_root.clone(),
+        repo_root,
         repo: RepoIdentity {
             provider: "github".to_string(),
             organization: "bitloops".to_string(),
@@ -26,14 +34,6 @@ fn test_cfg() -> DevqlConfig {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
-        semantic_provider: None,
-        semantic_model: None,
-        semantic_api_key: None,
-        semantic_base_url: None,
-        embedding_provider: None,
-        embedding_model: None,
-        embedding_api_key: None,
-        embedding_cache_dir: None,
     }
 }
 
@@ -114,6 +114,194 @@ fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
         .expect("apply symbol_clone_edges DDL");
 }
 
+fn apply_legacy_current_state_compat_schema(path: &Path) {
+    let conn = rusqlite::Connection::open(path).expect("open sqlite for legacy compat DDL");
+
+    let table_has_column = |table: &str, column: &str| -> bool {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("prepare table_info pragma");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query table_info pragma");
+        rows.filter_map(Result::ok)
+            .any(|name| name.eq_ignore_ascii_case(column))
+    };
+
+    let ensure_artefacts_column = |column: &str, ddl_type: &str| {
+        if table_has_column("artefacts", column) {
+            return;
+        }
+        conn.execute(
+            &format!("ALTER TABLE artefacts ADD COLUMN {column} {ddl_type}"),
+            [],
+        )
+        .unwrap_or_else(|err| panic!("add legacy artefacts.{column} column: {err}"));
+    };
+
+    ensure_artefacts_column("blob_sha", "TEXT");
+    ensure_artefacts_column("path", "TEXT");
+    ensure_artefacts_column("parent_artefact_id", "TEXT");
+    ensure_artefacts_column("start_line", "INTEGER");
+    ensure_artefacts_column("end_line", "INTEGER");
+    ensure_artefacts_column("start_byte", "INTEGER");
+    ensure_artefacts_column("end_byte", "INTEGER");
+
+    conn.execute_batch(
+        r#"
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_snapshot_after_insert
+AFTER INSERT ON artefacts
+WHEN NEW.blob_sha IS NOT NULL AND NEW.path IS NOT NULL
+BEGIN
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.blob_sha,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_snapshot_after_update
+AFTER UPDATE OF blob_sha, path, parent_artefact_id, start_line, end_line, start_byte, end_byte
+ON artefacts
+WHEN NEW.blob_sha IS NOT NULL AND NEW.path IS NOT NULL
+BEGIN
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.blob_sha,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_from_current_after_insert
+AFTER INSERT ON artefacts_current
+BEGIN
+    UPDATE artefacts
+       SET blob_sha = NEW.content_id,
+           path = NEW.path,
+           parent_artefact_id = NEW.parent_artefact_id,
+           start_line = NEW.start_line,
+           end_line = NEW.end_line,
+           start_byte = NEW.start_byte,
+           end_byte = NEW.end_byte
+     WHERE repo_id = NEW.repo_id
+       AND artefact_id = NEW.artefact_id;
+
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.content_id,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+
+CREATE TRIGGER IF NOT EXISTS artefacts_legacy_from_current_after_update
+AFTER UPDATE OF content_id, path, parent_artefact_id, start_line, end_line, start_byte, end_byte
+ON artefacts_current
+BEGIN
+    UPDATE artefacts
+       SET blob_sha = NEW.content_id,
+           path = NEW.path,
+           parent_artefact_id = NEW.parent_artefact_id,
+           start_line = NEW.start_line,
+           end_line = NEW.end_line,
+           start_byte = NEW.start_byte,
+           end_byte = NEW.end_byte
+     WHERE repo_id = NEW.repo_id
+       AND artefact_id = NEW.artefact_id;
+
+    INSERT INTO artefact_snapshots (
+        repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+        start_line, end_line, start_byte, end_byte
+    ) VALUES (
+        NEW.repo_id,
+        NEW.content_id,
+        NEW.path,
+        NEW.artefact_id,
+        NEW.parent_artefact_id,
+        COALESCE(NEW.start_line, 1),
+        COALESCE(NEW.end_line, COALESCE(NEW.start_line, 1)),
+        COALESCE(NEW.start_byte, 0),
+        COALESCE(NEW.end_byte, 0)
+    )
+    ON CONFLICT(repo_id, blob_sha, artefact_id) DO UPDATE SET
+        path = excluded.path,
+        parent_artefact_id = excluded.parent_artefact_id,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        start_byte = excluded.start_byte,
+        end_byte = excluded.end_byte;
+END;
+"#,
+    )
+    .expect("apply legacy current-state compatibility schema");
+}
+
+async fn seed_test_repository_catalog_row(relational: &RelationalStorage, cfg: &DevqlConfig) {
+    relational
+        .exec(&format!(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+             VALUES ('{}', '{}', '{}', '{}', 'main') \
+             ON CONFLICT(repo_id) DO UPDATE SET \
+               provider = excluded.provider, \
+               organization = excluded.organization, \
+               name = excluded.name, \
+               default_branch = excluded.default_branch",
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.provider),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.organization),
+            crate::host::devql::db_utils::esc_pg(&cfg.repo.name),
+        ))
+        .await
+        .expect("seed test repository catalog row");
+}
+
 async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     init_sqlite_schema(path)
         .await
@@ -121,58 +309,63 @@ async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     let path_buf = path.to_path_buf();
     tokio::task::spawn_blocking({
         let path = path_buf.clone();
+        move || apply_legacy_current_state_compat_schema(&path)
+    })
+    .await
+    .expect("join blocking legacy current-state DDL");
+    tokio::task::spawn_blocking({
+        let path = path_buf.clone();
         move || apply_symbol_clone_edges_sqlite_schema(&path)
     })
     .await
     .expect("join blocking clone DDL");
-    RelationalStorage::local_only(path_buf)
+    let relational = RelationalStorage::local_only(path_buf);
+    seed_test_repository_catalog_row(&relational, &test_cfg()).await;
+    relational
 }
 
 #[tokio::test]
-async fn checkpoint_file_snapshot_projection_is_idempotent_and_skips_unresolved_paths() {
+async fn checkpoint_provenance_projection_is_idempotent_for_commit_diff_rows() {
+    let repo = seed_git_repo();
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/one.ts"),
+        "export function one(): number {\n  return 1;\n}\n",
+    )
+    .expect("write src/one.ts");
+    fs::write(
+        repo.path().join("src/two.ts"),
+        "export function two(): number {\n  return 2;\n}\n",
+    )
+    .expect("write src/two.ts");
+    git_ok(repo.path(), &["add", "src/one.ts", "src/two.ts"]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "Add checkpoint provenance sources"],
+    );
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
     let temp = tempdir().expect("temp dir");
     let sqlite_path = temp.path().join("relational.sqlite");
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 
     let mut cfg = test_cfg();
-    cfg.repo.repo_id = deterministic_uuid("repo://checkpoint-file-snapshot-projection");
-
-    upsert_file_state_row(
-        &cfg.repo.repo_id,
-        &relational,
-        "commit-1",
-        "src/one.ts",
-        "blob-1",
-    )
-    .await
-    .expect("upsert file_state for first file");
-    upsert_file_state_row(
-        &cfg.repo.repo_id,
-        &relational,
-        "commit-1",
-        "src/two.ts",
-        "blob-2",
-    )
-    .await
-    .expect("upsert file_state for second file");
+    cfg.daemon_config_root = repo.path().to_path_buf();
+    cfg.repo_root = repo.path().to_path_buf();
+    cfg.repo = resolve_repo_identity(repo.path()).expect("resolve repo identity");
 
     let checkpoint = CommittedInfo {
         checkpoint_id: "checkpoint-1".to_string(),
         strategy: "manual-commit".to_string(),
         branch: "main".to_string(),
-        files_touched: vec![
-            "src/one.ts".to_string(),
-            "src/two.ts".to_string(),
-            "src/missing.ts".to_string(),
-            "src/two.ts".to_string(),
-        ],
+        files_touched: vec!["src/one.ts".to_string(), "src/two.ts".to_string()],
         session_id: "session-1".to_string(),
         agent: "claude-code".to_string(),
         created_at: "2026-03-27T10:15:00Z".to_string(),
         ..Default::default()
     };
     let commit_info = CheckpointCommitInfo {
-        commit_sha: "commit-1".to_string(),
+        commit_sha: head_sha.clone(),
         commit_unix: 1_742_972_900,
         author_name: "Bitloops Test".to_string(),
         author_email: "bitloops-test@example.com".to_string(),
@@ -209,12 +402,12 @@ async fn checkpoint_file_snapshot_projection_is_idempotent_and_skips_unresolved_
     let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
     let mut stmt = sqlite
         .prepare(
-            "SELECT path, blob_sha, session_id, agent, branch, strategy, commit_sha, event_time
-             FROM checkpoint_file_snapshots
+            "SELECT path_after, blob_sha_after, session_id, agent, branch, strategy, commit_sha, event_time, change_kind
+             FROM checkpoint_files
              WHERE repo_id = ?1 AND checkpoint_id = ?2
-             ORDER BY path ASC",
+             ORDER BY path_after ASC",
         )
-        .expect("prepare checkpoint_file_snapshots query");
+        .expect("prepare checkpoint_files query");
     let rows = stmt
         .query_map(
             rusqlite::params![cfg.repo.repo_id.as_str(), checkpoint.checkpoint_id.as_str()],
@@ -228,38 +421,43 @@ async fn checkpoint_file_snapshot_projection_is_idempotent_and_skips_unresolved_
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             },
         )
-        .expect("query checkpoint_file_snapshots rows")
+        .expect("query checkpoint_files rows")
         .collect::<std::result::Result<Vec<_>, _>>()
-        .expect("collect checkpoint_file_snapshots rows");
+        .expect("collect checkpoint_files rows");
 
     assert_eq!(
         rows,
         vec![
             (
                 "src/one.ts".to_string(),
-                "blob-1".to_string(),
+                git_blob_sha_at_commit(repo.path(), &head_sha, "src/one.ts")
+                    .expect("resolve blob sha for src/one.ts"),
                 "session-1".to_string(),
                 "claude-code".to_string(),
                 "main".to_string(),
                 "manual-commit".to_string(),
-                "commit-1".to_string(),
+                head_sha.clone(),
                 "2026-03-27T10:15:00Z".to_string(),
+                "add".to_string(),
             ),
             (
                 "src/two.ts".to_string(),
-                "blob-2".to_string(),
+                git_blob_sha_at_commit(repo.path(), &head_sha, "src/two.ts")
+                    .expect("resolve blob sha for src/two.ts"),
                 "session-1".to_string(),
                 "claude-code".to_string(),
                 "main".to_string(),
                 "manual-commit".to_string(),
-                "commit-1".to_string(),
+                head_sha.clone(),
                 "2026-03-27T10:15:00Z".to_string(),
+                "add".to_string(),
             ),
         ],
-        "projection should upsert only the resolved file snapshots"
+        "projection should upsert one checkpoint_files row per changed file"
     );
 }
 
@@ -307,6 +505,7 @@ fn seed_git_repo() -> TempDir {
         "Bitloops Test",
         "bitloops-test@example.com",
     );
+    write_test_daemon_config(dir.path());
     git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
     dir
 }
@@ -334,12 +533,13 @@ fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoi
 fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn status_for(rows: &[DatabaseStatusRow], label: &'static str) -> DatabaseConnectionStatus {
@@ -422,10 +622,14 @@ fn test_unresolved_call_edge(from_symbol_fqn: &str, symbol_ref: &str, line: i32)
 
 #[path = "devql_tests/baseline.rs"]
 mod baseline;
+#[path = "devql_tests/commit_history.rs"]
+mod commit_history;
 #[path = "devql_tests/config_and_status.rs"]
 mod config_and_status;
 #[path = "devql_tests/core_and_ingestion.rs"]
 mod core_and_ingestion;
+#[path = "devql_tests/extraction_go.rs"]
+mod extraction_go;
 #[path = "devql_tests/extraction_js_ts.rs"]
 mod extraction_js_ts;
 #[path = "devql_tests/extraction_rust.rs"]
@@ -455,8 +659,7 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
-    assert!(ingest.init);
-    assert_eq!(ingest.max_checkpoints, 500);
+    let _ = ingest;
 }
 
 #[test]

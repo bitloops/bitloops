@@ -5,7 +5,8 @@ use anyhow::Result;
 use crate::host::checkpoints::session::backend::SessionBackend;
 use crate::host::checkpoints::strategy::Strategy;
 use crate::host::hooks::runtime::agent_runtime::{
-    CODEX_HOOK_AGENT_PROFILE, SessionInfoInput, handle_session_start, handle_stop_with_profile,
+    CODEX_HOOK_AGENT_PROFILE, SessionInfoInput, handle_session_start_with_profile,
+    handle_stop_with_profile,
 };
 
 pub fn handle_session_start_codex(
@@ -13,7 +14,7 @@ pub fn handle_session_start_codex(
     backend: &dyn SessionBackend,
     repo_root: Option<&Path>,
 ) -> Result<()> {
-    handle_session_start(input, backend, repo_root)
+    handle_session_start_with_profile(input, backend, repo_root, Some(CODEX_HOOK_AGENT_PROFILE))
 }
 
 pub fn handle_stop_codex(
@@ -40,6 +41,7 @@ mod tests {
     use crate::host::checkpoints::session::phase::SessionPhase;
     use crate::host::checkpoints::session::state::PrePromptState;
     use crate::host::checkpoints::strategy::{StepContext, TaskStepContext};
+    use crate::test_support::git_fixtures::write_test_daemon_config;
     use crate::test_support::process_state::git_command;
     use std::fs;
     use std::path::Path;
@@ -150,6 +152,7 @@ mod tests {
         let strategy = RecordingStrategy::default();
         let session_id = "codex-session";
         let transcript_path = repo.path().join("codex.jsonl");
+        write_test_daemon_config(repo.path());
         fs::write(&transcript_path, "").expect("write transcript");
 
         backend

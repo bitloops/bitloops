@@ -4,15 +4,20 @@ use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::cli::embeddings::{
+    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
 };
 use crate::cli::{Cli, Commands};
+use crate::config::default_daemon_config_path;
 use crate::config::settings::{SETTINGS_DIR, save_settings, settings_local_path, settings_path};
 use crate::test_support::process_state::{
     git_command, with_cwd, with_env_var, with_env_vars, with_process_state,
 };
 use clap::Parser;
+use std::io::Cursor;
 use tempfile::TempDir;
 
 fn setup_settings(dir: &TempDir, content: &str) {
@@ -52,8 +57,41 @@ fn run_enable_command(args: EnableArgs) -> Result<()> {
     runtime.block_on(run(args))
 }
 
+fn test_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+}
+
+fn with_isolated_daemon_config_process_state<T>(
+    cwd: Option<&Path>,
+    extra_env: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let config_dir = tempfile::tempdir().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
+    let config_dir_value = config_dir.path().to_string_lossy().into_owned();
+    let data_dir_value = data_dir.path().to_string_lossy().into_owned();
+    let mut env = Vec::with_capacity(extra_env.len() + 1);
+    env.push((
+        "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+        Some(config_dir_value.as_str()),
+    ));
+    env.push((
+        "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+        Some(data_dir_value.as_str()),
+    ));
+    env.extend_from_slice(extra_env);
+    with_process_state(cwd, &env, f)
+}
+
+fn with_isolated_daemon_config<T>(f: impl FnOnce() -> T) -> T {
+    with_isolated_daemon_config_process_state(None, &[], f)
+}
+
 fn with_ready_daemon_and_repo_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
-    with_process_state(
+    with_isolated_daemon_config_process_state(
         Some(path),
         &[
             ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
@@ -80,7 +118,7 @@ fn with_enable_test_process_state<T>(
     telemetry_response: serde_json::Value,
     f: impl FnOnce() -> T,
 ) -> T {
-    with_process_state(
+    with_isolated_daemon_config_process_state(
         Some(path),
         &[
             ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
@@ -95,6 +133,157 @@ fn with_enable_test_process_state<T>(
     )
 }
 
+#[cfg(unix)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-enable-embeddings-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"#!/bin/sh
+model_name="bge-m3"
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"%s"}\n' "$req_id" "$model_name"
+      ;;
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"%s"}\n' "$req_id" "$model_name"
+      exit 0
+      ;;
+    *)
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
+      ;;
+  esac
+done
+"#;
+    fs::write(&script_path, script).expect("write fake runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod fake runtime script");
+    ("sh".to_string(), vec![script_path.display().to_string()])
+}
+
+#[cfg(unix)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::path::PathBuf::from(args[0].clone())
+}
+
+#[cfg(windows)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-enable-embeddings-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"
+$modelName = "bge-m3"
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
+}
+$ready | ConvertTo-Json -Compress
+$stdin = [Console]::In
+while (($line = $stdin.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.cmd) {
+    "embed" {
+      $response = @{
+        id = $request.id
+        ok = $true
+        vectors = @(@(0.1, 0.2, 0.3))
+        model = $modelName
+      }
+    }
+    "shutdown" {
+      $response = @{
+        id = $request.id
+        ok = $true
+        model = $modelName
+      }
+      $response | ConvertTo-Json -Compress
+      break
+    }
+    default {
+      $response = @{
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
+      }
+    }
+  }
+  $response | ConvertTo-Json -Compress
+}
+"#;
+    fs::write(&script_path, script).expect("write fake runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.display().to_string(),
+        ],
+    )
+}
+
+#[cfg(windows)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let script_dir = repo_root.join(".bitloops/test-bin");
+    fs::create_dir_all(&script_dir).expect("create managed runtime dir");
+    let powershell_script = script_dir.join("fake-managed-enable-embeddings-runtime.ps1");
+    let launcher = script_dir.join("fake-managed-enable-embeddings-runtime.cmd");
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
+    fs::write(
+        &launcher,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+            powershell_script.display()
+        ),
+    )
+    .expect("write managed runtime launcher");
+    launcher
+}
+
+fn write_runtime_only_daemon_config(command: &str, args: &[String]) {
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_path = default_daemon_config_path().expect("default daemon config path");
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).expect("create daemon config dir");
+    }
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[runtime]
+local_dev = false
+
+[inference.runtimes.bitloops_embeddings]
+command = {command:?}
+args = [{runtime_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+"#
+        ),
+    )
+    .expect("write daemon config");
+}
+
 /// Sets `enabled = true` in the project settings file and prints a confirmation.
 fn run_enable(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
     let path = settings_path(repo_root);
@@ -107,85 +296,93 @@ fn run_enable(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
 
 #[test]
 fn run_enable_sets_enabled_true() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = false
 "#,
-    );
+        );
 
-    let mut out = Vec::new();
-    run_enable(dir.path(), &mut out).unwrap();
+        let mut out = Vec::new();
+        run_enable(dir.path(), &mut out).unwrap();
 
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("enabled"),
-        "output should mention 'enabled': {output}"
-    );
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("enabled"),
+            "output should mention 'enabled': {output}"
+        );
 
-    let settings = load_settings(dir.path()).unwrap();
-    assert!(
-        settings.enabled,
-        "Bitloops should be enabled after run_enable"
-    );
+        let settings = load_settings(dir.path()).unwrap();
+        assert!(
+            settings.enabled,
+            "Bitloops should be enabled after run_enable"
+        );
+    });
 }
 
 #[test]
 fn run_enable_already_enabled() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 "#,
-    );
+        );
 
-    let mut out = Vec::new();
-    run_enable(dir.path(), &mut out).unwrap();
+        let mut out = Vec::new();
+        run_enable(dir.path(), &mut out).unwrap();
 
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("enabled"),
-        "output should mention 'enabled': {output}"
-    );
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("enabled"),
+            "output should mention 'enabled': {output}"
+        );
+    });
 }
 
 #[test]
 fn run_disable_removes_installed_hooks_without_editing_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 "#,
-    );
-    git_hooks::install_git_hooks(dir.path(), false).unwrap();
-    codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+        );
+        git_hooks::install_git_hooks(dir.path(), false).unwrap();
+        codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+        assert!(dir.path().join(".codex/config.toml").exists());
 
-    let mut out = Vec::new();
-    run_disable(dir.path(), &mut out, false).unwrap();
+        let mut out = Vec::new();
+        run_disable(dir.path(), &mut out, false).unwrap();
 
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("disabled"),
-        "output should mention 'disabled': {output}"
-    );
-    assert!(
-        git_command()
-            .arg("rev-parse")
-            .current_dir(dir.path())
-            .status()
-            .is_ok(),
-        "sanity check git command should still work"
-    );
-    assert!(git_hooks::is_git_hook_installed(dir.path()));
-    assert!(codex_hooks::are_hooks_installed_at(dir.path()));
-    assert!(!settings::is_enabled(dir.path()).unwrap());
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("disabled"),
+            "output should mention 'disabled': {output}"
+        );
+        assert!(
+            git_command()
+                .arg("rev-parse")
+                .current_dir(dir.path())
+                .status()
+                .is_ok(),
+            "sanity check git command should still work"
+        );
+        assert!(git_hooks::is_git_hook_installed(dir.path()));
+        assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+        assert!(dir.path().join(".codex/config.toml").exists());
+        assert!(!settings::is_enabled(dir.path()).unwrap());
+    });
 }
 
 #[test]
@@ -212,53 +409,55 @@ enabled = false
 
 #[test]
 fn check_disabled_guard_test() {
-    let dir = tempfile::tempdir().unwrap();
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
 
-    // No settings file → not disabled (defaults to enabled)
-    let mut out = Vec::new();
-    assert!(
-        !check_disabled_guard(dir.path(), &mut out),
-        "should return false when no settings file"
-    );
-    assert!(
-        String::from_utf8(out).unwrap().is_empty(),
-        "should print nothing when enabled"
-    );
+        // No settings file → not disabled (defaults to enabled)
+        let mut out = Vec::new();
+        assert!(
+            !check_disabled_guard(dir.path(), &mut out),
+            "should return false when no settings file"
+        );
+        assert!(
+            String::from_utf8(out).unwrap().is_empty(),
+            "should print nothing when enabled"
+        );
 
-    // Settings with enabled: true → not disabled
-    setup_settings(
-        &dir,
-        r#"[capture]
+        // Settings with enabled: true → not disabled
+        setup_settings(
+            &dir,
+            r#"[capture]
 enabled = true
 "#,
-    );
-    let mut out = Vec::new();
-    assert!(
-        !check_disabled_guard(dir.path(), &mut out),
-        "should return false when enabled"
-    );
+        );
+        let mut out = Vec::new();
+        assert!(
+            !check_disabled_guard(dir.path(), &mut out),
+            "should return false when enabled"
+        );
 
-    // Settings with enabled: false → disabled
-    setup_settings(
-        &dir,
-        r#"[capture]
+        // Settings with enabled: false → disabled
+        setup_settings(
+            &dir,
+            r#"[capture]
 enabled = false
 "#,
-    );
-    let mut out = Vec::new();
-    assert!(
-        check_disabled_guard(dir.path(), &mut out),
-        "should return true when disabled"
-    );
-    let output = String::from_utf8(out).unwrap();
-    assert!(
-        output.contains("Bitloops is disabled"),
-        "should print disabled message: {output}"
-    );
-    assert!(
-        output.contains("bitloops enable"),
-        "should mention 'bitloops enable': {output}"
-    );
+        );
+        let mut out = Vec::new();
+        assert!(
+            check_disabled_guard(dir.path(), &mut out),
+            "should return true when disabled"
+        );
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains("Bitloops is disabled"),
+            "should print disabled message: {output}"
+        );
+        assert!(
+            output.contains("bitloops enable"),
+            "should mention 'bitloops enable': {output}"
+        );
+    });
 }
 
 #[test]
@@ -387,37 +586,39 @@ fn determine_settings_target_settings_not_exists_no_flags() {
 
 #[test]
 fn run_enable_with_strategy_rewrites_repo_policy() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 push = true
 some_other_option = "value"
 "#,
-    );
+        );
 
-    run_enable_with_strategy(dir.path(), "auto-commit", false, false).unwrap();
+        run_enable_with_strategy(dir.path(), "auto-commit", false, false).unwrap();
 
-    let merged = load_settings(dir.path()).unwrap();
-    assert_eq!(merged.strategy, "auto-commit");
-    assert!(merged.enabled);
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("push")
-            .and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("some_other_option")
-            .and_then(serde_json::Value::as_str),
-        Some("value")
-    );
+        let merged = load_settings(dir.path()).unwrap();
+        assert_eq!(merged.strategy, "auto-commit");
+        assert!(merged.enabled);
+        assert_eq!(
+            merged
+                .strategy_options
+                .get("push")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            merged
+                .strategy_options
+                .get("some_other_option")
+                .and_then(serde_json::Value::as_str),
+            Some("value")
+        );
+    });
 }
 
 #[test]
@@ -446,34 +647,36 @@ fn setup_bitloops_dir_preserves_existing_files() {
 
 #[test]
 fn run_enable_with_strategy_preserves_local_settings() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"[capture]
 strategy = "manual-commit"
 enabled = true
 "#,
-    );
-    setup_local_settings(
-        &dir,
-        r#"[capture]
+        );
+        setup_local_settings(
+            &dir,
+            r#"[capture]
 push = true
 "#,
-    );
+        );
 
-    run_enable_with_strategy(dir.path(), "auto-commit", true, false).unwrap();
+        run_enable_with_strategy(dir.path(), "auto-commit", true, false).unwrap();
 
-    let merged = load_settings(dir.path()).unwrap();
-    assert_eq!(merged.strategy, "auto-commit");
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("push")
-            .and_then(|v| v.as_bool()),
-        Some(true),
-        "local strategy options should be preserved"
-    );
+        let merged = load_settings(dir.path()).unwrap();
+        assert_eq!(merged.strategy, "auto-commit");
+        assert_eq!(
+            merged
+                .strategy_options
+                .get("push")
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "local strategy options should be preserved"
+        );
+    });
 }
 
 #[test]
@@ -486,22 +689,26 @@ fn test_check_bitloops_dir_exists() {
 
 #[test]
 fn is_fully_enabled_not_enabled() {
-    let dir = tempfile::tempdir().unwrap();
-    let (enabled, _, _) = is_fully_enabled(dir.path());
-    assert!(!enabled, "should not be fully enabled");
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let (enabled, _, _) = is_fully_enabled(dir.path());
+        assert!(!enabled, "should not be fully enabled");
+    });
 }
 
 #[test]
 fn is_fully_enabled_settings_disabled() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_settings(
-        &dir,
-        r#"[capture]
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_settings(
+            &dir,
+            r#"[capture]
 enabled = false
 "#,
-    );
-    let (enabled, _, _) = is_fully_enabled(dir.path());
-    assert!(!enabled, "disabled settings should not be fully enabled");
+        );
+        let (enabled, _, _) = is_fully_enabled(dir.path());
+        assert!(!enabled, "disabled settings should not be fully enabled");
+    });
 }
 
 #[test]
@@ -824,6 +1031,227 @@ fn enable_args_support_telemetry_flags() {
 }
 
 #[test]
+fn enable_args_support_install_embeddings_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "enable", "--install-embeddings"])
+        .expect("enable install-embeddings flag should parse");
+    let Some(Commands::Enable(args)) = parsed.command else {
+        panic!("expected enable command");
+    };
+    assert!(args.install_embeddings);
+}
+
+#[test]
+fn enable_prompts_for_embeddings_and_defaults_to_yes() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    setup_git_repo(&repo);
+    setup_settings(
+        &repo,
+        r#"[capture]
+enabled = false
+"#,
+    );
+
+    with_isolated_daemon_config_process_state(
+        Some(repo.path()),
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("1")),
+        ],
+        || {
+            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
+
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, _variables| {
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": true,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    with_managed_embeddings_install_hook(
+                        move |repo_root| {
+                            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                                version: "v0.1.0".to_string(),
+                                binary_path: fake_managed_runtime_path(repo_root),
+                                freshly_installed: true,
+                            })
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let mut input = Cursor::new("\n");
+                            let runtime = test_runtime();
+                            runtime
+                                .block_on(run_with_io(
+                                    EnableArgs {
+                                        local: false,
+                                        project: false,
+                                        force: false,
+                                        agent: None,
+                                        telemetry: None,
+                                        no_telemetry: false,
+                                        install_embeddings: false,
+                                    },
+                                    &mut out,
+                                    &mut input,
+                                ))
+                                .expect("run enable");
+
+                            let rendered = String::from_utf8(out).expect("utf8 output");
+                            assert!(rendered.contains("Install embeddings now? [Y/n]"));
+                            assert!(rendered.contains("Installed managed standalone"));
+                            assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                            let daemon_config = fs::read_to_string(
+                                default_daemon_config_path().expect("daemon config path"),
+                            )
+                            .expect("read daemon config");
+                            assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn enable_install_embeddings_flag_skips_prompt_in_noninteractive_mode() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    setup_git_repo(&repo);
+    setup_settings(
+        &repo,
+        r#"[capture]
+enabled = false
+"#,
+    );
+
+    with_enable_test_process_state(
+        repo.path(),
+        serde_json::json!({
+            "updateCliTelemetryConsent": {
+                "telemetry": true,
+                "needsPrompt": false
+            }
+        }),
+        || {
+            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
+
+            with_managed_embeddings_install_hook(
+                move |repo_root| {
+                    Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                        version: "v0.1.0".to_string(),
+                        binary_path: fake_managed_runtime_path(repo_root),
+                        freshly_installed: true,
+                    })
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = test_runtime();
+                    runtime
+                        .block_on(run_with_io(
+                            EnableArgs {
+                                local: false,
+                                project: false,
+                                force: false,
+                                agent: None,
+                                telemetry: None,
+                                no_telemetry: false,
+                                install_embeddings: true,
+                            },
+                            &mut out,
+                            &mut input,
+                        ))
+                        .expect("run enable");
+
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(!rendered.contains("Install embeddings now? [Y/n]"));
+                    assert!(rendered.contains("Installed managed standalone"));
+                    assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn enable_does_not_prompt_when_embeddings_are_already_configured() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    setup_git_repo(&repo);
+    setup_settings(
+        &repo,
+        r#"[capture]
+enabled = false
+"#,
+    );
+
+    with_isolated_daemon_config_process_state(
+        Some(repo.path()),
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("1")),
+        ],
+        || {
+            let daemon_config_path = default_daemon_config_path().expect("daemon config path");
+            if let Some(parent) = daemon_config_path.parent() {
+                fs::create_dir_all(parent).expect("create daemon config dir");
+            }
+            fs::write(
+                daemon_config_path,
+                r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "openai"
+
+[inference.profiles.openai]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-large"
+"#,
+            )
+            .expect("write daemon config");
+
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, _variables| {
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": true,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = test_runtime();
+                    runtime
+                        .block_on(run_with_io(
+                            EnableArgs {
+                                local: false,
+                                project: false,
+                                force: false,
+                                agent: None,
+                                telemetry: None,
+                                no_telemetry: false,
+                                install_embeddings: false,
+                            },
+                            &mut out,
+                            &mut input,
+                        ))
+                        .expect("run enable");
+
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(!rendered.contains("Install embeddings now? [Y/n]"));
+                },
+            );
+        },
+    );
+}
+
+#[test]
 fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -835,6 +1263,7 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
             agent: None,
             telemetry: None,
             no_telemetry: false,
+            install_embeddings: false,
         })
         .unwrap_err();
 
@@ -856,6 +1285,7 @@ fn run_enable_with_legacy_agent_flag_installs_requested_agent_hooks() {
             agent: Some("cursor".to_string()),
             telemetry: None,
             no_telemetry: false,
+            install_embeddings: false,
         })
         .unwrap_err();
 
@@ -932,7 +1362,7 @@ fn repo_local_policy_exclude_is_added_to_git_info_exclude() {
 
     let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.contains(".bitloops.local.toml"));
-    assert!(exclude.contains(".bitloops/"));
+    assert!(!exclude.contains(".bitloops/"));
 }
 
 #[test]
@@ -961,6 +1391,7 @@ fn enable_does_not_create_shared_repo_policy_file() {
             agent: None,
             telemetry: None,
             no_telemetry: false,
+            install_embeddings: false,
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -982,6 +1413,7 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
             agent: None,
             telemetry: None,
             no_telemetry: false,
+            install_embeddings: false,
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -1018,6 +1450,7 @@ enabled = false
                 agent: None,
                 telemetry: None,
                 no_telemetry: false,
+                install_embeddings: false,
             })
             .unwrap_err();
 
@@ -1040,7 +1473,7 @@ enabled = false
 "#,
     );
 
-    with_process_state(
+    with_isolated_daemon_config_process_state(
         Some(dir.path()),
         &[
             ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
@@ -1065,6 +1498,7 @@ enabled = false
                         agent: None,
                         telemetry: Some(false),
                         no_telemetry: false,
+                        install_embeddings: false,
                     })
                     .expect("enable should succeed");
 

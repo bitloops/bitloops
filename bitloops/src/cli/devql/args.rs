@@ -12,8 +12,12 @@ pub enum DevqlCommand {
     Init(DevqlInitArgs),
     /// Ingest checkpoint/events and relational artefacts for configured backends.
     Ingest(DevqlIngestArgs),
+    /// Synchronize current workspace artefacts into DevQL state.
+    Sync(DevqlSyncArgs),
     /// Backfill or repair DevQL relational projections.
     Projection(DevqlProjectionArgs),
+    /// Print the DevQL GraphQL schema SDL.
+    Schema(DevqlSchemaArgs),
     /// Execute a DevQL query.
     Query(DevqlQueryArgs),
     /// Check backend connectivity for Postgres and ClickHouse.
@@ -22,20 +26,45 @@ pub enum DevqlCommand {
     Packs(DevqlPacksArgs),
     /// Manage repository-scoped external knowledge.
     Knowledge(DevqlKnowledgeArgs),
+    /// Test harness ingestion for DevQL production artefacts.
+    TestHarness(DevqlTestHarnessArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlInitArgs {}
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Default)]
 pub struct DevqlIngestArgs {
-    /// Bootstrap tables before ingestion.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub init: bool,
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
+}
 
-    /// Limit checkpoints processed (newest-first).
-    #[arg(long, default_value_t = 500)]
-    pub max_checkpoints: usize,
+#[derive(Debug, Clone, clap::Args)]
+pub struct DevqlSyncArgs {
+    /// Run a full workspace reconciliation.
+    #[arg(long, conflicts_with_all = ["paths", "repair", "validate"])]
+    pub full: bool,
+
+    /// Reconcile only the specified workspace paths.
+    #[arg(long, value_delimiter = ',', conflicts_with_all = ["full", "repair", "validate"])]
+    pub paths: Option<Vec<String>>,
+
+    /// Rebuild sync state from the current workspace and repair stored state.
+    #[arg(long, conflicts_with_all = ["full", "paths", "validate"])]
+    pub repair: bool,
+
+    /// Validate current-state tables against a full read-only workspace reconciliation.
+    #[arg(long, conflicts_with_all = ["full", "paths", "repair"])]
+    pub validate: bool,
+
+    /// Follow the queued sync task until it reaches a terminal state.
+    #[arg(long, default_value_t = false)]
+    pub status: bool,
+
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -67,6 +96,17 @@ pub struct DevqlCheckpointFileSnapshotsArgs {
     /// Report counters without mutating checkpoint_file_snapshots.
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlSchemaArgs {
+    /// Print the full/global DevQL GraphQL schema.
+    #[arg(long = "global", default_value_t = false)]
+    pub global: bool,
+
+    /// Print human-readable formatted SDL instead of minified SDL.
+    #[arg(long, default_value_t = false)]
+    pub human: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -142,4 +182,62 @@ pub struct DevqlKnowledgeAssociateArgs {
 #[derive(Args, Debug, Clone)]
 pub struct DevqlKnowledgeRefArgs {
     pub knowledge_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessArgs {
+    #[command(subcommand)]
+    pub command: DevqlTestHarnessCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlTestHarnessCommand {
+    /// Parse test files, discover suites/scenarios, and link tests to production artefacts.
+    IngestTests(DevqlTestHarnessIngestTestsArgs),
+    /// Ingest coverage report (LCOV or LLVM JSON).
+    IngestCoverage(DevqlTestHarnessIngestCoverageArgs),
+    /// Batch-ingest coverage from a JSON manifest.
+    IngestCoverageBatch(DevqlTestHarnessIngestCoverageBatchArgs),
+    /// Ingest Jest JSON test results.
+    IngestResults(DevqlTestHarnessIngestResultsArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestTestsArgs {
+    #[arg(long)]
+    pub commit: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestCoverageArgs {
+    #[arg(long)]
+    pub lcov: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub input: Option<std::path::PathBuf>,
+    #[arg(long)]
+    pub commit: String,
+    #[arg(long)]
+    pub scope: String,
+    #[arg(long, default_value = "unknown")]
+    pub tool: String,
+    #[arg(long)]
+    pub test_artefact_id: Option<String>,
+    #[arg(long)]
+    pub format: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestCoverageBatchArgs {
+    #[arg(long)]
+    pub manifest: std::path::PathBuf,
+    #[arg(long)]
+    pub commit: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTestHarnessIngestResultsArgs {
+    #[arg(long)]
+    pub jest_json: std::path::PathBuf,
+    #[arg(long)]
+    pub commit: String,
 }

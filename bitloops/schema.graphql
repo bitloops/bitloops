@@ -22,7 +22,7 @@ type Artefact {
 	symbolId: String!
 	path: String!
 	language: String!
-	canonicalKind: CanonicalKind!
+	canonicalKind: CanonicalKind
 	languageKind: String
 	symbolFqn: String
 	parentArtefactId: ID
@@ -40,16 +40,30 @@ type Artefact {
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	depsSummary(filter: DepsSummaryFilterInput): DepsSummary!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	copyLineage: [ArtefactCopyLineage!]!
 }
 
 type ArtefactConnection {
 	edges: [ArtefactEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type ArtefactCopyLineage {
+	checkpointId: String!
+	eventTime: DateTime!
+	commitSha: String!
+	sourceSymbolId: String!
+	sourceArtefactId: ID!
+	destSymbolId: String!
+	destArtefactId: ID!
+	source: Artefact
+	destination: Artefact
 }
 
 type ArtefactEdge {
@@ -153,6 +167,7 @@ type Checkpoint {
 	isTask: Boolean!
 	toolUseId: String
 	commit: Commit
+	fileRelations: [CheckpointFileRelation!]!
 }
 
 type CheckpointConnection {
@@ -164,6 +179,17 @@ type CheckpointConnection {
 type CheckpointEdge {
 	node: Checkpoint!
 	cursor: String!
+}
+
+type CheckpointFileRelation {
+	filepath: String!
+	changeKind: String!
+	pathBefore: String
+	pathAfter: String
+	blobShaBefore: String
+	blobShaAfter: String
+	copiedFromPath: String
+	copiedFromBlobSha: String
 }
 
 type CheckpointTokenUsage {
@@ -178,6 +204,10 @@ type Clone {
 	id: ID!
 	sourceArtefactId: ID!
 	targetArtefactId: ID!
+	sourceStartLine: Int
+	sourceEndLine: Int
+	targetStartLine: Int
+	targetEndLine: Int
 	relationKind: String!
 	score: Float!
 	metadata: JSON
@@ -189,6 +219,7 @@ type CloneConnection {
 	edges: [CloneEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+	summary: CloneSummary!
 }
 
 type CloneEdge {
@@ -196,9 +227,20 @@ type CloneEdge {
 	cursor: String!
 }
 
+type CloneSummary {
+	totalCount: Int!
+	groups: [CloneSummaryGroup!]!
+}
+
+type CloneSummaryGroup {
+	relationKind: String!
+	count: Int!
+}
+
 input ClonesFilterInput {
 	relationKind: String
 	minScore: Float
+	neighbors: Int
 }
 
 type Commit {
@@ -260,7 +302,29 @@ enum DepsDirection {
 input DepsFilterInput {
 	kind: EdgeKind
 	direction: DepsDirection! = OUT
-	includeUnresolved: Boolean! = false
+	includeUnresolved: Boolean! = true
+}
+
+type DepsSummary {
+	totalCount: Int!
+	incomingCount: Int!
+	outgoingCount: Int!
+	kindCounts: DepsSummaryKindCounts!
+}
+
+input DepsSummaryFilterInput {
+	kind: EdgeKind
+	direction: DepsDirection
+	unresolved: Boolean! = false
+}
+
+type DepsSummaryKindCounts {
+	imports: Int!
+	calls: Int!
+	references: Int!
+	extends: Int!
+	implements: Int!
+	exports: Int!
 }
 
 enum EdgeKind {
@@ -272,12 +336,26 @@ enum EdgeKind {
 	EXPORTS
 }
 
+input EnqueueSyncInput {
+	full: Boolean! = false
+	paths: [String!] = null
+	repair: Boolean! = false
+	validate: Boolean! = false
+	source: String = null
+}
+
+type EnqueueSyncResult {
+	task: SyncTask!
+	merged: Boolean!
+}
+
 type FileContext {
 	path: String!
 	language: String
 	blobSha: String
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 }
 
 type HealthBackendStatus {
@@ -294,18 +372,15 @@ type HealthStatus {
 }
 
 input IngestInput {
-	init: Boolean! = true
-	maxCheckpoints: Int! = 500
+	backfill: Int = null
 }
 
 type IngestResult {
 	success: Boolean!
-	initRequested: Boolean!
-	checkpointsProcessed: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 	semanticFeatureRowsUpserted: Int!
 	semanticFeatureRowsSkipped: Int!
 	symbolEmbeddingRowsUpserted: Int!
@@ -324,14 +399,13 @@ enum IngestionPhase {
 
 type IngestionProgressEvent {
 	phase: IngestionPhase!
-	checkpointsTotal: Int!
-	checkpointsProcessed: Int!
+	commitsTotal: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	currentCheckpointId: String
 	currentCommitSha: String
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 }
 
 type InitSchemaResult {
@@ -340,6 +414,48 @@ type InitSchemaResult {
 	repoId: String!
 	relationalBackend: String!
 	eventsBackend: String!
+}
+
+type InteractionEventObject {
+	id: ID!
+	sessionId: String!
+	turnId: String
+	eventType: String!
+	eventTime: String!
+	agentType: String!
+	model: String
+	payload: JSON
+}
+
+type InteractionSessionObject {
+	id: ID!
+	agentType: String!
+	model: String
+	firstPrompt: String
+	startedAt: String!
+	endedAt: String
+}
+
+type InteractionTokenUsage {
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+}
+
+type InteractionTurnObject {
+	id: ID!
+	sessionId: String!
+	turnNumber: Int!
+	prompt: String
+	agentType: String!
+	model: String
+	startedAt: String!
+	endedAt: String
+	tokenUsage: InteractionTokenUsage
+	filesModified: [String!]!
+	checkpointId: String
 }
 
 """
@@ -463,8 +579,8 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest(input: IngestInput!): IngestResult!
-	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
+	ingest(input: IngestInput): IngestResult!
+	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
@@ -488,6 +604,7 @@ type Project {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
@@ -496,6 +613,8 @@ type Project {
 type QueryRoot {
 	health: HealthStatus!
 	repo(name: String!): Repository!
+	syncTask(id: String!): SyncTask
+	syncTasks(repoId: String, limit: Int): [SyncTask!]!
 }
 
 input RefreshKnowledgeInput {
@@ -528,7 +647,11 @@ type Repository {
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
+	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
+	interactionEvents(sessionId: String, turnId: String, type: String, since: String, first: Int): [InteractionEventObject!]!
 }
 
 enum SaveSelector {
@@ -538,6 +661,110 @@ enum SaveSelector {
 type SubscriptionRoot {
 	checkpointIngested(repoName: String!): Checkpoint!
 	ingestionProgress(repoName: String!): IngestionProgressEvent!
+	syncProgress(taskId: String!): SyncProgressEvent!
+}
+
+type SyncProgressEvent {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	source: String!
+	mode: String!
+	status: String!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	phase: String!
+	currentPath: String
+	pathsTotal: Int!
+	pathsCompleted: Int!
+	pathsRemaining: Int!
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	error: String
+	summary: SyncResult
+}
+
+type SyncResult {
+	success: Boolean!
+	mode: String!
+	parserVersion: String!
+	extractorVersion: String!
+	activeBranch: String
+	headCommitSha: String
+	headTreeSha: String
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	validation: SyncValidationResult
+}
+
+type SyncTask {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	source: String!
+	mode: String!
+	status: String!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	phase: String!
+	currentPath: String
+	pathsTotal: Int!
+	pathsCompleted: Int!
+	pathsRemaining: Int!
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	error: String
+	summary: SyncResult
+}
+
+type SyncValidationFileDriftResult {
+	path: String!
+	missingArtefacts: Int!
+	staleArtefacts: Int!
+	mismatchedArtefacts: Int!
+	missingEdges: Int!
+	staleEdges: Int!
+	mismatchedEdges: Int!
+}
+
+type SyncValidationResult {
+	valid: Boolean!
+	expectedArtefacts: Int!
+	actualArtefacts: Int!
+	expectedEdges: Int!
+	actualEdges: Int!
+	missingArtefacts: Int!
+	staleArtefacts: Int!
+	mismatchedArtefacts: Int!
+	missingEdges: Int!
+	staleEdges: Int!
+	mismatchedEdges: Int!
+	filesWithDrift: [SyncValidationFileDriftResult!]!
 }
 
 type TelemetryEvent {
@@ -631,10 +858,22 @@ type TestHarnessCoveringTest {
 	testName: String!
 	suiteName: String
 	filePath: String!
+	startLine: Int!
+	endLine: Int!
 	confidence: Float!
 	discoverySource: String!
 	linkageSource: String!
 	linkageStatus: String!
+	classification: String
+	classificationSource: String
+	fanOut: Int
+	lastRun: TestHarnessLastRun
+}
+
+type TestHarnessLastRun {
+	status: String!
+	durationMs: Int
+	commitSha: String!
 }
 
 type TestHarnessTestsResult {

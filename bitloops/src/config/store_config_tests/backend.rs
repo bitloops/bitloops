@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::process_state::git_command;
 
 fn resolved_path(root: &Path, relative: &str) -> String {
     let candidate = root.join(relative);
@@ -202,6 +203,7 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
             }
         }),
     );
+    let _guard = enter_process_state(None, &[]);
 
     let cfg = resolve_store_backend_config_for_repo(temp.path()).expect("store backend config");
     assert!(!cfg.relational.has_postgres());
@@ -220,6 +222,189 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
         Some(
             temp.path()
                 .join("data/events.duckdb")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
+fn resolve_store_backend_config_for_repo_reads_nearest_ancestor_daemon_config() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let repo_root = temp.path().join("bitloops");
+    fs::create_dir_all(&repo_root).expect("create nested repo root");
+
+    write_envelope_config(
+        temp.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/relational.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/events.duckdb"
+                }
+            }
+        }),
+    );
+
+    let _guard = enter_process_state(None, &[]);
+    let cfg = resolve_store_backend_config_for_repo(&repo_root).expect("store backend config");
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some(
+            temp.path()
+                .join("stores/relational/relational.db")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some(
+            temp.path()
+                .join("stores/event/events.duckdb")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
+fn resolve_store_backend_config_for_repo_prefers_repo_scoped_config_over_explicit_override_in_tests()
+ {
+    let repo = tempfile::tempdir().expect("repo temp dir");
+    let foreign = tempfile::tempdir().expect("foreign temp dir");
+
+    write_envelope_config(
+        repo.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/local.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/local.duckdb"
+                }
+            }
+        }),
+    );
+    write_envelope_config(
+        foreign.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/foreign.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/foreign.duckdb"
+                }
+            }
+        }),
+    );
+
+    let foreign_config = foreign
+        .path()
+        .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+        .to_string_lossy()
+        .to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(foreign_config.as_str()),
+        )],
+    );
+
+    let cfg = resolve_store_backend_config_for_repo(repo.path()).expect("store backend config");
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some(
+            repo.path()
+                .join("stores/relational/local.db")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some(
+            repo.path()
+                .join("stores/event/local.duckdb")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
+fn resolve_store_backend_config_honours_explicit_daemon_config_override_inside_git_repo() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let status = git_command()
+        .args(["init"])
+        .current_dir(temp.path())
+        .status()
+        .expect("git init");
+    assert!(status.success(), "git init should succeed");
+
+    write_envelope_config(
+        temp.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "postgres_dsn": "postgres://repo-root"
+                },
+                "events": {
+                    "clickhouse_url": "http://repo-root-clickhouse:8123",
+                    "clickhouse_database": "repo_root"
+                }
+            }
+        }),
+    );
+
+    let nested = temp.path().join("test-runs").join("case-a");
+    fs::create_dir_all(&nested).expect("create nested config dir");
+    write_envelope_config(
+        &nested,
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": "stores/relational/relational.db"
+                },
+                "events": {
+                    "duckdb_path": "stores/event/events.duckdb"
+                }
+            }
+        }),
+    );
+
+    let config_path = nested.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config_path_string = config_path.to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(nested.as_path()),
+        &[(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(config_path_string.as_str()),
+        )],
+    );
+
+    let cfg = resolve_store_backend_config().expect("store backend config");
+    assert!(!cfg.relational.has_postgres());
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some(
+            nested
+                .join("stores/relational/relational.db")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert!(!cfg.events.has_clickhouse());
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some(
+            nested
+                .join("stores/event/events.duckdb")
                 .to_string_lossy()
                 .as_ref()
         )

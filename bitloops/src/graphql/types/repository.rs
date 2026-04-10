@@ -3,12 +3,15 @@ use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 use crate::graphql::{
     DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error, bad_user_input_error,
 };
+use crate::host::interactions::types::InteractionEventType;
 
+use super::interaction::{InteractionEventObject, InteractionSessionObject, InteractionTurnObject};
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
-    CheckpointEdge, CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar,
-    FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, Project,
-    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, paginate_items,
+    CheckpointEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
+    ConnectionPagination, DateTimeScalar, FileContext, KnowledgeItemConnection, KnowledgeItemEdge,
+    KnowledgeProvider, Project, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -347,6 +350,40 @@ impl Repository {
         ))
     }
 
+    #[graphql(name = "cloneSummary")]
+    async fn clone_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(name = "cloneFilter")] clone_filter: Option<ClonesFilterInput>,
+    ) -> Result<CloneSummary> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        if let Some(clone_filter) = clone_filter.as_ref() {
+            clone_filter.validate()?;
+        }
+        if self
+            .scope
+            .temporal_scope()
+            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
+        {
+            return Err(bad_user_input_error(
+                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+            ));
+        }
+
+        super::clone::resolve_clone_summary(
+            ctx.data_unchecked::<DevqlGraphqlContext>(),
+            None,
+            filter.as_ref(),
+            clone_filter.as_ref(),
+            &self.scope,
+        )
+        .await
+        .map_err(|err| backend_error(format!("failed to query repository clone summary: {err:#}")))
+    }
+
     async fn knowledge(
         &self,
         ctx: &Context<'_>,
@@ -376,5 +413,96 @@ impl Repository {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[graphql(name = "interactionSessions")]
+    async fn interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<InteractionSessionObject>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_sessions(&self.scope, agent.as_deref(), first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query interaction sessions: {err:#}")))
+    }
+
+    #[graphql(name = "interactionTurns")]
+    async fn interaction_turns(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "sessionId")] session_id: String,
+        first: Option<i32>,
+    ) -> Result<Vec<InteractionTurnObject>> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err(bad_user_input_error("sessionId must not be empty"));
+        }
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_turns(&self.scope, session_id, first)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to query interaction turns for session `{session_id}`: {err:#}"
+                ))
+            })
+    }
+
+    #[graphql(name = "interactionEvents")]
+    async fn interaction_events(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "sessionId")] session_id: Option<String>,
+        #[graphql(name = "turnId")] turn_id: Option<String>,
+        #[graphql(name = "type")] event_type: Option<String>,
+        since: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<InteractionEventObject>> {
+        validate_interaction_event_type_filter(event_type.as_deref())?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_events(
+                &self.scope,
+                session_id.as_deref(),
+                turn_id.as_deref(),
+                event_type.as_deref(),
+                since.as_deref(),
+                first,
+            )
+            .await
+            .map_err(|err| backend_error(format!("failed to query interaction events: {err:#}")))
+    }
+}
+
+fn validate_interaction_event_type_filter(event_type: Option<&str>) -> Result<()> {
+    if let Some(value) = event_type.map(str::trim).filter(|value| !value.is_empty())
+        && InteractionEventType::parse(value).is_none()
+    {
+        return Err(bad_user_input_error(format!(
+            "invalid interaction event type `{value}`"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_interaction_event_type_filter_is_bad_user_input() {
+        let err = validate_interaction_event_type_filter(Some("not_real")).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("BAD_USER_INPUT"),
+            "expected BAD_USER_INPUT, got: {err:?}"
+        );
+        assert_eq!(err.message, "invalid interaction event type `not_real`");
+    }
+
+    #[test]
+    fn known_interaction_event_type_filter_is_allowed() {
+        validate_interaction_event_type_filter(Some("turn_end")).expect("valid filter");
+        validate_interaction_event_type_filter(Some("  ")).expect("blank filter");
+        validate_interaction_event_type_filter(None).expect("missing filter");
     }
 }

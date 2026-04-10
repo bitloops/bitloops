@@ -1,29 +1,60 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedSyncTaskMetadata {
+    pub task_id: String,
+    pub merged: bool,
+    pub queue_position: Option<u64>,
+    pub tasks_ahead: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PostCommitArtefactRefreshStats {
     pub files_seen: usize,
     pub files_indexed: usize,
     pub files_deleted: usize,
     pub files_failed: usize,
+    pub queued_task: Option<QueuedSyncTaskMetadata>,
+}
+
+impl PostCommitArtefactRefreshStats {
+    pub(crate) fn completed_with_failures(&self) -> bool {
+        self.queued_task.is_none() && self.files_failed > 0
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn inline_from_summary(files_seen: usize, summary: &SyncSummary) -> Self {
+        Self {
+            files_seen,
+            files_indexed: summary.paths_added + summary.paths_changed,
+            files_deleted: summary.paths_removed,
+            files_failed: summary.parse_errors,
+            queued_task: None,
+        }
+    }
+
+    fn queued(files_seen: usize, queued: crate::daemon::SyncEnqueueResult) -> Self {
+        Self {
+            files_seen,
+            files_indexed: 0,
+            files_deleted: 0,
+            files_failed: 0,
+            queued_task: Some(QueuedSyncTaskMetadata {
+                task_id: queued.task.task_id,
+                merged: queued.merged,
+                queue_position: queued.task.queue_position,
+                tasks_ahead: queued.task.tasks_ahead,
+            }),
+        }
+    }
 }
 
 pub async fn run_post_commit_artefact_refresh(
     cfg: &DevqlConfig,
-    commit_sha: &str,
+    _commit_sha: &str,
     changed_files: &[String],
 ) -> Result<PostCommitArtefactRefreshStats> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
-        .context("resolving DevQL backend config for post-commit artefact refresh")?;
-    let relational = RelationalStorage::connect(
-        cfg,
-        &backends.relational,
-        "git post-commit artefact refresh",
-    )
-    .await?;
-
-    update_artefacts_for_changed_files(cfg, &relational, commit_sha, changed_files, "post-commit")
-        .await
+    sync_changed_paths(cfg, changed_files, "post-commit").await
 }
 
 pub async fn run_post_commit_checkpoint_projection_refresh(
@@ -37,7 +68,7 @@ pub async fn run_post_commit_checkpoint_projection_refresh(
         return Ok(());
     }
 
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for post-commit checkpoint projection refresh")?;
     let relational = RelationalStorage::connect(
         cfg,
@@ -51,96 +82,60 @@ pub async fn run_post_commit_checkpoint_projection_refresh(
 
 pub async fn run_post_merge_artefact_refresh(
     cfg: &DevqlConfig,
-    commit_sha: &str,
+    _commit_sha: &str,
     changed_files: &[String],
 ) -> Result<PostCommitArtefactRefreshStats> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
-        .context("resolving DevQL backend config for post-merge artefact refresh")?;
-    let relational =
-        RelationalStorage::connect(cfg, &backends.relational, "git post-merge artefact refresh")
-            .await?;
-
-    update_artefacts_for_changed_files(cfg, &relational, commit_sha, changed_files, "post-merge")
-        .await
+    sync_changed_paths(cfg, changed_files, "post-merge").await
 }
 
-async fn update_artefacts_for_changed_files(
+async fn sync_changed_paths(
     cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    commit_sha: &str,
     changed_files: &[String],
     source_hook: &str,
 ) -> Result<PostCommitArtefactRefreshStats> {
-    ensure_repository_row(cfg, relational).await?;
+    let mut paths = changed_files
+        .iter()
+        .map(|raw| normalize_repo_path(raw))
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
 
-    let commit_info = checkpoint_commit_info_from_sha(&cfg.repo_root, commit_sha).unwrap_or(
-        CheckpointCommitInfo {
-            commit_sha: commit_sha.to_string(),
-            commit_unix: 0,
-            author_name: String::new(),
-            author_email: String::new(),
-            subject: String::new(),
-        },
-    );
-    upsert_commit_metadata_row(cfg, relational, &commit_info).await?;
-
-    let mut stats = PostCommitArtefactRefreshStats::default();
-    for raw_path in changed_files {
-        let path = normalize_repo_path(raw_path);
-        if path.is_empty() {
-            continue;
-        }
-        stats.files_seen += 1;
-
-        let refresh_result = async {
-            let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, commit_sha, &path)
-                .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, commit_sha, raw_path));
-            if let Some(blob_sha) = blob_sha {
-                upsert_file_state_row(&cfg.repo.repo_id, relational, commit_sha, &path, &blob_sha)
-                    .await?;
-                let file_artefact = upsert_file_artefact_row(
-                    &cfg.repo.repo_id,
-                    &cfg.repo_root,
-                    relational,
-                    &path,
-                    &blob_sha,
-                )
-                .await?;
-                upsert_language_artefacts(
-                    cfg,
-                    relational,
-                    &FileRevision {
-                        commit_sha,
-                        revision: TemporalRevisionRef {
-                            kind: TemporalRevisionKind::Commit,
-                            id: commit_sha,
-                            temp_checkpoint_id: None,
-                        },
-                        commit_unix: commit_info.commit_unix,
-                        path: &path,
-                        blob_sha: &blob_sha,
-                    },
-                    &file_artefact,
-                )
-                .await?;
-                stats.files_indexed += 1;
-            } else {
-                delete_current_state_for_path(cfg, relational, &path).await?;
-                stats.files_deleted += 1;
-            }
-            Result::<(), anyhow::Error>::Ok(())
-        }
-        .await;
-
-        if let Err(err) = refresh_result {
-            stats.files_failed += 1;
-            eprintln!(
-                "[bitloops] Warning: DevQL {source_hook} refresh failed for `{path}` at commit {commit_sha}: {err:#}"
-            );
-        }
+    let stats = PostCommitArtefactRefreshStats {
+        files_seen: paths.len(),
+        ..PostCommitArtefactRefreshStats::default()
+    };
+    if paths.is_empty() {
+        return Ok(stats);
     }
 
-    Ok(stats)
+    #[cfg(test)]
+    {
+        let summary = crate::host::devql::run_sync_with_summary(cfg, SyncMode::Paths(paths))
+            .await
+            .with_context(|| {
+                format!("running DevQL sync inline for {source_hook} refresh in tests")
+            })?;
+        Ok(PostCommitArtefactRefreshStats::inline_from_summary(
+            stats.files_seen,
+            &summary,
+        ))
+    }
+
+    #[cfg(not(test))]
+    {
+        let source = match source_hook {
+            "post-commit" => crate::daemon::SyncTaskSource::PostCommit,
+            "post-merge" => crate::daemon::SyncTaskSource::PostMerge,
+            _ => crate::daemon::SyncTaskSource::ManualCli,
+        };
+        let queued = crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
+            .with_context(|| format!("queueing DevQL sync for {source_hook} refresh"))?;
+        Ok(PostCommitArtefactRefreshStats::queued(
+            stats.files_seen,
+            queued,
+        ))
+    }
 }
 
 async fn refresh_checkpoint_projection_for_commit(
@@ -174,7 +169,7 @@ async fn refresh_checkpoint_projection_for_commit(
 
 pub async fn run_post_checkout_branch_seed(
     cfg: &DevqlConfig,
-    previous_head: &str,
+    _previous_head: &str,
     new_head: &str,
     is_branch_checkout: bool,
 ) -> Result<()> {
@@ -182,40 +177,24 @@ pub async fn run_post_checkout_branch_seed(
         return Ok(());
     }
 
-    let new_branch = run_git(&cfg.repo_root, &["branch", "--show-current"])
-        .ok()
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default();
-    if new_branch.is_empty() {
-        return Ok(());
-    }
-
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
-        .context("resolving DevQL backend config for post-checkout branch seeding")?;
-    let relational =
-        RelationalStorage::connect(cfg, &backends.relational, "git post-checkout branch seed")
-            .await?;
-
-    ensure_repository_row(cfg, &relational).await?;
-    if branch_has_current_state_rows(cfg, &relational, &new_branch).await? {
-        return Ok(());
-    }
-
-    if previous_head.trim() == new_head.trim()
-        && !previous_head.trim().is_empty()
-        && !is_zero_git_oid(previous_head)
-        && let Some(source_branch) =
-            resolve_fast_copy_source_branch(cfg, &relational, previous_head, &new_branch).await?
-        && copy_branch_current_state(cfg, &relational, &source_branch, &new_branch).await?
+    #[cfg(test)]
     {
-        return Ok(());
+        crate::host::devql::run_sync_with_summary(cfg, SyncMode::Full)
+            .await
+            .context("running full DevQL sync inline for post-checkout branch seed in tests")?;
+        Ok(())
     }
 
-    let files = discover_baseline_files_at_revision(&cfg.repo_root, new_head)?;
-    let _stats =
-        update_artefacts_for_changed_files(cfg, &relational, new_head, &files, "post-checkout")
-            .await?;
-    Ok(())
+    #[cfg(not(test))]
+    {
+        crate::daemon::enqueue_sync_for_config(
+            cfg,
+            crate::daemon::SyncTaskSource::PostCheckout,
+            SyncMode::Full,
+        )
+        .context("queueing full DevQL sync for post-checkout branch seed")?;
+        Ok(())
+    }
 }
 
 fn is_zero_git_oid(value: &str) -> bool {
@@ -223,102 +202,71 @@ fn is_zero_git_oid(value: &str) -> bool {
     !trimmed.is_empty() && trimmed.chars().all(|ch| ch == '0')
 }
 
-async fn branch_has_current_state_rows(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    branch: &str,
-) -> Result<bool> {
-    let sql = format!(
-        "SELECT COUNT(*) AS row_count FROM artefacts_current \
-WHERE repo_id = '{}' AND branch = '{}'",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
-    );
-    let rows = relational.query_rows(&sql).await?;
-    Ok(count_query_rows(&rows) > 0)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::{SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus};
 
-fn count_query_rows(rows: &[Value]) -> usize {
-    rows.first()
-        .and_then(|row| row.get("row_count"))
-        .and_then(|value| {
-            value
-                .as_u64()
-                .map(|number| number as usize)
-                .or_else(|| value.as_i64().map(|number| number.max(0) as usize))
-                .or_else(|| value.as_str().and_then(|raw| raw.parse::<usize>().ok()))
-        })
-        .unwrap_or_default()
-}
-
-async fn resolve_fast_copy_source_branch(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    previous_head: &str,
-    new_branch: &str,
-) -> Result<Option<String>> {
-    let refs = run_git(
-        &cfg.repo_root,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "--points-at",
-            previous_head,
-            "refs/heads",
-        ],
-    )
-    .unwrap_or_default();
-    let mut candidates = refs
-        .lines()
-        .map(str::trim)
-        .filter(|branch| !branch.is_empty() && *branch != new_branch)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.dedup();
-
-    for branch in candidates {
-        if branch_has_current_state_rows(cfg, relational, &branch).await? {
-            return Ok(Some(branch));
+    fn sample_queued_result() -> crate::daemon::SyncEnqueueResult {
+        crate::daemon::SyncEnqueueResult {
+            task: SyncTaskRecord {
+                task_id: "sync-task-123".to_string(),
+                repo_id: "repo-1".to_string(),
+                repo_name: "demo".to_string(),
+                repo_provider: "local".to_string(),
+                repo_organisation: "local".to_string(),
+                repo_identity: "local/demo".to_string(),
+                daemon_config_root: PathBuf::from("/tmp/repo"),
+                repo_root: PathBuf::from("/tmp/repo"),
+                source: SyncTaskSource::PostCommit,
+                mode: SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                status: SyncTaskStatus::Queued,
+                submitted_at_unix: 1,
+                started_at_unix: None,
+                updated_at_unix: 1,
+                completed_at_unix: None,
+                queue_position: Some(3),
+                tasks_ahead: Some(2),
+                progress: SyncProgressUpdate::default(),
+                error: None,
+                summary: None,
+            },
+            merged: true,
         }
     }
 
-    Ok(None)
-}
+    #[test]
+    fn queued_refresh_stats_include_task_metadata() {
+        let stats = PostCommitArtefactRefreshStats::queued(2, sample_queued_result());
 
-async fn copy_branch_current_state(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    source_branch: &str,
-    target_branch: &str,
-) -> Result<bool> {
-    if !branch_has_current_state_rows(cfg, relational, source_branch).await? {
-        return Ok(false);
+        assert_eq!(stats.files_seen, 2);
+        assert_eq!(stats.files_indexed, 0);
+        assert_eq!(stats.files_deleted, 0);
+        assert_eq!(stats.files_failed, 0);
+        assert_eq!(
+            stats.queued_task,
+            Some(QueuedSyncTaskMetadata {
+                task_id: "sync-task-123".to_string(),
+                merged: true,
+                queue_position: Some(3),
+                tasks_ahead: Some(2),
+            })
+        );
+        assert!(!stats.completed_with_failures());
     }
 
-    let copy_artefacts_sql = format!(
-        "INSERT INTO artefacts_current (repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
-SELECT repo_id, '{}', symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at \
-FROM artefacts_current \
-WHERE repo_id = '{}' AND branch = '{}' \
-ON CONFLICT (repo_id, branch, symbol_id) DO NOTHING",
-        esc_pg(target_branch),
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(source_branch),
-    );
-    let copy_edges_sql = format!(
-        "INSERT INTO artefact_edges_current (edge_id, repo_id, branch, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
-SELECT edge_id, repo_id, '{}', commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at \
-FROM artefact_edges_current \
-WHERE repo_id = '{}' AND branch = '{}' \
-ON CONFLICT (repo_id, branch, edge_id) DO NOTHING",
-        esc_pg(target_branch),
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(source_branch),
-    );
-    relational
-        .exec_batch_transactional(&[copy_artefacts_sql, copy_edges_sql])
-        .await?;
+    #[test]
+    fn inline_refresh_stats_report_completed_failures() {
+        let stats = PostCommitArtefactRefreshStats {
+            files_seen: 2,
+            files_indexed: 1,
+            files_deleted: 0,
+            files_failed: 1,
+            queued_task: None,
+        };
 
-    Ok(true)
+        assert!(stats.completed_with_failures());
+    }
 }

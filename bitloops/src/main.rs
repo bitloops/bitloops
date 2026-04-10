@@ -18,10 +18,98 @@ pub use bitloops::utils;
 #[allow(dead_code)]
 pub(crate) mod test_support;
 
+fn init_standard_logger() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+}
+
+fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::ProcessLogContext> {
+    match command? {
+        cli::Commands::DaemonProcess(args) => Some(daemon::ProcessLogContext::daemon(
+            match args.mode {
+                daemon::DaemonProcessModeArg::Detached => "detached",
+                daemon::DaemonProcessModeArg::Service => "service",
+            },
+            Some(args.config_path.clone()),
+            args.service_name.clone(),
+        )),
+        cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
+        cli::Commands::Start(args) => Some(daemon::ProcessLogContext::daemon_cli(
+            if args.until_stopped {
+                "start_service"
+            } else if args.detached {
+                "start_detached"
+            } else {
+                "start_foreground"
+            },
+            args.config.clone(),
+        )),
+        cli::Commands::Stop(args) => Some(daemon::ProcessLogContext::daemon_cli(
+            "stop",
+            args.config.clone(),
+        )),
+        cli::Commands::Restart(args) => Some(daemon::ProcessLogContext::daemon_cli(
+            "restart",
+            args.config.clone(),
+        )),
+        cli::Commands::Daemon(args) => match args.command.as_ref()? {
+            cli::daemon::DaemonCommand::Start(start) => {
+                Some(daemon::ProcessLogContext::daemon_cli(
+                    if start.until_stopped {
+                        "start_service"
+                    } else if start.detached {
+                        "start_detached"
+                    } else {
+                        "start_foreground"
+                    },
+                    start.config.clone(),
+                ))
+            }
+            cli::daemon::DaemonCommand::Stop(stop) => Some(daemon::ProcessLogContext::daemon_cli(
+                "stop",
+                stop.config.clone(),
+            )),
+            cli::daemon::DaemonCommand::Restart(restart) => Some(
+                daemon::ProcessLogContext::daemon_cli("restart", restart.config.clone()),
+            ),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn command_handles_ctrl_c(command: Option<&cli::Commands>) -> bool {
+    matches!(
+        command,
+        Some(cli::Commands::Daemon(cli::daemon::DaemonArgs {
+            command: Some(cli::daemon::DaemonCommand::Logs(
+                cli::daemon::DaemonLogsArgs { follow: true, .. }
+            )),
+        }))
+    )
+}
+
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cmd = cli::Cli::parse();
+    if let Some(context) = daemon_log_context(cmd.command.as_ref()) {
+        if let Err(err) = daemon::init_process_logger(context) {
+            eprintln!("[bitloops] Warning: failed to initialize daemon logger: {err:#}");
+            init_standard_logger();
+        }
+    } else {
+        init_standard_logger();
+    }
+
+    if command_handles_ctrl_c(cmd.command.as_ref()) {
+        if let Err(e) = cli::run(cmd).await {
+            if e.downcast_ref::<cli::SilentError>().is_none() {
+                eprintln!("Error: {e:#}");
+            }
+            std::process::exit(1);
+        }
+        return;
+    }
 
     tokio::select! {
         result = cli::run(cmd) => {
@@ -45,7 +133,10 @@ mod tests {
         DashboardLocalDashboardConfig, ProviderConfig, resolve_dashboard_config,
         resolve_provider_config, resolve_store_backend_config,
     };
+    use super::daemon_log_context;
+    use crate::cli::{Cli, Commands};
     use crate::test_support::process_state::enter_process_state;
+    use clap::Parser;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -73,6 +164,24 @@ mod tests {
         fs::write(config_path, toml).expect("write config");
     }
 
+    fn enter_isolated_platform_dirs(
+        home_root: &Path,
+    ) -> crate::test_support::process_state::ProcessStateGuard {
+        let xdg_config_home = home_root.join(".config").display().to_string();
+        let app_data = home_root
+            .join("AppData")
+            .join("Roaming")
+            .display()
+            .to_string();
+        let home = home_root.display().to_string();
+        let env_vars = vec![
+            ("HOME", Some(home.as_str())),
+            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
+            ("APPDATA", Some(app_data.as_str())),
+        ];
+        enter_process_state(Some(home_root), &env_vars)
+    }
+
     #[test]
     fn main_target_resolves_store_backend_config_from_daemon_config() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -84,20 +193,7 @@ postgres_dsn = "postgres://u:p@localhost:5432/bitloops"
 "#,
         );
 
-        let xdg_config_home = temp.path().join(".config").display().to_string();
-        let app_data = temp
-            .path()
-            .join("AppData")
-            .join("Roaming")
-            .display()
-            .to_string();
-        let home = temp.path().display().to_string();
-        let env_vars = vec![
-            ("HOME", Some(home.as_str())),
-            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
-            ("APPDATA", Some(app_data.as_str())),
-        ];
-        let _guard = enter_process_state(Some(temp.path()), &env_vars);
+        let _guard = enter_isolated_platform_dirs(temp.path());
         let cfg = resolve_store_backend_config().expect("backend config");
 
         assert_eq!(
@@ -117,20 +213,7 @@ tls = true
 "#,
         );
 
-        let xdg_config_home = temp.path().join(".config").display().to_string();
-        let app_data = temp
-            .path()
-            .join("AppData")
-            .join("Roaming")
-            .display()
-            .to_string();
-        let home = temp.path().display().to_string();
-        let env_vars = vec![
-            ("HOME", Some(home.as_str())),
-            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
-            ("APPDATA", Some(app_data.as_str())),
-        ];
-        let _guard = enter_process_state(Some(temp.path()), &env_vars);
+        let _guard = enter_isolated_platform_dirs(temp.path());
 
         assert_eq!(
             resolve_dashboard_config().local_dashboard,
@@ -141,10 +224,54 @@ tls = true
     #[test]
     fn main_target_provider_config_defaults_without_repo_config() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let _guard = enter_process_state(Some(temp.path()), &[]);
+        let _guard = enter_isolated_platform_dirs(temp.path());
 
         let cfg = resolve_provider_config().expect("provider config");
 
         assert_eq!(cfg, ProviderConfig::default());
+    }
+
+    #[test]
+    fn main_target_marks_daemon_logs_follow_as_ctrl_c_owner() {
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "logs", "--follow"])
+            .expect("daemon logs follow should parse");
+
+        assert!(super::command_handles_ctrl_c(parsed.command.as_ref()));
+    }
+
+    #[test]
+    fn main_target_keeps_standard_ctrl_c_handling_for_other_commands() {
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path"])
+            .expect("daemon logs path should parse");
+        assert!(!super::command_handles_ctrl_c(parsed.command.as_ref()));
+
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "status"])
+            .expect("daemon status should parse");
+        assert!(!super::command_handles_ctrl_c(parsed.command.as_ref()));
+    }
+
+    #[test]
+    fn daemon_log_context_uses_daemon_cli_for_stop_command() {
+        let parsed = Cli::parse_from(["bitloops", "daemon", "stop"]);
+        let Some(context) = daemon_log_context(parsed.command.as_ref()) else {
+            panic!("expected daemon log context");
+        };
+        let command = serde_json::to_value(&context).expect("serialize process log context");
+        assert_eq!(command["process"], "daemon_cli");
+        assert_eq!(command["mode"], "stop");
+    }
+
+    #[test]
+    fn daemon_log_context_uses_daemon_cli_for_detached_start_command() {
+        let parsed = Cli::parse_from(["bitloops", "daemon", "start", "-d"]);
+        let Some(Commands::Daemon(_)) = parsed.command.as_ref() else {
+            panic!("expected daemon command");
+        };
+        let Some(context) = daemon_log_context(parsed.command.as_ref()) else {
+            panic!("expected daemon log context");
+        };
+        let command = serde_json::to_value(&context).expect("serialize process log context");
+        assert_eq!(command["process"], "daemon_cli");
+        assert_eq!(command["mode"], "start_detached");
     }
 }

@@ -9,9 +9,15 @@ use serde_json::Value;
 use crate::capability_packs as capabilities;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
+use super::events::{EventHandlerContext, HostEventHandler};
+use super::gateways::{
+    DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway,
+    SqliteRelationalGateway,
+};
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::lifecycle;
 use super::migrations::CapabilityMigration;
@@ -23,6 +29,7 @@ use super::registrar::{
     StageRegistration, StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
+use crate::host::inference::{InferenceGateway, ScopedInferenceGateway};
 
 #[derive(Clone)]
 enum RegisteredStage {
@@ -36,11 +43,29 @@ enum RegisteredIngester {
     Knowledge(Arc<dyn KnowledgeIngesterHandler>),
 }
 
+struct RuntimeLanguageServicesGateway {
+    inner: &'static crate::host::capability_host::runtime_contexts::BuiltinLanguageServicesGateway,
+}
+
+impl LanguageServicesGateway for RuntimeLanguageServicesGateway {
+    fn test_supports(&self) -> Vec<Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
+        self.inner.test_supports()
+    }
+
+    fn resolve_test_support_for_path(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
+        self.inner.resolve_test_support_for_path(relative_path)
+    }
+}
+
 pub struct DevqlCapabilityHost {
     runtime: LocalCapabilityRuntimeResources,
     descriptors: HashMap<String, &'static CapabilityDescriptor>,
     stages: HashMap<(String, String), RegisteredStage>,
     ingesters: HashMap<(String, String), RegisteredIngester>,
+    event_handlers: Vec<Arc<dyn HostEventHandler>>,
     schema_modules: Vec<SchemaModule>,
     query_examples: Vec<&'static [QueryExample]>,
     migrations: Vec<CapabilityMigration>,
@@ -61,6 +86,7 @@ impl DevqlCapabilityHost {
             descriptors: HashMap::new(),
             stages: HashMap::new(),
             ingesters: HashMap::new(),
+            event_handlers: Vec::new(),
             schema_modules: Vec::new(),
             query_examples: Vec::new(),
             migrations: Vec::new(),
@@ -93,6 +119,17 @@ impl DevqlCapabilityHost {
 
     pub fn invocation_policy(&self) -> &HostInvocationPolicy {
         &self.invocation_policy
+    }
+
+    pub fn inference(&self) -> &dyn InferenceGateway {
+        &self.runtime.inference
+    }
+
+    pub fn inference_for_capability<'a>(
+        &'a self,
+        capability_id: &'a str,
+    ) -> ScopedInferenceGateway<'a> {
+        self.runtime.inference.scoped(Some(capability_id))
     }
 
     pub fn cross_pack_access(&self) -> &CrossPackAccessPolicy {
@@ -133,6 +170,34 @@ impl DevqlCapabilityHost {
 
     pub fn query_examples(&self) -> &[&'static [QueryExample]] {
         self.query_examples.as_slice()
+    }
+
+    pub fn event_handlers(&self) -> &[Arc<dyn HostEventHandler>] {
+        self.event_handlers.as_slice()
+    }
+
+    pub fn build_event_handler_context(&self) -> Result<EventHandlerContext> {
+        let relational_store = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root(),
+            &self.runtime.backends.relational,
+        )?;
+        let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
+
+        let language_services: Arc<dyn LanguageServicesGateway> =
+            Arc::new(RuntimeLanguageServicesGateway {
+                inner: self.runtime.languages,
+            });
+        let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
+        let host_services: Arc<dyn HostServicesGateway> = Arc::new(
+            DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
+        );
+
+        Ok(EventHandlerContext {
+            storage: Arc::new(relational_store.to_local_inner()),
+            relational,
+            language_services,
+            host_services,
+        })
     }
 
     /// Snapshot of registered packs, migrations, invocation policy, and cross-pack grants.
@@ -338,7 +403,7 @@ impl DevqlCapabilityHost {
         };
 
         let request = StageRequest::new(payload);
-        let mut runtime = self.runtime.runtime();
+        let mut runtime = self.runtime.runtime_for_capability(capability_id);
         let limit = self.invocation_policy.stage_timeout;
         match handler {
             RegisteredStage::Core(h) => {
@@ -356,7 +421,7 @@ impl DevqlCapabilityHost {
             .get(capability_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let runtime = self.runtime.runtime();
+        let runtime = self.runtime.runtime_for_capability(capability_id);
         lifecycle::run_health_checks(capability_id, checks, &runtime)
     }
 
@@ -469,6 +534,11 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         self.query_examples.push(examples);
         Ok(())
     }
+
+    fn register_event_handler(&mut self, handler: Arc<dyn HostEventHandler>) -> Result<()> {
+        self.event_handlers.push(handler);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -497,6 +567,13 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
 
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
     static TEST_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
         id: "knowledge",
         display_name: "Knowledge",
@@ -507,6 +584,7 @@ mod tests {
         experimental: false,
         dependencies: &[],
         required_host_features: &[],
+        inference_slots: &[],
     };
 
     #[derive(Debug, Deserialize, PartialEq)]
@@ -739,8 +817,7 @@ mod tests {
         assert_eq!(host.schema_modules().len(), 1);
         assert_eq!(host.query_examples().len(), 1);
 
-        let stage = tokio::runtime::Runtime::new()
-            .expect("runtime")
+        let stage = test_runtime()
             .block_on(async {
                 host.invoke_stage("knowledge", "knowledge.stage", json!({ "limit": 4 }))
                     .await
@@ -750,8 +827,7 @@ mod tests {
         assert!(stage.payload["repo_root"].is_string());
         assert!(stage.render_human().contains("\"limit\": 4"));
 
-        let ingest = tokio::runtime::Runtime::new()
-            .expect("runtime")
+        let ingest = test_runtime()
             .block_on(async {
                 host.invoke_ingester(
                     "knowledge",

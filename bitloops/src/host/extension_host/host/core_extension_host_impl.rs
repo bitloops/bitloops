@@ -21,6 +21,8 @@ impl CoreExtensionHost {
         self.register_language_pack(RUST_LANGUAGE_PACK)?;
         self.register_language_pack(TS_JS_LANGUAGE_PACK)?;
         self.register_language_pack(PYTHON_LANGUAGE_PACK)?;
+        self.register_language_pack(GO_LANGUAGE_PACK)?;
+        self.register_language_pack(JAVA_LANGUAGE_PACK)?;
         self.register_capability_pack(KNOWLEDGE_CAPABILITY_PACK)?;
         self.register_capability_pack(TEST_HARNESS_CAPABILITY_PACK)?;
         Ok(())

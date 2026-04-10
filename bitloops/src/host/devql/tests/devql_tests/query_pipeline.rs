@@ -8,5 +8,7 @@ mod parsing;
 mod pipeline_validation;
 #[path = "query_pipeline/relational_pipeline.rs"]
 mod relational_pipeline;
+#[path = "query_pipeline/summary_stage.rs"]
+mod summary_stage;
 #[path = "query_pipeline/tests_stage.rs"]
 mod tests_stage;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 #[test]
 pub(crate) fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
@@ -25,8 +26,7 @@ pub(crate) fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
         modified_files: vec![],
         new_files: vec!["file.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -74,8 +74,7 @@ pub(crate) fn save_step_checkpoint_tree_has_modified_file() {
         modified_files: vec![],
         new_files: vec!["src.rs".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -120,8 +119,7 @@ pub(crate) fn save_step_skips_when_no_changes() {
         modified_files: vec![],
         new_files: vec!["file.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -134,14 +132,14 @@ pub(crate) fn save_step_skips_when_no_changes() {
 
     strategy.save_step(&ctx).unwrap();
     let s1 = backend.load_session("s3").unwrap().unwrap();
-    let count1 = s1.step_count;
+    let count1 = s1.pending.step_count;
 
     // Second call with same context — tree is identical → skip.
     strategy.save_step(&ctx).unwrap();
     let s2 = backend.load_session("s3").unwrap().unwrap();
 
     assert_eq!(
-        s2.step_count, count1,
+        s2.pending.step_count, count1,
         "step_count should not increase for identical tree"
     );
 }
@@ -159,7 +157,7 @@ pub(crate) fn save_step_increments_step_count() {
         session_id: "s4".to_string(),
         base_commit: head.clone(),
         phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
-        step_count: 0,
+        pending: PendingCheckpointState::default(),
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
@@ -169,8 +167,7 @@ pub(crate) fn save_step_increments_step_count() {
         modified_files: vec![],
         new_files: vec!["a.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -184,7 +181,7 @@ pub(crate) fn save_step_increments_step_count() {
 
     let loaded = backend.load_session("s4").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 1,
+        loaded.pending.step_count, 1,
         "step_count should be 1 after first save_step"
     );
 }
@@ -211,8 +208,7 @@ pub(crate) fn save_step_sets_base_commit() {
         modified_files: vec![],
         new_files: vec!["b.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -341,12 +337,8 @@ pub(crate) fn initialize_session_prompt_attribution_uses_latest_temporary_checkp
     let session_id = "attr-latest-temp-tree";
 
     fs::write(dir.path().join("README.md"), "agent baseline\n").unwrap();
-    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), session_id);
-    let result = write_temporary(
-        dir.path(),
-        first_checkpoint_opts(session_id, &base_commit, &metadata_dir_abs),
-    )
-    .unwrap();
+    let result =
+        write_temporary(dir.path(), first_checkpoint_opts(session_id, &base_commit)).unwrap();
     assert!(!result.skipped);
 
     // Ensure there is no shadow-branch fallback available.
@@ -411,8 +403,7 @@ pub(crate) fn save_step_consumes_pending_prompt_attribution() {
         modified_files: vec!["tracked.txt".to_string()],
         new_files: vec![],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -464,8 +455,7 @@ pub(crate) fn save_step_includes_transcript_in_checkpoint_tree() {
         modified_files: vec![],
         new_files: vec!["changed.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: transcript_path.to_string_lossy().to_string(),
         author_name: String::new(),
@@ -527,8 +517,7 @@ pub(crate) fn save_step_with_untracked_dir_does_not_crash() {
         modified_files: vec![],
         new_files: vec![],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),
@@ -557,8 +546,7 @@ pub(crate) fn save_step_no_head_is_noop() {
         modified_files: vec![],
         new_files: vec!["file.txt".to_string()],
         deleted_files: vec![],
-        metadata_dir: String::new(),
-        metadata_dir_abs: String::new(),
+        metadata: None,
         commit_message: String::new(),
         transcript_path: String::new(),
         author_name: String::new(),

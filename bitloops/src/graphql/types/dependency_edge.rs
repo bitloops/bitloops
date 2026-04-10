@@ -40,7 +40,7 @@ pub struct DepsFilterInput {
     pub kind: Option<EdgeKind>,
     #[graphql(default)]
     pub direction: DepsDirection,
-    #[graphql(default)]
+    #[graphql(default = true)]
     pub include_unresolved: bool,
 }
 
@@ -49,7 +49,95 @@ impl Default for DepsFilterInput {
         Self {
             kind: None,
             direction: DepsDirection::Out,
-            include_unresolved: false,
+            include_unresolved: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DepsFilterInput;
+
+    #[test]
+    fn deps_filter_default_includes_unresolved_edges() {
+        assert!(
+            DepsFilterInput::default().include_unresolved,
+            "default deps filter should include unresolved edges"
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, InputObject, Default)]
+pub struct DepsSummaryFilterInput {
+    pub kind: Option<EdgeKind>,
+    pub direction: Option<DepsDirection>,
+    #[graphql(default)]
+    pub unresolved: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, SimpleObject)]
+pub struct DepsSummaryKindCounts {
+    pub imports: i32,
+    pub calls: i32,
+    pub references: i32,
+    pub extends: i32,
+    pub implements: i32,
+    pub exports: i32,
+}
+
+impl DepsSummaryKindCounts {
+    pub(crate) fn increment(&mut self, kind: EdgeKind) {
+        match kind {
+            EdgeKind::Imports => self.imports = self.imports.saturating_add(1),
+            EdgeKind::Calls => self.calls = self.calls.saturating_add(1),
+            EdgeKind::References => self.references = self.references.saturating_add(1),
+            EdgeKind::Extends => self.extends = self.extends.saturating_add(1),
+            EdgeKind::Implements => self.implements = self.implements.saturating_add(1),
+            EdgeKind::Exports => self.exports = self.exports.saturating_add(1),
+        }
+    }
+
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.imports = self.imports.saturating_add(other.imports);
+        self.calls = self.calls.saturating_add(other.calls);
+        self.references = self.references.saturating_add(other.references);
+        self.extends = self.extends.saturating_add(other.extends);
+        self.implements = self.implements.saturating_add(other.implements);
+        self.exports = self.exports.saturating_add(other.exports);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, SimpleObject)]
+pub struct DepsSummary {
+    pub total_count: i32,
+    pub incoming_count: i32,
+    pub outgoing_count: i32,
+    pub kind_counts: DepsSummaryKindCounts,
+}
+
+impl DepsSummary {
+    pub(crate) fn from_edges(incoming: &[DependencyEdge], outgoing: &[DependencyEdge]) -> Self {
+        fn count_kind(edges: &[DependencyEdge]) -> DepsSummaryKindCounts {
+            let mut counts = DepsSummaryKindCounts::default();
+            for edge in edges {
+                counts.increment(edge.edge_kind);
+            }
+            counts
+        }
+
+        let incoming_count = i32::try_from(incoming.len()).unwrap_or(i32::MAX);
+        let outgoing_count = i32::try_from(outgoing.len()).unwrap_or(i32::MAX);
+        let total_count = incoming_count.saturating_add(outgoing_count);
+        let incoming_kind_counts = count_kind(incoming);
+        let outgoing_kind_counts = count_kind(outgoing);
+        let mut kind_counts = incoming_kind_counts;
+        kind_counts.merge(&outgoing_kind_counts);
+
+        Self {
+            total_count,
+            incoming_count,
+            outgoing_count,
+            kind_counts,
         }
     }
 }

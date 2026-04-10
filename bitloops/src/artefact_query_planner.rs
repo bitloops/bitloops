@@ -127,13 +127,6 @@ impl ArtefactTemporalScope {
         }
     }
 
-    pub(crate) fn save_revision(&self) -> Option<&str> {
-        match self {
-            Self::SaveRevision { revision_id } => Some(revision_id.as_str()),
-            Self::Current | Self::HistoricalCommit { .. } | Self::SaveCurrent => None,
-        }
-    }
-
     pub(crate) fn use_historical_tables(&self) -> bool {
         matches!(self, Self::HistoricalCommit { .. })
     }
@@ -388,7 +381,7 @@ mod tests {
 
     fn test_cfg(repo_root: &Path) -> DevqlConfig {
         DevqlConfig {
-            config_root: repo_root.to_path_buf(),
+            daemon_config_root: repo_root.to_path_buf(),
             repo_root: repo_root.to_path_buf(),
             repo: RepoIdentity {
                 provider: "github".to_string(),
@@ -402,14 +395,6 @@ mod tests {
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: "default".to_string(),
-            semantic_provider: None,
-            semantic_model: None,
-            semantic_api_key: None,
-            semantic_base_url: None,
-            embedding_provider: None,
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
         }
     }
 

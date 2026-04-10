@@ -1,5 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 pub mod checkpoints;
 pub mod clean;
@@ -8,6 +10,7 @@ pub mod dashboard;
 pub mod debug;
 pub mod devql;
 pub mod doctor;
+pub mod embeddings;
 pub mod enable;
 pub mod explain;
 pub mod init;
@@ -16,7 +19,6 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub(crate) mod telemetry_consent;
-pub mod testlens;
 pub mod uninstall;
 pub mod versioncheck;
 
@@ -91,8 +93,8 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
-    /// Test harness ingestion for DevQL production artefacts.
-    Testlens(testlens::TestLensArgs),
+    /// Manage embedding profiles and caches.
+    Embeddings(embeddings::EmbeddingsArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
@@ -130,6 +132,14 @@ impl std::fmt::Display for SilentError {
 
 impl std::error::Error for SilentError {}
 
+fn resolve_watcher_autostart_config_root(repo_root: &Path, policy_start: &Path) -> Option<PathBuf> {
+    if !crate::config::settings::is_enabled_for_hooks(policy_start) {
+        return None;
+    }
+
+    crate::config::resolve_daemon_config_root_for_repo(repo_root).ok()
+}
+
 pub async fn run(cli: Cli) -> Result<()> {
     let strategy_registry =
         crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
@@ -142,8 +152,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             bail!("`--version` cannot be combined with `--connection-status`");
         }
 
+        let started = Instant::now();
+        let telemetry_action = root::telemetry_action_for_version(cli.check);
         let result = root::run_version_command(cli.check);
-        root::run_persistent_post_run(&[], "version");
+        root::run_persistent_post_run(Some(&telemetry_action), started.elapsed(), result.is_ok());
         return result;
     }
 
@@ -151,8 +163,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         if cli.command.is_some() {
             bail!("`--connection-status` cannot be combined with a subcommand");
         }
+        let started = Instant::now();
+        let telemetry_action = root::telemetry_action_for_connection_status();
         let result = devql::run_connection_status().await;
-        root::run_persistent_post_run(&[], "connection-status");
+        root::run_persistent_post_run(Some(&telemetry_action), started.elapsed(), result.is_ok());
         return result;
     }
 
@@ -163,16 +177,15 @@ pub async fn run(cli: Cli) -> Result<()> {
     if root::should_attempt_watcher_autostart(&command)
         && let Ok(repo_root) = crate::utils::paths::repo_root()
         && let Ok(policy_start) = std::env::current_dir()
-        && let Ok(policy) = crate::config::discover_repo_policy_optional(&policy_start)
-        && let Some(config_root) = policy.root.as_deref()
-        && crate::config::settings::is_enabled_for_hooks(&policy_start)
-        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root, config_root)
+        && let Some(config_root) = resolve_watcher_autostart_config_root(&repo_root, &policy_start)
+        && let Err(err) =
+            crate::host::devql::watch::ensure_watcher_running(&repo_root, &config_root)
     {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");
     }
 
-    let command_name = root::command_name(&command);
-    let hidden_chain = root::hidden_chain_for_command(&command);
+    let telemetry_action = root::telemetry_action_for_command(&command);
+    let started = Instant::now();
 
     let result = match command {
         Commands::Daemon(args) => daemon::run(args).await,
@@ -197,7 +210,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
-        Commands::Testlens(args) => testlens::run(args).await,
+        Commands::Embeddings(args) => embeddings::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
         Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,
@@ -208,7 +221,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Help(args) => root::run_help_command(&args),
     };
 
-    root::run_persistent_post_run(&hidden_chain, command_name);
+    root::run_persistent_post_run(telemetry_action.as_ref(), started.elapsed(), result.is_ok());
     result
 }
 

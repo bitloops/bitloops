@@ -1,6 +1,9 @@
 use super::*;
 use crate::adapters::agents::Agent;
-use crate::test_support::process_state::with_cwd;
+use crate::host::checkpoints::lifecycle::adapters::{
+    CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP,
+    CODEX_HOOK_USER_PROMPT_SUBMIT,
+};
 
 fn init_repo(path: &std::path::Path) {
     let output = std::process::Command::new("git")
@@ -21,15 +24,28 @@ fn identity_and_preview() {
 }
 
 #[test]
+fn hook_names_expose_full_codex_surface() {
+    let agent = CodexAgent;
+    assert_eq!(
+        agent.hook_names(),
+        vec![
+            CODEX_HOOK_SESSION_START.to_string(),
+            CODEX_HOOK_USER_PROMPT_SUBMIT.to_string(),
+            CODEX_HOOK_PRE_TOOL_USE.to_string(),
+            CODEX_HOOK_POST_TOOL_USE.to_string(),
+            CODEX_HOOK_STOP.to_string(),
+        ]
+    );
+}
+
+#[test]
 fn detect_presence_checks_dot_codex_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
-    with_cwd(dir.path(), || {
-        let agent = CodexAgent;
-        assert!(!agent.detect_presence().expect("detect"));
-        std::fs::create_dir_all(dir.path().join(".codex")).expect("create .codex");
-        assert!(agent.detect_presence().expect("detect"));
-    });
+    let agent = CodexAgent;
+    assert!(!agent.detect_presence_at(dir.path()));
+    std::fs::create_dir_all(dir.path().join(".codex")).expect("create .codex");
+    assert!(agent.detect_presence_at(dir.path()));
 }
 
 #[test]
@@ -62,7 +78,7 @@ fn path_based_hooks_api_manages_hooks_without_cwd() {
     init_repo(dir.path());
 
     let installed = super::hooks::install_hooks_at(dir.path(), false, false).expect("install");
-    assert_eq!(installed, 2);
+    assert_eq!(installed, 5);
     assert!(super::hooks::are_hooks_installed_at(dir.path()));
 
     super::hooks::uninstall_hooks_at(dir.path()).expect("uninstall");

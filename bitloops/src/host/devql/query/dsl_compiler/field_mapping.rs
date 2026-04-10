@@ -5,19 +5,17 @@ use super::document_builder::{GraphqlArgument, GraphqlField, GraphqlSelection};
 use super::*;
 
 pub(super) const KNOWLEDGE_STAGE_NAME: &str = "knowledge";
+pub(super) const CLONE_SUMMARY_STAGE_NAME: &str =
+    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_STAGE_ID;
 pub(super) const TESTS_SUMMARY_STAGE_NAME: &str =
     crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
 
 pub(super) fn is_tests_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ALIAS_ID
 }
 
 pub(super) fn is_coverage_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
-        || stage_name
-            == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,10 +113,21 @@ pub(super) fn tests_result_selections() -> Vec<GraphqlSelection> {
                 GraphqlSelection::scalar("testName"),
                 GraphqlSelection::scalar("suiteName"),
                 GraphqlSelection::scalar("filePath"),
-                GraphqlSelection::scalar("confidence"),
-                GraphqlSelection::scalar("discoverySource"),
-                GraphqlSelection::scalar("linkageSource"),
-                GraphqlSelection::scalar("linkageStatus"),
+                GraphqlSelection::scalar("startLine"),
+                GraphqlSelection::scalar("endLine"),
+                GraphqlSelection::scalar("classification"),
+                GraphqlSelection::scalar("classificationSource"),
+                GraphqlSelection::scalar("fanOut"),
+                GraphqlField::new(
+                    "lastRun",
+                    Vec::new(),
+                    vec![
+                        GraphqlSelection::scalar("status"),
+                        GraphqlSelection::scalar("durationMs"),
+                        GraphqlSelection::scalar("commitSha"),
+                    ],
+                )
+                .into(),
             ],
         )
         .into(),
@@ -189,6 +198,49 @@ pub(super) fn coverage_result_selections() -> Vec<GraphqlSelection> {
     ]
 }
 
+pub(super) fn clone_result_selections(raw: bool) -> Result<Vec<GraphqlSelection>> {
+    if raw {
+        return scalar_selections_for_leaf(
+            SelectableLeaf::Clone,
+            &[
+                "id".to_string(),
+                "source_artefact_id".to_string(),
+                "target_artefact_id".to_string(),
+                "source_start_line".to_string(),
+                "source_end_line".to_string(),
+                "target_start_line".to_string(),
+                "target_end_line".to_string(),
+                "relation_kind".to_string(),
+                "score".to_string(),
+                "metadata".to_string(),
+            ],
+        );
+    }
+
+    Ok(vec![
+        GraphqlSelection::scalar("relationKind"),
+        GraphqlSelection::scalar("score"),
+        GraphqlField::new(
+            "sourceArtefact",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("path"),
+                GraphqlSelection::scalar("symbolFqn"),
+            ],
+        )
+        .into(),
+        GraphqlField::new(
+            "targetArtefact",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("path"),
+                GraphqlSelection::scalar("symbolFqn"),
+            ],
+        )
+        .into(),
+    ])
+}
+
 pub(super) fn tests_summary_result_selections() -> Vec<GraphqlSelection> {
     vec![
         GraphqlSelection::scalar("capability"),
@@ -208,6 +260,42 @@ pub(super) fn tests_summary_result_selections() -> Vec<GraphqlSelection> {
         )
         .into(),
         GraphqlSelection::scalar("coveragePresent"),
+    ]
+}
+
+pub(super) fn clone_summary_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("totalCount"),
+        GraphqlField::new(
+            "groups",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("relationKind"),
+                GraphqlSelection::scalar("count"),
+            ],
+        )
+        .into(),
+    ]
+}
+
+pub(super) fn deps_summary_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("totalCount"),
+        GraphqlSelection::scalar("incomingCount"),
+        GraphqlSelection::scalar("outgoingCount"),
+        GraphqlField::new(
+            "kindCounts",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("imports"),
+                GraphqlSelection::scalar("calls"),
+                GraphqlSelection::scalar("references"),
+                GraphqlSelection::scalar("extends"),
+                GraphqlSelection::scalar("implements"),
+                GraphqlSelection::scalar("exports"),
+            ],
+        )
+        .into(),
     ]
 }
 
@@ -320,6 +408,10 @@ fn default_fields_for_leaf(leaf: SelectableLeaf) -> &'static [&'static str] {
             "id",
             "sourceArtefactId",
             "targetArtefactId",
+            "sourceStartLine",
+            "sourceEndLine",
+            "targetStartLine",
+            "targetEndLine",
             "relationKind",
             "score",
         ],
@@ -400,6 +492,10 @@ fn allowed_fields_for_leaf(leaf: SelectableLeaf) -> &'static [&'static str] {
             "id",
             "sourceArtefactId",
             "targetArtefactId",
+            "sourceStartLine",
+            "sourceEndLine",
+            "targetStartLine",
+            "targetEndLine",
             "relationKind",
             "score",
             "metadata",

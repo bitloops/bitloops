@@ -1,6 +1,6 @@
 # Protocol Family vs Target Profile Playbook
 
-For package-ready/runtime guidance, see `docs/agent-extension-playbook.md`.
+For package-ready/runtime guidance, see `documentation/contributors/guides/agent-extension-playbook.md`.
 
 This playbook explains when to add a new **protocol family**, when to add a new **target profile**, and when to add both.
 

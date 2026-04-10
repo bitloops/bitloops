@@ -4,7 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{OnceLock, RwLock};
 
-use super::constants::BITLOOPS_DIR;
+const NESTED_GIT_ENV_KEYS: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+];
 
 #[derive(Clone)]
 struct RepoRootCache {
@@ -32,6 +40,9 @@ pub fn repo_root() -> Result<PathBuf> {
     let mut cmd = Command::new("git");
     cmd.args(["rev-parse", "--show-toplevel"])
         .stdin(Stdio::null());
+    for key in NESTED_GIT_ENV_KEYS {
+        cmd.env_remove(key);
+    }
     if !cwd.as_os_str().is_empty() {
         cmd.current_dir(&cwd);
     }
@@ -81,7 +92,11 @@ pub fn bitloops_project_root(start: &Path) -> Result<PathBuf> {
 
     let mut search = dir.clone();
     loop {
-        if search.join(BITLOOPS_DIR).is_dir() {
+        if search
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME)
+            .is_file()
+            || search.join(crate::config::REPO_POLICY_FILE_NAME).is_file()
+        {
             return Ok(search);
         }
         match search.parent() {

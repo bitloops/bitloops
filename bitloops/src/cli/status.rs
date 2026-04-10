@@ -1,11 +1,12 @@
 use crate::adapters::agents::agent_display_name;
+use crate::cli::enable::find_repo_root;
 use crate::config::settings;
 use crate::utils::strings;
 use anyhow::Result;
 use clap::Args;
 use std::env;
 use std::io::Write;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[derive(Args, Debug, Clone)]
@@ -42,20 +43,23 @@ impl Default for CliSettings {
 }
 
 pub fn run_status(w: &mut dyn Write, detailed: bool) -> Result<()> {
-    if !is_git_repository() {
+    let start = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    run_status_at(w, detailed, &start)
+}
+
+fn run_status_at(w: &mut dyn Write, detailed: bool, start: &Path) -> Result<()> {
+    let Ok(_repo_root) = find_repo_root(start) else {
         writeln!(w, "✕ not a git repository")?;
         return Ok(());
-    }
+    };
 
-    let repo_root = crate::utils::paths::repo_root()?;
-    let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.clone());
-    let effective = settings::load_settings(&policy_start)?;
+    let effective = settings::load_settings(start)?;
     let effective_cli = CliSettings {
         strategy: effective.strategy.clone(),
         enabled: effective.enabled,
     };
-    let policy_root = settings::current_policy_root(&policy_start)?;
-    let fingerprint = settings::current_config_fingerprint(&policy_start)?;
+    let policy_root = settings::current_policy_root(start)?;
+    let fingerprint = settings::current_config_fingerprint(start)?;
 
     if detailed {
         writeln!(w, "{}", format_settings_status_short(&effective_cli))?;
@@ -167,13 +171,6 @@ pub fn write_active_sessions(w: &mut dyn Write, sessions: &[ActiveSession]) -> R
     Ok(())
 }
 
-fn is_git_repository() -> bool {
-    matches!(
-        Command::new("git").args(["rev-parse", "--git-dir"]).output(),
-        Ok(out) if out.status.success()
-    )
-}
-
 fn format_settings_status_short(settings: &CliSettings) -> String {
     if settings.enabled {
         format!("Enabled ({})", settings.strategy)
@@ -198,9 +195,8 @@ pub async fn run(args: StatusArgs) -> Result<()> {
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
-    use super::{ActiveSession, run_status, time_ago, write_active_sessions};
+    use super::{ActiveSession, run_status_at, time_ago, write_active_sessions};
     use crate::config::settings::{self, BitloopsSettings};
-    use crate::test_support::process_state::with_cwd;
     use serde_json::json;
     use std::fs;
     use std::io::Cursor;
@@ -304,7 +300,7 @@ mod tests {
         );
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -324,7 +320,7 @@ mod tests {
         );
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -340,7 +336,7 @@ mod tests {
         let repo = setup_status_test_repo();
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -355,7 +351,7 @@ mod tests {
     fn TestRunStatus_NotGitRepository() {
         let dir = TempDir::new().expect("temp dir");
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(dir.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, dir.path());
         assert!(
             err.is_ok(),
             "run_status should not hard-fail outside git repo: {err:?}"
@@ -375,7 +371,7 @@ mod tests {
         write_local_settings(repo.path(), r#"{"strategy":"auto-commit","enabled":true}"#);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, true));
+        let err = run_status_at(&mut stdout, true, repo.path());
         assert!(err.is_ok(), "run_status detailed returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -404,7 +400,7 @@ mod tests {
         write_local_settings(repo.path(), r#"{"strategy":"auto-commit","enabled":false}"#);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, true));
+        let err = run_status_at(&mut stdout, true, repo.path());
         assert!(err.is_ok(), "run_status detailed returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -433,7 +429,7 @@ mod tests {
         write_local_settings(repo.path(), r#"{"strategy":"auto-commit","enabled":false}"#);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -450,7 +446,7 @@ mod tests {
         write_project_settings(repo.path(), r#"{"strategy":"auto-commit","enabled":true}"#);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -470,7 +466,7 @@ mod tests {
         );
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, true));
+        let err = run_status_at(&mut stdout, true, repo.path());
         assert!(err.is_ok(), "run_status detailed returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -685,7 +681,7 @@ mod tests {
         );
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -705,7 +701,7 @@ mod tests {
         write_local_config(repo.path(), r#"{"strategy":"auto-commit","enabled":false}"#);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, true));
+        let err = run_status_at(&mut stdout, true, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -727,7 +723,7 @@ mod tests {
         .expect("legacy file");
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        let err = run_status_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_status returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");

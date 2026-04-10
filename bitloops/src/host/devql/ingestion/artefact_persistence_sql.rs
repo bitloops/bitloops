@@ -39,20 +39,7 @@ pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     }
 }
 
-pub(super) fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {
-    match relational.dialect() {
-        RelationalDialect::Postgres => "EXTRACT(EPOCH FROM updated_at)::BIGINT",
-        RelationalDialect::Sqlite => "CAST(strftime('%s', updated_at) AS INTEGER)",
-    }
-}
-
-pub(super) fn revision_timestamp_sql(relational: &RelationalStorage, revision_unix: i64) -> String {
-    match relational.dialect() {
-        RelationalDialect::Postgres => format!("to_timestamp({revision_unix})"),
-        RelationalDialect::Sqlite => format!("datetime({revision_unix}, 'unixepoch')"),
-    }
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     match value {
         Some(Value::Array(values)) => values
@@ -65,6 +52,7 @@ pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_json_value_or_default(value: Option<&Value>, default: Value) -> Value {
     match value {
         Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or(default),
@@ -73,6 +61,7 @@ pub(super) fn parse_json_value_or_default(value: Option<&Value>, default: Value)
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
     value.and_then(|value| {
         value
@@ -82,6 +71,7 @@ pub(super) fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_required_i32(value: Option<&Value>) -> i32 {
     parse_nullable_i32(value).unwrap_or_default()
 }

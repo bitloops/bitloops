@@ -475,21 +475,15 @@ async fn devql_graphql_chat_history_surfaces_backend_error_when_events_store_is_
         ))
         .await;
 
-    assert_eq!(response.errors.len(), 1, "expected one graphql error");
-    let extensions = response.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        extensions.get("code"),
-        Some(&async_graphql::Value::from("BACKEND_ERROR"))
-    );
     assert!(
-        response.errors[0]
-            .message
-            .contains("DuckDB database file not found"),
-        "unexpected error: {:?}",
+        response.errors.is_empty(),
+        "chat-history should no longer depend on the events store: {:?}",
         response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["chatHistory"]["totalCount"],
+        0
     );
 }
 
@@ -510,11 +504,22 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
                 project(path: "packages/api") {
                   clones(filter: { minScore: 0.75 }, first: 10) {
                     totalCount
+                    summary {
+                      totalCount
+                      groups {
+                        relationKind
+                        count
+                      }
+                    }
                     edges {
                       node {
                         relationKind
                         score
                         metadata
+                        sourceStartLine
+                        sourceEndLine
+                        targetStartLine
+                        targetEndLine
                         sourceArtefact {
                           symbolFqn
                         }
@@ -530,10 +535,21 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
                         node {
                           clones(filter: { minScore: 0.70 }, first: 10) {
                             totalCount
+                            summary {
+                              totalCount
+                              groups {
+                                relationKind
+                                count
+                              }
+                            }
                             edges {
                               node {
                                 relationKind
                                 score
+                                sourceStartLine
+                                sourceEndLine
+                                targetStartLine
+                                targetEndLine
                                 targetArtefact {
                                   symbolFqn
                                 }
@@ -560,12 +576,40 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
     let json = response.data.into_json().expect("graphql data to json");
     assert_eq!(json["repo"]["project"]["clones"]["totalCount"], 1);
     assert_eq!(
+        json["repo"]["project"]["clones"]["summary"]["totalCount"],
+        1
+    );
+    assert_eq!(
         json["repo"]["project"]["clones"]["edges"][0]["node"]["relationKind"],
         "similar_implementation"
     );
     assert_eq!(
+        json["repo"]["project"]["clones"]["summary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["summary"]["groups"][0]["count"],
+        1
+    );
+    assert_eq!(
         json["repo"]["project"]["clones"]["edges"][0]["node"]["score"],
         0.93
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceStartLine"],
+        4
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceEndLine"],
+        6
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["targetStartLine"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["targetEndLine"],
+        3
     );
     assert_eq!(
         json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceArtefact"]["symbolFqn"],
@@ -580,6 +624,30 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
         2
     );
     assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"]
+            [0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"]
+            [0]["count"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
+            ["sourceStartLine"],
+        4
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
+            ["targetStartLine"],
+        1
+    );
+    assert_eq!(
         json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
             ["targetArtefact"]["symbolFqn"],
         "packages/api/src/target.ts::target"
@@ -588,6 +656,481 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
         json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][1]["node"]
             ["targetArtefact"]["symbolFqn"],
         "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_artefact_clones_neighbors_runs_on_demand_without_persisting_edges() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open graphql sqlite");
+    let before_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbol_clone_edges", [], |row| {
+            row.get(0)
+        })
+        .expect("count clone edges before query");
+
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "packages/api/src/caller.ts") {
+                  artefacts(filter: { symbolFqn: "packages/api/src/caller.ts::caller" }, first: 10) {
+                    edges {
+                      node {
+                        clones(filter: { neighbors: 5, minScore: 0.40 }, first: 10) {
+                          totalCount
+                          edges {
+                            node {
+                              relationKind
+                              score
+                              metadata
+                              targetArtefact {
+                                symbolFqn
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let clones = &json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"];
+    assert!(
+        clones["totalCount"]
+            .as_i64()
+            .map(|value| value > 0)
+            .unwrap_or(false),
+        "expected non-empty on-demand clone rows, got: {clones}",
+    );
+
+    let first = &clones["edges"][0]["node"];
+    let relation_kind = first["relationKind"]
+        .as_str()
+        .expect("relation kind string");
+    assert!(matches!(
+        relation_kind,
+        "exact_duplicate"
+            | "similar_implementation"
+            | "shared_logic_candidate"
+            | "diverged_implementation"
+            | "weak_clone_candidate"
+    ));
+    assert!(first["score"].is_number());
+    assert!(!first["targetArtefact"]["symbolFqn"].is_null());
+    let metadata = first["metadata"]
+        .as_object()
+        .expect("clone metadata object");
+    assert!(
+        metadata
+            .get("semanticScore")
+            .is_some_and(|value| value.is_number())
+    );
+    assert!(
+        metadata
+            .get("lexicalScore")
+            .is_some_and(|value| value.is_number())
+    );
+    assert!(
+        metadata
+            .get("structuralScore")
+            .is_some_and(|value| value.is_number())
+    );
+    assert!(
+        metadata
+            .get("explanation")
+            .is_some_and(|value| value.is_object())
+    );
+
+    let after_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbol_clone_edges", [], |row| {
+            row.get(0)
+        })
+        .expect("count clone edges after query");
+    assert_eq!(after_count, before_count);
+}
+
+#[tokio::test]
+async fn devql_graphql_clone_summary_queries_resolve_grouped_counts() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                cloneSummary(
+                  filter: { kind: FUNCTION }
+                  cloneFilter: { minScore: 0.68 }
+                ) {
+                  totalCount
+                  groups {
+                    relationKind
+                    count
+                  }
+                }
+                project(path: "packages/api") {
+                  filtered: cloneSummary(
+                    filter: { symbolFqn: "packages/api/src/caller.ts::caller" }
+                    cloneFilter: { relationKind: "similar_implementation", minScore: 0.75 }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                  empty: cloneSummary(
+                    filter: { symbolFqn: "packages/api/src/caller.ts::caller" }
+                    cloneFilter: { relationKind: "exact_duplicate" }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["cloneSummary"]["totalCount"], 3);
+    assert_eq!(
+        json["repo"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(json["repo"]["cloneSummary"]["groups"][0]["count"], 2);
+    assert_eq!(
+        json["repo"]["cloneSummary"]["groups"][1]["relationKind"],
+        "contextual_neighbor"
+    );
+    assert_eq!(json["repo"]["cloneSummary"]["groups"][1]["count"], 1);
+    assert_eq!(json["repo"]["project"]["filtered"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["project"]["filtered"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(json["repo"]["project"]["filtered"]["groups"][0]["count"], 1);
+    assert_eq!(json["repo"]["project"]["empty"]["totalCount"], 0);
+    assert_eq!(
+        json["repo"]["project"]["empty"]["groups"]
+            .as_array()
+            .expect("groups array")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_file_clone_summary_queries_resolve_grouped_counts() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "packages/api/src/caller.ts") {
+                  cloneSummary(
+                    filter: { symbolFqn: "packages/api/src/caller.ts::caller" }
+                    cloneFilter: { minScore: 0.68 }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["file"]["cloneSummary"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"][0]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"][0]["count"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"]
+            .as_array()
+            .expect("groups array")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_same_file_method_clone_summaries_match_across_repo_file_and_artefact_views()
+{
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_same_file_method_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                cloneSummary(
+                  filter: {
+                    kind: METHOD
+                    symbolFqn: "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute"
+                  }
+                ) {
+                  totalCount
+                  groups {
+                    relationKind
+                    count
+                  }
+                }
+                file(path: "packages/api/src/change-path.ts") {
+                  cloneSummary(
+                    filter: {
+                      kind: METHOD
+                      symbolFqn: "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute"
+                    }
+                  ) {
+                    totalCount
+                    groups {
+                      relationKind
+                      count
+                    }
+                  }
+                  artefacts(
+                    filter: {
+                      kind: METHOD
+                      symbolFqn: "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute"
+                    }
+                    first: 10
+                  ) {
+                    totalCount
+                    edges {
+                      node {
+                        symbolFqn
+                        clones(first: 10) {
+                          totalCount
+                          summary {
+                            totalCount
+                            groups {
+                              relationKind
+                              count
+                            }
+                          }
+                          edges {
+                            node {
+                              relationKind
+                              targetArtefact {
+                                symbolFqn
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["cloneSummary"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["cloneSummary"]["groups"][0]["relationKind"],
+        "weak_clone_candidate"
+    );
+    assert_eq!(json["repo"]["file"]["cloneSummary"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["file"]["cloneSummary"]["groups"][0]["relationKind"],
+        "weak_clone_candidate"
+    );
+    assert_eq!(json["repo"]["file"]["artefacts"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["summary"]["groups"][0]["relationKind"],
+        "weak_clone_candidate"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]["targetArtefact"]
+            ["symbolFqn"],
+        "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command"
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_project_clones_rejects_neighbors_override_with_validation_error() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  clones(filter: { neighbors: 5 }, first: 10) {
+                    totalCount
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(
+        response.errors.len(),
+        1,
+        "expected one graphql validation error"
+    );
+    let error = &response.errors[0];
+    assert_eq!(
+        error.message,
+        "`neighbors` override is only supported for artefact-scoped `clones` queries"
+    );
+    assert_eq!(
+        error
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_clone_summary_validates_inputs_and_rejects_temporal_scopes() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                badScore: cloneSummary(cloneFilter: {{ minScore: 1.5 }}) {{
+                  totalCount
+                }}
+                asOf(input: {{ commit: "{commit_sha}" }}) {{
+                  project(path: "packages/api") {{
+                    cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                      totalCount
+                    }}
+                  }}
+                  file(path: "packages/api/src/caller.ts") {{
+                    cloneSummary(filter: {{ kind: FUNCTION }}) {{
+                      totalCount
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#,
+        )))
+        .await;
+
+    let messages = response
+        .errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 3, "unexpected errors: {messages:?}");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`minScore` must be between 0 and 1")),
+        "expected minScore validation error, got {messages:?}"
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message.contains(
+                    "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+                )
+            })
+            .count(),
+        2,
+        "expected temporal cloneSummary errors, got {messages:?}"
     );
 }
 
@@ -1044,22 +1587,13 @@ async fn devql_event_resolvers_surface_backend_errors_when_duckdb_store_is_missi
         ))
         .await;
 
-    assert_eq!(response.errors.len(), 1, "expected one graphql error");
-    let extensions = response.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        extensions.get("code"),
-        Some(&async_graphql::Value::from("BACKEND_ERROR"))
-    );
     assert!(
-        response.errors[0]
-            .message
-            .contains("DuckDB database file not found"),
-        "unexpected error: {:?}",
+        response.errors.is_empty(),
+        "checkpoint queries should no longer depend on the events store: {:?}",
         response.errors
     );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["checkpoints"]["totalCount"], 0);
 }
 
 #[tokio::test]

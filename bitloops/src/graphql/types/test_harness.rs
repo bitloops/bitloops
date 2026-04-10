@@ -12,15 +12,28 @@ pub struct TestHarnessArtefactRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct TestHarnessLastRun {
+    pub status: String,
+    pub duration_ms: Option<i64>,
+    pub commit_sha: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
 pub struct TestHarnessCoveringTest {
     pub test_id: String,
     pub test_name: String,
     pub suite_name: Option<String>,
     pub file_path: String,
+    pub start_line: i32,
+    pub end_line: i32,
     pub confidence: f64,
     pub discovery_source: String,
     pub linkage_source: String,
     pub linkage_status: String,
+    pub classification: Option<String>,
+    pub classification_source: Option<String>,
+    pub fan_out: Option<i32>,
+    pub last_run: Option<TestHarnessLastRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]

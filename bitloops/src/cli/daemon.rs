@@ -1,108 +1,41 @@
-use std::io::{self, BufRead, Write};
+use std::fs::File;
+use std::future::Future;
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread;
+use std::time::Duration;
 
-use anyhow::{Result, bail};
-use clap::{Args, Subcommand};
+use anyhow::{Context, Result, bail};
+use tokio::{sync::mpsc, task};
 
 use crate::api::DashboardServerConfig;
 use crate::cli::telemetry_consent;
 use crate::config::{bootstrap_default_daemon_environment, default_daemon_config_exists};
 use crate::daemon::{self, DaemonMode};
-pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`";
+#[path = "daemon/args.rs"]
+mod args;
+#[path = "daemon/display.rs"]
+mod display;
+#[cfg(test)]
+#[path = "daemon/tests.rs"]
+mod tests;
 
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonArgs {
-    #[command(subcommand)]
-    pub command: Option<DaemonCommand>,
-}
+const DEFAULT_LOG_TAIL_LINES: usize = 200;
+const LOG_FOLLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const TAIL_SCAN_BLOCK_SIZE: usize = 8 * 1024;
 
-#[derive(Subcommand, Debug, Clone)]
-pub enum DaemonCommand {
-    /// Start the global Bitloops daemon.
-    Start(DaemonStartArgs),
-    /// Stop the global Bitloops daemon.
-    Stop(DaemonStopArgs),
-    /// Show global Bitloops daemon status.
-    Status(DaemonStatusArgs),
-    /// Restart the global Bitloops daemon.
-    Restart(DaemonRestartArgs),
-}
+pub use args::{
+    DaemonArgs, DaemonCommand, DaemonLogsArgs, DaemonRestartArgs, DaemonStartArgs,
+    DaemonStatusArgs, DaemonStopArgs, EnrichmentArgs, EnrichmentCommand, EnrichmentPauseArgs,
+    EnrichmentResumeArgs, EnrichmentRetryFailedArgs, EnrichmentStatusArgs,
+    MISSING_SUBCOMMAND_MESSAGE,
+};
 
-#[derive(Args, Debug, Clone)]
-pub struct DaemonStartArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-
-    /// Create the default global daemon config and local default stores if missing.
-    #[arg(long, default_value_t = false, conflicts_with = "config")]
-    pub create_default_config: bool,
-
-    /// Start detached instead of holding the current terminal open.
-    #[arg(
-        short = 'd',
-        long,
-        default_value_t = false,
-        conflicts_with = "until_stopped"
-    )]
-    pub detached: bool,
-
-    /// Install or refresh an always-on user-scoped service, then start it.
-    #[arg(long, default_value_t = false, conflicts_with = "detached")]
-    pub until_stopped: bool,
-
-    /// Hostname to bind the daemon server to.
-    #[arg(long)]
-    pub host: Option<String>,
-
-    /// Port to bind the daemon server to.
-    #[arg(long, default_value_t = crate::api::DEFAULT_DASHBOARD_PORT)]
-    pub port: u16,
-
-    /// Force fast local HTTP mode. Requires `--host 127.0.0.1`.
-    #[arg(long, default_value_t = false)]
-    pub http: bool,
-
-    /// Force a full local dashboard network recheck and refresh discovery hints.
-    #[arg(long = "recheck-local-dashboard-net", default_value_t = false)]
-    pub recheck_local_dashboard_net: bool,
-
-    /// Path to the dashboard bundle directory (contains index.html).
-    #[arg(long = "bundle-dir", alias = "bundle", value_name = "PATH")]
-    pub bundle_dir: Option<std::path::PathBuf>,
-
-    /// Enable anonymous telemetry for this CLI version.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
-    pub telemetry: Option<bool>,
-
-    /// Disable anonymous telemetry for this CLI version.
-    #[arg(
-        long = "no-telemetry",
-        conflicts_with = "telemetry",
-        default_value_t = false
-    )]
-    pub no_telemetry: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonStopArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonStatusArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonRestartArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-}
+use display::{enrichment_status_lines, status_lines};
 
 pub async fn run(args: DaemonArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -114,6 +47,9 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Stop(args) => run_stop(args).await,
         DaemonCommand::Status(args) => run_status(args).await,
         DaemonCommand::Restart(args) => run_restart(args).await,
+        DaemonCommand::Enable(args) => crate::cli::enable::run(args).await,
+        DaemonCommand::Enrichments(args) => run_enrichments(args).await,
+        DaemonCommand::Logs(args) => run_logs(args).await,
     }
 }
 
@@ -129,11 +65,23 @@ async fn run_start_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
-    print_legacy_repo_data_warnings();
+    log::info!(
+        "cli daemon start: detached={} until_stopped={} config={:?} host={:?} port={} http={} recheck_local_dashboard_net={} bundle_dir={:?}",
+        args.detached,
+        args.until_stopped,
+        args.config,
+        args.host,
+        args.port,
+        args.http,
+        args.recheck_local_dashboard_net,
+        args.bundle_dir
+    );
     let preflight = resolve_start_preflight(&args, out, input)?;
 
     if preflight.create_default_config {
         let _ = bootstrap_default_daemon_environment()?;
+    } else if args.bootstrap_local_stores {
+        let _ = crate::config::ensure_daemon_store_artifacts(args.config.as_deref())?;
     }
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
@@ -188,10 +136,43 @@ fn resolve_start_preflight(
     input: &mut dyn BufRead,
 ) -> Result<StartPreflightDecision> {
     let default_config_missing = args.config.is_none() && !default_daemon_config_exists()?;
+    resolve_start_preflight_with_state(
+        args,
+        out,
+        input,
+        default_config_missing,
+        telemetry_consent::can_prompt_interactively(),
+    )
+}
+
+#[cfg(test)]
+fn resolve_start_preflight_for_tests(
+    args: &DaemonStartArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    default_config_missing: bool,
+    can_prompt_interactively: bool,
+) -> Result<StartPreflightDecision> {
+    resolve_start_preflight_with_state(
+        args,
+        out,
+        input,
+        default_config_missing,
+        can_prompt_interactively,
+    )
+}
+
+fn resolve_start_preflight_with_state(
+    args: &DaemonStartArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    default_config_missing: bool,
+    can_prompt_interactively: bool,
+) -> Result<StartPreflightDecision> {
     let mut create_default_config = args.create_default_config;
 
     if default_config_missing && !create_default_config {
-        if !telemetry_consent::can_prompt_interactively() {
+        if !can_prompt_interactively {
             bail!(missing_default_daemon_bootstrap_message());
         }
         create_default_config = telemetry_consent::prompt_default_config_setup(out, input)?;
@@ -205,6 +186,7 @@ fn resolve_start_preflight(
         args,
         out,
         input,
+        can_prompt_interactively,
     )?;
 
     Ok(StartPreflightDecision {
@@ -218,6 +200,7 @@ fn collect_startup_telemetry_choice(
     args: &DaemonStartArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
+    can_prompt_interactively: bool,
 ) -> Result<Option<bool>> {
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
@@ -229,7 +212,7 @@ fn collect_startup_telemetry_choice(
         return Ok(Some(choice));
     }
 
-    if !telemetry_consent::can_prompt_interactively() {
+    if !can_prompt_interactively {
         bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
     }
 
@@ -239,12 +222,58 @@ fn collect_startup_telemetry_choice(
 }
 
 pub async fn run_stop(args: DaemonStopArgs) -> Result<()> {
+    log::info!("cli daemon stop: config={:?}", args.config);
     if let Some(config_path) = args.config.as_deref() {
         let _ = daemon::resolve_daemon_config(Some(config_path))?;
     }
+
+    // Send $session_end for all active sessions before stopping
+    send_session_end_for_all_sessions();
+
     daemon::stop().await?;
     println!("Bitloops daemon stopped.");
     Ok(())
+}
+
+fn send_session_end_for_all_sessions() {
+    let Ok(state_dir) = crate::utils::platform_dirs::bitloops_state_dir() else {
+        return;
+    };
+    send_session_end_for_all_sessions_in(state_dir.as_path());
+}
+
+fn send_session_end_for_all_sessions_in(state_dir: &Path) {
+    let session_path = state_dir.join("telemetry_sessions.json");
+
+    // Load and end all sessions
+    let Ok(content) = std::fs::read_to_string(&session_path) else {
+        return;
+    };
+    let Ok(store) = serde_json::from_str::<crate::telemetry::sessions::SessionStore>(&content)
+    else {
+        return;
+    };
+
+    // End all sessions and send $session_end events
+    for (repo_root_str, session) in store.sessions() {
+        if crate::telemetry::analytics::load_dispatch_context_for_repo(Path::new(repo_root_str))
+            .is_none()
+        {
+            continue;
+        }
+
+        let ended = crate::telemetry::sessions::EndedSession {
+            session_id: session.session_id.clone(),
+            repo_root: repo_root_str.clone(),
+            started_at: session.started_at,
+            ended_at: crate::telemetry::sessions::now_secs(),
+            duration_secs: session.session_duration_secs(),
+        };
+        crate::telemetry::analytics::track_session_end_detached(&ended, "daemon-stop");
+    }
+
+    // Clear the session file
+    let _ = crate::telemetry::sessions::SessionStore::default().save(state_dir);
 }
 
 pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
@@ -252,16 +281,86 @@ pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
         let _ = daemon::resolve_daemon_config(Some(config_path))?;
     }
     let report = daemon::status().await?;
-    for line in status_lines(&report) {
-        println!("{line}");
+    let mut out = io::stdout().lock();
+    write_status_output(&report, args.json, &mut out)
+}
+
+fn write_status_output(
+    report: &daemon::DaemonStatusReport,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    if json {
+        serde_json::to_writer_pretty(&mut *out, report)
+            .context("serializing daemon status as JSON")?;
+        writeln!(out)?;
+        return Ok(());
     }
-    for line in legacy_repo_data_warnings() {
-        println!("{line}");
+
+    for line in status_lines(report) {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+pub async fn run_logs(args: DaemonLogsArgs) -> Result<()> {
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    run_logs_with_io(args, &mut out).await
+}
+
+async fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
+    run_logs_with_io_and_shutdown_at_path(
+        args,
+        out,
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        },
+        LOG_FOLLOW_POLL_INTERVAL,
+        daemon::daemon_log_file_path(),
+    )
+    .await
+}
+
+#[cfg(test)]
+async fn run_logs_with_io_at_path(
+    args: DaemonLogsArgs,
+    out: &mut dyn Write,
+    log_path: std::path::PathBuf,
+) -> Result<()> {
+    run_logs_with_io_and_shutdown_at_path(args, out, async {}, LOG_FOLLOW_POLL_INTERVAL, log_path)
+        .await
+}
+
+async fn run_logs_with_io_and_shutdown_at_path<S>(
+    args: DaemonLogsArgs,
+    out: &mut dyn Write,
+    shutdown: S,
+    poll_interval: Duration,
+    log_path: std::path::PathBuf,
+) -> Result<()>
+where
+    S: Future<Output = ()>,
+{
+    if args.path {
+        writeln!(out, "{}", log_path.display()).context("writing daemon log path")?;
+        return Ok(());
+    }
+
+    ensure_log_file_exists(&log_path)?;
+    let tail_lines = args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES);
+    for line in read_tail_lines(log_path.clone(), tail_lines).await? {
+        writeln!(out, "{line}").context("writing daemon log output")?;
+    }
+    out.flush().context("flushing daemon log output")?;
+    if args.follow {
+        follow_log_file_until_shutdown(&log_path, out, shutdown, poll_interval).await?;
     }
     Ok(())
 }
 
 pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
+    log::info!("cli daemon restart: config={:?}", args.config);
     let requested_config: Option<daemon::ResolvedDaemonConfig> = args
         .config
         .as_deref()
@@ -295,8 +394,40 @@ pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
     Ok(())
 }
 
+pub async fn run_enrichments(args: EnrichmentArgs) -> Result<()> {
+    let Some(command) = args.command else {
+        bail!(
+            "missing subcommand. Use one of: `bitloops daemon enrichments status`, `bitloops daemon enrichments pause`, `bitloops daemon enrichments resume`, `bitloops daemon enrichments retry-failed`"
+        );
+    };
+
+    match command {
+        EnrichmentCommand::Status(_) => {
+            let status = daemon::enrichment_status()?;
+            for line in enrichment_status_lines(&status) {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        EnrichmentCommand::Pause(args) => {
+            let result = daemon::pause_enrichments(args.reason)?;
+            println!("{}", result.message);
+            Ok(())
+        }
+        EnrichmentCommand::Resume(_) => {
+            let result = daemon::resume_enrichments()?;
+            println!("{}", result.message);
+            Ok(())
+        }
+        EnrichmentCommand::RetryFailed(_) => {
+            let result = daemon::retry_failed_enrichments()?;
+            println!("{}", result.message);
+            Ok(())
+        }
+    }
+}
+
 pub async fn launch_dashboard() -> Result<()> {
-    print_legacy_repo_data_warnings();
     if let Some(url) = daemon::daemon_url()? {
         crate::api::open_in_default_browser(&url)?;
         println!("Opened Bitloops dashboard at {url}");
@@ -365,511 +496,195 @@ fn missing_default_daemon_bootstrap_message() -> &'static str {
     "Bitloops daemon has not been bootstrapped yet. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`."
 }
 
-fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
-    let mut lines = Vec::new();
-
-    if let Some(runtime) = report.runtime.as_ref() {
-        lines.push("Bitloops daemon: running".to_string());
-        lines.push(format!("Mode: {}", runtime.mode));
-        lines.push(format!("URL: {}", runtime.url));
-        lines.push(format!("Config: {}", runtime.config_path.display()));
-        lines.push(format!("PID: {}", runtime.pid));
-        append_supervisor_lines(&mut lines, report);
-        if let Some(health) = report.health.as_ref() {
-            append_health_lines(&mut lines, health);
-        }
-        return lines;
+fn ensure_log_file_exists(path: &Path) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
     }
-
-    if let Some(service) = report.service.as_ref() {
-        lines.push("Bitloops daemon: stopped".to_string());
-        lines.push("Mode: always-on service".to_string());
-        lines.push(format!("Config: {}", service.config_path.display()));
-        lines.push(format!(
-            "Supervisor service: {} ({}, installed)",
-            service.service_name, service.manager
-        ));
-        lines.push(format!(
-            "Supervisor state: {}",
-            if report.service_running {
-                "running"
-            } else {
-                "stopped"
-            }
-        ));
-        if let Some(url) = service.last_url.as_ref() {
-            lines.push(format!("Last URL: {url}"));
-        }
-        return lines;
-    }
-
-    lines.push("Bitloops daemon: stopped".to_string());
-    lines.push("Mode: not running".to_string());
-    lines
-}
-
-fn append_supervisor_lines(lines: &mut Vec<String>, report: &daemon::DaemonStatusReport) {
-    if let Some(service) = report.service.as_ref() {
-        lines.push(format!(
-            "Supervisor service: {} ({}, installed)",
-            service.service_name, service.manager
-        ));
-        lines.push(format!(
-            "Supervisor state: {}",
-            if report.service_running {
-                "running"
-            } else {
-                "stopped"
-            }
-        ));
-    }
-}
-
-fn append_health_lines(lines: &mut Vec<String>, health: &daemon::DaemonHealthSummary) {
-    if let (Some(backend), Some(connected)) =
-        (&health.relational_backend, health.relational_connected)
-    {
-        lines.push(format!(
-            "Relational: {} ({})",
-            backend,
-            if connected {
-                "connected"
-            } else {
-                "disconnected"
-            }
-        ));
-    }
-    if let (Some(backend), Some(connected)) = (&health.events_backend, health.events_connected) {
-        lines.push(format!(
-            "Events: {} ({})",
-            backend,
-            if connected {
-                "connected"
-            } else {
-                "disconnected"
-            }
-        ));
-    }
-    if let (Some(backend), Some(connected)) = (&health.blob_backend, health.blob_connected) {
-        lines.push(format!(
-            "Blob: {} ({})",
-            backend,
-            if connected {
-                "available"
-            } else {
-                "unavailable"
-            }
-        ));
-    }
-}
-
-fn print_legacy_repo_data_warnings() {
-    for line in legacy_repo_data_warnings() {
-        eprintln!("{line}");
-    }
-}
-
-fn legacy_repo_data_warnings() -> Vec<String> {
-    let Some(repo_root) = crate::utils::paths::repo_root().ok() else {
-        return Vec::new();
-    };
-
-    let legacy_paths = [
-        repo_root.join(".bitloops").join("stores"),
-        repo_root.join(".bitloops").join("embeddings"),
-        repo_root.join(".bitloops").join("tmp"),
-        repo_root.join(".bitloops").join("metadata"),
-    ];
-    let found: Vec<_> = legacy_paths
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect();
-    if found.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::with_capacity(found.len() + 1);
-    lines.push(
-        "Warning: legacy repo-local Bitloops data was found and is ignored unless you configure those paths explicitly in the daemon config.".to_string(),
+    bail!(
+        "Bitloops daemon log file does not exist yet at {}. Start the daemon and try again.",
+        path.display()
     );
-    lines.extend(
-        found
-            .into_iter()
-            .map(|path| format!("Legacy path: {}", path.display())),
-    );
-    lines
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cli::{Cli, Commands};
-    use crate::daemon::{DaemonServiceMetadata, DaemonStatusReport, ServiceManagerKind};
-    use crate::test_support::process_state::enter_process_state;
-    use clap::Parser;
-    use std::io::Cursor;
-    use tempfile::TempDir;
-
-    #[test]
-    fn daemon_start_cli_parses_lifecycle_and_server_flags() {
-        let parsed = Cli::try_parse_from([
-            "bitloops",
-            "daemon",
-            "start",
-            "--create-default-config",
-            "-d",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "6100",
-            "--http",
-            "--recheck-local-dashboard-net",
-            "--bundle-dir",
-            "/tmp/bundle",
-        ])
-        .expect("daemon start should parse");
-
-        let Some(Commands::Daemon(daemon)) = parsed.command else {
-            panic!("expected daemon command");
-        };
-        let Some(DaemonCommand::Start(start)) = daemon.command else {
-            panic!("expected daemon start command");
-        };
-
-        assert!(start.create_default_config);
-        assert!(start.detached);
-        assert!(!start.until_stopped);
-        assert_eq!(start.host.as_deref(), Some("127.0.0.1"));
-        assert_eq!(start.port, 6100);
-        assert!(start.http);
-        assert!(start.recheck_local_dashboard_net);
-        assert_eq!(
-            start.bundle_dir,
-            Some(std::path::PathBuf::from("/tmp/bundle"))
-        );
-        assert_eq!(start.telemetry, None);
-        assert!(!start.no_telemetry);
-    }
-
-    #[test]
-    fn daemon_start_cli_parses_telemetry_flags() {
-        let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "--telemetry=false"])
-            .expect("daemon start should parse telemetry=false");
-
-        let Some(Commands::Daemon(daemon)) = parsed.command else {
-            panic!("expected daemon command");
-        };
-        let Some(DaemonCommand::Start(start)) = daemon.command else {
-            panic!("expected daemon start command");
-        };
-
-        assert_eq!(start.telemetry, Some(false));
-        assert!(!start.no_telemetry);
-
-        let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "--no-telemetry"])
-            .expect("daemon start should parse no-telemetry");
-
-        let Some(Commands::Daemon(daemon)) = parsed.command else {
-            panic!("expected daemon command");
-        };
-        let Some(DaemonCommand::Start(start)) = daemon.command else {
-            panic!("expected daemon start command");
-        };
-
-        assert_eq!(start.telemetry, None);
-        assert!(start.no_telemetry);
-    }
-
-    #[test]
-    fn daemon_start_rejects_create_default_config_with_explicit_config() {
-        let err = Cli::try_parse_from([
-            "bitloops",
-            "daemon",
-            "start",
-            "--config",
-            "/tmp/bitloops.toml",
-            "--create-default-config",
-        ])
-        .err()
-        .expect("daemon start should reject conflicting config bootstrap flags");
-
-        assert!(err.to_string().contains("--create-default-config"));
-    }
-
-    #[tokio::test]
-    async fn run_start_requires_explicit_bootstrap_when_default_config_is_missing() {
-        let config_root = TempDir::new().expect("temp dir");
-        let data_root = TempDir::new().expect("temp dir");
-        let cache_root = TempDir::new().expect("temp dir");
-        let state_root = TempDir::new().expect("temp dir");
-        let config_root_str = config_root.path().to_string_lossy().to_string();
-        let data_root_str = data_root.path().to_string_lossy().to_string();
-        let cache_root_str = cache_root.path().to_string_lossy().to_string();
-        let state_root_str = state_root.path().to_string_lossy().to_string();
-        let _guard = enter_process_state(
-            None,
-            &[
-                (
-                    "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                    Some(config_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                    Some(data_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                    Some(cache_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                    Some(state_root_str.as_str()),
-                ),
-            ],
-        );
-
-        let err = run_start(DaemonStartArgs {
-            config: None,
-            create_default_config: false,
-            detached: false,
-            until_stopped: false,
-            host: None,
-            port: crate::api::DEFAULT_DASHBOARD_PORT,
-            http: false,
-            recheck_local_dashboard_net: false,
-            bundle_dir: None,
-            telemetry: None,
-            no_telemetry: false,
-        })
+async fn read_tail_lines(path: std::path::PathBuf, lines: usize) -> Result<Vec<String>> {
+    task::spawn_blocking(move || tail_log_file(&path, lines))
         .await
-        .expect_err("plain start should require explicit bootstrap");
+        .context("joining daemon log tail task")?
+}
 
-        assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
+fn tail_log_file(path: &Path, lines: usize) -> Result<Vec<String>> {
+    if lines == 0 {
+        return Ok(Vec::new());
     }
 
-    #[test]
-    fn start_preflight_accepts_default_config_bootstrap_and_then_prompts_for_telemetry() {
-        let config_root = TempDir::new().expect("temp dir");
-        let data_root = TempDir::new().expect("temp dir");
-        let cache_root = TempDir::new().expect("temp dir");
-        let state_root = TempDir::new().expect("temp dir");
-        let config_root_str = config_root.path().to_string_lossy().to_string();
-        let data_root_str = data_root.path().to_string_lossy().to_string();
-        let cache_root_str = cache_root.path().to_string_lossy().to_string();
-        let state_root_str = state_root.path().to_string_lossy().to_string();
-        let _guard = enter_process_state(
-            None,
-            &[
-                (
-                    "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                    Some(config_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                    Some(data_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                    Some(cache_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                    Some(state_root_str.as_str()),
-                ),
-                ("BITLOOPS_TEST_TTY", Some("1")),
-            ],
-        );
-        let mut out = Vec::new();
-        let mut input = Cursor::new(b"\n\n".to_vec());
+    let mut file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let start = find_tail_start_offset(&mut file, lines, path)?;
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("seeking daemon log {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("reading daemon log {}", path.display()))?;
+    let content = String::from_utf8(bytes)
+        .with_context(|| format!("decoding daemon log {}", path.display()))?;
 
-        let decision = resolve_start_preflight(
-            &DaemonStartArgs {
-                config: None,
-                create_default_config: false,
-                detached: false,
-                until_stopped: false,
-                host: None,
-                port: crate::api::DEFAULT_DASHBOARD_PORT,
-                http: false,
-                recheck_local_dashboard_net: false,
-                bundle_dir: None,
-                telemetry: None,
-                no_telemetry: false,
+    Ok(content.lines().map(str::to_owned).collect())
+}
+
+fn find_tail_start_offset(file: &mut File, lines: usize, path: &Path) -> Result<u64> {
+    let file_len = file
+        .metadata()
+        .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+        .len();
+    if file_len == 0 {
+        return Ok(0);
+    }
+
+    let mut remaining = file_len;
+    let mut needed = lines;
+    let mut skip_trailing_newline = file_ends_with_newline(file, file_len, path)?;
+    let mut buffer = vec![0_u8; TAIL_SCAN_BLOCK_SIZE];
+
+    while remaining > 0 {
+        let read_size = remaining.min(TAIL_SCAN_BLOCK_SIZE as u64) as usize;
+        remaining -= read_size as u64;
+        file.seek(SeekFrom::Start(remaining))
+            .with_context(|| format!("seeking daemon log {}", path.display()))?;
+        file.read_exact(&mut buffer[..read_size])
+            .with_context(|| format!("reading daemon log {}", path.display()))?;
+
+        for idx in (0..read_size).rev() {
+            if buffer[idx] != b'\n' {
+                continue;
+            }
+
+            let newline_pos = remaining + idx as u64;
+            if skip_trailing_newline && newline_pos == file_len - 1 {
+                skip_trailing_newline = false;
+                continue;
+            }
+
+            needed -= 1;
+            if needed == 0 {
+                return Ok(newline_pos + 1);
+            }
+        }
+    }
+
+    Ok(0)
+}
+
+fn file_ends_with_newline(file: &mut File, file_len: u64, path: &Path) -> Result<bool> {
+    if file_len == 0 {
+        return Ok(false);
+    }
+
+    let mut byte = [0_u8; 1];
+    file.seek(SeekFrom::Start(file_len - 1))
+        .with_context(|| format!("seeking daemon log {}", path.display()))?;
+    file.read_exact(&mut byte)
+        .with_context(|| format!("reading daemon log {}", path.display()))?;
+    Ok(byte[0] == b'\n')
+}
+
+async fn follow_log_file_until_shutdown<S>(
+    path: &Path,
+    out: &mut dyn Write,
+    shutdown: S,
+    poll_interval: Duration,
+) -> Result<()>
+where
+    S: Future<Output = ()>,
+{
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let stop = Arc::new(AtomicBool::new(false));
+    let path = path.to_path_buf();
+    let worker_stop = stop.clone();
+    let worker = task::spawn_blocking(move || {
+        follow_log_file(
+            &path,
+            |chunk| {
+                tx.send(chunk.to_owned())
+                    .map_err(|_| anyhow::anyhow!("daemon log follow channel closed"))?;
+                Ok(())
             },
-            &mut out,
-            &mut input,
+            &|| worker_stop.load(Ordering::SeqCst),
+            poll_interval,
         )
-        .expect("start preflight should prompt for bootstrap and telemetry");
+    });
+    tokio::pin!(shutdown);
 
-        let rendered = String::from_utf8(out).expect("utf8 output");
-        assert!(decision.create_default_config);
-        assert_eq!(decision.startup_telemetry, Some(true));
-        assert!(rendered.contains(
-            "No global Bitloops daemon config was found. Set up the default configuration? [Y/n]"
-        ));
-        assert!(rendered.contains("Help us improve Bitloops"));
-        assert!(rendered.contains("Enable anonymous telemetry? [Y/n]"));
+    loop {
+        tokio::select! {
+            maybe_chunk = rx.recv() => {
+                let Some(chunk) = maybe_chunk else {
+                    break;
+                };
+                write!(out, "{chunk}").context("writing daemon follow output")?;
+                out.flush().context("flushing daemon follow output")?;
+            }
+            _ = &mut shutdown => {
+                stop.store(true, Ordering::SeqCst);
+                break;
+            }
+        }
     }
 
-    #[test]
-    fn start_preflight_reuses_missing_config_error_when_user_declines_bootstrap() {
-        let config_root = TempDir::new().expect("temp dir");
-        let data_root = TempDir::new().expect("temp dir");
-        let cache_root = TempDir::new().expect("temp dir");
-        let state_root = TempDir::new().expect("temp dir");
-        let config_root_str = config_root.path().to_string_lossy().to_string();
-        let data_root_str = data_root.path().to_string_lossy().to_string();
-        let cache_root_str = cache_root.path().to_string_lossy().to_string();
-        let state_root_str = state_root.path().to_string_lossy().to_string();
-        let _guard = enter_process_state(
-            None,
-            &[
-                (
-                    "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                    Some(config_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                    Some(data_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                    Some(cache_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                    Some(state_root_str.as_str()),
-                ),
-                ("BITLOOPS_TEST_TTY", Some("1")),
-            ],
-        );
-        let mut out = Vec::new();
-        let mut input = Cursor::new(b"n\n".to_vec());
-
-        let err = resolve_start_preflight(
-            &DaemonStartArgs {
-                config: None,
-                create_default_config: false,
-                detached: false,
-                until_stopped: false,
-                host: None,
-                port: crate::api::DEFAULT_DASHBOARD_PORT,
-                http: false,
-                recheck_local_dashboard_net: false,
-                bundle_dir: None,
-                telemetry: None,
-                no_telemetry: false,
-            },
-            &mut out,
-            &mut input,
-        )
-        .expect_err("declining bootstrap should fail with the missing-config error");
-
-        let rendered = String::from_utf8(out).expect("utf8 output");
-        assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
-        assert!(rendered.contains(
-            "No global Bitloops daemon config was found. Set up the default configuration? [Y/n]"
-        ));
-        assert!(!rendered.contains("Enable anonymous telemetry? [Y/n]"));
+    worker.await.context("joining daemon log follow task")??;
+    while let Ok(chunk) = rx.try_recv() {
+        write!(out, "{chunk}").context("writing daemon follow output")?;
     }
+    out.flush().context("flushing daemon follow output")?;
+    Ok(())
+}
 
-    #[test]
-    fn start_preflight_uses_explicit_telemetry_choice_without_prompting() {
-        let config_root = TempDir::new().expect("temp dir");
-        let data_root = TempDir::new().expect("temp dir");
-        let cache_root = TempDir::new().expect("temp dir");
-        let state_root = TempDir::new().expect("temp dir");
-        let config_root_str = config_root.path().to_string_lossy().to_string();
-        let data_root_str = data_root.path().to_string_lossy().to_string();
-        let cache_root_str = cache_root.path().to_string_lossy().to_string();
-        let state_root_str = state_root.path().to_string_lossy().to_string();
-        let _guard = enter_process_state(
-            None,
-            &[
-                (
-                    "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
-                    Some(config_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
-                    Some(data_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
-                    Some(cache_root_str.as_str()),
-                ),
-                (
-                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
-                    Some(state_root_str.as_str()),
-                ),
-                ("BITLOOPS_TEST_TTY", Some("1")),
-            ],
-        );
-        let mut out = Vec::new();
-        let mut input = Cursor::new(b"".to_vec());
+fn follow_log_file<F>(
+    path: &Path,
+    mut on_chunk: F,
+    should_stop: &dyn Fn() -> bool,
+    poll_interval: Duration,
+) -> Result<()>
+where
+    F: FnMut(&str) -> Result<()>,
+{
+    let mut position = std::fs::metadata(path)
+        .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+        .len();
 
-        let decision = resolve_start_preflight(
-            &DaemonStartArgs {
-                config: None,
-                create_default_config: true,
-                detached: false,
-                until_stopped: false,
-                host: None,
-                port: crate::api::DEFAULT_DASHBOARD_PORT,
-                http: false,
-                recheck_local_dashboard_net: false,
-                bundle_dir: None,
-                telemetry: Some(false),
-                no_telemetry: false,
-            },
-            &mut out,
-            &mut input,
-        )
-        .expect("explicit telemetry flag should suppress prompting");
+    loop {
+        if should_stop() {
+            return Ok(());
+        }
 
-        let rendered = String::from_utf8(out).expect("utf8 output");
-        assert!(decision.create_default_config);
-        assert_eq!(decision.startup_telemetry, Some(false));
-        assert!(!rendered.contains("Help us improve Bitloops"));
-        assert!(!rendered.contains("Enable anonymous telemetry? [Y/n]"));
-    }
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+            .len();
+        if len < position {
+            position = 0;
+        }
 
-    #[test]
-    fn status_lines_show_global_supervisor_install_and_state() {
-        let report = DaemonStatusReport {
-            runtime: None,
-            service: Some(DaemonServiceMetadata {
-                version: 1,
-                config_path: std::path::PathBuf::from("/tmp/bitloops/config.toml"),
-                config_root: std::path::PathBuf::from("/tmp"),
-                manager: ServiceManagerKind::Launchd,
-                service_name: "com.bitloops.daemon".to_string(),
-                service_file: None,
-                config: DashboardServerConfig {
-                    host: None,
-                    port: crate::api::DEFAULT_DASHBOARD_PORT,
-                    no_open: true,
-                    force_http: false,
-                    recheck_local_dashboard_net: false,
-                    bundle_dir: None,
-                },
-                last_url: Some("https://127.0.0.1:5173".to_string()),
-                last_pid: None,
-            }),
-            service_running: false,
-            health: None,
-        };
+        if len > position {
+            let mut file = File::open(path)
+                .with_context(|| format!("opening daemon log {}", path.display()))?;
+            file.seek(SeekFrom::Start(position))
+                .with_context(|| format!("seeking daemon log {}", path.display()))?;
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                let bytes = reader
+                    .read_line(&mut line)
+                    .with_context(|| format!("reading daemon log {}", path.display()))?;
+                if bytes == 0 {
+                    break;
+                }
+                on_chunk(&line)?;
+                line.clear();
+            }
+            position = reader
+                .stream_position()
+                .with_context(|| format!("tracking daemon log cursor {}", path.display()))?;
+        }
 
-        assert_eq!(
-            status_lines(&report),
-            vec![
-                "Bitloops daemon: stopped".to_string(),
-                "Mode: always-on service".to_string(),
-                "Config: /tmp/bitloops/config.toml".to_string(),
-                "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
-                "Supervisor state: stopped".to_string(),
-                "Last URL: https://127.0.0.1:5173".to_string(),
-            ]
-        );
+        thread::sleep(poll_interval);
     }
 }

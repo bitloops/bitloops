@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::host::extension_host::LanguagePackDescriptor;
 use crate::host::extension_host::builtins::TS_JS_LANGUAGE_PACK;
 use crate::host::language_adapter::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageTestSupport,
+    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageKind,
+    LanguageTestSupport,
 };
 
 use super::canonical::{TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS};
@@ -23,7 +24,7 @@ impl LanguageAdapterPack for TsJsLanguageAdapterPack {
         TS_JS_CANONICAL_MAPPINGS
     }
 
-    fn supported_language_kinds(&self) -> &'static [&'static str] {
+    fn supported_language_kinds(&self) -> &'static [LanguageKind] {
         TS_JS_SUPPORTED_LANGUAGE_KINDS
     }
 

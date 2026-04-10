@@ -1,5 +1,7 @@
 use super::*;
 
+const DEFAULT_POST_MERGE_HISTORY_BACKFILL: usize = 200;
+
 pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -> Result<()> {
     let Some(head_sha) = try_head_hash(repo_root)? else {
         return Ok(());
@@ -17,16 +19,32 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -
     }
 
     let refresh_future = async {
+        #[cfg(not(test))]
+        if let Err(err) =
+            crate::daemon::require_current_repo_runtime(repo_root, "post-merge DevQL refresh")
+        {
+            eprintln!("[bitloops] Warning: {err:#}");
+            return Ok(());
+        }
         let repo = crate::host::devql::resolve_repo_identity(repo_root)
             .context("resolving repository identity for post-merge DevQL refresh")?;
         let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
             .context("building DevQL config for post-merge refresh")?;
+        crate::host::devql::execute_ingest_with_backfill_window(
+            &cfg,
+            false,
+            DEFAULT_POST_MERGE_HISTORY_BACKFILL,
+            None,
+            None,
+        )
+        .await
+        .context("catching up DevQL historical commit ingest for post-merge")?;
         let stats =
             crate::host::devql::run_post_merge_artefact_refresh(&cfg, &head_sha, &changed_files)
                 .await
                 .context("refreshing DevQL artefacts for post-merge files")?;
 
-        if stats.files_failed > 0 {
+        if stats.completed_with_failures() {
             eprintln!(
                 "[bitloops] Warning: DevQL post-merge artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
                 head_sha,

@@ -36,7 +36,7 @@ impl Agent for OpenCodeAgent {
 
     fn detect_presence(&self) -> Result<bool> {
         let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        Ok(repo_root.join(".opencode").is_dir() || repo_root.join("opencode.json").is_file())
+        Ok(self.detect_presence_at(&repo_root))
     }
 
     fn get_session_id(&self, input: &HookInput) -> String {
@@ -172,5 +172,11 @@ impl Agent for OpenCodeAgent {
         } else {
             format!("opencode -s {session_id}")
         }
+    }
+}
+
+impl OpenCodeAgent {
+    pub(crate) fn detect_presence_at(&self, repo_root: &Path) -> bool {
+        repo_root.join(".opencode").is_dir() || repo_root.join("opencode.json").is_file()
     }
 }

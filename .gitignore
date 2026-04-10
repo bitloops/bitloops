@@ -33,7 +33,18 @@ ref/
 .claude/
 bitloops/.fastembed_cache
 
-docs/superpowers
+
 docs/temp
 .codex
 AGENTS.md
+
+docs/superpowers/*
+
+docs/superpowers/plans/*
+
+docs/superpowers/specs/*
+
+.opencode
+
+# Temporary add due to bitloops generating hooks there instead of /.git/hooks
+.githooks/

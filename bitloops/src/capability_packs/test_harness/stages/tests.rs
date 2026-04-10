@@ -120,22 +120,42 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
             linkage_source.as_deref(),
             limit,
         )?;
+        let latest_runs = if let Some(commit_sha) = commit_sha.as_deref() {
+            let test_ids = covering
+                .iter()
+                .map(|rec| rec.test_id.clone())
+                .collect::<Vec<_>>();
+            store.load_latest_test_runs(commit_sha, &test_ids)?
+        } else {
+            std::collections::HashMap::new()
+        };
 
         let covering_tests_rows: Vec<Value> = covering
             .into_iter()
-            .map(|rec| {
-                json!({
+            .map(|rec| -> anyhow::Result<Value> {
+                let last_run = latest_runs.get(&rec.test_id).cloned();
+                Ok(json!({
                     "test_id": rec.test_id,
                     "test_name": rec.test_name,
                     "suite_name": rec.suite_name,
                     "file_path": rec.file_path,
+                    "start_line": rec.start_line,
+                    "end_line": rec.end_line,
                     "confidence": rec.confidence,
                     "discovery_source": rec.discovery_source,
                     "linkage_source": rec.linkage_source,
                     "linkage_status": rec.linkage_status,
-                })
+                    "classification": rec.classification,
+                    "classification_source": rec.classification_source,
+                    "fan_out": rec.fan_out,
+                    "last_run": last_run.map(|run| json!({
+                        "status": run.status,
+                        "duration_ms": run.duration_ms,
+                        "commit_sha": run.commit_sha,
+                    })),
+                }))
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let summary = json!({
             "total_covering_tests": covering_tests_rows.len(),
@@ -175,7 +195,7 @@ impl StageHandler for TestsStageHandler {
 
 #[cfg(test)]
 mod guardrail_tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -227,6 +247,9 @@ mod guardrail_tests {
     struct FakeRepo {
         calls: Mutex<Vec<StageCall>>,
         responses: BTreeMap<String, Vec<StageCoveringTestRecord>>,
+        latest_runs: BTreeMap<String, crate::models::LatestTestRunRecord>,
+        latest_run_calls: Mutex<Vec<(String, String)>>,
+        bulk_latest_run_calls: Mutex<Vec<(String, Vec<String>)>>,
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -252,6 +275,30 @@ mod guardrail_tests {
 
         fn calls(&self) -> Vec<StageCall> {
             self.calls.lock().expect("calls lock").clone()
+        }
+
+        fn with_latest_run(
+            mut self,
+            test_symbol_id: &str,
+            latest_run: crate::models::LatestTestRunRecord,
+        ) -> Self {
+            self.latest_runs
+                .insert(test_symbol_id.to_string(), latest_run);
+            self
+        }
+
+        fn latest_run_calls(&self) -> Vec<(String, String)> {
+            self.latest_run_calls
+                .lock()
+                .expect("latest_run_calls lock")
+                .clone()
+        }
+
+        fn bulk_latest_run_calls(&self) -> Vec<(String, Vec<String>)> {
+            self.bulk_latest_run_calls
+                .lock()
+                .expect("bulk_latest_run_calls lock")
+                .clone()
         }
     }
 
@@ -286,10 +333,34 @@ mod guardrail_tests {
 
         fn load_latest_test_run(
             &self,
-            _commit_sha: &str,
-            _test_symbol_id: &str,
+            commit_sha: &str,
+            test_symbol_id: &str,
         ) -> Result<Option<crate::models::LatestTestRunRecord>> {
-            unreachable!("unused in tests stage guardrails")
+            self.latest_run_calls
+                .lock()
+                .expect("latest_run_calls lock")
+                .push((commit_sha.to_string(), test_symbol_id.to_string()));
+            Ok(self.latest_runs.get(test_symbol_id).cloned())
+        }
+
+        fn load_latest_test_runs(
+            &self,
+            commit_sha: &str,
+            test_symbol_ids: &[String],
+        ) -> Result<HashMap<String, crate::models::LatestTestRunRecord>> {
+            self.bulk_latest_run_calls
+                .lock()
+                .expect("bulk_latest_run_calls lock")
+                .push((commit_sha.to_string(), test_symbol_ids.to_vec()));
+            Ok(test_symbol_ids
+                .iter()
+                .filter_map(|test_id| {
+                    self.latest_runs
+                        .get(test_id)
+                        .cloned()
+                        .map(|run| (test_id.clone(), run))
+                })
+                .collect())
         }
 
         fn load_coverage_summary(
@@ -399,10 +470,15 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: Some("suite".into()),
                 file_path: "tests/a.rs".into(),
+                start_line: 3,
+                end_line: 6,
                 confidence: 0.91,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
                 linkage_status: "linked".into(),
+                classification: Some("unit".into()),
+                classification_source: Some("coverage_derived".into()),
+                fan_out: Some(1),
             }],
         );
 
@@ -422,6 +498,8 @@ mod guardrail_tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
         assert_eq!(rows[0]["covering_tests"].as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["covering_tests"][0]["start_line"], 3);
+        assert_eq!(rows[0]["covering_tests"][0]["end_line"], 6);
         assert_eq!(repo.calls().len(), 1);
         assert_eq!(repo.calls()[0].production_symbol_id, "symbol-a");
     }
@@ -436,10 +514,15 @@ mod guardrail_tests {
                     test_name: "covers_a".into(),
                     suite_name: Some("suite-a".into()),
                     file_path: "tests/a.rs".into(),
+                    start_line: 5,
+                    end_line: 9,
                     confidence: 0.8,
                     discovery_source: "static".into(),
                     linkage_source: "coverage".into(),
                     linkage_status: "linked".into(),
+                    classification: Some("unit".into()),
+                    classification_source: Some("coverage_derived".into()),
+                    fan_out: Some(1),
                 }],
             )
             .with_response(
@@ -449,10 +532,15 @@ mod guardrail_tests {
                     test_name: "covers_b".into(),
                     suite_name: Some("suite-b".into()),
                     file_path: "tests/b.rs".into(),
+                    start_line: 7,
+                    end_line: 12,
                     confidence: 0.82,
                     discovery_source: "static".into(),
                     linkage_source: "coverage".into(),
                     linkage_status: "linked".into(),
+                    classification: Some("unit".into()),
+                    classification_source: Some("coverage_derived".into()),
+                    fan_out: Some(1),
                 }],
             );
 
@@ -486,10 +574,15 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 10,
+                end_line: 11,
                 confidence: 0.8,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
                 linkage_status: "linked".into(),
+                classification: Some("unit".into()),
+                classification_source: Some("coverage_derived".into()),
+                fan_out: Some(1),
             }],
         );
 
@@ -521,10 +614,15 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 1,
+                end_line: 2,
                 confidence: 0.5,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
                 linkage_status: "linked".into(),
+                classification: Some("unit".into()),
+                classification_source: Some("coverage_derived".into()),
+                fan_out: Some(1),
             }],
         );
 
@@ -564,10 +662,15 @@ mod guardrail_tests {
                 test_name: "covers_a".into(),
                 suite_name: None,
                 file_path: "tests/a.rs".into(),
+                start_line: 1,
+                end_line: 2,
                 confidence: 0.5,
                 discovery_source: "static".into(),
                 linkage_source: "coverage".into(),
                 linkage_status: "linked".into(),
+                classification: Some("unit".into()),
+                classification_source: Some("coverage_derived".into()),
+                fan_out: Some(1),
             }],
         );
 
@@ -596,5 +699,94 @@ mod guardrail_tests {
         assert_eq!(call.min_confidence, Some(0.75));
         assert_eq!(call.linkage_source, None);
         assert_eq!(call.limit, 7);
+    }
+
+    #[tokio::test]
+    async fn tests_stage_loads_latest_runs_in_bulk_when_commit_sha_is_present() {
+        let repo = FakeRepo::default()
+            .with_response(
+                "symbol-a",
+                vec![
+                    StageCoveringTestRecord {
+                        test_id: "test-a".into(),
+                        test_name: "covers_a".into(),
+                        suite_name: Some("suite-a".into()),
+                        file_path: "tests/a.rs".into(),
+                        start_line: 1,
+                        end_line: 2,
+                        confidence: 0.91,
+                        discovery_source: "static".into(),
+                        linkage_source: "coverage".into(),
+                        linkage_status: "linked".into(),
+                        classification: Some("unit".into()),
+                        classification_source: Some("coverage_derived".into()),
+                        fan_out: Some(1),
+                    },
+                    StageCoveringTestRecord {
+                        test_id: "test-b".into(),
+                        test_name: "covers_b".into(),
+                        suite_name: Some("suite-a".into()),
+                        file_path: "tests/b.rs".into(),
+                        start_line: 4,
+                        end_line: 8,
+                        confidence: 0.88,
+                        discovery_source: "static".into(),
+                        linkage_source: "coverage".into(),
+                        linkage_status: "linked".into(),
+                        classification: Some("integration".into()),
+                        classification_source: Some("coverage_derived".into()),
+                        fan_out: Some(2),
+                    },
+                ],
+            )
+            .with_latest_run(
+                "test-a",
+                crate::models::LatestTestRunRecord {
+                    status: "passed".into(),
+                    duration_ms: Some(12),
+                    commit_sha: "commit-bulk".into(),
+                },
+            )
+            .with_latest_run(
+                "test-b",
+                crate::models::LatestTestRunRecord {
+                    status: "failed".into(),
+                    duration_ms: Some(21),
+                    commit_sha: "commit-bulk".into(),
+                },
+            );
+
+        let resp = execute(
+            &repo,
+            json!({
+                "input_rows": [
+                    stage_row(Some("artefact-a"), "symbol-a", "tests::a", "test_case", "tests/a.rs", 10, 12)
+                ],
+                "query_context": {
+                    "resolved_commit_sha": "commit-bulk"
+                }
+            }),
+        )
+        .await;
+
+        let rows = resp.payload.as_array().expect("array");
+        let covering = rows[0]["covering_tests"]
+            .as_array()
+            .expect("covering tests");
+        assert_eq!(covering.len(), 2);
+        assert_eq!(covering[0]["last_run"]["status"], "passed");
+        assert_eq!(covering[1]["last_run"]["status"], "failed");
+        assert!(
+            repo.latest_run_calls().is_empty(),
+            "tests stage should not perform per-row latest-run lookups"
+        );
+        assert_eq!(repo.bulk_latest_run_calls().len(), 1);
+        assert_eq!(
+            repo.bulk_latest_run_calls()[0],
+            (
+                "commit-bulk".to_string(),
+                vec!["test-a".to_string(), "test-b".to_string()]
+            )
+        );
     }
 }

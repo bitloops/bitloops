@@ -1,7 +1,7 @@
 mod commit_counts;
 mod helpers;
 mod stage_serving;
-#[cfg(test)]
+#[cfg(all(test, feature = "postgres-tests"))]
 mod tests;
 
 use std::collections::{HashMap, HashSet};
@@ -19,16 +19,62 @@ use crate::models::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
     StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestHarnessCommitCounts,
+    TestRunRecord, derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
 use self::helpers::{
     clear_existing_test_discovery_data, get, get_i64, get_opt_i64, upsert_test_artefact_current,
-    upsert_test_artefact_edge_current, upsert_test_classification,
-    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
+    upsert_test_artefact_edge_current, upsert_test_classification, upsert_test_run,
 };
+
+/// Groups covered coverage rows by test symbol for classification. Pure helper used by
+/// [`PostgresTestHarnessRepository::rebuild_classifications_from_coverage`].
+fn group_covered_rows_by_test_symbol(
+    row_tuples: Vec<(String, String, String, String)>,
+) -> HashMap<String, (String, HashSet<String>, HashSet<String>)> {
+    let mut grouped: HashMap<String, (String, HashSet<String>, HashSet<String>)> = HashMap::new();
+    for (repo_id, test_symbol_id, production_symbol_id, path) in row_tuples {
+        let directory = std::path::Path::new(&path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let entry = grouped
+            .entry(test_symbol_id)
+            .or_insert_with(|| (repo_id, HashSet::new(), HashSet::new()));
+        entry.1.insert(production_symbol_id);
+        entry.2.insert(directory);
+    }
+    grouped
+}
+
+fn classification_records_from_grouped(
+    commit_sha: &str,
+    grouped: HashMap<String, (String, HashSet<String>, HashSet<String>)>,
+) -> Vec<TestClassificationRecord> {
+    let mut records = Vec::new();
+    for (test_symbol_id, (repo_id, artefacts, directories)) in grouped {
+        let fan_out = artefacts.len() as i64;
+        if fan_out == 0 {
+            continue;
+        }
+        let boundary_crossings = directories.len() as i64;
+        let classification = derive_test_classification(fan_out, boundary_crossings);
+        records.push(TestClassificationRecord {
+            classification_id: format!("class:{commit_sha}:{test_symbol_id}"),
+            repo_id,
+            commit_sha: commit_sha.to_string(),
+            test_symbol_id,
+            classification: classification.to_string(),
+            classification_source: "coverage_derived".to_string(),
+            fan_out,
+            boundary_crossings,
+        });
+    }
+    records
+}
 
 pub struct PostgresTestHarnessRepository {
     postgres: PostgresSyncConnection,
@@ -58,8 +104,7 @@ impl PostgresTestHarnessRepository {
 }
 
 impl TestHarnessRepository for PostgresTestHarnessRepository {
-    fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
-        let commit_sha = commit_sha.to_string();
+    fn load_test_scenarios(&self, _commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
         self.with_client(move |client| {
             Box::pin(async move {
                 let rows = client
@@ -70,11 +115,10 @@ FROM test_artefacts_current ts
 LEFT JOIN test_artefacts_current parent
   ON parent.repo_id = ts.repo_id
  AND parent.symbol_id = ts.parent_symbol_id
-WHERE ts.commit_sha = $1
-  AND ts.canonical_kind = 'test_scenario'
+WHERE ts.canonical_kind = 'test_scenario'
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
-                        &[&commit_sha],
+                        &[],
                     )
                     .await
                     .context("failed querying test scenarios")?;
@@ -98,14 +142,10 @@ ORDER BY ts.path ASC, ts.start_line ASC
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         let commit_sha = commit_sha.to_string();
         let test_artefacts = test_artefacts.to_vec();
         let test_edges = test_edges.to_vec();
-        let discovery_run = discovery_run.clone();
-        let diagnostics = diagnostics.to_vec();
         self.with_client(move |client| {
             Box::pin(async move {
                 let tx = client
@@ -114,10 +154,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
                     .context("failed to start test discovery transaction")?;
                 clear_existing_test_discovery_data(&tx, &commit_sha).await?;
 
-                upsert_test_discovery_run(&tx, &discovery_run).await?;
-                for diagnostic in diagnostics {
-                    upsert_test_discovery_diagnostic(&tx, &diagnostic).await?;
-                }
                 for artefact in test_artefacts {
                     upsert_test_artefact_current(&tx, &artefact).await?;
                 }
@@ -341,44 +377,21 @@ WHERE cc.commit_sha = $1
                     .await
                     .context("failed querying coverage rows for classification")?;
 
-                let mut grouped: HashMap<String, (String, HashSet<String>, HashSet<String>)> =
-                    HashMap::new();
+                let mut row_tuples = Vec::with_capacity(rows.len());
                 for row in rows {
-                    let repo_id: String = get(&row, 0, "repo_id")?;
-                    let test_symbol_id: String = get(&row, 1, "test_symbol_id")?;
-                    let production_symbol_id: String = get(&row, 2, "production_symbol_id")?;
-                    let path: String = get(&row, 3, "artefact_path")?;
-
-                    let directory = std::path::Path::new(&path)
-                        .parent()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-
-                    let entry = grouped
-                        .entry(test_symbol_id)
-                        .or_insert_with(|| (repo_id, HashSet::new(), HashSet::new()));
-                    entry.1.insert(production_symbol_id);
-                    entry.2.insert(directory);
+                    row_tuples.push((
+                        get(&row, 0, "repo_id")?,
+                        get(&row, 1, "test_symbol_id")?,
+                        get(&row, 2, "production_symbol_id")?,
+                        get(&row, 3, "artefact_path")?,
+                    ));
                 }
 
+                let grouped = group_covered_rows_by_test_symbol(row_tuples);
+                let records = classification_records_from_grouped(&commit_sha, grouped);
+
                 let mut inserted = 0usize;
-                for (test_symbol_id, (repo_id, artefacts, directories)) in grouped {
-                    let fan_out = artefacts.len() as i64;
-                    if fan_out == 0 {
-                        continue;
-                    }
-                    let boundary_crossings = directories.len() as i64;
-                    let classification = derive_test_classification(fan_out, boundary_crossings);
-                    let record = TestClassificationRecord {
-                        classification_id: format!("class:{commit_sha}:{test_symbol_id}"),
-                        repo_id,
-                        commit_sha: commit_sha.to_string(),
-                        test_symbol_id,
-                        classification: classification.to_string(),
-                        classification_source: "coverage_derived".to_string(),
-                        fan_out,
-                        boundary_crossings,
-                    };
+                for record in records {
                     upsert_test_classification(client, &record).await?;
                     inserted += 1;
                 }
@@ -563,6 +576,48 @@ LIMIT 1
         })
     }
 
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<HashMap<String, LatestTestRunRecord>> {
+        if test_symbol_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let commit_sha = commit_sha.to_string();
+        let test_symbol_ids = test_symbol_ids.to_vec();
+        self.with_client(move |client| {
+            Box::pin(async move {
+                let rows = client
+                    .query(
+                        r#"
+SELECT test_symbol_id, status, duration_ms, commit_sha
+FROM test_runs
+WHERE commit_sha = $1
+  AND test_symbol_id = ANY($2)
+ORDER BY test_symbol_id, ran_at DESC
+"#,
+                        &[&commit_sha, &test_symbol_ids],
+                    )
+                    .await
+                    .context("failed querying latest runs")?;
+
+                let mut runs = HashMap::new();
+                for row in rows {
+                    let test_symbol_id = get(&row, 0, "test_symbol_id")?;
+                    runs.entry(test_symbol_id).or_insert(LatestTestRunRecord {
+                        status: get(&row, 1, "run_status")?,
+                        duration_ms: get_opt_i64(&row, 2, "duration_ms")?,
+                        commit_sha: get(&row, 3, "commit_sha")?,
+                    });
+                }
+
+                Ok(runs)
+            })
+        })
+    }
+
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
@@ -736,5 +791,67 @@ ORDER BY ch.line, ch.branch_id
                 stage_serving::load_stage_coverage_metadata(client, repo_id, commit_sha).await
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod classification_grouping_tests {
+    use super::{classification_records_from_grouped, group_covered_rows_by_test_symbol};
+
+    #[test]
+    fn groups_rows_by_test_and_counts_fan_out_and_directories() {
+        let rows = vec![
+            (
+                "repo1".to_string(),
+                "test_a".to_string(),
+                "sym1".to_string(),
+                "src/one.rs".to_string(),
+            ),
+            (
+                "repo1".to_string(),
+                "test_a".to_string(),
+                "sym2".to_string(),
+                "src/two.rs".to_string(),
+            ),
+        ];
+        let grouped = group_covered_rows_by_test_symbol(rows);
+        assert_eq!(grouped.len(), 1);
+        let (repo_id, syms, dirs) = grouped.get("test_a").expect("test_a");
+        assert_eq!(repo_id, "repo1");
+        assert_eq!(syms.len(), 2);
+        assert_eq!(dirs.len(), 1);
+        assert!(dirs.contains("src"));
+
+        let records = classification_records_from_grouped("commit-1", grouped);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].test_symbol_id, "test_a");
+        assert_eq!(records[0].fan_out, 2);
+        assert_eq!(records[0].boundary_crossings, 1);
+        assert_eq!(records[0].classification, "unit");
+        assert_eq!(records[0].classification_id, "class:commit-1:test_a");
+    }
+
+    #[test]
+    fn multiple_directories_raise_boundary_crossings() {
+        let rows = vec![
+            (
+                "r".to_string(),
+                "t".to_string(),
+                "a".to_string(),
+                "pkg/a.rs".to_string(),
+            ),
+            (
+                "r".to_string(),
+                "t".to_string(),
+                "b".to_string(),
+                "other/b.rs".to_string(),
+            ),
+        ];
+        let grouped = group_covered_rows_by_test_symbol(rows);
+        let records = classification_records_from_grouped("c2", grouped);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].boundary_crossings, 2);
+        assert_eq!(records[0].fan_out, 2);
+        assert_eq!(records[0].classification, "integration");
     }
 }

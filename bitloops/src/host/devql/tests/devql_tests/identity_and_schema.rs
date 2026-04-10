@@ -1,10 +1,11 @@
 use super::*;
+use crate::host::language_adapter::{LanguageKind, RustKind};
 
 #[test]
 fn symbol_id_is_stable_when_impl_block_moves_lines() {
     let original = LanguageArtefact {
         canonical_kind: None,
-        language_kind: "impl_item".to_string(),
+        language_kind: LanguageKind::rust(RustKind::ImplItem),
         name: "impl@12".to_string(),
         symbol_fqn: "src/lib.rs::impl@12".to_string(),
         parent_symbol_fqn: None,
@@ -99,11 +100,11 @@ impl Service for Repo {
 
     let original_impl = original_artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "impl_item")
+        .find(|artefact| artefact.language_kind == LanguageKind::rust(RustKind::ImplItem))
         .expect("expected impl artefact in original ingest");
     let moved_impl = moved_artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "impl_item")
+        .find(|artefact| artefact.language_kind == LanguageKind::rust(RustKind::ImplItem))
         .expect("expected impl artefact in moved ingest");
     let original_impl_symbol_id = structural_symbol_id_for_artefact(original_impl, None);
     let moved_impl_symbol_id = structural_symbol_id_for_artefact(moved_impl, None);
@@ -141,21 +142,34 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("modifiers JSONB NOT NULL DEFAULT '[]'::jsonb"));
     assert!(sql.contains("docstring TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
-    assert!(sql.contains("revision_kind TEXT NOT NULL DEFAULT 'commit'"));
-    assert!(sql.contains("revision_id TEXT NOT NULL DEFAULT ''"));
-    assert!(sql.contains("temp_checkpoint_id BIGINT"));
+    assert!(sql.contains("content_id TEXT NOT NULL"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
-    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_files"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefacts"));
     assert!(sql.contains("event_time TIMESTAMPTZ NOT NULL"));
-    assert!(sql.contains("PRIMARY KEY (repo_id, checkpoint_id, path, blob_sha)"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_lookup_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_agent_time_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
-    assert!(sql.contains("PRIMARY KEY (repo_id, branch, symbol_id)"));
+    assert!(sql.contains("relation_id TEXT PRIMARY KEY"));
+    assert!(sql.contains("copy_source_path TEXT"));
+    assert!(sql.contains("copy_source_blob_sha TEXT"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_lookup_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_agent_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_event_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_commit_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_change_kind_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_copy_source_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_dest_idx"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, path, symbol_id)"));
     assert!(!sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
@@ -164,22 +178,37 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
     assert!(sql.contains("CONSTRAINT artefact_edges_current_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_current_line_range_chk"));
-    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx"));
 }
 
 #[test]
 fn sqlite_schema_sql_includes_sync_state_table() {
     let sql = sqlite_schema_sql();
-    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_files"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefacts"));
     assert!(sql.contains("event_time TEXT NOT NULL"));
-    assert!(sql.contains("PRIMARY KEY (repo_id, checkpoint_id, path, blob_sha)"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_lookup_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_agent_time_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
+    assert!(sql.contains("copy_source_path TEXT"));
+    assert!(sql.contains("copy_source_blob_sha TEXT"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_lookup_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_agent_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_event_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_commit_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_change_kind_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_files_copy_source_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_dest_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("PRIMARY KEY (repo_id, state_key)"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger"));
+    assert!(sql.contains("checkpoint_status TEXT NOT NULL"));
 }
 
 #[test]
@@ -262,18 +291,11 @@ fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebr
 }
 
 #[test]
-fn devql_ingest_accepts_explicit_false_for_init() {
-    let parsed = crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
-        .expect("devql ingest should parse with explicit boolean value");
-
-    let Some(crate::cli::Commands::Devql(args)) = parsed.command else {
-        panic!("expected devql command");
-    };
-    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
-        panic!("expected devql ingest command");
-    };
-
-    assert!(!ingest.init);
+fn devql_ingest_rejects_removed_init_flag() {
+    assert!(
+        crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"]).is_err(),
+        "devql ingest should reject the removed --init flag"
+    );
 }
 
 #[test]

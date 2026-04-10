@@ -1,4 +1,5 @@
 pub mod artefact;
+pub mod artefact_selection;
 pub mod chat;
 pub mod checkpoint;
 pub mod clone;
@@ -8,18 +9,22 @@ pub mod dependency_edge;
 pub mod file_context;
 pub mod health;
 pub mod ingestion;
+pub mod interaction;
 pub mod knowledge;
 pub mod project;
 pub mod repository;
 pub mod scalars;
+pub mod sync;
 pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
 
-pub use artefact::{Artefact, ArtefactFilterInput, CanonicalKind};
+pub use artefact::LineRangeInput;
+pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
+pub use artefact_selection::{ArtefactSelection, ArtefactSelectorInput};
 pub use chat::{ChatEntry, ChatRole};
-pub use checkpoint::Checkpoint;
-pub use clone::{ClonesFilterInput, SemanticClone};
+pub use checkpoint::{Checkpoint, CheckpointFileRelation};
+pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
@@ -28,7 +33,9 @@ pub use connection::{
     KnowledgeRelationConnection, KnowledgeRelationEdge, KnowledgeVersionConnection,
     KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge, paginate_items,
 };
-pub use dependency_edge::{DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind};
+pub use dependency_edge::{
+    DependencyEdge, DepsDirection, DepsFilterInput, DepsSummary, DepsSummaryFilterInput, EdgeKind,
+};
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
 pub use ingestion::IngestionProgressEvent;
@@ -39,6 +46,7 @@ pub use knowledge::{
 pub use project::Project;
 pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
+pub use sync::{SyncProgressEvent, SyncTaskObject};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
 pub use test_harness::{

@@ -8,13 +8,10 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::capability_packs::semantic_clones::embeddings;
-use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
-use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
-    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
-    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+    SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, load_pre_stage_artefacts_for_blob,
+    load_pre_stage_dependencies_for_blob,
 };
 use crate::config::{
     EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
@@ -37,6 +34,8 @@ use crate::utils::terminal::print_db_status_table;
 pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]
 pub(crate) mod checkpoint_file_snapshots;
+#[path = "devql/checkpoint_provenance.rs"]
+pub(crate) mod checkpoint_provenance;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
 #[path = "devql/commands_projection.rs"]
@@ -45,12 +44,18 @@ mod commands_projection;
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
 mod commands_refresh;
+#[path = "devql/commands_sync.rs"]
+mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+#[path = "devql/sync/mod.rs"]
+pub(crate) mod sync;
 mod types;
 
-pub(crate) use self::commands_ingest::execute_ingest_with_observer;
 pub use self::commands_ingest::run_ingest;
+pub(crate) use self::commands_ingest::{
+    execute_ingest_with_backfill_window, execute_ingest_with_observer,
+};
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
 pub use self::commands_projection::{
@@ -63,18 +68,31 @@ pub(crate) use self::commands_query::{
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{
-    PostCommitArtefactRefreshStats, run_post_checkout_branch_seed,
+    PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata, run_post_checkout_branch_seed,
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
+pub use self::commands_sync::{
+    SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
+    SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
+    run_sync_with_summary_and_observer_and_diffs,
+};
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
+pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 
 #[cfg(test)]
-pub(crate) use self::commands_ingest::promote_temporary_current_rows_for_head_commit;
+pub(crate) use self::commands_sync::execute_sync;
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation;
+#[allow(unused_imports)]
+pub(crate) use self::commands_sync::execute_sync_with_observer_and_stats_and_diffs;
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use self::commands_sync::execute_sync_with_stats;
 #[cfg(test)]
 pub(crate) use self::connection_status::{
     EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,
@@ -92,6 +110,10 @@ const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 #[cfg(test)]
 const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
+#[cfg(test)]
+const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
+#[cfg(test)]
+const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -115,18 +137,17 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
-        summary.checkpoints_processed,
+        "DevQL ingest complete: commits_processed={}, checkpoint_companions_processed={}, events_inserted={}, artefacts_upserted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
+        summary.commits_processed,
+        summary.checkpoint_companions_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
-        summary.checkpoints_without_commit,
-        summary.temporary_rows_promoted,
         summary.semantic_feature_rows_upserted,
         summary.semantic_feature_rows_skipped,
         summary.symbol_embedding_rows_upserted,
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
-        summary.symbol_clone_sources_scored
+        summary.symbol_clone_sources_scored,
     )
 }
 
@@ -374,6 +395,70 @@ fn resolve_language_id_for_file_path(file_path: &str) -> Option<&'static str> {
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct ExtractedProductionArtefact {
+    pub canonical_kind: Option<String>,
+    pub language_kind: String,
+    pub name: String,
+    pub symbol_fqn: String,
+    pub parent_symbol_fqn: Option<String>,
+    pub start_line: i32,
+    pub end_line: i32,
+    pub start_byte: i32,
+    pub end_byte: i32,
+    pub signature: String,
+    pub modifiers: Vec<String>,
+    pub docstring: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtractedProductionFile {
+    pub language: String,
+    pub file_docstring: Option<String>,
+    pub artefacts: Vec<ExtractedProductionArtefact>,
+}
+
+/// Extracts production artefacts for a single source file using the same
+/// language adapter packs that power DevQL sync materialization.
+pub fn extract_production_file_artefacts(
+    path: &str,
+    content: &str,
+) -> Result<Option<ExtractedProductionFile>> {
+    let language = detect_language(path);
+    let Some(pack_id) = resolve_language_pack_owner_for_input(&language, Some(path))
+        .or_else(|| resolve_language_pack_owner(&language))
+    else {
+        return Ok(None);
+    };
+
+    let registry = language_adapter_registry()?;
+    let file_docstring = registry.extract_file_docstring(pack_id, content);
+    let artefacts = registry
+        .extract_artefacts(pack_id, content, path)?
+        .into_iter()
+        .map(|item| ExtractedProductionArtefact {
+            canonical_kind: item.canonical_kind,
+            language_kind: item.language_kind.to_string(),
+            name: item.name,
+            symbol_fqn: item.symbol_fqn,
+            parent_symbol_fqn: item.parent_symbol_fqn,
+            start_line: item.start_line,
+            end_line: item.end_line,
+            start_byte: item.start_byte,
+            end_byte: item.end_byte,
+            signature: item.signature,
+            modifiers: item.modifiers,
+            docstring: item.docstring,
+        })
+        .collect();
+
+    Ok(Some(ExtractedProductionFile {
+        language,
+        file_docstring,
+        artefacts,
+    }))
+}
+
 fn language_pack_context_for_language(
     cfg: &DevqlConfig,
     commit_sha: Option<&str>,
@@ -478,9 +563,39 @@ pub fn run_capability_packs_report(
 }
 
 async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorage) -> Result<()> {
-    init_sqlite_schema(&relational.local.path).await?;
-    if let Some(remote) = relational.remote.as_ref() {
-        init_postgres_schema(cfg, &remote.client).await?;
+    init_relational_schema_with_mode(cfg, relational, RelationalSchemaInitMode::SafeBootstrap)
+        .await
+        .map(|_| ())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SyncExecutionSchemaOutcome {
+    pub remote_current_state_rebuilt: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RelationalSchemaInitMode {
+    SafeBootstrap,
+    SyncExecution,
+}
+
+async fn init_relational_schema_with_mode(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    mode: RelationalSchemaInitMode,
+) -> Result<SyncExecutionSchemaOutcome> {
+    init_sqlite_schema(relational.sqlite_path()).await?;
+    let mut outcome = SyncExecutionSchemaOutcome::default();
+    if let Some(remote_client) = relational.remote_client() {
+        let init_outcome = match mode {
+            RelationalSchemaInitMode::SafeBootstrap => {
+                init_postgres_schema(cfg, remote_client).await?
+            }
+            RelationalSchemaInitMode::SyncExecution => {
+                init_postgres_schema_for_sync_execution(cfg, remote_client).await?
+            }
+        };
+        outcome.remote_current_state_rebuilt = init_outcome.rebuilt_current_state;
     }
 
     let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
@@ -498,32 +613,32 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
                 test_harness_context.capability_pack_id
             )
         })?;
-    Ok(())
+    Ok(outcome)
 }
 
-fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
-    semantic::SemanticSummaryProviderConfig {
-        semantic_provider: cfg.semantic_provider.clone(),
-        semantic_model: cfg.semantic_model.clone(),
-        semantic_api_key: cfg.semantic_api_key.clone(),
-        semantic_base_url: cfg.semantic_base_url.clone(),
-    }
-}
-
-fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    embeddings::EmbeddingProviderConfig {
-        embedding_provider: cfg.embedding_provider.clone(),
-        embedding_model: cfg.embedding_model.clone(),
-        embedding_api_key: cfg.embedding_api_key.clone(),
-        embedding_cache_dir: cfg.embedding_cache_dir.clone(),
-    }
-}
-
-async fn initialise_devql_schema_for_command(
+pub(crate) async fn ensure_devql_storage_current(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<(RelationalStorage, InitSchemaSummary)> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+    let (relational, summary, _outcome) = initialise_devql_schema_for_command_with_mode(
+        cfg,
+        command,
+        RelationalSchemaInitMode::SafeBootstrap,
+    )
+    .await?;
+    Ok((relational, summary))
+}
+
+async fn initialise_devql_schema_for_command_with_mode(
+    cfg: &DevqlConfig,
+    command: &str,
+    mode: RelationalSchemaInitMode,
+) -> Result<(
+    RelationalStorage,
+    InitSchemaSummary,
+    SyncExecutionSchemaOutcome,
+)> {
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
@@ -532,7 +647,7 @@ async fn initialise_devql_schema_for_command(
     } else {
         init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
     }
-    init_relational_schema(cfg, &relational).await?;
+    let outcome = init_relational_schema_with_mode(cfg, &relational, mode).await?;
     Ok((
         relational,
         InitSchemaSummary {
@@ -550,44 +665,71 @@ async fn initialise_devql_schema_for_command(
                 "duckdb".to_string()
             },
         },
+        outcome,
     ))
+}
+
+/// Ensures all DevQL relational and events schemas are up to date.
+/// Idempotent and safe to call on every daemon start.
+pub async fn ensure_relational_and_events_schema(
+    config_root: &Path,
+    repo_root: &Path,
+    repo: RepoIdentity,
+) -> Result<()> {
+    let backends = resolve_store_backend_config_for_repo(config_root)
+        .context("resolving DevQL backend config for schema bootstrap")?;
+    let cfg = DevqlConfig::from_roots(config_root.to_path_buf(), repo_root.to_path_buf(), repo)?;
+    let relational =
+        RelationalStorage::connect(&cfg, &backends.relational, "daemon schema bootstrap").await?;
+
+    if backends.events.has_clickhouse() {
+        init_clickhouse_schema(&cfg).await?;
+    } else {
+        init_duckdb_schema(repo_root, &backends.events).await?;
+    }
+    init_relational_schema_with_mode(&cfg, &relational, RelationalSchemaInitMode::SafeBootstrap)
+        .await?;
+    Ok(())
 }
 
 pub(crate) async fn execute_init_schema(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<InitSchemaSummary> {
-    let (_relational, summary) = initialise_devql_schema_for_command(cfg, command).await?;
+    let (_relational, summary) = ensure_devql_storage_current(cfg, command).await?;
     Ok(summary)
+}
+
+pub(crate) async fn prepare_sync_execution_schema(
+    cfg: &DevqlConfig,
+    command: &str,
+    mode: &SyncMode,
+) -> Result<SyncExecutionSchemaOutcome> {
+    if matches!(mode, SyncMode::Validate) {
+        return Ok(SyncExecutionSchemaOutcome::default());
+    }
+    let (_relational, _summary, outcome) = initialise_devql_schema_for_command_with_mode(
+        cfg,
+        command,
+        RelationalSchemaInitMode::SyncExecution,
+    )
+    .await?;
+    Ok(outcome)
+}
+
+pub(crate) fn effective_sync_mode_after_schema_preparation(
+    mode: SyncMode,
+    outcome: SyncExecutionSchemaOutcome,
+) -> SyncMode {
+    match mode {
+        SyncMode::Paths(_) if outcome.remote_current_state_rebuilt => SyncMode::Repair,
+        other => other,
+    }
 }
 
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     let summary = execute_init_schema(cfg, "devql init").await?;
     println!("{}", format_init_schema_summary(&summary));
-    Ok(())
-}
-
-pub async fn execute_project_bootstrap(
-    cfg: &DevqlConfig,
-    skip_baseline: bool,
-) -> Result<InitSchemaSummary> {
-    let (relational, summary) = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
-
-    if skip_baseline {
-        return Ok(summary);
-    }
-
-    run_baseline_ingestion(cfg, &relational).await?;
-    Ok(summary)
-}
-
-pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
-    let summary = execute_project_bootstrap(cfg, skip_baseline).await?;
-    println!("{}", format_init_schema_summary(&summary));
-
-    if skip_baseline {
-        println!("Baseline ingestion skipped (`--skip-baseline`).");
-    }
     Ok(())
 }
 
@@ -614,6 +756,9 @@ mod ingestion_checkpoint;
 // ingestion: baseline indexing for full tracked codebase at HEAD
 #[path = "devql/ingestion/baseline.rs"]
 mod ingestion_baseline;
+// ingestion: commit-first historical ingest range and ledger helpers
+#[path = "devql/ingestion/history.rs"]
+mod ingestion_history;
 // ingestion: shared record types for artefact persistence
 #[path = "devql/ingestion/artefact_persistence_types.rs"]
 mod ingestion_artefact_persistence_types;
@@ -667,12 +812,19 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
+use self::ingestion_history::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
 pub(crate) use self::ingestion_schema::{
-    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
-    knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
+    checkpoint_relational_schema_sql_postgres, checkpoint_relational_schema_sql_sqlite,
+    checkpoint_runtime_schema_sql_sqlite, devql_schema_sql_sqlite,
+    historical_artefacts_cutover_sqlite_sql, knowledge_schema_sql_duckdb,
+    knowledge_schema_sql_sqlite,
+};
+#[cfg(test)]
+pub(crate) use self::ingestion_schema::{
+    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite,
 };
 use self::ingestion_types::*;
 pub(crate) use self::ingestion_types::{
@@ -715,6 +867,13 @@ fn symbol_id_for_artefact(item: &LanguageArtefact) -> String {
 }
 
 #[cfg(test)]
+#[path = "devql/tests/compat_current_state.rs"]
+mod compat_current_state;
+
+#[cfg(test)]
+pub(crate) use self::compat_current_state::*;
+
+#[cfg(test)]
 #[path = "devql/tests/devql_tests.rs"]
 mod tests;
 
@@ -731,17 +890,24 @@ mod mapping_tests;
 mod core_contract_tests;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/cucumber_world.rs"]
 mod cucumber_world;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/cucumber_steps/mod.rs"]
 mod cucumber_steps;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "slow-tests"))]
 #[path = "devql/tests/cucumber_bdd.rs"]
 mod cucumber_bdd;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;
+
+#[cfg(test)]
+#[path = "devql/tests/sync_tests.rs"]
+mod sync_tests;

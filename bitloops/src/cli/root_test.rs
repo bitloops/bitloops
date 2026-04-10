@@ -1,13 +1,20 @@
 use super::root::{
     CompletionShell, ROOT_NAME, ROOT_SHORT_ABOUT, build_commit, build_date, build_target,
     build_version, has_hidden_in_chain, run_curl_bash_post_install_command_with_io,
-    should_attempt_watcher_autostart, write_completion, write_help, write_version,
+    should_attempt_watcher_autostart, telemetry_action_for_command, write_completion, write_help,
+    write_version,
 };
-use super::{Cli, Commands};
-use crate::test_support::process_state::with_env_vars;
+use super::{Cli, Commands, resolve_watcher_autostart_config_root};
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE, REPO_POLICY_LOCAL_FILE_NAME,
+};
+use crate::test_support::git_fixtures::init_test_repo;
+use crate::test_support::process_state::{with_env_var, with_env_vars};
 use crate::utils::branding::bitloops_wordmark;
 use clap::{Command, CommandFactory, Parser};
+use serde_json::Value;
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 fn find_subcommand<'a>(cmd: &'a Command, name: &str) -> &'a Command {
@@ -28,6 +35,38 @@ fn render_custom_help(path: &[&str], show_tree: bool) -> String {
     let command_path = path.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     write_help(&mut out, &command_path, show_tree).expect("custom help should render");
     String::from_utf8(out).expect("help should be valid utf-8")
+}
+
+fn write_test_daemon_config(config_root: &Path) -> PathBuf {
+    let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::write(
+        &config_path,
+        r#"[runtime]
+local_dev = false
+
+[stores.relational]
+sqlite_path = "stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "stores/blob"
+"#,
+    )
+    .expect("write test daemon config");
+    config_path
+}
+
+fn write_enabled_repo_local_policy(repo_root: &Path) {
+    std::fs::write(
+        repo_root.join(REPO_POLICY_LOCAL_FILE_NAME),
+        r#"[capture]
+enabled = true
+strategy = "manual-commit"
+"#,
+    )
+    .expect("write repo-local policy");
 }
 
 #[test]
@@ -190,6 +229,7 @@ fn TestRootCommand_WatcherAutostartMatrix() {
             ["bitloops", "devql", "query", "repo(\"bitloops\")"].as_slice(),
             true,
         ),
+        (["bitloops", "devql", "schema"].as_slice(), false),
     ];
 
     for (argv, expected) in cases {
@@ -205,6 +245,49 @@ fn TestRootCommand_WatcherAutostartMatrix() {
             argv
         );
     }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ResolveWatcherAutostartConfigRoot_UsesDaemonOverrideRoot() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("bitloops");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    write_enabled_repo_local_policy(&repo_root);
+
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let config_root = resolve_watcher_autostart_config_root(&repo_root, &repo_root)
+                .expect("watcher autostart should resolve daemon config root");
+
+            assert_eq!(config_root, dir.path());
+            assert_ne!(config_root, repo_root);
+        },
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ResolveWatcherAutostartConfigRoot_DoesNotFallBackToRepoRoot() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("bitloops");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    write_enabled_repo_local_policy(&repo_root);
+
+    with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
+        let config_root = resolve_watcher_autostart_config_root(&repo_root, &repo_root);
+        assert!(
+            config_root.is_none(),
+            "watcher autostart should fail closed when no daemon config root is available"
+        );
+    });
 }
 
 #[test]
@@ -650,4 +733,195 @@ fn TestPersistentPostRun_ParentHiddenWalk() {
             tt.name, got_hidden, tt.want_hidden
         );
     }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_StartAliasCollapsesToCanonicalDaemonStart() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "start", "-d"]).expect("start alias should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops daemon start");
+    assert_eq!(action.surface, "cli");
+    assert_eq!(
+        action.properties.get("flags"),
+        Some(&Value::Array(vec![Value::String("detached".to_string())]))
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_HiddenInternalCommandsDoNotEmit() {
+    let analytics = Cli::try_parse_from(["bitloops", "__send_analytics", "{}"])
+        .expect("internal analytics command should parse");
+    let analytics_command = analytics.command.as_ref().expect("command");
+    assert!(
+        telemetry_action_for_command(analytics_command).is_none(),
+        "internal analytics command should not emit telemetry"
+    );
+
+    let completion =
+        Cli::try_parse_from(["bitloops", "completion", "bash"]).expect("completion should parse");
+    let completion_command = completion.command.as_ref().expect("command");
+    assert!(
+        telemetry_action_for_command(completion_command).is_none(),
+        "hidden completion command should not emit telemetry"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DaemonStartCanonicalCommandUsesSameEventName() {
+    let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "--until-stopped"])
+        .expect("daemon start should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops daemon start");
+    assert_eq!(action.surface, "cli");
+    assert_eq!(
+        action.properties.get("flags"),
+        Some(&Value::Array(vec![Value::String(
+            "until_stopped".to_string()
+        )]))
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlSyncTracksSafeProperties() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--paths", "a,b", "--status"])
+        .expect("devql sync should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql sync");
+    assert_eq!(
+        action.properties.get("sync_mode").and_then(Value::as_str),
+        Some("paths")
+    );
+    assert_eq!(
+        action.properties.get("paths_count").and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        action
+            .properties
+            .get("status_follow")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    let rendered = serde_json::to_string(&action.properties).expect("serialize properties");
+    assert!(
+        !rendered.contains("\"a\"") && !rendered.contains("\"b\""),
+        "telemetry should not include raw path values"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlQueryTracksRawGraphqlModeWithoutQueryText() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "query",
+        "--graphql",
+        "query DashboardRepos { repositories { name } }",
+    ])
+    .expect("raw GraphQL query should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql query");
+    assert_eq!(
+        action.properties.get("query_mode").and_then(Value::as_str),
+        Some("raw_graphql")
+    );
+    assert!(
+        !action.properties.contains_key("stage_sequence"),
+        "raw GraphQL mode should not capture stage sequence"
+    );
+    let rendered = serde_json::to_string(&action.properties).expect("serialize properties");
+    assert!(
+        !rendered.contains("DashboardRepos") && !rendered.contains("repositories"),
+        "telemetry should not include raw GraphQL query text"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlQueryTracksDslStageSequence() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "query",
+        "repo(\"x\")->artefacts()->deps()->limit(5)",
+    ])
+    .expect("devql query should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql query");
+    assert_eq!(
+        action.properties.get("query_mode").and_then(Value::as_str),
+        Some("dsl")
+    );
+    let expected_sequence = vec![
+        Value::String("repo".to_string()),
+        Value::String("artefacts".to_string()),
+        Value::String("deps".to_string()),
+        Value::String("limit".to_string()),
+    ];
+    assert_eq!(
+        action
+            .properties
+            .get("stage_sequence")
+            .and_then(Value::as_array),
+        Some(&expected_sequence)
+    );
+    let rendered = serde_json::to_string(&action.properties).expect("serialize properties");
+    assert!(
+        !rendered.contains("\"x\"") && !rendered.contains("limit(5)"),
+        "telemetry should not include raw DevQL literals"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlSchemaTracksModeAndOutput() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "schema", "--global", "--human"])
+        .expect("devql schema should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql schema");
+    assert_eq!(
+        action.properties.get("schema_mode").and_then(Value::as_str),
+        Some("global")
+    );
+    assert_eq!(
+        action.properties.get("output_mode").and_then(Value::as_str),
+        Some("human")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetryAction_DevqlSchemaDefaultsToMinifiedSlim() {
+    let parsed =
+        Cli::try_parse_from(["bitloops", "devql", "schema"]).expect("devql schema should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops devql schema");
+    assert_eq!(
+        action.properties.get("schema_mode").and_then(Value::as_str),
+        Some("slim")
+    );
+    assert_eq!(
+        action.properties.get("output_mode").and_then(Value::as_str),
+        Some("minified")
+    );
 }

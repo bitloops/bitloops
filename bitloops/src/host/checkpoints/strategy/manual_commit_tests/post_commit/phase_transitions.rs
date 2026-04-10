@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
 
 use super::helpers::commit_file;
 
@@ -6,17 +7,22 @@ use super::helpers::commit_file;
 pub(crate) fn post_commit_active_session_condenses_immediately() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-active".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
             base_commit: head,
-            step_count: 2,
-            files_touched: vec!["active.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 2,
+                files_touched: vec!["active.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-active", "pc-active-turn", &["active.txt"]);
 
     commit_file(dir.path(), "active.txt", "active.txt content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
@@ -27,8 +33,14 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
         loaded.phase,
         crate::host::checkpoints::session::phase::SessionPhase::Active
     );
-    assert_eq!(loaded.step_count, 0, "active session should be condensed");
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+    assert_eq!(
+        loaded.pending.step_count, 0,
+        "active session should be condensed"
+    );
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head_sha)
+        .cloned()
         .expect("post_commit should map active commit to a checkpoint");
     assert!(
         read_committed(dir.path(), &checkpoint_id)
@@ -46,23 +58,36 @@ pub(crate) fn post_commit_active_session_condenses_immediately() {
 pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-active-turn".to_string(),
             phase: SessionPhase::Active,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["index.html".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["index.html".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-active-turn",
+        "pc-active-turn-1",
+        &["index.html"],
+    );
 
     commit_file(dir.path(), "index.html", "index.html content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head_sha)
+        .cloned()
         .expect("post_commit should map active commit to a checkpoint");
     let loaded = backend.load_session("pc-active-turn").unwrap().unwrap();
     assert_eq!(
@@ -76,25 +101,30 @@ pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
 pub(crate) fn post_commit_idle_session_condenses() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-idle".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["idle.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["idle.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-idle", "pc-idle-turn", &["idle.txt"]);
 
     commit_file(dir.path(), "idle.txt", "idle.txt content");
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let loaded = backend.load_session("pc-idle").unwrap().unwrap();
-    assert_eq!(loaded.step_count, 0);
+    assert_eq!(loaded.pending.step_count, 0);
     assert!(
-        loaded.files_touched.is_empty(),
+        loaded.pending.files_touched.is_empty(),
         "files_touched should be reset"
     );
 }
@@ -103,17 +133,22 @@ pub(crate) fn post_commit_idle_session_condenses() {
 pub(crate) fn post_commit_rebase_during_active_skips_transition() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-rebase".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
             base_commit: head,
-            step_count: 3,
-            files_touched: vec!["rebase.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 3,
+                files_touched: vec!["rebase.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-rebase", "pc-rebase-turn", &["rebase.txt"]);
 
     fs::create_dir_all(dir.path().join(".git").join("rebase-merge")).unwrap();
     commit_file(dir.path(), "rebase.txt", "rebase.txt content");
@@ -122,7 +157,7 @@ pub(crate) fn post_commit_rebase_during_active_skips_transition() {
 
     let loaded = backend.load_session("pc-rebase").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 3,
+        loaded.pending.step_count, 3,
         "during rebase post-commit should be a no-op for session state"
     );
     assert!(
@@ -135,17 +170,22 @@ pub(crate) fn post_commit_rebase_during_active_skips_transition() {
 pub(crate) fn post_commit_files_touched_resets_after_condensation() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-files".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["f1.rs".to_string(), "f2.rs".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["f1.rs".to_string(), "f2.rs".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-files", "pc-files-turn", &["f1.rs", "f2.rs"]);
 
     fs::write(dir.path().join("f1.rs"), "f1").unwrap();
     fs::write(dir.path().join("f2.rs"), "f2").unwrap();
@@ -153,13 +193,14 @@ pub(crate) fn post_commit_files_touched_resets_after_condensation() {
     git_ok(dir.path(), &["commit", "-m", "test commit"]);
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
     let loaded = backend.load_session("pc-files").unwrap().unwrap();
-    assert!(loaded.files_touched.is_empty());
+    assert!(loaded.pending.files_touched.is_empty());
 }
 
 #[test]
 pub(crate) fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     let transcript_path = dir.path().join("live-transcript.jsonl");
     fs::write(
@@ -173,18 +214,30 @@ pub(crate) fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
             session_id: "turn-end-session".to_string(),
             phase: SessionPhase::Active,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["turn-end.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["turn-end.txt".to_string()],
+                ..Default::default()
+            },
             transcript_path: transcript_path.to_string_lossy().to_string(),
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "turn-end-session",
+        "turn-end-session-turn",
+        &["turn-end.txt"],
+    );
 
     commit_file(dir.path(), "turn-end.txt", "turn-end.txt content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head_sha)
+        .cloned()
         .expect("post_commit should map turn-end commit to a checkpoint");
 
     // Update the live transcript so turn-end finalization has richer content to persist.

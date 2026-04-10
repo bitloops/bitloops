@@ -82,6 +82,44 @@ pub(crate) const PYTHON_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDesc
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
+pub(crate) const GO_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+    id: "go-language-pack",
+    version: "1.0.0",
+    api_version: 1,
+    display_name: "Go Language Pack",
+    aliases: &["golang-pack", "go-pack"],
+    supported_languages: &["go", "golang"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "go-standard",
+        display_name: "Go Standard",
+        language_id: "go",
+        dialect: Some("go"),
+        aliases: &["golang"],
+        file_extensions: &["go"],
+        supported_source_versions: &["^1.22", "^1.23", "^1.24"],
+    }],
+    compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
+};
+
+pub(crate) const JAVA_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+    id: "java-language-pack",
+    version: "1.0.0",
+    api_version: 1,
+    display_name: "Java Language Pack",
+    aliases: &["java-pack", "jdk-pack"],
+    supported_languages: &["java"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "java-standard",
+        display_name: "Java Standard",
+        language_id: "java",
+        dialect: Some("java"),
+        aliases: &["jdk", "jvm-java"],
+        file_extensions: &["java"],
+        supported_source_versions: &["^17", "^21"],
+    }],
+    compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
+};
+
 const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "knowledge-capability-pack",
     display_name: "Knowledge Capability Pack",

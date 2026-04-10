@@ -65,6 +65,7 @@ async fn api_commits_filters_by_user_agent_and_time() {
     assert_eq!(commit_files_touched[0]["filepath"], "app.rs");
     assert_eq!(commit_files_touched[0]["additionsCount"].as_u64(), Some(1));
     assert_eq!(commit_files_touched[0]["deletionsCount"].as_u64(), Some(1));
+    assert!(commit_files_touched[0].get("changeKind").is_none());
 
     let checkpoint_files_touched = commits[0]["checkpoint"]["files_touched"]
         .as_array()
@@ -79,6 +80,9 @@ async fn api_commits_filters_by_user_agent_and_time() {
         checkpoint_files_touched[0]["deletionsCount"].as_u64(),
         Some(1)
     );
+    assert_eq!(checkpoint_files_touched[0]["changeKind"], "modify");
+    assert!(checkpoint_files_touched[0]["copiedFromPath"].is_null());
+    assert!(checkpoint_files_touched[0]["copiedFromBlobSha"].is_null());
 
     let timestamp = commits[0]["commit"]["timestamp"]
         .as_i64()
@@ -191,15 +195,78 @@ async fn api_validates_missing_required_branch() {
 }
 
 #[tokio::test]
-async fn api_checkpoint_returns_detailed_session_payload() {
+async fn api_repositories_returns_empty_list_when_catalog_is_empty() {
     let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute("DELETE FROM repositories", [])
+        .expect("clear repository catalog");
     let app = build_dashboard_router(test_state(
         repo.path().to_path_buf(),
         ServeMode::HelloWorld,
         repo.path().to_path_buf(),
     ));
 
-    let (status, payload) = request_json(app, "/api/checkpoints/aabbccddeeff").await;
+    let (status, payload) = request_json(app, "/api/repositories").await;
+    assert_eq!(status, StatusCode::OK);
+    let repositories = payload.as_array().expect("repositories array");
+    assert!(repositories.is_empty());
+}
+
+#[tokio::test]
+async fn api_repositories_lists_all_known_repositories() {
+    let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES
+            (?1, 'github', 'acme', 'alpha', 'main'),
+            (?2, 'github', 'acme', 'beta', 'develop')
+         ON CONFLICT(repo_id) DO UPDATE SET
+            provider = excluded.provider,
+            organization = excluded.organization,
+            name = excluded.name,
+            default_branch = excluded.default_branch",
+        rusqlite::params![
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ],
+    )
+    .expect("seed repository catalog rows");
+
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json(app, "/api/repositories").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let repositories = payload.as_array().expect("repositories array");
+    assert_eq!(repositories.len(), 3);
+    assert_eq!(
+        repositories
+            .iter()
+            .map(|repo| repo["name"].as_str().expect("repository name"))
+            .collect::<Vec<_>>(),
+        vec!["alpha", "beta", SEEDED_REPO_NAME]
+    );
+}
+
+#[tokio::test]
+async fn api_checkpoint_returns_detailed_session_payload() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let checkpoint_path = format!("/api/checkpoints/{repo_id}/aabbccddeeff");
+    let (status, payload) = request_json(app, &checkpoint_path).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["checkpoint_id"], "aabbccddeeff");
     assert_eq!(payload["session_count"].as_u64(), Some(1));
@@ -211,6 +278,9 @@ async fn api_checkpoint_returns_detailed_session_payload() {
     assert_eq!(files_touched[0]["filepath"], "app.rs");
     assert_eq!(files_touched[0]["additionsCount"].as_u64(), Some(1));
     assert_eq!(files_touched[0]["deletionsCount"].as_u64(), Some(1));
+    assert_eq!(files_touched[0]["changeKind"], "modify");
+    assert!(files_touched[0]["copiedFromPath"].is_null());
+    assert!(files_touched[0]["copiedFromBlobSha"].is_null());
 
     let sessions = payload["sessions"].as_array().expect("sessions array");
     assert_eq!(sessions.len(), 1);
@@ -272,19 +342,121 @@ async fn api_users_returns_name_and_email_from_graphql_wrapper() {
 #[tokio::test]
 async fn api_checkpoint_validates_checkpoint_id() {
     let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
     let app = build_dashboard_router(test_state(
         repo.path().to_path_buf(),
         ServeMode::HelloWorld,
         repo.path().to_path_buf(),
     ));
 
-    let (status, payload) = request_json(app, "/api/checkpoints/not-an-id").await;
+    let checkpoint_path = format!("/api/checkpoints/{repo_id}/not-an-id");
+    let (status, payload) = request_json(app, &checkpoint_path).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(payload["error"]["code"], "bad_request");
     assert_eq!(
         payload["error"]["message"],
         "invalid checkpoint_id; expected 12 lowercase hex characters"
     );
+}
+
+#[tokio::test]
+async fn api_git_blob_returns_file_bytes() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:app.rs"]);
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{blob_sha}");
+    let (status, body) = request_bytes(app, &uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, b"fn main() { println!(\"ok\"); }\n".as_slice());
+}
+
+#[tokio::test]
+async fn api_git_blob_rejects_invalid_oid_length() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let short_sha = "a".repeat(39);
+    let uri = format!("/api/blobs/{repo_id}/{short_sha}");
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(payload["error"]["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn api_git_blob_returns_not_found_for_unknown_object() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{}", "0".repeat(40));
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(payload["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn api_git_blob_rejects_non_blob_object() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{commit_sha}");
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(payload["error"]["code"], "bad_request");
+    assert!(
+        payload["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a blob")
+    );
+}
+
+#[tokio::test]
+async fn api_git_blob_returns_payload_too_large_for_oversized_blob() {
+    use crate::api::handlers::git_blob::MAX_GIT_BLOB_BYTES;
+
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    let big_len = (MAX_GIT_BLOB_BYTES as usize).saturating_add(1);
+    let big = vec![b'x'; big_len];
+    fs::write(repo_root.join("huge.bin"), big).expect("write huge.bin");
+    git_ok(repo_root, &["add", "huge.bin"]);
+    git_ok(repo_root, &["commit", "-m", "huge"]);
+    seed_repository_catalog_row(repo_root, SEEDED_REPO_NAME, "main");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let blob_sha = git_ok(repo_root, &["rev-parse", "HEAD:huge.bin"]);
+    let app = build_dashboard_router(test_state(
+        repo_root.to_path_buf(),
+        ServeMode::HelloWorld,
+        repo_root.to_path_buf(),
+    ));
+
+    let uri = format!("/api/blobs/{repo_id}/{blob_sha}");
+    let (status, payload) = request_json(app, &uri).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(payload["error"]["code"], "payload_too_large");
 }
 
 #[tokio::test]
@@ -301,12 +473,18 @@ async fn api_openapi_json_lists_dashboard_paths() {
     assert!(payload["paths"].get("/api/kpis").is_some());
     assert!(payload["paths"].get("/api/commits").is_some());
     assert!(payload["paths"].get("/api/branches").is_some());
+    assert!(payload["paths"].get("/api/repositories").is_some());
     assert!(payload["paths"].get("/api/users").is_some());
     assert!(payload["paths"].get("/api/agents").is_some());
     assert!(payload["paths"].get("/api/db/health").is_some());
     assert!(
         payload["paths"]
-            .get("/api/checkpoints/{checkpoint_id}")
+            .get("/api/checkpoints/{repo_id}/{checkpoint_id}")
+            .is_some()
+    );
+    assert!(
+        payload["paths"]
+            .get("/api/blobs/{repo_id}/{blob_sha}")
             .is_some()
     );
     assert!(payload["paths"].get("/api/check_bundle_version").is_some());
@@ -453,6 +631,27 @@ async fn installed_bundle_non_html_assets_are_not_modified() {
 }
 
 #[tokio::test]
+async fn missing_bundle_asset_returns_not_found_instead_of_html() {
+    let repo = seed_dashboard_repo();
+    let bundle = TempDir::new().expect("bundle dir");
+    fs::write(
+        bundle.path().join("index.html"),
+        "<!doctype html><html><body>installed bundle</body></html>",
+    )
+    .expect("write index");
+
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::Bundle(bundle.path().to_path_buf()),
+        bundle.path().to_path_buf(),
+    ));
+
+    let (status, body) = request_text(app, "/assets/missing-chunk.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, "Bundle asset not found.\n");
+}
+
+#[tokio::test]
 async fn api_check_bundle_version_returns_expected_fields() {
     let repo = seed_dashboard_repo();
     let bundle_dir = TempDir::new().expect("bundle dir");
@@ -460,13 +659,14 @@ async fn api_check_bundle_version_returns_expected_fields() {
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.path().to_path_buf(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.path().to_path_buf(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
     assert_eq!(status, StatusCode::OK);
@@ -488,13 +688,14 @@ async fn api_fetch_bundle_installs_bundle_and_root_serves_it() {
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "2.0.0");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.clone(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.clone(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, before_body) = request_text(app.clone(), "/").await;
     assert_eq!(status, StatusCode::OK);
@@ -524,13 +725,16 @@ async fn api_fetch_bundle_installs_bundle_and_root_serves_it() {
 async fn api_check_bundle_version_returns_manifest_fetch_failed() {
     let repo = seed_dashboard_repo();
     let bundle_dir = TempDir::new().expect("bundle dir");
-    let _state = with_dashboard_manifest_url("http://127.0.0.1:9/bundle_versions.json");
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.path().to_path_buf(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.path().to_path_buf(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_manifest(
+            "http://127.0.0.1:9/bundle_versions.json",
+        )),
+    );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
@@ -546,13 +750,14 @@ async fn api_check_bundle_version_returns_internal_on_manifest_parse_failure() {
     fs::write(cdn.path().join("bundle_versions.json"), "{not-valid-json")
         .expect("write invalid manifest");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.path().to_path_buf(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.path().to_path_buf(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -575,13 +780,10 @@ async fn api_check_bundle_version_returns_up_to_date() {
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
     assert_eq!(status, StatusCode::OK);
@@ -605,13 +807,10 @@ async fn api_check_bundle_version_returns_update_available() {
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
     assert_eq!(status, StatusCode::OK);
@@ -631,13 +830,14 @@ async fn api_check_bundle_version_fetches_manifest_on_every_call() {
     let cdn = setup_local_bundle_cdn_with_manifest(manifest_v1, Some(&archive), Some(&checksum));
 
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.path().to_path_buf(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.path().to_path_buf(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status_first, payload_first) =
         request_json(app.clone(), "/api/check_bundle_version").await;
@@ -659,13 +859,14 @@ async fn api_check_bundle_version_returns_no_compatible_version_reason() {
     let manifest = r#"{"versions":[{"version":"9.9.9","min_required_cli_version":"99.0.0","max_required_cli_version":"latest","download_url":"bundle.tar.zst","checksum_url":"bundle.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, None, None);
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.path().to_path_buf(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.path().to_path_buf(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) = request_json(app, "/api/check_bundle_version").await;
     assert_eq!(status, StatusCode::OK);
@@ -684,13 +885,10 @@ async fn api_fetch_bundle_returns_checksum_mismatch() {
         "0000000000000000000000000000000000000000000000000000000000000000".to_string();
     let cdn = setup_local_bundle_cdn(&archive, &wrong_checksum, "2.1.0");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) =
         request_json_with_method(app, Method::POST, "/api/fetch_bundle", Body::from("{}")).await;
@@ -708,13 +906,10 @@ async fn api_fetch_bundle_returns_no_compatible_version() {
     let manifest = r#"{"versions":[{"version":"9.9.9","min_required_cli_version":"99.0.0","max_required_cli_version":"latest","download_url":"bundle.tar.zst","checksum_url":"bundle.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, Some(&archive), Some(&checksum));
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) =
         request_json_with_method(app, Method::POST, "/api/fetch_bundle", Body::from("{}")).await;
@@ -730,13 +925,10 @@ async fn api_fetch_bundle_returns_bundle_download_failed() {
     let manifest = r#"{"versions":[{"version":"3.0.0","min_required_cli_version":"0.0.1","max_required_cli_version":"latest","download_url":"missing.tar.zst","checksum_url":"missing.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, None, None);
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) =
         request_json_with_method(app, Method::POST, "/api/fetch_bundle", Body::from("{}")).await;
@@ -766,13 +958,10 @@ async fn api_fetch_bundle_returns_bundle_install_failed() {
     let manifest = r#"{"versions":[{"version":"3.1.0","min_required_cli_version":"0.0.1","max_required_cli_version":"latest","download_url":"bundle.tar.zst","checksum_url":"bundle.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, Some(&archive), Some(&checksum));
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) =
         request_json_with_method(app, Method::POST, "/api/fetch_bundle", Body::from("{}")).await;
@@ -804,13 +993,14 @@ async fn api_fetch_bundle_install_failure_does_not_replace_existing_bundle() {
     let manifest = r#"{"versions":[{"version":"3.2.0","min_required_cli_version":"0.0.1","max_required_cli_version":"latest","download_url":"bundle.tar.zst","checksum_url":"bundle.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, Some(&archive), Some(&checksum));
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir.clone(),
-    ));
+    let app = build_dashboard_router(
+        test_state(
+            repo.path().to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.clone(),
+        )
+        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) =
         request_json_with_method(app, Method::POST, "/api/fetch_bundle", Body::from("{}")).await;
@@ -831,13 +1021,10 @@ async fn api_fetch_bundle_returns_internal_on_manifest_parse_failure() {
     fs::write(cdn.path().join("bundle_versions.json"), "{not-valid-json")
         .expect("write invalid manifest");
     let base_url = format!("file://{}/", cdn.path().display());
-    let _state = with_dashboard_cdn_base_url(&base_url);
-
-    let app = build_dashboard_router(test_state(
-        repo.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        bundle_dir,
-    ));
+    let app = build_dashboard_router(
+        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
+            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    );
 
     let (status, payload) =
         request_json_with_method(app, Method::POST, "/api/fetch_bundle", Body::from("{}")).await;

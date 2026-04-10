@@ -7,7 +7,8 @@ use super::extraction::{extract_rust_artefacts, extract_rust_file_docstring};
 use super::test_support::rust_test_support;
 use crate::host::extension_host::LanguagePackDescriptor;
 use crate::host::language_adapter::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageTestSupport,
+    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageKind,
+    LanguageTestSupport,
 };
 
 pub(crate) struct RustLanguageAdapterPack;
@@ -21,7 +22,7 @@ impl LanguageAdapterPack for RustLanguageAdapterPack {
         RUST_CANONICAL_MAPPINGS
     }
 
-    fn supported_language_kinds(&self) -> &'static [&'static str] {
+    fn supported_language_kinds(&self) -> &'static [LanguageKind] {
         RUST_SUPPORTED_LANGUAGE_KINDS
     }
 

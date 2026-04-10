@@ -2,54 +2,65 @@
 
 ## Build locally
 
-Run from the `bitloops/` directory:
+Run from the repository root:
 
 ```bash
 # One-time local setup for build-time dashboard URL embedding
-cp config/dashboard_urls.template.json config/dashboard_urls.json
+cp bitloops/config/dashboard_urls.template.json bitloops/config/dashboard_urls.json
 
-# Type-check only (fast, like tsc --noEmit)
-cargo check
+# Fast type-check loop (default local path)
+cargo dev-check
 
-# Dev build → target/debug/bitloops
-cargo build
+# Dev build → bitloops/target/debug/bitloops
+cargo dev-build
 
-# Release build (optimised) → target/release/bitloops
-cargo build --release
+# Install/update the local `bitloops` binary in Cargo bin dir
+cargo dev-install
+
+# Release build with bundled DuckDB (for offline/exotic targets)
+cargo build --manifest-path bitloops/Cargo.toml --release --features duckdb-bundled
 
 # Run without a separate build step
-cargo run -- status
-cargo run -- --help
+cargo run --manifest-path bitloops/Cargo.toml --no-default-features -- status
+cargo run --manifest-path bitloops/Cargo.toml --no-default-features -- --help
 ```
 
-Dashboard bundle URLs are embedded at build time from `config/dashboard_urls.json`.
+Dashboard bundle URLs are embedded at build time from `bitloops/config/dashboard_urls.json`.
 If this file is missing or invalid, `cargo build`/`cargo check` will fail with a
 clear remediation message.
 
-### DuckDB (optional speed-up)
+### DuckDB defaults
 
-By default, `cargo build` uses the **`duckdb-bundled`** feature and compiles DuckDB C++ locally (slow, but works offline and for exotic targets).
+Local Cargo aliases now default to the fast non-bundled DuckDB path and set
+`DUCKDB_DOWNLOAD_LIB=1` automatically.
 
-For **much faster** builds on supported hosts, disable that default and let `libduckdb-sys` download the official DuckDB release for your target (linux-gnu amd64/arm64, macOS universal, Windows MSVC):
+For supported hosts (`linux-gnu` amd64/arm64, macOS universal, Windows MSVC),
+this uses official prebuilt `libduckdb` binaries:
 
 ```bash
-export DUCKDB_DOWNLOAD_LIB=1
-cargo check --no-default-features
+cargo dev-check
 ```
-
-`./scripts/test-summary.sh`, `./scripts/coverage-baseline-check.sh`, and `bash scripts/check-dev.sh` do this automatically unless **`DUCKDB_USE_BUNDLED=1`** (force source build).
 
 To use a **local** unpack instead of download, set **`DUCKDB_LIB_DIR`** (and **`DUCKDB_INCLUDE_DIR`** if headers are not beside the lib) and build with **`--no-default-features`**.
 
-**Unsupported** for prebuilts: **linux-musl** and other triples without an official `libduckdb-*.zip` — keep default features (bundled) for those, e.g. `cargo build --release --target x86_64-unknown-linux-musl`.
+On macOS, `cargo dev-install` signs the installed binary automatically. By default it uses ad-hoc signing (no secrets required). To use a keychain identity instead, set `BITLOOPS_CODESIGN_IDENTITY` in your shell profile.
+
+For offline/exotic targets use bundled mode explicitly:
+
+```bash
+cargo dev-check-bundled
+cargo dev-build-bundled
+```
+
+**Unsupported** for prebuilts: **linux-musl** and other triples without an official `libduckdb-*.zip` — use bundled mode for those targets (for example `cargo build --manifest-path bitloops/Cargo.toml --release --target x86_64-unknown-linux-musl --features duckdb-bundled`).
 
 ## Local checks (optional)
 
-There are no repo-enforced git hooks. To match what runs on pull requests to `develop`, run from the repo root:
+There are no repo-enforced git hooks. To match the blocking `develop` pull-request gate, run from the repo root:
 
 ```bash
-bash scripts/check-dev.sh           # file-size, fmt --check, clippy
-bash scripts/check-dev.sh --test   # also ./scripts/test-summary.sh (full suite + combined summaries)
+bash scripts/check-dev.sh           # file-size, fmt, clippy
+bash scripts/check-dev.sh --test   # also cargo dev-test-merge (fast + curated slow smokes)
 bash scripts/check-dev.sh --full   # also coverage baseline check
 ```
 
@@ -57,24 +68,37 @@ If you previously pointed `core.hooksPath` at this repository, run `bash scripts
 
 ## Testing
 
-Run from the `bitloops/` directory:
+Run from the repository root:
 
 ```bash
-# Full suite (recommended): one command, combined “test result:” summaries at the end
-./scripts/test-summary.sh
-# Equivalent without the script:
-cargo test --no-fail-fast
+# Fast default loop after edits
+cargo dev-check
+cargo dev-test-core
 
-# Optional cargo aliases (see .cargo/config.toml): test-core, test-cli, test-integration, test-all
-# Those aliases are NOT visible if you run cargo from the git repo root with
-# `--manifest-path bitloops/Cargo.toml` — use `cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast`
-# or `working-directory: bitloops` in CI.
+# If CLI behaviour changed
+cargo dev-test-cli
+
+# Fast default test lane (no slow e2e/integration suites; binaries are pre-signed on macOS)
+cargo dev-test-fast
+
+# Merge gate lane (fast + curated slow smokes)
+cargo dev-test-merge
+
+# Slow lane only (all feature-gated heavy suites, no fast lane)
+cargo dev-test-slow
+
+# Full lane (fast + slow)
+cargo dev-test-full
 
 # Tests with coverage (single llvm-cov run) + coverage summary tables
-./scripts/test-summary.sh --coverage
+cargo dev-coverage
+cargo dev-coverage-metrics
+
+# Coverage with both LCOV and HTML from one instrumented run
+cargo dev-coverage-all
 
 # HTML + LCOV reports (separate from the baseline gate)
-./scripts/test-coverage.sh baseline
+cargo dev-coverage-html
 
 # Coverage setup (once)
 brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
@@ -82,44 +106,40 @@ brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
 # If preview error, do
 rustup component add llvm-tools-preview
 
-# Coverage baseline gate (lines + functions, strict no-regression)
-# - check: fail if current coverage < baseline - 0.05 for either metric
-./scripts/coverage-baseline-check.sh check
-
-# - update: append a new baseline entry intentionally (JSONL history)
-./scripts/coverage-baseline-check.sh update
-
-# Coverage baseline (HTML + LCOV, default cargo threading)
-cargo test-coverage
+# Local compare against default policy thresholds (80/75 with 0.05 tolerance)
+cargo dev-coverage-compare
 
 # Open HTML coverage report
-open target/llvm-cov-html/html/index.html
+open bitloops/target/llvm-cov-html/html/index.html
 ```
 
 Test type notes:
 
 - `core` tests are Rust library tests (`--lib`).
 - `cli` tests are Rust binary tests for `bitloops` (`--bin bitloops`).
-- `integration` tests are separate test targets under `tests/*.rs`; this includes end-to-end style scenarios in this repo.
+- `integration` tests are explicit test targets in `Cargo.toml`.
+- `merge` runs the fast lane plus a curated smoke subset of slow suites.
+- slow end-to-end/integration suites are gated behind `--features slow-tests`.
 
 Coverage outputs:
 
-- HTML: `target/llvm-cov-html/html/index.html`
-- LCOV: `target/llvm-cov.info`
-- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops/`)
+- HTML: `bitloops/target/llvm-cov-html/html/index.html`
+- LCOV: `bitloops/target/llvm-cov.info`
 
 Coverage gate policy:
 
-- On pull requests to `develop`, CI runs the same check **informationally** (does not block merge); enforce locally with `bash scripts/check-dev.sh --full` before merge if you rely on the baseline.
+- Coverage baseline metadata is refreshed on pushes to `develop`.
+- Coverage is separate from the blocking `develop` pull-request gate.
 - Metrics: lines and functions.
 - Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
-- Baseline source on check: latest JSONL record (`tail -n 1`).
+- Baseline source: GitHub repository variables (`BITLOOPS_COV_BASELINE_LINES_PCT`, `BITLOOPS_COV_BASELINE_FUNCTIONS_PCT`) refreshed on push to `develop`.
+- Fallback when metadata is missing: lines `80.00%`, functions `75.00%`.
 
-When baseline changes are intentional:
+`bitloops/scripts/*.sh` helpers remain in-repo for CI/back-compat usage and
+report formatting, but local developer workflows should use the Cargo `dev-*`
+commands above.
 
-- Run `./scripts/coverage-baseline-check.sh update` from `bitloops/`.
-- Commit the appended baseline history entries with your code changes.
-- If baseline decreases, include a short justification in the PR description.
+For a focused testing and quality-check command reference, see `TESTING.md`.
 
 ---
 
@@ -254,7 +274,8 @@ brew install bitloops
 
 | Task         | How                                                    |
 | ------------ | ------------------------------------------------------ |
-| Build        | `cargo build --release`                                |
+| Build        | `cargo dev-build`                                      |
+| Install      | `cargo dev-install`                                    |
 | Release      | bump `Cargo.toml` version → `./scripts/release.sh`     |
 | CI workflow  | `.github/workflows/release.yml` (triggers on `v*` tag) |
 | curl install | `install.sh` in repo root                              |

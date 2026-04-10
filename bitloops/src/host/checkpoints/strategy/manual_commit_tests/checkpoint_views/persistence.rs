@@ -4,7 +4,7 @@ use rusqlite::OptionalExtension;
 #[test]
 pub(crate) fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "919293949596";
     let transcript =
         "{\"type\":\"assistant\",\"message\":{\"content\":\"db-backed transcript\"}}\n";
@@ -46,11 +46,11 @@ pub(crate) fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite()
         "write_committed should persist to DB/blob storage: {result:?}"
     );
 
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(dir.path()))
         .expect("connect checkpoint sqlite");
     sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+        .initialise_relational_checkpoint_schema()
+        .expect("initialise relational checkpoint schema");
     let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
         .expect("resolve repo identity")
         .repo_id;
@@ -106,7 +106,7 @@ pub(crate) fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite()
 #[test]
 pub(crate) fn update_committed_updates_db_blob_and_content_hash() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "929394959697";
 
     let mut initial = default_write_committed_opts(
@@ -165,7 +165,7 @@ pub(crate) fn update_committed_updates_db_blob_and_content_hash() {
 #[test]
 pub(crate) fn write_committed_records_local_backend_in_blob_row() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "949596979899";
 
     let result = write_committed(
@@ -192,7 +192,7 @@ pub(crate) fn write_committed_records_local_backend_in_blob_row() {
 #[test]
 pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "939495969798";
 
     write_committed(
@@ -215,11 +215,11 @@ pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
         "update_summary should persist to checkpoint_sessions: {update:?}"
     );
 
-    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
+    let sqlite = SqliteConnectionPool::connect(relational_checkpoints_db_path(dir.path()))
         .expect("connect checkpoint sqlite");
     sqlite
-        .initialise_checkpoint_schema()
-        .expect("initialise checkpoint schema");
+        .initialise_relational_checkpoint_schema()
+        .expect("initialise relational checkpoint schema");
     let summary_json = sqlite
         .with_connection(|conn| -> anyhow::Result<Option<Option<String>>> {
             conn.query_row(
@@ -244,7 +244,16 @@ pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
 #[test]
 pub(crate) fn write_committed_three_sessions() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
+    commit_files(
+        dir.path(),
+        &[
+            ("s0.rs", "pub fn s0() {}\n"),
+            ("s1.rs", "pub fn s1() {}\n"),
+            ("s2.rs", "pub fn s2() {}\n"),
+        ],
+        "prepare three-session provenance",
+    );
     let checkpoint_id = "515253545556";
 
     for i in 0..3 {
@@ -312,6 +321,15 @@ pub(crate) fn write_committed_three_sessions() {
         top_metadata["token_usage"]["input_tokens"], 600,
         "expected aggregated input tokens across sessions"
     );
+    assert_eq!(
+        query_checkpoint_file_session_ids(dir.path(), checkpoint_id),
+        vec![
+            "three-session-0".to_string(),
+            "three-session-1".to_string(),
+            "three-session-2".to_string()
+        ],
+        "expected checkpoint provenance rows for all sessions"
+    );
 
     for i in 0..3 {
         let content = read_session_content(dir.path(), checkpoint_id, i).unwrap();
@@ -322,7 +340,7 @@ pub(crate) fn write_committed_three_sessions() {
 #[test]
 pub(crate) fn read_committed_nonexistent_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     run_git(
         dir.path(),
         &[

@@ -1,26 +1,24 @@
 use anyhow::Result;
+use std::sync::Arc;
 
 use crate::host::capability_host::CapabilityRegistrar;
 
+use super::event_handlers::TestHarnessSyncHandler;
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
 };
 use super::query_examples::TEST_HARNESS_QUERY_EXAMPLES;
 use super::schema::TEST_HARNESS_SCHEMA_MODULE;
-use super::stages::{
-    build_coverage_stage, build_coverage_stage_alias, build_tests_stage, build_tests_stage_alias,
-    build_tests_summary_stage,
-};
+use super::stages::{build_coverage_stage, build_tests_stage, build_tests_summary_stage};
 
 pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_ingester(build_linkage_ingester())?;
     registrar.register_ingester(build_coverage_ingester())?;
     registrar.register_ingester(build_classification_ingester())?;
     registrar.register_stage(build_tests_stage())?;
-    registrar.register_stage(build_tests_stage_alias())?;
     registrar.register_stage(build_tests_summary_stage())?;
     registrar.register_stage(build_coverage_stage())?;
-    registrar.register_stage(build_coverage_stage_alias())?;
+    registrar.register_event_handler(Arc::new(TestHarnessSyncHandler))?;
     registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
     registrar.register_query_examples(TEST_HARNESS_QUERY_EXAMPLES)?;
     Ok(())
@@ -31,12 +29,11 @@ mod tests {
     use super::*;
     use crate::capability_packs::test_harness::types::{
         TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,
-        TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID, TEST_HARNESS_COVERAGE_STAGE_ID,
-        TEST_HARNESS_LINKAGE_INGESTER_ID, TEST_HARNESS_TESTS_STAGE_ALIAS_ID,
+        TEST_HARNESS_COVERAGE_STAGE_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
         TEST_HARNESS_TESTS_STAGE_ID, TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     };
     use crate::host::capability_host::{
-        IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
+        HostEventHandler, IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
     };
     use anyhow::Result;
 
@@ -44,6 +41,7 @@ mod tests {
     struct CollectingRegistrar {
         stages: Vec<(&'static str, &'static str)>,
         ingesters: Vec<(&'static str, &'static str)>,
+        event_handlers: Vec<String>,
         schema_modules: Vec<SchemaModule>,
         query_examples: Vec<QueryExample>,
     }
@@ -57,6 +55,12 @@ mod tests {
         fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
             self.ingesters
                 .push((ingester.capability_id, ingester.ingester_name));
+            Ok(())
+        }
+
+        fn register_event_handler(&mut self, handler: Arc<dyn HostEventHandler>) -> Result<()> {
+            self.event_handlers
+                .push(handler.capability_id().to_string());
             Ok(())
         }
 
@@ -81,10 +85,8 @@ mod tests {
             registrar.stages,
             vec![
                 ("test_harness", TEST_HARNESS_TESTS_STAGE_ID),
-                ("test_harness", TEST_HARNESS_TESTS_STAGE_ALIAS_ID),
                 ("test_harness", TEST_HARNESS_TESTS_SUMMARY_STAGE_ID),
                 ("test_harness", TEST_HARNESS_COVERAGE_STAGE_ID),
-                ("test_harness", TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID),
             ]
         );
         assert_eq!(
@@ -95,6 +97,7 @@ mod tests {
                 ("test_harness", TEST_HARNESS_CLASSIFICATION_INGESTER_ID),
             ]
         );
+        assert_eq!(registrar.event_handlers, vec!["test_harness".to_string()]);
         assert_eq!(registrar.schema_modules, vec![TEST_HARNESS_SCHEMA_MODULE]);
         assert_eq!(registrar.query_examples, TEST_HARNESS_QUERY_EXAMPLES);
         Ok(())

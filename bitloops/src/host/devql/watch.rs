@@ -13,10 +13,12 @@ use clap::{Args, Parser};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use sha2::{Digest, Sha256};
 
+use crate::host::relational_store::DefaultRelationalStore;
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
+
 #[path = "capture.rs"]
 mod capture;
 
-const WATCHER_PID_FILE_NAME: &str = "devql-watcher.pid";
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOSTART";
 
@@ -25,8 +27,8 @@ pub struct WatcherProcessArgs {
     #[arg(long)]
     pub repo_root: Option<PathBuf>,
 
-    #[arg(long, hide = true)]
-    pub config_root: Option<PathBuf>,
+    #[arg(long = "daemon-config-root", alias = "config-root", hide = true)]
+    pub daemon_config_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -50,47 +52,39 @@ impl From<crate::config::WatchRuntimeConfig> for DevqlWatchOptions {
     }
 }
 
-pub fn watcher_pid_file(config_root: &Path) -> PathBuf {
-    config_root
-        .join(crate::utils::paths::BITLOOPS_DIR)
-        .join(WATCHER_PID_FILE_NAME)
-}
-
 fn watcher_autostart_disabled() -> bool {
     env::var(DISABLE_WATCHER_AUTOSTART_ENV)
         .ok()
         .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
 }
 
-pub fn ensure_watcher_running(repo_root: &Path, config_root: &Path) -> Result<()> {
+pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
     if watcher_autostart_disabled() {
         return Ok(());
     }
 
-    let pid_file = watcher_pid_file(config_root);
     let restart_token = current_watcher_restart_token()?;
-    if let Some(entry) = read_pid_file(&pid_file)?
-        && process_is_running(entry.pid)
-    {
-        if entry.restart_token.as_deref() == Some(restart_token.as_str()) {
-            return Ok(());
-        }
-        // Restart token mismatch means a different binary is now serving watcher work.
-        // Kill the stale watcher so the new process can re-run startup schema init.
-        kill_process(entry.pid);
-    }
-
-    if pid_file.exists() {
-        let _ = fs::remove_file(&pid_file);
-    }
-
     let repo_root = repo_root
         .canonicalize()
         .unwrap_or_else(|_| repo_root.to_path_buf());
-    let config_root = config_root
+    let daemon_config_root = daemon_config_root
         .canonicalize()
-        .unwrap_or_else(|_| config_root.to_path_buf());
-    let mut command = build_watcher_spawn_command(&repo_root, &config_root)?;
+        .unwrap_or_else(|_| daemon_config_root.to_path_buf());
+    let runtime_store = RepoSqliteRuntimeStore::open_for_roots(&daemon_config_root, &repo_root)?;
+
+    if let Some(entry) = runtime_store.load_watcher_registration()? {
+        if process_is_running(entry.pid) {
+            if entry.restart_token == restart_token {
+                return Ok(());
+            }
+            // Restart token mismatch means a different binary is now serving watcher work.
+            // Kill the stale watcher so the new process can re-run startup schema init.
+            kill_process(entry.pid);
+        }
+        runtime_store.clear_watcher_registration()?;
+    }
+
+    let mut command = build_watcher_spawn_command(&repo_root, &daemon_config_root)?;
     command
         // Avoid pinning the repository directory as the watcher cwd. Temp test
         // repos can be deleted while the detached watcher is still alive.
@@ -102,42 +96,40 @@ pub fn ensure_watcher_running(repo_root: &Path, config_root: &Path) -> Result<()
     let child = command
         .spawn()
         .with_context(|| format!("spawning DevQL watcher for {}", repo_root.display()))?;
-
-    ensure_watcher_pid_parent_dir(&pid_file)?;
-    fs::write(&pid_file, format!("{}\n{}", child.id(), restart_token))
-        .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
+    runtime_store.save_watcher_registration(child.id(), &restart_token, &repo_root)?;
 
     Ok(())
 }
 
-pub fn restart_watcher(repo_root: &Path, config_root: &Path) -> Result<()> {
-    let pid_file = watcher_pid_file(config_root);
-    if let Some(entry) = read_pid_file(&pid_file)?
+pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
+    let runtime_store = RepoSqliteRuntimeStore::open_for_roots(daemon_config_root, repo_root)?;
+    if let Some(entry) = runtime_store.load_watcher_registration()?
         && process_is_running(entry.pid)
     {
         kill_process(entry.pid);
     }
-    if pid_file.exists() {
-        let _ = fs::remove_file(&pid_file);
-    }
-    if crate::config::settings::is_enabled_for_hooks(config_root) {
-        ensure_watcher_running(repo_root, config_root)?;
+    runtime_store.clear_watcher_registration()?;
+    if crate::config::settings::is_enabled_for_hooks(repo_root) {
+        ensure_watcher_running(repo_root, daemon_config_root)?;
     }
     Ok(())
 }
 
 pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
     let repo_root = resolve_repo_root(args.repo_root)?;
-    let config_root = resolve_config_root(args.config_root, &repo_root)?;
+    let daemon_config_root = resolve_daemon_config_root(args.daemon_config_root, &repo_root)?;
     let repo = crate::host::devql::resolve_repo_identity(&repo_root)?;
-    let cfg =
-        crate::host::devql::DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)?;
-    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&config_root);
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        daemon_config_root.clone(),
+        repo_root.clone(),
+        repo,
+    )?;
+    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
     let opts = DevqlWatchOptions::from(watch_cfg);
-    let pid_file = watcher_pid_file(&config_root);
 
-    initialise_local_watch_schema(&repo_root, &config_root)?;
-    let _pid_guard = WatcherPidGuard::acquire(pid_file)?;
+    initialise_local_watch_schema(&repo_root, &daemon_config_root)?;
+    let runtime_store = RepoSqliteRuntimeStore::open_for_roots(&daemon_config_root, &repo_root)?;
+    let _registration_guard = WatcherRegistrationGuard::acquire(runtime_store, &repo_root)?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker_cfg = cfg.clone();
@@ -171,24 +163,20 @@ fn resolve_repo_root(explicit_repo_root: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn resolve_config_root(explicit_config_root: Option<PathBuf>, repo_root: &Path) -> Result<PathBuf> {
-    match explicit_config_root {
-        Some(config_root) => Ok(config_root),
-        None => Ok(repo_root.to_path_buf()),
+fn resolve_daemon_config_root(
+    explicit_daemon_config_root: Option<PathBuf>,
+    repo_root: &Path,
+) -> Result<PathBuf> {
+    match explicit_daemon_config_root {
+        Some(daemon_config_root) => Ok(daemon_config_root),
+        None => crate::config::resolve_daemon_config_root_for_repo(repo_root),
     }
 }
 
-fn initialise_local_watch_schema(repo_root: &Path, config_root: &Path) -> Result<()> {
-    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(config_root)
-        .context("resolving store config for watcher start")?;
-    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
-        repo_root,
-        backend_cfg.relational.sqlite_path.as_deref(),
-    )
-    .context("resolving SQLite path for watcher start")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)?;
-    sqlite.initialise_devql_schema()?;
-    Ok(())
+fn initialise_local_watch_schema(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
+    let relational = DefaultRelationalStore::open_local_for_roots(daemon_config_root, repo_root)
+        .context("opening local relational store for watcher start")?;
+    relational.initialise_local_devql_schema()
 }
 
 fn run_notify_loop(
@@ -303,7 +291,7 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
     .is_ok()
 }
 
-fn build_watcher_spawn_command(repo_root: &Path, config_root: &Path) -> Result<Command> {
+fn build_watcher_spawn_command(repo_root: &Path, daemon_config_root: &Path) -> Result<Command> {
     #[cfg(unix)]
     use std::os::unix::process::CommandExt;
 
@@ -312,51 +300,12 @@ fn build_watcher_spawn_command(repo_root: &Path, config_root: &Path) -> Result<C
     let mut command = Command::new(current_exe);
     command.arg(WATCHER_COMMAND_NAME);
     command.arg("--repo-root").arg(repo_root);
-    command.arg("--config-root").arg(config_root);
+    command.arg("--daemon-config-root").arg(daemon_config_root);
     #[cfg(unix)]
     {
         command.process_group(0);
     }
     Ok(command)
-}
-
-fn ensure_watcher_pid_parent_dir(pid_file: &Path) -> Result<()> {
-    let parent = pid_file
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .context("resolving watcher pid parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("creating watcher pid directory {}", parent.display()))
-}
-
-pub(crate) struct PidFileEntry {
-    pub(crate) pid: u32,
-    /// `None` when the pid file was written by an older build that did not include a restart token.
-    /// A missing token is treated as a mismatch, triggering a watcher restart.
-    pub(crate) restart_token: Option<String>,
-}
-
-fn read_pid_file(pid_file: &Path) -> Result<Option<PidFileEntry>> {
-    let data = match fs::read_to_string(pid_file) {
-        Ok(data) => data,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(err)
-                .with_context(|| format!("reading watcher pid file {}", pid_file.display()));
-        }
-    };
-
-    let mut lines = data.lines();
-    let pid = match lines.next().and_then(|l| l.trim().parse::<u32>().ok()) {
-        Some(pid) => pid,
-        None => return Ok(None),
-    };
-    let restart_token = lines
-        .next()
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_string);
-    Ok(Some(PidFileEntry { pid, restart_token }))
 }
 
 fn kill_process(pid: u32) {
@@ -411,35 +360,30 @@ fn process_is_running(pid: u32) -> bool {
     }
 }
 
-struct WatcherPidGuard {
-    pid_file: PathBuf,
+struct WatcherRegistrationGuard {
+    runtime_store: RepoSqliteRuntimeStore,
     pid: u32,
     restart_token: String,
 }
 
-impl WatcherPidGuard {
-    fn acquire(pid_file: PathBuf) -> Result<Self> {
-        ensure_watcher_pid_parent_dir(&pid_file)?;
+impl WatcherRegistrationGuard {
+    fn acquire(runtime_store: RepoSqliteRuntimeStore, repo_root: &Path) -> Result<Self> {
         let pid = std::process::id();
         let restart_token = current_watcher_restart_token()?;
-        fs::write(&pid_file, format!("{pid}\n{restart_token}"))
-            .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
+        runtime_store.save_watcher_registration(pid, &restart_token, repo_root)?;
         Ok(Self {
-            pid_file,
+            runtime_store,
             pid,
             restart_token,
         })
     }
 }
 
-impl Drop for WatcherPidGuard {
+impl Drop for WatcherRegistrationGuard {
     fn drop(&mut self) {
-        let entry = read_pid_file(&self.pid_file).ok().flatten();
-        if entry.as_ref().map(|entry| entry.pid) == Some(self.pid)
-            && entry.and_then(|entry| entry.restart_token) == Some(self.restart_token.clone())
-        {
-            let _ = fs::remove_file(&self.pid_file);
-        }
+        let _ = self
+            .runtime_store
+            .delete_watcher_registration_if_matches(self.pid, &self.restart_token);
     }
 }
 
@@ -483,222 +427,104 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::git_fixtures::init_test_repo;
     use crate::test_support::process_state::with_env_var;
-    use std::fs;
 
     use tempfile::TempDir;
 
     use super::*;
 
-    // ── helpers ──────────────────────────────────────────────────────────────
-
-    fn write_pid_file(dir: &TempDir, content: &str) -> PathBuf {
-        let pid_file = dir.path().join("devql-watcher.pid");
-        fs::write(&pid_file, content).expect("write pid file");
-        pid_file
-    }
-
-    // ── read_pid_file ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn read_pid_file_returns_none_when_missing() {
+    fn seed_runtime_store() -> (TempDir, PathBuf, RepoSqliteRuntimeStore) {
         let dir = TempDir::new().expect("temp dir");
-        let pid_file = dir.path().join("missing.pid");
-        let result = read_pid_file(&pid_file).expect("read should not error");
-        assert!(result.is_none());
+        let repo_root = dir.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo root");
+        init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+        let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+            .expect("open repo runtime store");
+        (dir, repo_root, store)
     }
 
     #[test]
-    fn read_pid_file_parses_legacy_single_line_format() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "12345\n");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
+    fn watcher_registration_round_trips_through_repo_runtime_store() {
+        let (_dir, repo_root, store) = seed_runtime_store();
+
+        store
+            .save_watcher_registration(12345, "token-123", &repo_root)
+            .expect("save watcher registration");
+        let entry = store
+            .load_watcher_registration()
+            .expect("load watcher registration")
+            .expect("watcher registration should exist");
+
         assert_eq!(entry.pid, 12345);
+        assert_eq!(entry.restart_token, "token-123");
+        assert_eq!(entry.repo_root, repo_root);
+    }
+
+    #[test]
+    fn delete_watcher_registration_if_matches_preserves_mismatched_rows() {
+        let (_dir, repo_root, store) = seed_runtime_store();
+
+        store
+            .save_watcher_registration(7, "token-a", &repo_root)
+            .expect("seed watcher registration");
+        store
+            .delete_watcher_registration_if_matches(8, "token-b")
+            .expect("conditional delete");
+
         assert!(
-            entry.restart_token.is_none(),
-            "single-line file should yield no restart_token"
+            store
+                .load_watcher_registration()
+                .expect("load watcher registration")
+                .is_some(),
+            "mismatched conditional delete should preserve the row"
         );
     }
 
     #[test]
-    fn read_pid_file_parses_two_line_format_with_restart_token() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "99\ntoken-123\n");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_eq!(entry.pid, 99);
-        assert_eq!(entry.restart_token.as_deref(), Some("token-123"));
-    }
+    fn registration_guard_writes_and_removes_owned_row() {
+        let (_dir, repo_root, store) = seed_runtime_store();
 
-    #[test]
-    fn read_pid_file_returns_none_for_non_numeric_pid() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "not-a-pid\n1\n");
-        let result = read_pid_file(&pid_file).expect("read should not error");
-        assert!(
-            result.is_none(),
-            "non-numeric first line should return None"
-        );
-    }
-
-    #[test]
-    fn read_pid_file_accepts_missing_restart_token_line() {
-        // File with pid but no trailing newline or restart token line
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "42");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_eq!(entry.pid, 42);
-        assert!(entry.restart_token.is_none());
-    }
-
-    #[test]
-    fn read_pid_file_keeps_non_numeric_restart_token() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "77\nbad-version\n");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_eq!(entry.pid, 77);
-        assert_eq!(entry.restart_token.as_deref(), Some("bad-version"));
-    }
-
-    // ── WatcherPidGuard ───────────────────────────────────────────────────────
-
-    #[test]
-    fn pid_guard_writes_pid_file_with_restart_token() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = dir.path().join("devql-watcher.pid");
         {
-            let _guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire guard");
-            let content = fs::read_to_string(&pid_file).expect("read pid file");
-            let mut lines = content.lines();
-            let pid_str = lines.next().expect("pid line");
-            let restart_token = lines.next().expect("restart token line");
-            let pid: u32 = pid_str.parse().expect("pid is numeric");
-            assert_eq!(pid, std::process::id());
-            assert!(
-                !restart_token.is_empty(),
-                "restart token should not be empty"
-            );
+            let _guard = WatcherRegistrationGuard::acquire(store.clone(), &repo_root)
+                .expect("acquire watcher registration guard");
+            let entry = store
+                .load_watcher_registration()
+                .expect("load watcher registration")
+                .expect("watcher registration should exist");
+            assert_eq!(entry.pid, std::process::id());
+            assert!(!entry.restart_token.is_empty());
         }
-        // Guard dropped — file should be cleaned up
+
         assert!(
-            !pid_file.exists(),
-            "pid file should be removed when guard is dropped"
+            store
+                .load_watcher_registration()
+                .expect("load watcher registration after drop")
+                .is_none(),
+            "owned watcher registration should be removed on drop"
         );
     }
 
     #[test]
-    fn pid_guard_does_not_remove_file_if_pid_was_overwritten() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = dir.path().join("devql-watcher.pid");
-        let guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire guard");
-        // Overwrite with a different pid so the guard's ownership check fails
-        fs::write(&pid_file, "99999\ndifferent-token\n").expect("overwrite pid file");
-        drop(guard);
-        // File should still exist because the guard saw a different pid
-        assert!(
-            pid_file.exists(),
-            "pid file should not be removed when pid has been overwritten"
-        );
-    }
-
-    // ── restart token written by ensure_watcher_running ──────────────────────
-
-    #[test]
-    fn ensure_watcher_running_pid_file_contains_current_restart_token() {
-        // We can't easily spawn a real watcher in a unit test, but we CAN verify that
-        // `WatcherPidGuard::acquire` encodes the right restart token, which is the same path
-        // used by the spawned watcher process.
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = dir.path().join("devql-watcher.pid");
-        let _guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_eq!(
-            entry.restart_token,
-            Some(current_watcher_restart_token().expect("restart token")),
-            "pid file written by WatcherPidGuard must carry the current restart token"
-        );
-    }
-
-    #[test]
-    fn ensure_watcher_running_returns_early_when_autostart_disabled_env_is_set() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = watcher_pid_file(dir.path());
-
+    fn ensure_watcher_running_returns_early_when_autostart_is_disabled() {
+        let (dir, repo_root, store) = seed_runtime_store();
         with_env_var(DISABLE_WATCHER_AUTOSTART_ENV, Some("1"), || {
-            ensure_watcher_running(dir.path(), dir.path())
-                .expect("autostart-disabled no-op should succeed");
+            ensure_watcher_running(&repo_root, dir.path()).expect("autostart disabled");
         });
 
         assert!(
-            !pid_file.exists(),
-            "watcher pid file should not be created when autostart is disabled"
+            store
+                .load_watcher_registration()
+                .expect("load watcher registration")
+                .is_none(),
+            "disabled autostart must not register a watcher"
         );
     }
 
     #[test]
-    fn watcher_repo_root_missing_returns_true_after_repo_is_deleted() {
-        let dir = TempDir::new().expect("temp dir");
-        let repo_root = dir.path().to_path_buf();
-
-        assert!(!watcher_repo_root_missing(&repo_root));
-
-        drop(dir);
-
-        assert!(watcher_repo_root_missing(&repo_root));
-    }
-
-    // ── restart token mismatch detection ─────────────────────────────────────
-
-    #[test]
-    fn legacy_pid_file_restart_token_is_none_triggering_restart_logic() {
-        // Simulate an old pid file with no restart token line.
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "12345\n");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_ne!(
-            entry.restart_token,
-            Some(current_watcher_restart_token().expect("restart token")),
-            "legacy pid file (no token) must not match current restart token"
-        );
-    }
-
-    #[test]
-    fn stale_restart_token_in_pid_file_does_not_match_current() {
-        let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "12345\nstale-token\n");
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_ne!(
-            entry.restart_token,
-            Some(current_watcher_restart_token().expect("restart token")),
-            "stale restart token must not match current restart token"
-        );
-    }
-
-    #[test]
-    fn current_restart_token_matches_runtime_value() {
-        let dir = TempDir::new().expect("temp dir");
+    fn current_watcher_restart_token_hashes_the_current_binary() {
         let token = current_watcher_restart_token().expect("restart token");
-        let pid_file = write_pid_file(&dir, &format!("1\n{token}\n"));
-        let entry = read_pid_file(&pid_file)
-            .expect("read ok")
-            .expect("entry present");
-        assert_eq!(
-            entry.restart_token,
-            Some(token),
-            "correctly tokened pid file must match current restart token"
-        );
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

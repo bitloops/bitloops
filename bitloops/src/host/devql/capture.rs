@@ -1,17 +1,23 @@
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
-use tokio::task;
+
+use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 
 #[cfg(test)]
 pub(crate) fn capture_temporary_checkpoint_batch(
     cfg: &crate::host::devql::DevqlConfig,
     changed_paths: &[PathBuf],
 ) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new().context("creating watcher capture runtime")?;
-    capture_temporary_checkpoint_batch_with_handle(cfg, changed_paths, runtime.handle())
+    let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating watcher capture runtime")?;
+    runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))
 }
 
 pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
@@ -19,8 +25,25 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     changed_paths: &[PathBuf],
     handle: &tokio::runtime::Handle,
 ) -> Result<()> {
-    if changed_paths.is_empty() {
+    let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
         return Ok(());
+    };
+    handle.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
+
+    Ok(())
+}
+
+struct PreparedCaptureBatch {
+    modified: Vec<String>,
+    deleted: Vec<String>,
+}
+
+fn prepare_capture_temporary_checkpoint_batch(
+    cfg: &crate::host::devql::DevqlConfig,
+    changed_paths: &[PathBuf],
+) -> Result<Option<PreparedCaptureBatch>> {
+    if changed_paths.is_empty() {
+        return Ok(None);
     }
 
     let repo_root = &cfg.repo_root;
@@ -48,7 +71,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     }
 
     if modified.is_empty() && deleted.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let parent_tree = crate::host::checkpoints::strategy::manual_commit::run_git(
@@ -66,18 +89,13 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     )
     .context("building temporary checkpoint tree hash for devql watch")?;
     if parent_tree.as_deref() == Some(tree_hash.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
-    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
-        .context("resolving store config for watcher capture")?;
-    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
-        repo_root,
-        backend_cfg.relational.sqlite_path.as_deref(),
-    )
-    .context("resolving SQLite path for watcher capture")?;
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.clone())?;
-    sqlite.initialise_devql_schema()?;
+    let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
+        .context("opening local relational store for watcher capture")?;
+    relational.initialise_local_devql_schema()?;
+    let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for watch capture")?
@@ -93,10 +111,10 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         .map_err(anyhow::Error::from)
     })?;
     if latest_tree_hash.as_deref() == Some(tree_hash.as_str()) {
-        return Ok(());
+        return Ok(None);
     }
 
-    let row_id = sqlite.with_connection(|conn| {
+    let _row_id = sqlite.with_connection(|conn| {
         conn.execute(
             "INSERT OR IGNORE INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
             rusqlite::params![repo_id, tree_hash],
@@ -104,130 +122,48 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         conn.query_row(
             "SELECT id FROM workspace_revisions WHERE repo_id = ?1 AND tree_hash = ?2",
             rusqlite::params![repo_id, tree_hash],
-            |row| row.get(0),
+            |row| row.get::<_, i64>(0),
         )
         .map_err(anyhow::Error::from)
     })?;
-
-    let revision_unix = current_unix_timestamp();
-    let relational = crate::host::devql::RelationalStorage::local_only(sqlite_path);
-    handle.block_on(apply_current_state_updates(
-        cfg,
-        &relational,
-        repo_root,
-        &base_commit,
-        &tree_hash,
-        row_id,
-        revision_unix,
-        &modified,
-        &deleted,
-    ))?;
-
-    Ok(())
+    Ok(Some(PreparedCaptureBatch { modified, deleted }))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn apply_current_state_updates(
+async fn sync_changed_paths(
     cfg: &crate::host::devql::DevqlConfig,
-    relational: &crate::host::devql::RelationalStorage,
-    repo_root: &Path,
-    base_commit: &str,
-    tree_hash: &str,
-    row_id: i64,
-    revision_unix: i64,
     modified: &[String],
     deleted: &[String],
 ) -> Result<()> {
-    let revision_id = format!("temp:{row_id}");
-    for rel_path in modified {
-        let content = match load_file_from_tree_blocking(repo_root, tree_hash, rel_path).await {
-            Ok(value) => value,
-            Err(err) => {
-                log::warn!("devql watcher skipped `{rel_path}`: {err:#}");
-                continue;
-            }
-        };
-        let blob_sha = match load_blob_sha_from_tree_blocking(repo_root, tree_hash, rel_path).await
-        {
-            Ok(value) => value,
-            Err(err) => {
-                log::warn!("devql watcher skipped `{rel_path}` blob lookup: {err:#}");
-                continue;
-            }
-        };
-        let revision = crate::host::devql::FileRevision {
-            commit_sha: base_commit,
-            revision: crate::host::devql::TemporalRevisionRef {
-                kind: crate::host::devql::TemporalRevisionKind::Temporary,
-                id: &revision_id,
-                temp_checkpoint_id: Some(row_id),
-            },
-            commit_unix: revision_unix,
-            path: rel_path,
-            blob_sha: &blob_sha,
-        };
-        crate::host::devql::upsert_current_state_for_content(cfg, relational, &revision, &content)
+    let mut paths = modified
+        .iter()
+        .chain(deleted.iter())
+        .map(|path| crate::host::devql::normalize_repo_path(path))
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    #[cfg(test)]
+    {
+        crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
             .await
-            .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
+            .context("running DevQL sync inline for watcher capture paths in tests")?;
+        Ok(())
     }
-    for rel_path in deleted {
-        if let Err(err) =
-            crate::host::devql::delete_current_state_for_path(cfg, relational, rel_path).await
-        {
-            log::warn!("devql watcher failed deleting `{rel_path}` current state: {err:#}");
-        }
+
+    #[cfg(not(test))]
+    {
+        crate::daemon::enqueue_sync_for_config(
+            cfg,
+            crate::daemon::SyncTaskSource::Watcher,
+            crate::host::devql::SyncMode::Paths(paths),
+        )
+        .context("queueing DevQL sync for watcher capture paths")?;
+        Ok(())
     }
-    Ok(())
-}
-
-fn load_file_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
-    crate::host::checkpoints::strategy::manual_commit::run_git(
-        repo_root,
-        &["show", &format!("{tree_hash}:{path}")],
-    )
-}
-
-fn load_blob_sha_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
-    crate::host::checkpoints::strategy::manual_commit::run_git(
-        repo_root,
-        &["rev-parse", &format!("{tree_hash}:{path}")],
-    )
-    .map(|value| value.trim().to_string())
-}
-
-async fn load_file_from_tree_blocking(
-    repo_root: &Path,
-    tree_hash: &str,
-    path: &str,
-) -> Result<String> {
-    let repo_root = repo_root.to_path_buf();
-    let tree_hash = tree_hash.to_string();
-    let path = path.to_string();
-    let path_for_log = path.clone();
-    task::spawn_blocking(move || load_file_from_tree(&repo_root, &tree_hash, &path))
-        .await
-        .with_context(|| format!("joining blocking git show task for `{path_for_log}`"))?
-}
-
-async fn load_blob_sha_from_tree_blocking(
-    repo_root: &Path,
-    tree_hash: &str,
-    path: &str,
-) -> Result<String> {
-    let repo_root = repo_root.to_path_buf();
-    let tree_hash = tree_hash.to_string();
-    let path = path.to_string();
-    let path_for_log = path.clone();
-    task::spawn_blocking(move || load_blob_sha_from_tree(&repo_root, &tree_hash, &path))
-        .await
-        .with_context(|| format!("joining blocking git rev-parse task for `{path_for_log}`"))?
-}
-
-fn current_unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_secs() as i64)
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -236,7 +172,7 @@ mod tests {
 
     use super::*;
     use crate::host::devql::file_symbol_id;
-    use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+    use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
     use rusqlite::Connection;
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
@@ -264,6 +200,7 @@ mod tests {
             "Bitloops Test",
             "bitloops-test@example.com",
         );
+        write_test_daemon_config(dir.path());
         fs::create_dir_all(dir.path().join("src")).expect("create src dir");
         fs::write(
             dir.path().join("src/lib.rs"),
@@ -275,6 +212,18 @@ mod tests {
         dir
     }
 
+    fn devql_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
+        let backend = crate::config::resolve_store_backend_config_for_repo(repo_root)
+            .expect("resolve backend config");
+        let sqlite_path = backend
+            .relational
+            .sqlite_path
+            .as_deref()
+            .expect("test daemon config should set sqlite_path");
+        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(sqlite_path))
+            .expect("resolve configured sqlite path")
+    }
+
     #[test]
     fn capture_updates_current_devql_state_for_modified_file() {
         let dir = seed_repo();
@@ -283,6 +232,7 @@ mod tests {
             "pub fn second() -> i32 {\n    2\n}\n",
         )
         .expect("update file");
+        let working_blob_sha = git_ok(dir.path(), &["hash-object", "src/lib.rs"]);
 
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
@@ -290,7 +240,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture temporary checkpoint");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let workspace_rows: i64 = conn
@@ -320,21 +270,45 @@ mod tests {
             .expect("count current artefact rows");
         assert!(artefact_rows >= 2, "expected file + function artefacts");
 
-        let revision_row: (String, String, String, Option<i64>) = conn
-            .query_row(
-                "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id \
-                 FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
-                [file_symbol_id("src/lib.rs")],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .expect("fetch current file revision row");
+        let materialized_rows: Vec<(String, String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT symbol_fqn, content_id, language \
+                     FROM artefacts_current \
+                     WHERE path = 'src/lib.rs' \
+                     ORDER BY symbol_fqn",
+                )
+                .expect("prepare sync-shaped artefacts_current query");
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .expect("query sync-shaped artefacts_current rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect sync-shaped artefacts_current rows")
+        };
         assert!(
-            !revision_row.0.is_empty(),
-            "watch capture should retain base commit sha"
+            materialized_rows
+                .iter()
+                .all(|(_, content_id, language)| content_id == &working_blob_sha
+                    && language == "rust"),
+            "watch capture should delegate to sync and materialize rows for the edited blob"
         );
-        assert_eq!(revision_row.1, "temporary");
-        assert!(revision_row.2.starts_with("temp:"));
-        assert!(revision_row.3.is_some());
+        assert!(
+            materialized_rows
+                .iter()
+                .any(|(symbol_fqn, _, _)| symbol_fqn == "src/lib.rs"),
+            "file row should be materialized with the sync-shaped schema"
+        );
+
+        let current_state: (String, String) = conn
+            .query_row(
+                "SELECT effective_content_id, effective_source \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 AND path = ?2",
+                [&cfg.repo.repo_id, "src/lib.rs"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read current file state row");
+        assert_eq!(current_state.0, working_blob_sha);
+        assert_eq!(current_state.1, "worktree");
     }
 
     #[test]
@@ -355,7 +329,7 @@ mod tests {
         )
         .expect("capture with mixed dir and file events");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let current_rows: i64 = conn
             .query_row(
@@ -375,19 +349,18 @@ mod tests {
             "pub fn second() -> i32 {\n    2\n}\n",
         )
         .expect("update file");
+        let working_blob_sha = git_ok(dir.path(), &["hash-object", "src/lib.rs"]);
 
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let sqlite =
             crate::storage::SqliteConnectionPool::connect(db_path.clone()).expect("connect sqlite");
         sqlite
             .initialise_devql_schema()
             .expect("initialise devql schema");
 
-        let head_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
-        let working_blob_sha = git_ok(dir.path(), &["hash-object", "src/lib.rs"]);
         let committed_unix = git_ok(dir.path(), &["show", "-s", "--format=%ct", "HEAD"])
             .parse::<i64>()
             .expect("parse commit unix timestamp");
@@ -400,19 +373,32 @@ mod tests {
         sqlite
             .with_connection(|conn| {
                 conn.execute(
+                    "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+                     VALUES (?1, ?2, ?3, ?4, 'main') \
+                     ON CONFLICT(repo_id) DO UPDATE SET \
+                       provider = excluded.provider, \
+                       organization = excluded.organization, \
+                       name = excluded.name, \
+                       default_branch = excluded.default_branch",
+                    rusqlite::params![
+                        cfg.repo.repo_id.as_str(),
+                        cfg.repo.provider.as_str(),
+                        cfg.repo.organization.as_str(),
+                        cfg.repo.name.as_str(),
+                    ],
+                )?;
+                conn.execute(
                     "INSERT INTO artefacts_current (
-                        repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
-                        blob_sha, path, language, canonical_kind, language_kind, symbol_fqn,
-                        parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte,
-                        signature, modifiers, docstring, content_hash, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, 'temporary', 'temp:0', 0, ?5, 'src/lib.rs', 'rust', 'file', 'file', 'src/lib.rs',
-                        NULL, NULL, 1, 3, 0, 29, NULL, '[]', NULL, 'stale-hash', datetime(?6, 'unixepoch'))",
+                        repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+                        language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line,
+                        end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+                    ) VALUES (?1, 'src/lib.rs', ?2, ?3, ?4, 'rust', 'file', 'file', 'src/lib.rs::stale',
+                        NULL, NULL, 1, 3, 0, 29, NULL, '[]', NULL, datetime(?5, 'unixepoch'))",
                     rusqlite::params![
                         cfg.repo.repo_id,
+                        working_blob_sha,
                         file_symbol,
                         file_artefact_id,
-                        head_sha,
-                        working_blob_sha,
                         committed_unix,
                     ],
                 )?;
@@ -424,25 +410,53 @@ mod tests {
             .expect("capture temporary checkpoint over unchanged blob");
 
         let conn = Connection::open(db_path).expect("open sqlite");
-        let current_row: (String, String) = conn
-            .query_row(
-                "SELECT commit_sha, revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
-                [file_symbol_id("src/lib.rs")],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("read current file row");
-        assert_eq!(current_row.0, head_sha);
-        assert_ne!(current_row.1, "temp:0");
+        let materialized_rows: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT symbol_fqn, content_id \
+                     FROM artefacts_current \
+                     WHERE path = 'src/lib.rs' \
+                     ORDER BY symbol_fqn",
+                )
+                .expect("prepare sync-shaped artefacts_current query");
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .expect("query sync-shaped artefacts_current rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect sync-shaped artefacts_current rows")
+        };
+        assert!(
+            materialized_rows
+                .iter()
+                .all(
+                    |(symbol_fqn, content_id)| symbol_fqn.starts_with("src/lib.rs")
+                        && content_id == &working_blob_sha
+                ),
+            "capture should rewrite stale sync rows for the edited path"
+        );
+        assert!(
+            materialized_rows
+                .iter()
+                .any(|(symbol_fqn, _)| symbol_fqn == "src/lib.rs"),
+            "file row should be re-materialized using the sync-shaped schema"
+        );
+        assert!(
+            !materialized_rows
+                .iter()
+                .any(|(symbol_fqn, _)| symbol_fqn == "src/lib.rs::stale"),
+            "stale path metadata should not survive capture"
+        );
 
-        let artefact_row: (String, String) = conn
+        let current_state: (String, String) = conn
             .query_row(
-                "SELECT commit_sha, revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
-                rusqlite::params![file_symbol],
+                "SELECT effective_content_id, effective_source \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 AND path = ?2",
+                [&cfg.repo.repo_id, "src/lib.rs"],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .expect("read artefact current row");
-        assert_eq!(artefact_row.0, head_sha);
-        assert_eq!(artefact_row.1, current_row.1);
+            .expect("read current file state row");
+        assert_eq!(current_state.0, working_blob_sha);
+        assert_eq!(current_state.1, "worktree");
     }
 
     #[test]
@@ -466,36 +480,48 @@ mod tests {
             "pub fn first() -> i32 {\n    11\n}\n\npub fn second() -> i32 {\n    2\n}\n",
         )
         .expect("write second temp version");
+        let current_blob_sha = git_ok(dir.path(), &["hash-object", "src/lib.rs"]);
         capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
             .expect("capture second temp batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
-        let file_revision: String = conn
-            .query_row(
-                "SELECT revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
-                [file_symbol_id("src/lib.rs")],
-                |row| row.get(0),
-            )
-            .expect("read file revision");
-        let first_revision: String = conn
-            .query_row(
-                "SELECT revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_fqn = 'src/lib.rs::first'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("read first revision");
-        let second_revision: String = conn
-            .query_row(
-                "SELECT revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_fqn = 'src/lib.rs::second'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("read second revision");
+        let materialized_rows: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT symbol_fqn, content_id \
+                     FROM artefacts_current \
+                     WHERE path = 'src/lib.rs' \
+                     ORDER BY symbol_fqn",
+                )
+                .expect("prepare sync-shaped artefacts_current query");
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .expect("query sync-shaped artefacts_current rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect sync-shaped artefacts_current rows")
+        };
 
-        assert_eq!(file_revision, "temp:2");
-        assert_eq!(first_revision, "temp:2");
-        assert_eq!(second_revision, "temp:1");
+        assert!(
+            materialized_rows
+                .iter()
+                .all(
+                    |(symbol_fqn, content_id)| symbol_fqn.starts_with("src/lib.rs")
+                        && content_id == &current_blob_sha
+                ),
+            "follow-up temp changes should rematerialize the sync-shaped rows for the edited blob"
+        );
+        assert!(
+            materialized_rows
+                .iter()
+                .any(|(symbol_fqn, _)| symbol_fqn == "src/lib.rs::first"),
+            "first symbol should be materialized"
+        );
+        assert!(
+            materialized_rows
+                .iter()
+                .any(|(symbol_fqn, _)| symbol_fqn == "src/lib.rs::second"),
+            "second symbol should be materialized"
+        );
     }
 
     #[test]
@@ -508,7 +534,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture no-op batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         if !db_path.exists() {
             return;
         }
@@ -544,7 +570,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
             .expect("capture duplicate batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -565,7 +591,11 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create test runtime");
         let target = dir.path().join("src/lib.rs");
 
         fs::write(&target, "pub fn second() -> i32 {\n    2\n}\n").expect("update file");
@@ -584,7 +614,7 @@ mod tests {
         )
         .expect("capture deleted file using runtime handle");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -623,7 +653,11 @@ mod tests {
         let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("create test runtime");
         let target = dir.path().join("src/lib.rs");
         capture_temporary_checkpoint_batch_with_handle(
             &cfg,
@@ -638,7 +672,7 @@ mod tests {
         )
         .expect("capture duplicate batch with runtime handle");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -654,9 +688,9 @@ mod tests {
     }
 
     #[test]
-    fn capture_workspace_revision_id_is_referenced_by_artefacts_current() {
-        // Verify that temp_checkpoint_id on artefacts_current equals the
-        // workspace_revisions.id that was inserted for that batch.
+    fn capture_workspace_revision_batches_delegate_to_sync_and_dedupe_tree_hashes() {
+        // Verify that watcher capture delegates to sync-shaped materialization
+        // and that workspace_revisions still dedupe identical tree hashes.
         let dir = seed_repo();
         fs::write(
             dir.path().join("src/lib.rs"),
@@ -670,7 +704,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let workspace_id: i64 = conn
@@ -681,33 +715,56 @@ mod tests {
             )
             .expect("fetch workspace_revisions id");
 
-        let temp_checkpoint_id: i64 = conn
+        let workspace_rows: i64 = conn
             .query_row(
-                "SELECT temp_checkpoint_id FROM artefacts_current \
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions");
+        let artefact_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+                [&cfg.repo.repo_id, "src/lib.rs"],
+                |row| row.get(0),
+            )
+            .expect("count sync-shaped artefacts_current rows");
+        let current_state: (String, String) = conn
+            .query_row(
+                "SELECT effective_content_id, effective_source \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 AND path = ?2",
+                [&cfg.repo.repo_id, "src/lib.rs"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read current file state row");
+        let content_id: String = conn
+            .query_row(
+                "SELECT content_id FROM artefacts_current \
                  WHERE path = 'src/lib.rs' AND symbol_id = ?1",
                 [file_symbol_id("src/lib.rs")],
                 |row| row.get(0),
             )
-            .expect("fetch temp_checkpoint_id from artefacts_current");
-
+            .expect("fetch file content_id");
         assert_eq!(
-            temp_checkpoint_id, workspace_id,
-            "temp_checkpoint_id in artefacts_current must equal workspace_revisions.id"
+            workspace_rows, 1,
+            "workspace_revisions should contain exactly one deduped tree hash batch"
         );
-
-        // revision_id should be "temp:<workspace_id>"
-        let revision_id: String = conn
-            .query_row(
-                "SELECT revision_id FROM artefacts_current \
-                 WHERE path = 'src/lib.rs' AND symbol_id = ?1",
-                [file_symbol_id("src/lib.rs")],
-                |row| row.get(0),
-            )
-            .expect("fetch revision_id");
+        assert!(
+            artefact_rows >= 1,
+            "watcher capture should delegate to sync and materialize sync-shaped rows"
+        );
         assert_eq!(
-            revision_id,
-            format!("temp:{workspace_id}"),
-            "revision_id must be temp:<workspace_revisions.id>"
+            current_state.1, "worktree",
+            "captured file should be tracked via sync current_file_state"
+        );
+        assert_eq!(
+            current_state.0, content_id,
+            "current_file_state should use the same effective content id as artefacts_current"
+        );
+        assert!(
+            workspace_id > 0,
+            "workspace_revisions must insert a batch id"
         );
     }
 
@@ -727,7 +784,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         // temporary_checkpoints should not even exist in the DevQL database —
@@ -761,7 +818,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
+        let db_path = devql_sqlite_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let table_exists: bool = conn

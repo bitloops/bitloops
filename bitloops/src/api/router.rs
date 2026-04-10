@@ -1,11 +1,12 @@
 use super::handlers::{
     handle_api_agents, handle_api_branches, handle_api_check_bundle_version, handle_api_checkpoint,
-    handle_api_commits, handle_api_db_health, handle_api_fetch_bundle, handle_api_kpis,
-    handle_api_not_found, handle_api_openapi, handle_api_root, handle_api_users,
+    handle_api_commits, handle_api_db_health, handle_api_fetch_bundle, handle_api_git_blob,
+    handle_api_kpis, handle_api_not_found, handle_api_openapi, handle_api_repositories,
+    handle_api_root, handle_api_users,
 };
 use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
-    has_bundle_index, resolve_bundle_file,
+    has_bundle_index, request_path_looks_like_asset, resolve_bundle_file,
 };
 use crate::graphql::{
     global_graphql_handler, global_graphql_playground_handler, global_graphql_sdl_handler,
@@ -20,6 +21,9 @@ use axum::{
     response::Response,
     routing::{any, get, post},
 };
+use serde_json::Value;
+use std::collections::HashMap;
+use std::time::Instant;
 
 const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update-prompt-script">
 (function () {
@@ -207,10 +211,15 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
         .route("/kpis", get(handle_api_kpis))
         .route("/commits", get(handle_api_commits))
         .route("/branches", get(handle_api_branches))
+        .route("/repositories", get(handle_api_repositories))
         .route("/users", get(handle_api_users))
         .route("/agents", get(handle_api_agents))
         .route("/db/health", get(handle_api_db_health))
-        .route("/checkpoints/{checkpoint_id}", get(handle_api_checkpoint))
+        .route(
+            "/checkpoints/{repo_id}/{checkpoint_id}",
+            get(handle_api_checkpoint),
+        )
+        .route("/blobs/{repo_id}/{blob_sha}", get(handle_api_git_blob))
         .route(
             "/check_bundle_version",
             get(handle_api_check_bundle_version),
@@ -221,7 +230,10 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
 }
 
 async fn handle_dashboard_root(State(state): State<DashboardState>, method: Method) -> Response {
-    serve_dashboard_request(&state, "/", method).await
+    let started = Instant::now();
+    let response = serve_dashboard_request(&state, "/", method.clone()).await;
+    track_dashboard_page_event(&state, "/", &method, response.status(), started.elapsed());
+    response
 }
 
 async fn handle_dashboard_path(
@@ -230,7 +242,16 @@ async fn handle_dashboard_path(
     method: Method,
 ) -> Response {
     let request_path = format!("/{path}");
-    serve_dashboard_request(&state, &request_path, method).await
+    let started = Instant::now();
+    let response = serve_dashboard_request(&state, &request_path, method.clone()).await;
+    track_dashboard_page_event(
+        &state,
+        &request_path,
+        &method,
+        response.status(),
+        started.elapsed(),
+    );
+    response
 }
 
 async fn serve_dashboard_request(
@@ -245,6 +266,7 @@ async fn serve_dashboard_request(
             "text/plain; charset=utf-8",
             b"method not allowed\n".to_vec(),
             false,
+            None,
         );
     }
 
@@ -265,6 +287,7 @@ async fn serve_dashboard_request(
             "text/html; charset=utf-8",
             DASHBOARD_FALLBACK_INSTALL_HTML.as_bytes().to_vec(),
             is_head,
+            Some("no-store"),
         ),
         ServeMode::Bundle(bundle_dir) => {
             serve_bundle_request(&bundle_dir, request_path, is_head).await
@@ -283,6 +306,7 @@ async fn serve_bundle_request(
             "text/plain; charset=utf-8",
             b"Bundle not found.\n".to_vec(),
             is_head,
+            None,
         );
     };
 
@@ -291,13 +315,34 @@ async fn serve_bundle_request(
     {
         let content_type = content_type_for_path(&file_path);
         let body = maybe_inject_update_prompt(content_type, bytes);
-        return response_with_bytes(StatusCode::OK, content_type, body, is_head);
+        let cache_control = if content_type.starts_with("text/html") {
+            Some("no-store")
+        } else {
+            None
+        };
+        return response_with_bytes(StatusCode::OK, content_type, body, is_head, cache_control);
+    }
+
+    if request_path_looks_like_asset(request_path) {
+        return response_with_bytes(
+            StatusCode::NOT_FOUND,
+            "text/plain; charset=utf-8",
+            b"Bundle asset not found.\n".to_vec(),
+            is_head,
+            None,
+        );
     }
 
     let index_path = bundle_dir.join("index.html");
     if let Some(bytes) = read_bundle_file_within_dir(&canonical_bundle_dir, &index_path).await {
         let body = maybe_inject_update_prompt("text/html; charset=utf-8", bytes);
-        return response_with_bytes(StatusCode::OK, "text/html; charset=utf-8", body, is_head);
+        return response_with_bytes(
+            StatusCode::OK,
+            "text/html; charset=utf-8",
+            body,
+            is_head,
+            Some("no-store"),
+        );
     }
 
     response_with_bytes(
@@ -305,6 +350,7 @@ async fn serve_bundle_request(
         "text/plain; charset=utf-8",
         b"Bundle not found.\n".to_vec(),
         is_head,
+        None,
     )
 }
 
@@ -352,6 +398,7 @@ fn response_with_bytes(
     content_type: &'static str,
     body: Vec<u8>,
     is_head: bool,
+    cache_control: Option<&'static str>,
 ) -> Response {
     let mut response = if is_head {
         Response::new(Body::empty())
@@ -362,5 +409,47 @@ fn response_with_bytes(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Some(cache_control) = cache_control {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(cache_control),
+        );
+    }
     response
+}
+
+fn track_dashboard_page_event(
+    state: &DashboardState,
+    request_path: &str,
+    method: &Method,
+    status: StatusCode,
+    duration: std::time::Duration,
+) {
+    if *method != Method::GET && *method != Method::HEAD {
+        return;
+    }
+    if request_path_looks_like_asset(request_path) {
+        return;
+    }
+
+    let mut properties = HashMap::new();
+    properties.insert(
+        "http_method".to_string(),
+        Value::String(method.as_str().to_string()),
+    );
+    properties.insert(
+        "status_code_class".to_string(),
+        Value::String(super::status_code_class(status).to_string()),
+    );
+
+    super::track_repo_action(
+        &state.repo_root,
+        crate::telemetry::analytics::ActionDescriptor {
+            event: "bitloops dashboard page".to_string(),
+            surface: "dashboard",
+            properties,
+        },
+        status.is_success(),
+        duration,
+    );
 }

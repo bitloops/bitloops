@@ -1,6 +1,72 @@
 use super::*;
+use crate::host::interactions::db_store::SqliteInteractionSpool;
+use crate::host::interactions::interaction_repository::create_interaction_repository;
+use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
+};
 
 // ── Strategy trait impl ───────────────────────────────────────────────────────
+
+struct SpoolBackedInteractionRepository<'a> {
+    spool: &'a dyn InteractionSpool,
+}
+
+impl InteractionEventRepository for SpoolBackedInteractionRepository<'_> {
+    fn repo_id(&self) -> &str {
+        self.spool.repo_id()
+    }
+
+    fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
+        self.spool.record_session(session)
+    }
+
+    fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
+        self.spool.record_turn(turn)
+    }
+
+    fn append_event(&self, event: &InteractionEvent) -> Result<()> {
+        self.spool.record_event(event)
+    }
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        self.spool
+            .assign_checkpoint_to_turns(turn_ids, checkpoint_id, assigned_at)
+    }
+
+    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>> {
+        self.spool.list_sessions(agent, limit)
+    }
+
+    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        self.spool.load_session(session_id)
+    }
+
+    fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        self.spool.list_turns_for_session(session_id, limit)
+    }
+
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        self.spool.list_uncheckpointed_turns()
+    }
+
+    fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        self.spool.list_events(filter, limit)
+    }
+}
 
 impl Strategy for ManualCommitStrategy {
     fn name(&self) -> &str {
@@ -63,7 +129,7 @@ impl Strategy for ManualCommitStrategy {
         }
 
         let default_prompt_attr = SessionPromptAttribution {
-            checkpoint_number: state.step_count as i32 + 1,
+            checkpoint_number: state.pending.step_count as i32 + 1,
             ..Default::default()
         };
         let prompt_attr = state
@@ -90,21 +156,8 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let default_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
-        let mut metadata_dir = ctx.metadata_dir.trim().to_string();
-        let mut metadata_dir_abs = ctx.metadata_dir_abs.trim().to_string();
-
-        if metadata_dir.is_empty() {
-            metadata_dir = default_metadata_dir.clone();
-        }
-        if metadata_dir_abs.is_empty() && !metadata_dir.is_empty() {
-            metadata_dir_abs = self
-                .repo_root
-                .join(&metadata_dir)
-                .to_string_lossy()
-                .to_string();
-        }
-        if metadata_dir == default_metadata_dir && !transcript_path.trim().is_empty() {
+        let session_metadata = ctx.metadata.clone();
+        if session_metadata.is_none() && !transcript_path.trim().is_empty() {
             let _ = write_session_metadata(&self.repo_root, &ctx.session_id, &transcript_path);
         }
 
@@ -132,16 +185,15 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                step_number: state.step_count + 1,
+                step_number: state.pending.step_count + 1,
                 modified_files: modified.clone(),
                 new_files: new_files.clone(),
                 deleted_files: deleted.clone(),
-                metadata_dir,
-                metadata_dir_abs,
+                session_metadata,
                 commit_message: commit_msg,
                 author_name,
                 author_email,
-                is_first_checkpoint: state.step_count == 0,
+                is_first_checkpoint: state.pending.step_count == 0,
             },
         )?;
         if !result.skipped && result.commit_hash.is_empty() {
@@ -152,7 +204,10 @@ impl Strategy for ManualCommitStrategy {
         // Still persist token_usage when provided so turn-end can record usage without a new commit.
         if result.skipped {
             if let Some(usage) = &ctx.token_usage {
-                state.token_usage = Some(accumulate_token_usage(state.token_usage.take(), usage));
+                state.pending.token_usage = Some(accumulate_token_usage(
+                    state.pending.token_usage.take(),
+                    usage,
+                ));
                 self.backend.save_session(&state)?;
             }
             return Ok(());
@@ -160,16 +215,20 @@ impl Strategy for ManualCommitStrategy {
 
         // Update session state.
         state.base_commit = head;
-        state.step_count += 1;
+        state.pending.step_count += 1;
         state.cli_version = CLI_VERSION.to_string();
         state.pending_prompt_attribution = None;
         state.prompt_attributions.push(prompt_attr);
         // Record transcript identifier at the first step.
-        if state.step_count == 1 && state.transcript_identifier_at_start.is_empty() {
-            state.transcript_identifier_at_start = ctx.step_transcript_identifier.clone();
+        if state.pending.step_count == 1 && state.pending.transcript_identifier_at_start.is_empty()
+        {
+            state.pending.transcript_identifier_at_start = ctx.step_transcript_identifier.clone();
         }
         if let Some(usage) = &ctx.token_usage {
-            state.token_usage = Some(accumulate_token_usage(state.token_usage.take(), usage));
+            state.pending.token_usage = Some(accumulate_token_usage(
+                state.pending.token_usage.take(),
+                usage,
+            ));
         }
         let all_files: Vec<String> = modified
             .iter()
@@ -177,7 +236,7 @@ impl Strategy for ManualCommitStrategy {
             .chain(deleted.iter())
             .cloned()
             .collect();
-        merge_files_touched(&mut state.files_touched, &all_files);
+        merge_files_touched(&mut state.pending.files_touched, &all_files);
         self.backend.save_session(&state)?;
 
         Ok(())
@@ -259,15 +318,25 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryTaskOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                step_number: state.step_count,
+                step_number: state.pending.step_count,
                 tool_use_id: ctx.tool_use_id.clone(),
                 agent_id: ctx.agent_id.clone(),
                 modified_files: ctx.modified_files.clone(),
                 new_files: ctx.new_files.clone(),
                 deleted_files: ctx.deleted_files.clone(),
-                transcript_path: ctx.transcript_path.clone(),
-                subagent_transcript_path: ctx.subagent_transcript_path.clone(),
-                checkpoint_uuid: ctx.checkpoint_uuid.clone(),
+                session_metadata: if ctx.session_metadata.is_some() {
+                    ctx.session_metadata.clone()
+                } else if !ctx.transcript_path.trim().is_empty() {
+                    let _ = write_session_metadata(
+                        &self.repo_root,
+                        &ctx.session_id,
+                        &ctx.transcript_path,
+                    );
+                    None
+                } else {
+                    None
+                },
+                task_metadata: ctx.task_metadata.clone(),
                 is_incremental: ctx.is_incremental,
                 incremental_sequence: ctx.incremental_sequence,
                 incremental_type: ctx.incremental_type.clone(),
@@ -281,7 +350,7 @@ impl Strategy for ManualCommitStrategy {
             anyhow::bail!("task checkpoint commit hash is empty");
         }
 
-        // Update session state — accumulate files_touched but don't bump step_count
+        // Update session state — accumulate pending files but don't bump checkpoint count
         // (task checkpoints are subordinate to regular turn checkpoints).
         let all_files: Vec<String> = ctx
             .modified_files
@@ -290,7 +359,7 @@ impl Strategy for ManualCommitStrategy {
             .chain(ctx.deleted_files.iter())
             .cloned()
             .collect();
-        merge_files_touched(&mut state.files_touched, &all_files);
+        merge_files_touched(&mut state.pending.files_touched, &all_files);
         self.backend.save_session(&state)?;
 
         Ok(())
@@ -323,6 +392,8 @@ impl Strategy for ManualCommitStrategy {
             return Ok(());
         };
         let committed_files = files_changed_in_commit(&self.repo_root, &head).unwrap_or_default();
+        let committed_files_set: std::collections::HashSet<String> =
+            committed_files.iter().cloned().collect();
         if let Err(err) = run_devql_post_commit_refresh(&self.repo_root, &head, &committed_files) {
             eprintln!(
                 "[bitloops] Warning: DevQL post-commit artefact refresh failed for commit {}: {err:#}",
@@ -349,73 +420,52 @@ impl Strategy for ManualCommitStrategy {
             return Ok(());
         }
 
-        let sessions = self.backend.list_sessions().unwrap_or_default();
-        let checkpoint_id = generate_checkpoint_id();
-        let mut condensed_any_session = false;
-
-        for mut state in sessions {
-            let has_pending = state.phase == SessionPhase::Ended
-                || !state.files_touched.is_empty()
-                || state.step_count > 0;
-            if !has_pending {
-                if state.phase.is_active() && state.base_commit != head {
-                    state.base_commit = head.clone();
-                    let _ = self.backend.save_session(&state);
-                }
-                continue;
-            }
-
-            let transition_actions =
-                self.apply_git_commit_transition(&mut state, is_rebase_in_progress);
-            let should_condense = transition_actions
-                .iter()
-                .any(|action| matches!(action, Action::Condense | Action::CondenseIfFilesTouched));
-            let should_update_active_base = transition_actions
-                .iter()
-                .any(|action| matches!(action, Action::DiscardIfNoFiles));
-
-            if should_condense {
-                if !state.files_touched.is_empty() {
-                    let committed_touched: Vec<String> = state
-                        .files_touched
-                        .iter()
-                        .filter(|f| committed_files.contains(f.as_str()))
-                        .cloned()
-                        .collect();
-                    if committed_touched.is_empty() {
-                        if state.phase.is_active() && state.base_commit != head {
-                            state.base_commit = head.clone();
-                        }
-                        let _ = self.backend.save_session(&state);
-                        continue;
+        let interaction_spool = open_interaction_spool(&self.repo_root).ok();
+        let interaction_spool_ref = interaction_spool
+            .as_ref()
+            .map(|spool| spool as &dyn InteractionSpool);
+        let spool_pending_work = interaction_spool_ref.is_some_and(spool_has_pending_work);
+        let (interaction_repository, derivation_spool) =
+            match resolve_interaction_repository_for_post_commit(&self.repo_root) {
+                Ok(repository) => (repository, interaction_spool_ref),
+                Err(err) => {
+                    let context = format_post_commit_derivation_context(
+                        &head,
+                        None,
+                        None,
+                        &[],
+                        Some(spool_pending_work),
+                    );
+                    if spool_pending_work && let Some(spool) = interaction_spool_ref {
+                        eprintln!(
+                            "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}\n[bitloops] Warning: falling back to the local interaction spool for post_commit derivation"
+                        );
+                        (
+                            Box::new(SpoolBackedInteractionRepository { spool })
+                                as Box<dyn InteractionEventRepository>,
+                            None,
+                        )
+                    } else {
+                        eprintln!(
+                            "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
+                        );
+                        update_active_session_base_commits(
+                            self.backend.as_ref(),
+                            &head,
+                            &std::collections::HashSet::new(),
+                        );
+                        return Ok(());
                     }
                 }
+            };
 
-                if let Err(e) = self.condense_session(&mut state, &checkpoint_id, &head) {
-                    eprintln!(
-                        "[bitloops] Warning: condensation failed for session {}: {e}",
-                        state.session_id
-                    );
-                    let _ = self.backend.save_session(&state);
-                    continue;
-                }
-                condensed_any_session = true;
-
-                // ACTIVE sessions track all turn checkpoint IDs for stop-time finalization.
-                if state.phase.is_active() {
-                    state.turn_checkpoint_ids.push(checkpoint_id.clone());
-                }
-            } else if should_update_active_base
-                && state.phase.is_active()
-                && state.base_commit != head
-            {
-                state.base_commit = head.clone();
-            }
-
-            let _ = self.backend.save_session(&state);
-        }
-
-        if condensed_any_session {
+        if let Some(checkpoint_id) = self.derive_post_commit_from_interaction_sources(
+            &head,
+            &committed_files_set,
+            is_rebase_in_progress,
+            interaction_repository.as_ref(),
+            derivation_spool,
+        )? {
             insert_commit_checkpoint_mapping(&self.repo_root, &head, &checkpoint_id)?;
             if let Err(err) = run_devql_post_commit_checkpoint_projection_refresh(
                 &self.repo_root,
@@ -497,4 +547,235 @@ impl Strategy for ManualCommitStrategy {
 
         Ok(())
     }
+}
+
+impl ManualCommitStrategy {
+    pub(crate) fn derive_post_commit_from_interaction_sources(
+        &self,
+        head: &str,
+        committed_files_set: &std::collections::HashSet<String>,
+        is_rebase_in_progress: bool,
+        interaction_repository: &dyn InteractionEventRepository,
+        interaction_spool: Option<&dyn InteractionSpool>,
+    ) -> Result<Option<String>> {
+        flush_interaction_spool_or_fail(head, interaction_spool, interaction_repository)?;
+
+        let uncheckpointed_turns = interaction_repository
+            .list_uncheckpointed_turns()
+            .with_context(|| {
+                let context = format_post_commit_derivation_context(head, None, None, &[], None);
+                format!(
+                    "listing uncheckpointed interaction turns from event repository ({context})"
+                )
+            })?;
+        let mut turns_by_session: std::collections::BTreeMap<
+            String,
+            Vec<crate::host::interactions::InteractionTurn>,
+        > = std::collections::BTreeMap::new();
+        for turn in uncheckpointed_turns {
+            turns_by_session
+                .entry(turn.session_id.clone())
+                .or_default()
+                .push(turn);
+        }
+        let pending_turn_sessions = turns_by_session
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+
+        let checkpoint_id = generate_checkpoint_id();
+        let checkpoint_assigned_at = now_rfc3339();
+        let mut condensed_any_session = false;
+        let mut condensed_sessions = std::collections::HashSet::new();
+
+        if !is_rebase_in_progress {
+            for (session_id, mut session_turns) in turns_by_session {
+                session_turns.sort_by(|left, right| {
+                    left.turn_number
+                        .cmp(&right.turn_number)
+                        .then_with(|| left.started_at.cmp(&right.started_at))
+                        .then_with(|| left.turn_id.cmp(&right.turn_id))
+                });
+                let contributing_turns = session_turns
+                    .iter()
+                    .filter(|turn| turn_overlaps_committed_files(turn, committed_files_set))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if contributing_turns.is_empty() {
+                    continue;
+                }
+                let session_turn_ids: Vec<String> = contributing_turns
+                    .iter()
+                    .map(|turn| turn.turn_id.clone())
+                    .collect();
+                let session_context = format_post_commit_derivation_context(
+                    head,
+                    Some(&checkpoint_id),
+                    Some(&session_id),
+                    &session_turn_ids,
+                    interaction_spool.map(spool_has_pending_work),
+                );
+
+                let interaction_session = interaction_repository
+                    .load_session(&session_id)
+                    .with_context(|| {
+                        format!(
+                            "loading interaction session `{session_id}` from event repository ({session_context})"
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        eprintln!(
+                            "[bitloops] Warning: missing interaction session for overlapping turns ({session_context})"
+                        );
+                        anyhow::anyhow!(
+                            "missing interaction session for overlapping interaction turns ({session_context})"
+                        )
+                    })?;
+                let latest_session_tree_hash =
+                    latest_temporary_checkpoint_tree_hash(&self.repo_root, &session_id);
+
+                self.condense_interaction_session(
+                    &interaction_session,
+                    &contributing_turns,
+                    &checkpoint_id,
+                    head,
+                    committed_files_set,
+                )?;
+
+                for turn in contributing_turns {
+                    let remaining_files = files_with_remaining_agent_changes_from_tree(
+                        &self.repo_root,
+                        latest_session_tree_hash.as_deref(),
+                        head,
+                        &turn.files_modified,
+                        committed_files_set,
+                    );
+                    let mut updated_turn = turn.clone();
+                    updated_turn.updated_at = checkpoint_assigned_at.clone();
+
+                    if remaining_files.is_empty() {
+                        updated_turn.checkpoint_id = Some(checkpoint_id.clone());
+                    } else {
+                        updated_turn.files_modified = remaining_files;
+                        updated_turn.checkpoint_id = None;
+                    }
+
+                    interaction_repository
+                        .upsert_turn(&updated_turn)
+                        .with_context(|| {
+                            format!(
+                                "updating checkpoint progress for interaction turn `{}` in session `{session_id}` ({session_context})",
+                                updated_turn.turn_id
+                            )
+                        })?;
+                    if let Some(spool) = interaction_spool {
+                        spool.record_turn(&updated_turn).with_context(|| {
+                            format!(
+                                "mirroring checkpoint progress for interaction turn `{}` into the local spool ({session_context})",
+                                updated_turn.turn_id
+                            )
+                        })?;
+                    }
+                }
+
+                condensed_any_session = true;
+                condensed_sessions.insert(session_id);
+            }
+        }
+
+        let active_base_skip_sessions = if is_rebase_in_progress {
+            pending_turn_sessions.clone()
+        } else {
+            condensed_sessions.clone()
+        };
+        update_active_session_base_commits(self.backend.as_ref(), head, &active_base_skip_sessions);
+
+        if condensed_any_session
+            && let Some(spool) = interaction_spool
+            && let Err(err) = spool.flush(interaction_repository)
+        {
+            let context = format_post_commit_derivation_context(
+                head,
+                Some(&checkpoint_id),
+                None,
+                &[],
+                Some(spool_has_pending_work(spool)),
+            );
+            eprintln!(
+                "[bitloops] Warning: failed to flush checkpoint assignments to the interaction event store ({context}): {err:#}"
+            );
+        }
+
+        Ok(condensed_any_session.then_some(checkpoint_id))
+    }
+}
+
+fn resolve_interaction_repository_for_post_commit(
+    repo_root: &Path,
+) -> Result<Box<dyn InteractionEventRepository>> {
+    let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving store backend config for interaction event repository")?;
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for interaction event repository")?
+        .repo_id;
+    create_interaction_repository(&backends.events, repo_root, repo_id)
+        .map(|repository| Box::new(repository) as Box<dyn InteractionEventRepository>)
+}
+
+fn spool_has_pending_work(spool: &dyn InteractionSpool) -> bool {
+    spool.has_pending_mutations().unwrap_or(false)
+        || spool
+            .list_uncheckpointed_turns()
+            .map(|turns| !turns.is_empty())
+            .unwrap_or(false)
+}
+
+fn flush_interaction_spool_or_fail(
+    head: &str,
+    spool: Option<&dyn InteractionSpool>,
+    repository: &dyn InteractionEventRepository,
+) -> Result<()> {
+    let Some(spool) = spool else {
+        return Ok(());
+    };
+    let pending_work = spool_has_pending_work(spool);
+    if let Err(err) = spool.flush(repository) {
+        let context =
+            format_post_commit_derivation_context(head, None, None, &[], Some(pending_work));
+        if pending_work {
+            eprintln!(
+                "[bitloops] Warning: failed to flush interaction spool before post_commit derivation ({context}): {err:#}"
+            );
+            return Err(err).context(format!(
+                "flushing interaction spool before post_commit derivation ({context})"
+            ));
+        }
+        eprintln!(
+            "[bitloops] Warning: failed to flush interaction spool before post_commit derivation ({context}): {err:#}"
+        );
+    }
+    Ok(())
+}
+
+fn update_active_session_base_commits(
+    backend: &dyn crate::host::checkpoints::session::SessionBackend,
+    head: &str,
+    skip_session_ids: &std::collections::HashSet<String>,
+) {
+    for mut state in backend.list_sessions().unwrap_or_default() {
+        if !state.phase.is_active() || state.base_commit == head {
+            continue;
+        }
+        if skip_session_ids.contains(&state.session_id) {
+            continue;
+        }
+        state.base_commit = head.to_string();
+        let _ = backend.save_session(&state);
+    }
+}
+
+fn open_interaction_spool(repo_root: &Path) -> Result<SqliteInteractionSpool> {
+    crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo_root)
+        .context("opening repo runtime store for interaction spool")?
+        .interaction_spool()
 }

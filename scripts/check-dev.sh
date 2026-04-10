@@ -9,7 +9,7 @@ usage() {
 Usage: bash scripts/check-dev.sh [--test] [--full]
 
   Default: Rust file-size check, cargo fmt, cargo clippy.
-  --test   Also run the full suite via bitloops/scripts/test-summary.sh (cargo test --no-fail-fast + combined summaries).
+  --test   Also run cargo dev-test-merge (fast lane + curated slow smoke suites).
   --full   Run coverage baseline check only (llvm-cov runs the full test suite once; no duplicate plain test run).
 
   DuckDB: by default uses official prebuilt libduckdb (fast). Set DUCKDB_USE_BUNDLED=1 to compile from source instead.
@@ -56,7 +56,7 @@ cargo fmt --all --manifest-path "$BL/Cargo.toml"
 cargo clippy --manifest-path "$BL/Cargo.toml" --all-targets "${DUCKDB_CARGO_FEATURES[@]}" -- -D warnings
 
 if [[ "$RUN_TEST" == 1 ]] && [[ "$RUN_FULL" == 0 ]]; then
-  (cd "$BL" && bash scripts/test-summary.sh)
+  (cd "$ROOT" && cargo dev-test-merge)
 fi
 
 if [[ "$RUN_FULL" == 1 ]]; then

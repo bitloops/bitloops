@@ -153,42 +153,51 @@ pub(super) fn insert_historical_function_artefact(
 ) {
     conn.execute(
         "INSERT INTO artefacts (
-            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-            language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-            start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+            artefact_id, symbol_id, repo_id, language, canonical_kind,
+            language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, 'typescript', 'function',
-            'function_declaration', ?6, NULL, ?7, ?8, 0, ?9, NULL, '[\"export\"]',
-            'Event-backed docstring', ?10, ?11
+            ?1, ?2, ?3, 'typescript', 'function',
+            'function_declaration', ?4, NULL, '[\"export\"]',
+            'Event-backed docstring', ?5, ?6
         )",
         rusqlite::params![
             artefact_id,
             symbol_id,
             repo_id,
-            blob_sha,
-            path,
             symbol_fqn,
-            start_line,
-            end_line,
-            end_line * 10,
             format!("hash-{artefact_id}"),
             created_at,
         ],
     )
-    .expect("insert historical function artefact");
+    .expect("insert historical function artefact metadata");
+    conn.execute(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, created_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, NULL, ?5, ?6, 0, ?7, ?8
+        )",
+        rusqlite::params![
+            repo_id,
+            blob_sha,
+            path,
+            artefact_id,
+            start_line,
+            end_line,
+            end_line * 10,
+            created_at,
+        ],
+    )
+    .expect("insert historical function artefact snapshot");
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn insert_current_function_artefact(
     conn: &rusqlite::Connection,
     repo_id: &str,
-    branch: &str,
     artefact_id: &str,
     symbol_id: &str,
-    commit_sha: &str,
-    revision_kind: &str,
-    revision_id: &str,
-    blob_sha: &str,
+    content_id: &str,
     path: &str,
     symbol_fqn: &str,
     start_line: i64,
@@ -197,31 +206,26 @@ pub(super) fn insert_current_function_artefact(
 ) {
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
-            temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
+            repo_id, path, content_id, symbol_id, artefact_id,
+            language, canonical_kind, language_kind,
             symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-            start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+            start_byte, end_byte, signature, modifiers, docstring, updated_at
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-            NULL, ?8, ?9, 'typescript', 'function', 'function_declaration',
-            ?10, NULL, NULL, ?11, ?12,
-            0, ?13, NULL, '[\"export\"]', 'Event-backed docstring', ?14, ?15
+            ?1, ?2, ?3, ?4, ?5,
+            'typescript', 'function', 'function_declaration',
+            ?6, NULL, NULL, ?7, ?8,
+            0, ?9, NULL, '[\"export\"]', 'Event-backed docstring', ?10
         )",
         rusqlite::params![
             repo_id,
-            branch,
+            path,
+            content_id,
             symbol_id,
             artefact_id,
-            commit_sha,
-            revision_kind,
-            revision_id,
-            blob_sha,
-            path,
             symbol_fqn,
             start_line,
             end_line,
             end_line * 10,
-            format!("hash-{artefact_id}"),
             updated_at,
         ],
     )
@@ -247,14 +251,26 @@ pub(super) fn insert_current_file_state_row(
     conn: &rusqlite::Connection,
     repo_id: &str,
     path: &str,
-    commit_sha: &str,
-    blob_sha: &str,
-    committed_at: &str,
+    language: &str,
+    effective_content_id: &str,
+    last_synced_at: &str,
 ) {
     conn.execute(
-        "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![repo_id, path, commit_sha, blob_sha, committed_at],
+        "INSERT INTO current_file_state (
+            repo_id, path, language,
+            head_content_id, index_content_id, worktree_content_id,
+            effective_content_id, effective_source,
+            parser_version, extractor_version,
+            exists_in_head, exists_in_index, exists_in_worktree,
+            last_synced_at
+        ) VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?4, 'head', 'test', 'test', 1, 1, 1, ?5)",
+        rusqlite::params![
+            repo_id,
+            path,
+            language,
+            effective_content_id,
+            last_synced_at
+        ],
     )
     .expect("insert current_file_state row");
 }
@@ -273,12 +289,16 @@ pub(super) fn insert_checkpoint_file_snapshot_row(
     path: &str,
     blob_sha: &str,
 ) {
+    let relation_id = crate::host::devql::deterministic_uuid(&format!(
+        "{repo_id}|{checkpoint_id}|{path}|{blob_sha}"
+    ));
     conn.execute(
-        "INSERT INTO checkpoint_file_snapshots (
-            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
-            commit_sha, path, blob_sha
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO checkpoint_files (
+            relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+            commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'modify', ?10, ?10, ?11, ?11)",
         rusqlite::params![
+            relation_id,
             repo_id,
             checkpoint_id,
             session_id,
@@ -291,7 +311,7 @@ pub(super) fn insert_checkpoint_file_snapshot_row(
             blob_sha,
         ],
     )
-    .expect("insert checkpoint_file_snapshots row");
+    .expect("insert checkpoint_files row");
 }
 
 pub(super) struct MockHttpResponse {
@@ -315,12 +335,10 @@ pub(super) struct MockSequentialHttpServer {
 }
 
 impl MockSequentialHttpServer {
-    pub(super) fn start(responses: Vec<MockHttpResponse>) -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
-        listener
-            .set_nonblocking(true)
-            .expect("set nonblocking mock server");
-        let addr = listener.local_addr().expect("mock server addr");
+    pub(super) fn try_start(responses: Vec<MockHttpResponse>) -> std::io::Result<Self> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let addr = listener.local_addr()?;
         let url = format!("http://{}", addr);
         let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
@@ -370,11 +388,11 @@ impl MockSequentialHttpServer {
             }
         });
 
-        Self {
+        Ok(Self {
             url,
             handle: Some(handle),
             shutdown,
-        }
+        })
     }
 }
 
@@ -501,24 +519,26 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
-    let files_touched_raw =
-        serde_json::to_string(seed.files_touched).expect("serialise files_touched");
     let token_usage_raw = serde_json::to_string(&seed.token_usage).expect("serialise token_usage");
+    let provenance_session = seed
+        .sessions
+        .first()
+        .map(|session| (session.session_id, session.agent, session.created_at))
+        .unwrap_or(("session-0", "codex", "2026-01-01T00:00:00Z"));
 
     sqlite
         .with_connection(|conn| {
             conn.execute(
                 "INSERT INTO checkpoints (
                     checkpoint_id, repo_id, strategy, branch, cli_version,
-                    files_touched, checkpoints_count, token_usage
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    checkpoints_count, token_usage
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     seed.checkpoint_id,
                     repo_id.as_str(),
                     "manual-commit",
                     seed.branch,
                     "0.0.3",
-                    files_touched_raw.as_str(),
                     seed.checkpoints_count,
                     token_usage_raw.as_str(),
                 ],
@@ -528,13 +548,13 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
                 conn.execute(
                     "INSERT INTO checkpoint_sessions (
                         checkpoint_id, session_id, session_index, agent, turn_id, checkpoints_count,
-                        files_touched, is_task, tool_use_id, transcript_identifier_at_start,
+                        is_task, tool_use_id, transcript_identifier_at_start,
                         checkpoint_transcript_start, initial_attribution, token_usage, summary,
                         author_name, author_email, transcript_path, created_at
                     ) VALUES (
                         ?1, ?2, ?3, ?4, '', ?5,
-                        ?6, 0, '', '', 0, NULL, NULL, NULL,
-                        'Alice', 'alice@example.com', '', ?7
+                        0, '', '', 0, NULL, NULL, NULL,
+                        'Alice', 'alice@example.com', '', ?6
                     )",
                     rusqlite::params![
                         seed.checkpoint_id,
@@ -542,8 +562,39 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
                         session.session_index,
                         session.agent,
                         session.checkpoints_count,
-                        files_touched_raw.as_str(),
                         session.created_at,
+                    ],
+                )?;
+            }
+
+            for (index, path) in seed.files_touched.iter().enumerate() {
+                let relation_id = crate::host::devql::deterministic_uuid(&format!(
+                    "{}|{}|{}|{}",
+                    repo_id.as_str(),
+                    seed.checkpoint_id,
+                    provenance_session.0,
+                    path
+                ));
+                let blob_sha = format!("seed-blob-{index}");
+                conn.execute(
+                    "INSERT INTO checkpoint_files (
+                        relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+                        commit_sha, change_kind, path_before, path_after, blob_sha_before, blob_sha_after
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'manual-commit',
+                        ?8, 'modify', ?9, ?9, ?10, ?10
+                    )",
+                    rusqlite::params![
+                        relation_id,
+                        repo_id.as_str(),
+                        seed.checkpoint_id,
+                        provenance_session.0,
+                        provenance_session.2,
+                        provenance_session.1,
+                        seed.branch,
+                        seed.commit_sha,
+                        path,
+                        blob_sha,
                     ],
                 )?;
             }

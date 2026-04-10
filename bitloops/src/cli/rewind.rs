@@ -302,6 +302,7 @@ fn perform_full_rewind(repo_root: &Path, point: &RewindPoint) -> Result<()> {
 
 #[derive(Debug, Clone)]
 struct TreeEntry {
+    #[cfg(unix)]
     mode: String,
     hash: String,
     path: String,
@@ -362,6 +363,7 @@ fn list_checkpoint_tree_entries(repo_root: &Path, commit_id: &str) -> Result<Vec
         }
 
         entries.push(TreeEntry {
+            #[cfg(unix)]
             mode: mode.to_string(),
             hash: hash.to_string(),
             path: path.to_string(),
@@ -546,7 +548,9 @@ impl EmptyFallback for String {
 mod tests {
     use super::*;
     use crate::cli::explain::RewindPoint;
+    use crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE;
     use crate::config::settings::{self, BitloopsSettings};
+    use crate::test_support::git_fixtures::write_test_daemon_config;
     use crate::test_support::process_state::with_env_var;
     use tempfile::TempDir;
 
@@ -598,6 +602,8 @@ mod tests {
             dir.path(),
             &["config", "user.email", "rewind-test@example.com"],
         );
+        git_ok(dir.path(), &["config", "commit.gpgsign", "false"]);
+        git_ok(dir.path(), &["config", "tag.gpgsign", "false"]);
         dir
     }
 
@@ -762,19 +768,31 @@ mod tests {
     fn list_checkpoint_tree_entries_filters_infrastructure_files() {
         let repo = init_git_repo();
         std::fs::write(repo.path().join("src.rs"), "fn main() {}\n").expect("write source");
-        std::fs::create_dir_all(repo.path().join(".bitloops").join("metadata"))
-            .expect("create metadata dir");
+        std::fs::create_dir_all(
+            repo.path()
+                .join(".bitloops")
+                .join("internal")
+                .join("sessions")
+                .join("session-1"),
+        )
+        .expect("create metadata dir");
         std::fs::write(
             repo.path()
                 .join(".bitloops")
-                .join("metadata")
+                .join("internal")
+                .join("sessions")
+                .join("session-1")
                 .join("ignored.txt"),
             "ignored",
         )
         .expect("write metadata file");
         git_ok(
             repo.path(),
-            &["add", "src.rs", ".bitloops/metadata/ignored.txt"],
+            &[
+                "add",
+                "src.rs",
+                ".bitloops/internal/sessions/session-1/ignored.txt",
+            ],
         );
         git_ok(repo.path(), &["commit", "-m", "seed tree"]);
         let head = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -831,12 +849,9 @@ mod tests {
     #[test]
     fn helper_paths_tolerate_missing_session_state() {
         let repo = init_git_repo();
-        let sqlite_path = crate::utils::paths::default_relational_db_path(repo.path());
-        let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
-            .expect("create sqlite database");
-        sqlite
-            .initialise_checkpoint_schema()
-            .expect("initialise checkpoint schema");
+        let config_root = TempDir::new().expect("temp daemon config");
+        let config_path = write_test_daemon_config(config_root.path());
+        let config_path_string = config_path.to_string_lossy().to_string();
 
         let point = RewindPoint {
             session_id: "session-404".to_string(),
@@ -846,8 +861,31 @@ mod tests {
         let preserved = load_preserved_untracked_files(repo.path(), &point);
         assert!(preserved.is_empty());
 
-        reset_shadow_branch_to_checkpoint(repo.path(), &point)
-            .expect("missing session backend state should be a no-op");
+        with_env_var(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(config_path_string.as_str()),
+            || {
+                let cfg = crate::config::resolve_store_backend_config_for_repo(repo.path())
+                    .expect("resolve backend config");
+                let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
+                    repo.path(),
+                    Some(
+                        cfg.relational
+                            .sqlite_path
+                            .as_deref()
+                            .expect("test daemon config should set sqlite_path"),
+                    ),
+                )
+                .expect("resolve configured sqlite path");
+                let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
+                    .expect("create sqlite database");
+                sqlite
+                    .initialise_checkpoint_schema()
+                    .expect("initialise checkpoint schema");
+                reset_shadow_branch_to_checkpoint(repo.path(), &point)
+                    .expect("missing session backend state should be a no-op");
+            },
+        );
     }
 
     #[test]

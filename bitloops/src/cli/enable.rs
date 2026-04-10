@@ -10,6 +10,9 @@ use clap::Args;
 use crate::adapters::agents::AgentAdapterRegistry;
 #[cfg(test)]
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::cli::embeddings::{
+    EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+};
 use crate::cli::telemetry_consent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
@@ -24,7 +27,7 @@ use crate::config::settings::{settings_local_path, settings_path};
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::devql::watch;
 
-#[derive(Args)]
+#[derive(Args, Debug, Clone)]
 pub struct EnableArgs {
     /// Deprecated: the nearest discovered project policy is edited automatically.
     #[arg(long)]
@@ -53,6 +56,10 @@ pub struct EnableArgs {
         default_value_t = false
     )]
     pub no_telemetry: bool,
+
+    /// Configure and bootstrap local embeddings so sync can include them.
+    #[arg(long, default_value_t = false)]
+    pub install_embeddings: bool,
 }
 
 /// Finds the git repository root by walking up from `start`.
@@ -86,10 +93,8 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
         .join(REPO_POLICY_LOCAL_FILE_NAME);
     let relative_local_policy = relative_local_policy.to_string_lossy().replace('\\', "/");
 
-    for entry in [relative_local_policy.as_str(), ".bitloops/"] {
-        if content.lines().any(|line| line.trim() == entry) {
-            continue;
-        }
+    let entry = relative_local_policy.as_str();
+    if !content.lines().any(|line| line.trim() == entry) {
         if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');
         }
@@ -102,8 +107,12 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
     Ok(())
 }
 
-fn restart_watcher_if_running(repo_root: &Path, config_root: &Path) {
-    if let Err(err) = watch::restart_watcher(repo_root, config_root) {
+fn restart_watcher_if_running(repo_root: &Path) {
+    let Ok(daemon_config_root) = crate::config::resolve_daemon_config_root_for_repo(repo_root)
+    else {
+        return;
+    };
+    if let Err(err) = watch::restart_watcher(repo_root, &daemon_config_root) {
         log::debug!("skipping watcher restart after policy change: {err:#}");
     }
 }
@@ -140,23 +149,27 @@ pub async fn run(args: EnableArgs) -> Result<()> {
         bail!("cannot use both --local and --project flags");
     }
 
+    let mut out = io::stdout().lock();
     let stdin = io::stdin();
     let mut input = BufReader::new(stdin.lock());
-    run_with_input(args, &mut input).await
+    run_with_io(args, &mut out, &mut input).await
 }
 
-async fn run_with_input(args: EnableArgs, input: &mut dyn BufRead) -> Result<()> {
+pub(crate) async fn run_with_io(
+    args: EnableArgs,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let git_root = find_repo_root(&cwd)?;
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
 
     telemetry_consent::ensure_default_daemon_running().await?;
-    let mut out = io::stdout().lock();
     telemetry_consent::ensure_existing_config_telemetry_consent(
         cwd.as_path(),
         telemetry_choice,
-        &mut out,
+        out,
         input,
     )
     .await?;
@@ -174,15 +187,74 @@ async fn run_with_input(args: EnableArgs, input: &mut dyn BufRead) -> Result<()>
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    let policy_root = policy.root.unwrap_or_else(|| cwd.clone());
     set_capture_enabled(&target_path, true)?;
     let settings = load_settings(&cwd).unwrap_or_default();
-    restart_watcher_if_running(&git_root, &policy_root);
+    restart_watcher_if_running(&git_root);
 
-    println!("Bitloops enabled in this project! :)");
-    println!("Strategy: {}.", settings.strategy);
-    println!("Updated project config: {}", target_path.display());
+    writeln!(out, "Bitloops enabled in this project! :)")?;
+    writeln!(out, "Strategy: {}.", settings.strategy)?;
+    writeln!(out, "Updated project config: {}", target_path.display())?;
+
+    if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
+        match install_or_bootstrap_embeddings(&cwd) {
+            Ok(lines) => {
+                for line in lines {
+                    writeln!(out, "{line}")?;
+                }
+            }
+            Err(err) => {
+                bail!("Bitloops capture was enabled, but embeddings installation failed: {err:#}");
+            }
+        }
+    }
     Ok(())
+}
+
+fn should_install_embeddings(
+    repo_root: &Path,
+    explicit_install: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if explicit_install {
+        return Ok(true);
+    }
+
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(false);
+    }
+
+    if !matches!(
+        inspect_embeddings_install_state(repo_root),
+        EmbeddingsInstallState::NotConfigured
+    ) {
+        return Ok(false);
+    }
+
+    prompt_install_embeddings(out, input)
+}
+
+fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
+    writeln!(out)?;
+    writeln!(
+        out,
+        "Install local embeddings as well? This is recommended and lets sync include embeddings."
+    )?;
+
+    loop {
+        write!(out, "Install embeddings now? [Y/n] ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading embeddings install prompt response")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(out, "Please answer yes or no.")?,
+        }
+    }
 }
 
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
@@ -200,10 +272,9 @@ pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    let policy_root = policy.root.unwrap_or_else(|| start.to_path_buf());
     set_capture_enabled(&target_path, false)?;
     let repo_root = find_repo_root(start)?;
-    restart_watcher_if_running(&repo_root, &policy_root);
+    restart_watcher_if_running(&repo_root);
     writeln!(
         out,
         "Bitloops capture is now disabled for this project ({})",

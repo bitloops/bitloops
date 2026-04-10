@@ -1,11 +1,18 @@
 use super::*;
 use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
+use crate::capability_packs::semantic_clones::features::{
+    SemanticFeatureInput, SemanticSummaryCandidate,
+};
 use crate::capability_packs::test_harness::mapping::model::DiscoveryIssue;
+use crate::daemon::EnrichmentQueueStatus;
+use crate::host::capability_host::CapabilityHealthResult;
 use crate::host::devql::knowledge_support::KnowledgeBddHarness;
 use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tempfile::TempDir;
 
 #[derive(Debug)]
 pub(super) struct EdgeExpectation<'a> {
@@ -41,6 +48,28 @@ pub(super) struct DevqlBddWorld {
     pub(super) materialized_links: Vec<TestArtefactEdgeCurrentRecord>,
     pub(super) discovery_issues: Vec<DiscoveryIssue>,
     pub(super) tests_query_response: Option<Value>,
+    pub(super) semantic_clone_fixture: Option<String>,
+    pub(super) clone_query_rows: Vec<Value>,
+    pub(super) stage1_input: Option<SemanticFeatureInput>,
+    pub(super) stage1_provider_candidate: Option<SemanticSummaryCandidate>,
+    pub(super) stage1_persisted_semantics_row: Option<Value>,
+    pub(super) semantic_clone_stage1_upserted: usize,
+    pub(super) semantic_clone_stage1_skipped: usize,
+    pub(super) semantic_clone_stage2_upserted: usize,
+    pub(super) semantic_clone_stage2_skipped: usize,
+    pub(super) semantic_clone_semantic_hashes_before: HashMap<String, String>,
+    pub(super) semantic_clone_semantic_hashes_after: HashMap<String, String>,
+    pub(super) semantic_clone_embedding_hashes_before: HashMap<String, String>,
+    pub(super) semantic_clone_embedding_hashes_after: HashMap<String, String>,
+    pub(super) semantic_clone_edge_hashes_before: HashMap<String, String>,
+    pub(super) semantic_clone_edge_hashes_after: HashMap<String, String>,
+    pub(super) semantic_clone_stage2_error: Option<anyhow::Error>,
+    pub(super) semantic_clone_stage2_embedding_rows_written: usize,
+    pub(super) scenario_workspace: Option<TempDir>,
+    pub(super) health_results: HashMap<String, CapabilityHealthResult>,
+    pub(super) enrichment_status: Option<EnrichmentQueueStatus>,
+    pub(super) operation_error: Option<String>,
+    pub(super) operation_output: Vec<String>,
     pub(super) knowledge: Option<KnowledgeBddHarness>,
     pub(super) knowledge_last_ingest: Option<IngestKnowledgeResult>,
     pub(super) knowledge_last_association: Option<AssociateKnowledgeResult>,
@@ -72,6 +101,28 @@ impl Default for DevqlBddWorld {
             materialized_links: Vec::new(),
             discovery_issues: Vec::new(),
             tests_query_response: None,
+            semantic_clone_fixture: None,
+            clone_query_rows: Vec::new(),
+            stage1_input: None,
+            stage1_provider_candidate: None,
+            stage1_persisted_semantics_row: None,
+            semantic_clone_stage1_upserted: 0,
+            semantic_clone_stage1_skipped: 0,
+            semantic_clone_stage2_upserted: 0,
+            semantic_clone_stage2_skipped: 0,
+            semantic_clone_semantic_hashes_before: HashMap::new(),
+            semantic_clone_semantic_hashes_after: HashMap::new(),
+            semantic_clone_embedding_hashes_before: HashMap::new(),
+            semantic_clone_embedding_hashes_after: HashMap::new(),
+            semantic_clone_edge_hashes_before: HashMap::new(),
+            semantic_clone_edge_hashes_after: HashMap::new(),
+            semantic_clone_stage2_error: None,
+            semantic_clone_stage2_embedding_rows_written: 0,
+            scenario_workspace: None,
+            health_results: HashMap::new(),
+            enrichment_status: None,
+            operation_error: None,
+            operation_output: Vec::new(),
             knowledge: None,
             knowledge_last_ingest: None,
             knowledge_last_association: None,
@@ -82,6 +133,12 @@ impl Default for DevqlBddWorld {
 }
 
 impl DevqlBddWorld {
+    fn isolated_test_repo_root() -> PathBuf {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("bitloops-devql-bdd-test-{id}"))
+    }
+
     pub(super) fn reset(&mut self) {
         self.scenario_id = None;
         self.source_path = None;
@@ -104,6 +161,28 @@ impl DevqlBddWorld {
         self.materialized_links.clear();
         self.discovery_issues.clear();
         self.tests_query_response = None;
+        self.semantic_clone_fixture = None;
+        self.clone_query_rows.clear();
+        self.stage1_input = None;
+        self.stage1_provider_candidate = None;
+        self.stage1_persisted_semantics_row = None;
+        self.semantic_clone_stage1_upserted = 0;
+        self.semantic_clone_stage1_skipped = 0;
+        self.semantic_clone_stage2_upserted = 0;
+        self.semantic_clone_stage2_skipped = 0;
+        self.semantic_clone_semantic_hashes_before.clear();
+        self.semantic_clone_semantic_hashes_after.clear();
+        self.semantic_clone_embedding_hashes_before.clear();
+        self.semantic_clone_embedding_hashes_after.clear();
+        self.semantic_clone_edge_hashes_before.clear();
+        self.semantic_clone_edge_hashes_after.clear();
+        self.semantic_clone_stage2_error = None;
+        self.semantic_clone_stage2_embedding_rows_written = 0;
+        self.scenario_workspace = None;
+        self.health_results.clear();
+        self.enrichment_status = None;
+        self.operation_error = None;
+        self.operation_output.clear();
         self.knowledge = None;
         self.knowledge_last_ingest = None;
         self.knowledge_last_association = None;
@@ -112,9 +191,10 @@ impl DevqlBddWorld {
     }
 
     pub(super) fn test_cfg() -> DevqlConfig {
+        let repo_root = Self::isolated_test_repo_root();
         DevqlConfig {
-            config_root: PathBuf::from("/tmp/repo"),
-            repo_root: PathBuf::from("/tmp/repo"),
+            daemon_config_root: repo_root.clone(),
+            repo_root,
             repo: RepoIdentity {
                 provider: "github".to_string(),
                 organization: "bitloops".to_string(),
@@ -127,14 +207,6 @@ impl DevqlBddWorld {
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: "default".to_string(),
-            semantic_provider: None,
-            semantic_model: None,
-            semantic_api_key: None,
-            semantic_base_url: None,
-            embedding_provider: None,
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
         }
     }
 
@@ -158,6 +230,41 @@ impl DevqlBddWorld {
             .as_ref()
             .expect("logger workspace should be initialized")
             .path()
+    }
+
+    pub(super) fn ensure_scenario_workspace(&mut self) -> &Path {
+        if self.scenario_workspace.is_none() {
+            self.scenario_workspace =
+                Some(tempfile::tempdir().expect("create temp resilience workspace"));
+        }
+        self.scenario_workspace
+            .as_ref()
+            .expect("scenario workspace should be initialized")
+            .path()
+    }
+
+    pub(super) fn scenario_repo_root(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("repo");
+        std::fs::create_dir_all(&path).expect("create scenario repo root");
+        path
+    }
+
+    pub(super) fn scenario_config_override_root(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("config-root");
+        std::fs::create_dir_all(&path).expect("create scenario config root");
+        path
+    }
+
+    pub(super) fn scenario_state_override_root(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("state-root");
+        std::fs::create_dir_all(&path).expect("create scenario state root");
+        path
+    }
+
+    pub(super) fn scenario_bin_dir(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("bin");
+        std::fs::create_dir_all(&path).expect("create scenario bin dir");
+        path
     }
 
     pub(super) fn read_log_entries(&self) -> Vec<Value> {
@@ -185,7 +292,7 @@ impl DevqlBddWorld {
     ) {
         assert!(
             self.artefacts.iter().any(|artefact| {
-                artefact.language_kind == language_kind
+                artefact.language_kind.as_str() == language_kind
                     && artefact.canonical_kind.as_deref() == canonical_kind
                     && artefact.name == name
             }),

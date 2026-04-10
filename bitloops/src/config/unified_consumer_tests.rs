@@ -2,13 +2,15 @@ use serde_json::json;
 use std::path::Path;
 
 use super::unified_config::{
-    UnifiedSettings, merge_layers, resolve_dashboard_from_unified, resolve_embedding_from_unified,
-    resolve_provider_from_unified, resolve_semantic_from_unified,
+    UnifiedSettings, merge_layers, resolve_dashboard_from_unified,
+    resolve_embedding_capability_from_unified, resolve_embeddings_from_unified,
+    resolve_provider_from_unified, resolve_semantic_clones_from_unified,
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL,
-    ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DashboardLocalDashboardConfig,
+    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS, InferenceTask, SemanticCloneEmbeddingMode,
+    SemanticClonesInferenceBindings, SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -41,7 +43,7 @@ fn store_backend_from_unified_reads_relational_and_events() {
 
 #[test]
 fn store_backend_from_unified_applies_defaults() {
-    let settings = UnifiedSettings::default(); // no stores block
+    let settings = UnifiedSettings::default();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
 
@@ -74,98 +76,166 @@ fn store_backend_from_unified_merges_across_layers() {
 }
 
 // ---------------------------------------------------------------------------
-// B. Semantic config from unified
+// B. Semantic clones + inference config from unified
 // ---------------------------------------------------------------------------
 
 #[test]
-fn semantic_from_unified_reads_semantic_block() {
+fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     let settings = UnifiedSettings {
-        semantic: Some(json!({
-            "provider": "openai",
-            "model": "text-embedding-3-small",
-            "api_key": "sk-test",
-            "base_url": "https://api.openai.com"
+        semantic_clones: Some(json!({
+            "summary_mode": "auto",
+            "embedding_mode": "semantic_aware_once",
+            "enrichment_workers": 12,
+            "inference": {
+                "summary_generation": "summary_llm",
+                "code_embeddings": "local_code",
+                "summary_embeddings": "local_summary"
+            }
+        })),
+        inference: Some(json!({
+            "runtimes": {
+                "bitloops_embeddings": {
+                    "command": "bitloops-embeddings",
+                    "args": ["--verbose"]
+                }
+            },
+            "profiles": {
+                "local_code": {
+                    "task": "embeddings",
+                    "driver": "bitloops_embeddings_ipc",
+                    "runtime": "bitloops_embeddings",
+                    "model": "bge-m3",
+                    "cache_dir": ".cache/embeddings"
+                },
+                "local_summary": {
+                    "task": "embeddings",
+                    "driver": "bitloops_embeddings_ipc",
+                    "runtime": "bitloops_embeddings",
+                    "model": "bge-m3"
+                },
+                "summary_llm": {
+                    "task": "text_generation",
+                    "driver": "openai",
+                    "model": "gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "base_url": "https://api.openai.com/v1"
+                }
+            }
         })),
         ..Default::default()
     };
-    let cfg = resolve_semantic_from_unified(&settings, no_env);
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
+    let inference = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
+    let capability =
+        resolve_embedding_capability_from_unified(&settings, Path::new("/config"), no_env);
 
-    assert_eq!(cfg.semantic_provider.as_deref(), Some("openai"));
+    assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Auto);
     assert_eq!(
-        cfg.semantic_model.as_deref(),
-        Some("text-embedding-3-small")
+        semantic_clones.embedding_mode,
+        SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
-    assert_eq!(cfg.semantic_api_key.as_deref(), Some("sk-test"));
     assert_eq!(
-        cfg.semantic_base_url.as_deref(),
-        Some("https://api.openai.com")
+        semantic_clones.inference,
+        SemanticClonesInferenceBindings {
+            summary_generation: Some("summary_llm".to_string()),
+            code_embeddings: Some("local_code".to_string()),
+            summary_embeddings: Some("local_summary".to_string()),
+        }
     );
+    assert_eq!(semantic_clones.ann_neighbors, 5);
+    assert_eq!(semantic_clones.enrichment_workers, 12);
+    assert!(inference.warnings.is_empty());
+    assert_eq!(
+        inference
+            .runtimes
+            .get("bitloops_embeddings")
+            .expect("runtime")
+            .args,
+        vec!["--verbose".to_string()]
+    );
+    let code_profile = inference.profiles.get("local_code").expect("code profile");
+    assert_eq!(code_profile.task, InferenceTask::Embeddings);
+    assert_eq!(code_profile.driver, "bitloops_embeddings_ipc");
+    assert_eq!(code_profile.runtime.as_deref(), Some("bitloops_embeddings"));
+    assert_eq!(code_profile.model.as_deref(), Some("bge-m3"));
+    assert_eq!(
+        code_profile.cache_dir.as_deref(),
+        Some(Path::new("/config/.cache/embeddings"))
+    );
+    let llm_profile = inference.profiles.get("summary_llm").expect("llm profile");
+    assert_eq!(llm_profile.task, InferenceTask::TextGeneration);
+    assert_eq!(llm_profile.driver, "openai");
+    assert_eq!(llm_profile.model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(capability.semantic_clones, semantic_clones);
+    assert_eq!(capability.inference, inference);
 }
 
 #[test]
-fn semantic_from_unified_env_wins_over_file() {
-    let settings = UnifiedSettings {
-        semantic: Some(json!({
-            "provider": "openai",
-            "model": "file-model"
-        })),
-        ..Default::default()
-    };
-    let cfg = resolve_semantic_from_unified(&settings, |key| match key {
-        k if k == ENV_SEMANTIC_PROVIDER => Some("anthropic".into()),
-        k if k == ENV_SEMANTIC_MODEL => Some("env-model".into()),
-        k if k == ENV_SEMANTIC_API_KEY => Some("env-key".into()),
-        k if k == ENV_SEMANTIC_BASE_URL => Some("https://env.example.com".into()),
-        _ => None,
-    });
-
-    assert_eq!(
-        cfg.semantic_provider.as_deref(),
-        Some("anthropic"),
-        "env should override file"
-    );
-    assert_eq!(cfg.semantic_model.as_deref(), Some("env-model"));
-    assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
-    assert_eq!(
-        cfg.semantic_base_url.as_deref(),
-        Some("https://env.example.com")
-    );
-}
-
-// ---------------------------------------------------------------------------
-// C. Embedding config from unified
-// ---------------------------------------------------------------------------
-
-#[test]
-fn embedding_from_unified_reads_values() {
+fn embedding_capability_from_unified_does_not_activate_from_unrelated_store_settings() {
     let settings = UnifiedSettings {
         stores: Some(json!({
-            "embedding_provider": "openai",
-            "embedding_model": "text-embedding-ada-002",
-            "embedding_api_key": "sk-embed"
+            "relational": {
+                "sqlite_path": "data/devql.sqlite"
+            }
         })),
         ..Default::default()
     };
-    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
 
-    assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
-    assert_eq!(
-        cfg.embedding_model.as_deref(),
-        Some("text-embedding-ada-002")
-    );
-    assert_eq!(cfg.embedding_api_key.as_deref(), Some("sk-embed"));
+    let capability =
+        resolve_embedding_capability_from_unified(&settings, Path::new("/config"), no_env);
+    assert_eq!(capability.semantic_clones.inference.code_embeddings, None);
+    assert!(capability.inference.profiles.is_empty());
+    assert!(capability.inference.warnings.is_empty());
 }
 
 #[test]
-fn embedding_from_unified_defaults_provider_to_local() {
-    let settings = UnifiedSettings::default();
-    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
+fn semantic_clones_from_unified_reads_mode_fields() {
+    let settings = UnifiedSettings {
+        semantic_clones: Some(json!({
+            "summary_mode": "off",
+            "embedding_mode": "refresh_on_upgrade",
+            "ann_neighbors": 17,
+        })),
+        ..Default::default()
+    };
 
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
+    assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Off);
+    assert_eq!(semantic_clones.inference.summary_generation, None);
     assert_eq!(
-        cfg.embedding_provider.as_deref(),
-        Some("local"),
-        "default embedding provider should be 'local'"
+        semantic_clones.embedding_mode,
+        SemanticCloneEmbeddingMode::RefreshOnUpgrade
     );
+    assert_eq!(semantic_clones.inference.code_embeddings, None);
+    assert_eq!(semantic_clones.ann_neighbors, 17);
+    assert_eq!(
+        semantic_clones.enrichment_workers,
+        DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
+    );
+}
+
+#[test]
+fn semantic_clones_from_unified_clamps_ann_neighbors_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_ANN_NEIGHBORS" => Some("999".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.ann_neighbors, 50);
+    assert_eq!(
+        semantic_clones.enrichment_workers,
+        DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
+    );
+}
+
+#[test]
+fn semantic_clones_from_unified_reads_enrichment_workers_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS" => Some("16".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.enrichment_workers, 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,20 +272,17 @@ fn watch_from_unified_env_overrides() {
         _ => None,
     });
 
-    assert_eq!(cfg.watch_debounce_ms, 200, "env should override file");
+    assert_eq!(cfg.watch_debounce_ms, 200);
     assert_eq!(cfg.watch_poll_fallback_ms, 3000);
 }
 
 #[test]
 fn watch_from_unified_applies_defaults() {
-    let settings = UnifiedSettings::default(); // no watch block
+    let settings = UnifiedSettings::default();
     let cfg = resolve_watch_from_unified(&settings, no_env);
 
-    assert_eq!(cfg.watch_debounce_ms, 500, "default debounce is 500ms");
-    assert_eq!(
-        cfg.watch_poll_fallback_ms, 2000,
-        "default poll fallback is 2000ms"
-    );
+    assert_eq!(cfg.watch_debounce_ms, 500);
+    assert_eq!(cfg.watch_poll_fallback_ms, 2000);
 }
 
 // ---------------------------------------------------------------------------
@@ -312,21 +379,12 @@ fn watch_from_unified_merges_across_json_layers() {
     let merged = merge_layers(&[global, project]);
     let cfg = resolve_watch_from_unified(&merged, no_env);
 
-    assert_eq!(
-        cfg.watch_debounce_ms, 1000,
-        "debounce from global should propagate via JSON merge"
-    );
-    assert_eq!(
-        cfg.watch_poll_fallback_ms, 4000,
-        "poll fallback from project should override default"
-    );
+    assert_eq!(cfg.watch_debounce_ms, 1000);
+    assert_eq!(cfg.watch_poll_fallback_ms, 4000);
 }
 
 // ---------------------------------------------------------------------------
-// H. Provider-less store backend from unified config (spec §5.1, CLI-1480)
-//
-// These tests assert the target API where provider enums are removed and
-// backend availability is derived from connection-string presence.
+// H. Provider-less store backend from unified config
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -341,14 +399,8 @@ fn store_backend_from_unified_has_postgres_when_dsn_present() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
 
-    assert!(
-        cfg.relational.has_postgres(),
-        "postgres_dsn present → has_postgres"
-    );
-    assert!(
-        cfg.events.has_clickhouse(),
-        "clickhouse_url present → has_clickhouse"
-    );
+    assert!(cfg.relational.has_postgres());
+    assert!(cfg.events.has_clickhouse());
 }
 
 #[test]
@@ -357,16 +409,7 @@ fn store_backend_from_unified_defaults_have_no_remote_capabilities() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
 
-    assert!(
-        !cfg.relational.has_postgres(),
-        "default should not have postgres"
-    );
-    assert!(
-        !cfg.events.has_clickhouse(),
-        "default should not have clickhouse"
-    );
-    assert!(
-        !cfg.blobs.has_remote(),
-        "default should not have remote blob"
-    );
+    assert!(!cfg.relational.has_postgres());
+    assert!(!cfg.events.has_clickhouse());
+    assert!(!cfg.blobs.has_remote());
 }

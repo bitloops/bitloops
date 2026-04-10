@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use super::types::{Checkpoint, IngestionProgressEvent};
+use crate::daemon::SyncTaskRecord;
 
 const SUBSCRIPTION_CHANNEL_CAPACITY: usize = 128;
 
@@ -19,18 +20,27 @@ pub(crate) struct IngestionProgressMessage {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct SyncTaskMessage {
+    pub(crate) task_id: String,
+    pub(crate) task: SyncTaskRecord,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct SubscriptionHub {
     checkpoint_ingested: broadcast::Sender<CheckpointIngestedEvent>,
     ingestion_progress: broadcast::Sender<IngestionProgressMessage>,
+    sync_progress: broadcast::Sender<SyncTaskMessage>,
 }
 
 impl Default for SubscriptionHub {
     fn default() -> Self {
         let (checkpoint_ingested, _) = broadcast::channel(SUBSCRIPTION_CHANNEL_CAPACITY);
         let (ingestion_progress, _) = broadcast::channel(SUBSCRIPTION_CHANNEL_CAPACITY);
+        let (sync_progress, _) = broadcast::channel(SUBSCRIPTION_CHANNEL_CAPACITY);
         Self {
             checkpoint_ingested,
             ingestion_progress,
+            sync_progress,
         }
     }
 }
@@ -46,6 +56,10 @@ impl SubscriptionHub {
 
     pub(crate) fn subscribe_progress(&self) -> broadcast::Receiver<IngestionProgressMessage> {
         self.ingestion_progress.subscribe()
+    }
+
+    pub(crate) fn subscribe_sync_progress(&self) -> broadcast::Receiver<SyncTaskMessage> {
+        self.sync_progress.subscribe()
     }
 
     pub(crate) fn publish_checkpoint(&self, repo_name: impl Into<String>, checkpoint: Checkpoint) {
@@ -65,5 +79,10 @@ impl SubscriptionHub {
         let _ = self
             .ingestion_progress
             .send(IngestionProgressMessage { repo_name, event });
+    }
+
+    pub(crate) fn publish_sync_task(&self, task: SyncTaskRecord) {
+        let task_id = task.task_id.clone();
+        let _ = self.sync_progress.send(SyncTaskMessage { task_id, task });
     }
 }

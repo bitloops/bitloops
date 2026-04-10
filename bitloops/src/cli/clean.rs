@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::cli::enable::find_repo_root;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::strategy::manual_commit::list_orphaned_session_states_for_cleanup;
 use crate::utils::paths;
@@ -20,7 +21,12 @@ pub struct CleanupItem {
 }
 
 pub fn run_clean(w: &mut dyn Write, force: bool) -> Result<()> {
-    let repo_root = resolve_repo_root()?;
+    let start = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    run_clean_at(w, force, &start)
+}
+
+fn run_clean_at(w: &mut dyn Write, force: bool, start: &Path) -> Result<()> {
+    let repo_root = resolve_repo_root_from(start)?;
 
     let mut items: Vec<CleanupItem> = Vec::new();
 
@@ -44,7 +50,7 @@ pub fn run_clean(w: &mut dyn Write, force: bool) -> Result<()> {
             }),
     );
 
-    run_clean_with_items(w, force, &items)
+    run_clean_with_items_at_root(w, force, &items, Some(&repo_root))
 }
 
 pub fn run_clean_with_items(w: &mut dyn Write, force: bool, items: &[CleanupItem]) -> Result<()> {
@@ -171,6 +177,10 @@ fn resolve_repo_root() -> Result<PathBuf> {
     }
 }
 
+fn resolve_repo_root_from(start: &Path) -> Result<PathBuf> {
+    find_repo_root(start).map_err(|_| anyhow::anyhow!("not a git repository"))
+}
+
 fn list_orphaned_checkpoint_metadata(_repo_root: &Path) -> Vec<String> {
     // Auto-commit checkpoint metadata cleanup is not yet wired in Rust runtime.
     // Keep this hook point so `clean` can include checkpoint items when that
@@ -222,11 +232,14 @@ fn is_valid_cleanup_id(id: &str) -> bool {
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
-    use super::{CleanupItem, CleanupType, run_clean, run_clean_with_items};
+    use super::{
+        CleanupItem, CleanupType, run_clean_at, run_clean_with_items, run_clean_with_items_at_root,
+    };
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
     use crate::host::checkpoints::session::state::SessionState;
     use crate::storage::SqliteConnectionPool;
-    use crate::test_support::process_state::{git_command, with_process_state};
+    use crate::test_support::git_fixtures::write_test_daemon_config;
+    use crate::test_support::process_state::git_command;
     use std::io::Cursor;
     use std::path::Path;
     use tempfile::TempDir;
@@ -244,22 +257,15 @@ mod tests {
         )
     }
 
-    fn with_legacy_local_backend<T>(f: impl FnOnce() -> T) -> T {
-        f()
-    }
-
-    fn with_legacy_local_backend_at<T>(cwd: &Path, f: impl FnOnce() -> T) -> T {
-        with_process_state(Some(cwd), &[], f)
-    }
-
     fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
         let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
-        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-            resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-                .expect("resolve configured sqlite path")
-        } else {
-            crate::utils::paths::default_relational_db_path(repo_root)
-        }
+        let path = cfg
+            .relational
+            .sqlite_path
+            .as_deref()
+            .expect("test daemon config should set sqlite_path");
+        resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
     }
 
     fn ensure_relational_store_file(repo_root: &Path) {
@@ -291,6 +297,7 @@ mod tests {
             ],
         );
         assert!(ok, "initial commit failed: {err}");
+        write_test_daemon_config(root);
         ensure_relational_store_file(root);
         dir
     }
@@ -309,18 +316,16 @@ mod tests {
     }
 
     fn create_orphan_session_state(repo: &Path, session_id: &str) {
-        with_legacy_local_backend_at(repo, || {
-            let backend = crate::host::checkpoints::session::create_session_backend_or_local(repo);
-            let state = SessionState {
-                session_id: session_id.to_string(),
-                base_commit: "1234567abcdef".to_string(),
-                started_at: "2025-01-01T00:00:00Z".to_string(),
-                ..Default::default()
-            };
-            backend
-                .save_session(&state)
-                .expect("save orphan session state");
-        });
+        let backend = crate::host::checkpoints::session::create_session_backend_or_local(repo);
+        let state = SessionState {
+            session_id: session_id.to_string(),
+            base_commit: "1234567abcdef".to_string(),
+            started_at: "2025-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        backend
+            .save_session(&state)
+            .expect("save orphan session state");
     }
 
     // CLI-537
@@ -329,7 +334,7 @@ mod tests {
         let repo = setup_clean_test_repo();
         let mut stdout = Cursor::new(Vec::new());
 
-        let err = with_legacy_local_backend_at(repo.path(), || run_clean(&mut stdout, false));
+        let err = run_clean_at(&mut stdout, false, repo.path());
         assert!(err.is_ok(), "run_clean returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -350,7 +355,7 @@ mod tests {
         let _ = run_git(&root, &["branch", "bitloops/checkpoints/v1"]);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(&root, || run_clean(&mut stdout, false));
+        let err = run_clean_at(&mut stdout, false, &root);
         assert!(err.is_ok(), "run_clean returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -377,7 +382,7 @@ mod tests {
         let _ = run_git(&root, &["branch", "bitloops/def5678"]);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(&root, || run_clean(&mut stdout, true));
+        let err = run_clean_at(&mut stdout, true, &root);
         assert!(err.is_ok(), "run_clean returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -404,7 +409,7 @@ mod tests {
         let _ = run_git(&root, &["branch", "bitloops/checkpoints/v1"]);
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(&root, || run_clean(&mut stdout, true));
+        let err = run_clean_at(&mut stdout, true, &root);
         assert!(err.is_ok(), "run_clean returned error: {err:?}");
 
         assert!(
@@ -422,7 +427,7 @@ mod tests {
     fn TestRunClean_NotGitRepository() {
         let dir = TempDir::new().expect("temp dir");
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(dir.path(), || run_clean(&mut stdout, false));
+        let err = run_clean_at(&mut stdout, false, dir.path());
         assert!(err.is_err(), "run_clean should fail outside git repository");
     }
 
@@ -437,7 +442,7 @@ mod tests {
         std::fs::create_dir_all(&subdir).expect("subdir");
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(&subdir, || run_clean(&mut stdout, false));
+        let err = run_clean_at(&mut stdout, false, &subdir);
         assert!(
             err.is_ok(),
             "run_clean returned error from subdirectory: {err:?}"
@@ -457,7 +462,7 @@ mod tests {
         create_orphan_session_state(&root, "orphan-session-123");
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(&root, || run_clean(&mut stdout, false));
+        let err = run_clean_at(&mut stdout, false, &root);
         assert!(err.is_ok(), "run_clean returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -477,19 +482,17 @@ mod tests {
         let root = repo.path().to_path_buf();
         create_orphan_session_state(&root, "orphan-session-456");
 
-        with_legacy_local_backend_at(&root, || {
-            let backend = crate::host::checkpoints::session::create_session_backend_or_local(&root);
-            assert!(
-                backend
-                    .load_session("orphan-session-456")
-                    .expect("load orphan state")
-                    .is_some(),
-                "expected orphan session state to exist before cleanup"
-            );
-        });
+        let backend = crate::host::checkpoints::session::create_session_backend_or_local(&root);
+        assert!(
+            backend
+                .load_session("orphan-session-456")
+                .expect("load orphan state")
+                .is_some(),
+            "expected orphan session state to exist before cleanup"
+        );
 
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend_at(&root, || run_clean(&mut stdout, true));
+        let err = run_clean_at(&mut stdout, true, &root);
         assert!(err.is_ok(), "run_clean returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
@@ -497,16 +500,14 @@ mod tests {
             output.contains("Session states (1)"),
             "expected deleted session-state section, got: {output}"
         );
-        with_legacy_local_backend_at(&root, || {
-            let backend = crate::host::checkpoints::session::create_session_backend_or_local(&root);
-            assert!(
-                backend
-                    .load_session("orphan-session-456")
-                    .expect("load orphan state after cleanup")
-                    .is_none(),
-                "expected orphan session state to be deleted"
-            );
-        });
+        let backend = crate::host::checkpoints::session::create_session_backend_or_local(&root);
+        assert!(
+            backend
+                .load_session("orphan-session-456")
+                .expect("load orphan state after cleanup")
+                .is_none(),
+            "expected orphan session state to be deleted"
+        );
     }
 
     // CLI-543
@@ -530,8 +531,7 @@ mod tests {
             },
         ];
 
-        let err =
-            with_legacy_local_backend_at(&root, || run_clean_with_items(&mut stdout, true, &items));
+        let err = run_clean_with_items_at_root(&mut stdout, true, &items, Some(&root));
         assert!(
             err.is_err(),
             "run_clean_with_items should return error when some deletions fail"
@@ -574,8 +574,7 @@ mod tests {
             },
         ];
 
-        let err =
-            with_legacy_local_backend_at(&root, || run_clean_with_items(&mut stdout, true, &items));
+        let err = run_clean_with_items_at_root(&mut stdout, true, &items, Some(&root));
         assert!(err.is_err(), "should return error when all deletions fail");
 
         let err_str = err.err().map(|e| e.to_string()).unwrap_or_default();
@@ -599,7 +598,7 @@ mod tests {
     #[test]
     fn TestRunCleanWithItems_NoItems() {
         let mut stdout = Cursor::new(Vec::new());
-        let err = with_legacy_local_backend(|| run_clean_with_items(&mut stdout, false, &[]));
+        let err = run_clean_with_items(&mut stdout, false, &[]);
         assert!(err.is_ok(), "run_clean_with_items returned error: {err:?}");
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");

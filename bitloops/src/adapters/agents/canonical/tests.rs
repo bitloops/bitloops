@@ -179,10 +179,14 @@ fn lifecycle_event_conversion_trims_host_owned_values() {
         event_type: Some(LifecycleEventType::TurnStart),
         session_id: " session-7 ".to_string(),
         session_ref: " /tmp/session-7.jsonl ".to_string(),
+        source: String::new(),
         prompt: "  hello world  ".to_string(),
+        tool_name: String::new(),
         tool_use_id: "  tool-1  ".to_string(),
+        tool_input: None,
         subagent_id: "  subagent-9  ".to_string(),
         model: "  gemini-2.5  ".to_string(),
+        finalize_open_turn: false,
     };
 
     let canonical = CanonicalLifecycleEvent::from(&event);

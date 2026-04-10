@@ -1,19 +1,20 @@
 use std::fs;
 mod test_harness_support;
 
+use bitloops::capability_packs::test_harness::storage::TestHarnessQueryRepository;
+use bitloops::models::{CoverageFormat, ScopeKind};
 use rusqlite::{Connection, params};
-use serde_json::Value;
 use test_harness_support::{
-    Workspace, bootstrap_codex_workspace, load_symbol_fqn, run_bitloops_or_panic,
+    Workspace, bootstrap_minimal_workspace, ingest_test_harness_coverage,
+    ingest_test_harness_tests, open_test_harness_repository, run_devql_init,
     seed_production_artefacts, write_rust_coverage_fixture,
 };
 
 #[test]
-#[ignore = "slow E2E: spawns bitloops binary; run with `cargo test -- --ignored`"]
 fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
     let workspace = Workspace::new("sqlite-init");
 
-    bootstrap_codex_workspace(&workspace);
+    bootstrap_minimal_workspace(&workspace);
 
     assert!(
         workspace.db_path().is_file(),
@@ -34,27 +35,25 @@ fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
         "expected checkpoint/session schema after init"
     );
 
-    let pre_devql_test_scenarios_count: i64 = conn
+    let pre_devql_test_artefacts_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'test_scenarios'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'test_artefacts_current'",
             [],
             |row| row.get(0),
         )
-        .expect("query pre-devql test_scenarios table");
+        .expect("query pre-devql test_artefacts_current table");
     assert_eq!(
-        pre_devql_test_scenarios_count, 0,
+        pre_devql_test_artefacts_count, 0,
         "did not expect test-harness tables before devql init"
     );
 
-    run_bitloops_or_panic(workspace.repo_dir(), &["devql", "init"]);
+    run_devql_init(&workspace);
 
     for table in [
-        "test_suites",
-        "test_scenarios",
-        "test_links",
+        "test_artefacts_current",
+        "test_artefact_edges_current",
         "coverage_captures",
         "coverage_hits",
-        "test_discovery_runs",
     ] {
         let count: i64 = conn
             .query_row(
@@ -68,20 +67,16 @@ fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
 }
 
 #[test]
-#[ignore = "slow E2E: spawns bitloops binary; run with `cargo test -- --ignored`"]
-fn bitloops_testlens_ingest_coverage_reports_artefact_only_mode_on_sqlite() {
+fn bitloops_testlens_ingest_coverage_records_sqlite_hits_without_cli_spawn() {
     let workspace = Workspace::new("sqlite-coverage");
     write_rust_coverage_fixture(&workspace);
 
-    bootstrap_codex_workspace(&workspace);
-    run_bitloops_or_panic(workspace.repo_dir(), &["devql", "init"]);
+    bootstrap_minimal_workspace(&workspace);
+    run_devql_init(&workspace);
 
     for commit in ["C0", "C1"] {
         seed_production_artefacts(&workspace, commit);
-        run_bitloops_or_panic(
-            workspace.repo_dir(),
-            &["testlens", "ingest-tests", "--commit", commit],
-        );
+        ingest_test_harness_tests(&workspace, commit);
     }
 
     let lcov_path = workspace.repo_dir().join("rust-coverage.lcov");
@@ -100,66 +95,53 @@ end_of_record
     )
     .expect("write lcov");
 
-    run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &[
-            "testlens",
-            "ingest-coverage",
-            "--commit",
-            "C1",
-            "--scope",
-            "workspace",
-            "--tool",
-            "cargo-llvm-cov",
-            "--lcov",
-            lcov_path.to_str().expect("lcov path should be utf-8"),
-        ],
+    ingest_test_harness_coverage(
+        &workspace,
+        "C1",
+        &lcov_path,
+        ScopeKind::Workspace,
+        "cargo-llvm-cov",
+        CoverageFormat::Lcov,
     );
 
     let conn = Connection::open(workspace.db_path()).expect("open sqlite db");
-    let rust_find_by_id = load_symbol_fqn(&conn, "C1", "%find_by_id");
-
-    let c0_query: Value = serde_json::from_str(&run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &[
-            "testlens",
-            "query",
-            "--artefact",
-            &rust_find_by_id,
-            "--commit",
-            "C0",
-            "--view",
-            "coverage",
-        ],
-    ))
-    .expect("parse C0 query json");
+    let repository = open_test_harness_repository(&workspace);
     assert!(
-        c0_query["coverage"].is_null(),
-        "expected null coverage payload for commit C0"
-    );
-
-    let c1_summary: Value = serde_json::from_str(&run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &[
-            "testlens",
-            "query",
-            "--artefact",
-            &rust_find_by_id,
-            "--commit",
-            "C1",
-            "--view",
-            "summary",
-        ],
-    ))
-    .expect("parse C1 summary json");
-    assert_eq!(
-        c1_summary["summary"]["coverage_mode"].as_str(),
-        Some("artefact_only"),
-        "expected workspace coverage to remain artefact_only"
+        !repository
+            .coverage_exists_for_commit("C0")
+            .expect("check C0 coverage state"),
+        "expected no coverage payload for commit C0"
     );
     assert!(
-        c1_summary["summary"]["line_coverage_pct"].is_number(),
-        "expected line coverage percentage in summary"
+        repository
+            .coverage_exists_for_commit("C1")
+            .expect("check C1 coverage state"),
+        "expected coverage payload for commit C1"
+    );
+    let covered_symbol_id: String = conn
+        .query_row(
+            r#"
+SELECT ch.production_symbol_id
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+LIMIT 1
+"#,
+            params!["C1"],
+            |row| row.get(0),
+        )
+        .expect("load a covered production symbol for C1");
+    let c1_summary = repository
+        .load_coverage_summary("C1", &covered_symbol_id)
+        .expect("load C1 coverage summary")
+        .expect("expected coverage summary for commit C1");
+    assert!(
+        c1_summary.line_total > 0,
+        "expected line coverage rows for C1"
+    );
+    assert!(
+        c1_summary.line_covered > 0,
+        "expected at least one covered line for C1"
     );
 
     let c1_hit_count: i64 = conn

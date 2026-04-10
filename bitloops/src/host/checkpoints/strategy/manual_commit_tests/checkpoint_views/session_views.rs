@@ -3,7 +3,7 @@ use super::*;
 #[test]
 pub(crate) fn read_committed_returns_checkpoint_summary() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "c1c2c3c4c5c6";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -36,7 +36,16 @@ pub(crate) fn read_committed_returns_checkpoint_summary() {
 #[test]
 pub(crate) fn write_committed_aggregation() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
+    commit_files(
+        dir.path(),
+        &[
+            ("a.rs", "pub fn a() {}\n"),
+            ("b.rs", "pub fn b() {}\n"),
+            ("c.rs", "pub fn c() {}\n"),
+        ],
+        "prepare committed checkpoint provenance",
+    );
     let checkpoint_id = "b1b2b3b4b5b6";
     write_committed(
         dir.path(),
@@ -141,7 +150,7 @@ pub(crate) fn write_committed_aggregation() {
 #[test]
 pub(crate) fn read_session_content_by_index() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "d1d2d3d4d5d6";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -186,7 +195,7 @@ pub(crate) fn read_session_content_by_index() {
 #[test]
 pub(crate) fn read_session_content_invalid_index() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "e1e2e3e4e5e6";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -210,7 +219,7 @@ pub(crate) fn read_session_content_invalid_index() {
 #[test]
 pub(crate) fn read_latest_session_content_returns_latest() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "f1f2f3f4f5f6";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -237,7 +246,7 @@ pub(crate) fn read_latest_session_content_returns_latest() {
 #[test]
 pub(crate) fn read_session_content_by_id_lookup() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "010203040506";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -263,7 +272,7 @@ pub(crate) fn read_session_content_by_id_lookup() {
 #[test]
 pub(crate) fn read_session_content_by_id_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "111213141516";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -288,7 +297,7 @@ pub(crate) fn read_session_content_by_id_not_found() {
 #[test]
 pub(crate) fn list_committed_multi_session_info() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "212223242526";
     let strategy = ManualCommitStrategy::new(dir.path());
 
@@ -323,7 +332,7 @@ pub(crate) fn list_committed_multi_session_info() {
 #[test]
 pub(crate) fn write_committed_session_with_no_prompts() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "313233343536";
 
     let result = write_committed(
@@ -374,7 +383,7 @@ pub(crate) fn write_committed_session_with_no_prompts() {
 #[test]
 pub(crate) fn write_committed_session_with_summary() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "aabbccddeeff";
 
     let summary = serde_json::json!({
@@ -431,7 +440,7 @@ pub(crate) fn write_committed_session_with_summary() {
 #[test]
 pub(crate) fn write_committed_session_with_no_context() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "414243444546";
 
     let result = write_committed(

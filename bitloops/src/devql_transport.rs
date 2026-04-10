@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use axum::http::HeaderMap;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -31,6 +32,29 @@ pub(crate) struct SlimCliRepoScope {
     pub(crate) git_dir_relative_path: String,
     pub(crate) config_fingerprint: String,
 }
+
+#[derive(Debug)]
+enum DevqlScopeDiscoveryError {
+    RepoRootUnavailable { stderr: Option<String> },
+}
+
+impl std::fmt::Display for DevqlScopeDiscoveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RepoRootUnavailable {
+                stderr: Some(stderr),
+            } => write!(
+                f,
+                "failed to resolve git repository root for DevQL scope: {stderr}"
+            ),
+            Self::RepoRootUnavailable { stderr: None } => {
+                write!(f, "failed to resolve git repository root for DevQL scope")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DevqlScopeDiscoveryError {}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RepoPathRegistry {
@@ -76,35 +100,54 @@ pub(crate) fn discover_slim_cli_repo_scope(cwd: Option<&Path>) -> Result<SlimCli
     })
 }
 
+pub(crate) fn is_repo_root_discovery_error(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<DevqlScopeDiscoveryError>(),
+        Some(DevqlScopeDiscoveryError::RepoRootUnavailable { .. })
+    )
+}
+
 pub(crate) fn attach_slim_cli_scope_headers(
     request: RequestBuilder,
     scope: &SlimCliRepoScope,
 ) -> RequestBuilder {
     let request = request
         .header(HEADER_SCOPE_REPO_ID, scope.repo.repo_id.as_str())
-        .header(HEADER_SCOPE_REPO_NAME, scope.repo.name.as_str())
+        .header(
+            HEADER_SCOPE_REPO_NAME,
+            encode_scope_header_value(scope.repo.name.as_str()),
+        )
         .header(HEADER_SCOPE_REPO_PROVIDER, scope.repo.provider.as_str())
         .header(
             HEADER_SCOPE_REPO_ORGANISATION,
-            scope.repo.organization.as_str(),
+            encode_scope_header_value(scope.repo.organization.as_str()),
         )
-        .header(HEADER_SCOPE_REPO_IDENTITY, scope.repo.identity.as_str())
+        .header(
+            HEADER_SCOPE_REPO_IDENTITY,
+            encode_scope_header_value(scope.repo.identity.as_str()),
+        )
         .header(
             HEADER_SCOPE_REPO_ROOT,
-            scope.repo_root.to_string_lossy().to_string(),
+            encode_scope_header_value(&scope.repo_root.to_string_lossy()),
         )
-        .header(HEADER_SCOPE_BRANCH, scope.branch_name.as_str())
+        .header(
+            HEADER_SCOPE_BRANCH,
+            encode_scope_header_value(scope.branch_name.as_str()),
+        )
         .header(
             HEADER_SCOPE_CONFIG_FINGERPRINT,
             scope.config_fingerprint.as_str(),
         )
         .header(
             HEADER_SCOPE_GIT_DIR_RELATIVE_PATH,
-            scope.git_dir_relative_path.as_str(),
+            encode_scope_header_value(scope.git_dir_relative_path.as_str()),
         );
 
     match scope.project_path.as_deref() {
-        Some(project_path) => request.header(HEADER_SCOPE_PROJECT_PATH, project_path),
+        Some(project_path) => request.header(
+            HEADER_SCOPE_PROJECT_PATH,
+            encode_scope_header_value(project_path),
+        ),
         None => request,
     }
 }
@@ -112,26 +155,33 @@ pub(crate) fn attach_slim_cli_scope_headers(
 pub(crate) fn parse_slim_cli_scope_headers(
     headers: &HeaderMap,
 ) -> Result<Option<SlimCliRepoScope>> {
-    let Some(repo_root) = header_value(headers, HEADER_SCOPE_REPO_ROOT)? else {
+    let Some(repo_root) = decode_scope_header_value(headers, HEADER_SCOPE_REPO_ROOT)? else {
         return Ok(None);
     };
     let repo_root = PathBuf::from(repo_root);
     let repo = RepoIdentity {
         repo_id: required_header_value(headers, HEADER_SCOPE_REPO_ID)?,
-        name: required_header_value(headers, HEADER_SCOPE_REPO_NAME)?,
+        name: required_decoded_scope_header_value(headers, HEADER_SCOPE_REPO_NAME)?,
         provider: required_header_value(headers, HEADER_SCOPE_REPO_PROVIDER)?,
-        organization: required_header_value(headers, HEADER_SCOPE_REPO_ORGANISATION)?,
-        identity: required_header_value(headers, HEADER_SCOPE_REPO_IDENTITY)?,
+        organization: required_decoded_scope_header_value(headers, HEADER_SCOPE_REPO_ORGANISATION)?,
+        identity: required_decoded_scope_header_value(headers, HEADER_SCOPE_REPO_IDENTITY)?,
     };
 
     Ok(Some(SlimCliRepoScope {
         repo,
         repo_root,
-        branch_name: required_header_value(headers, HEADER_SCOPE_BRANCH)?,
-        project_path: header_value(headers, HEADER_SCOPE_PROJECT_PATH)?,
-        git_dir_relative_path: required_header_value(headers, HEADER_SCOPE_GIT_DIR_RELATIVE_PATH)?,
+        branch_name: required_decoded_scope_header_value(headers, HEADER_SCOPE_BRANCH)?,
+        project_path: decode_scope_header_value(headers, HEADER_SCOPE_PROJECT_PATH)?,
+        git_dir_relative_path: required_decoded_scope_header_value(
+            headers,
+            HEADER_SCOPE_GIT_DIR_RELATIVE_PATH,
+        )?,
         config_fingerprint: required_header_value(headers, HEADER_SCOPE_CONFIG_FINGERPRINT)?,
     }))
+}
+
+pub(crate) fn encode_scope_header_value(input: &str) -> String {
+    URL_SAFE_NO_PAD.encode(input.as_bytes())
 }
 
 pub(crate) fn load_repo_path_registry(path: &Path) -> Result<RepoPathRegistry> {
@@ -215,10 +265,10 @@ fn resolve_repo_root_from_cwd(cwd: &Path) -> Result<PathBuf> {
         .context("resolving git repository root for DevQL scope")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            bail!("failed to resolve git repository root for DevQL scope");
+        return Err(DevqlScopeDiscoveryError::RepoRootUnavailable {
+            stderr: (!stderr.is_empty()).then_some(stderr),
         }
-        bail!("failed to resolve git repository root for DevQL scope: {stderr}");
+        .into());
     }
     let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if root.is_empty() {
@@ -273,8 +323,28 @@ fn header_value(headers: &HeaderMap, name: &str) -> Result<Option<String>> {
     Ok(Some(value))
 }
 
+fn decode_scope_header_value(headers: &HeaderMap, name: &str) -> Result<Option<String>> {
+    let Some(value) = header_value(headers, name)? else {
+        return Ok(None);
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .with_context(|| format!("decoding Bitloops DevQL scope header `{name}` from base64url"))?;
+    let decoded = String::from_utf8(bytes)
+        .with_context(|| format!("decoding Bitloops DevQL scope header `{name}` as UTF-8"))?;
+    if decoded.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(decoded))
+}
+
 fn required_header_value(headers: &HeaderMap, name: &str) -> Result<String> {
     header_value(headers, name)?
+        .ok_or_else(|| anyhow!("missing Bitloops DevQL scope header `{name}`"))
+}
+
+fn required_decoded_scope_header_value(headers: &HeaderMap, name: &str) -> Result<String> {
+    decode_scope_header_value(headers, name)?
         .ok_or_else(|| anyhow!("missing Bitloops DevQL scope header `{name}`"))
 }
 
@@ -324,6 +394,8 @@ fn unix_timestamp_now() -> u64 {
 mod tests {
     use super::*;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+    use axum::http::HeaderValue;
+    use reqwest::Client;
     use tempfile::TempDir;
 
     fn canonical_path(path: &Path) -> PathBuf {
@@ -459,6 +531,62 @@ mod tests {
         assert_eq!(
             registry.entries[0].git_dir_relative_path.as_deref(),
             Some(".git")
+        );
+    }
+
+    #[test]
+    fn slim_cli_scope_headers_round_trip_unicode_scope_values() {
+        let scope = SlimCliRepoScope {
+            repo: RepoIdentity {
+                repo_id: "repo-id".to_string(),
+                name: "cafe-dashboard".to_string(),
+                provider: "local".to_string(),
+                organization: "local".to_string(),
+                identity: "local://local/cafe-dashboard".to_string(),
+            },
+            repo_root: PathBuf::from("/tmp/Jack’s MacBook Pro – 2/local-dashboard"),
+            branch_name: "main".to_string(),
+            project_path: Some("packages/café".to_string()),
+            git_dir_relative_path: ".git".to_string(),
+            config_fingerprint: "fingerprint-a".to_string(),
+        };
+
+        let request =
+            attach_slim_cli_scope_headers(Client::new().post("http://127.0.0.1/devql"), &scope)
+                .build()
+                .expect("build request with slim headers");
+
+        let parsed = parse_slim_cli_scope_headers(request.headers())
+            .expect("unicode scope headers should round-trip successfully")
+            .expect("scope headers should be present");
+
+        assert_eq!(parsed.repo_root, scope.repo_root);
+        assert_eq!(parsed.project_path, scope.project_path);
+        assert_eq!(parsed.branch_name, scope.branch_name);
+        assert_eq!(parsed.git_dir_relative_path, scope.git_dir_relative_path);
+        assert_eq!(parsed.config_fingerprint, scope.config_fingerprint);
+        assert_eq!(parsed.repo.repo_id, scope.repo.repo_id);
+        assert_eq!(parsed.repo.name, scope.repo.name);
+        assert_eq!(parsed.repo.provider, scope.repo.provider);
+        assert_eq!(parsed.repo.organization, scope.repo.organization);
+        assert_eq!(parsed.repo.identity, scope.repo.identity);
+    }
+
+    #[test]
+    fn parsing_scope_headers_rejects_invalid_base64url_payload() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_SCOPE_REPO_ROOT,
+            HeaderValue::from_static("not-base64!"),
+        );
+
+        let err = parse_slim_cli_scope_headers(&headers).expect_err("invalid base64url payload");
+
+        assert!(
+            format!("{err:#}").contains(
+                "decoding Bitloops DevQL scope header `x-bitloops-cli-repo-root` from base64url"
+            ),
+            "unexpected error: {err:#}"
         );
     }
 }

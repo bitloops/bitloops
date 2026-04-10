@@ -9,19 +9,21 @@ pub use classification::{is_infrastructure_path, is_protected_path, to_relative_
 pub use claude::{get_claude_project_dir, sanitize_path_for_claude};
 pub use constants::{
     BITLOOPS_BLOB_STORE_DIR, BITLOOPS_DIR, BITLOOPS_EMBEDDING_MODELS_DIR, BITLOOPS_EMBEDDINGS_DIR,
-    BITLOOPS_EVENT_STORE_DIR, BITLOOPS_METADATA_DIR, BITLOOPS_RELATIONAL_STORE_DIR,
-    BITLOOPS_STORES_DIR, BITLOOPS_TMP_DIR, CHECKPOINT_FILE_NAME, CONTENT_HASH_FILE_NAME,
-    CONTEXT_FILE_NAME, EVENTS_DB_FILE_NAME, EXPORT_DATA_FILE_NAME, METADATA_BRANCH_NAME,
-    METADATA_FILE_NAME, PROMPT_FILE_NAME, RELATIONAL_DB_FILE_NAME, SETTINGS_FILE_NAME,
-    SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, TRANSCRIPT_FILE_NAME_LEGACY,
+    BITLOOPS_EVENT_STORE_DIR, BITLOOPS_RELATIONAL_STORE_DIR, BITLOOPS_RUNTIME_STORE_DIR,
+    BITLOOPS_STORES_DIR, BITLOOPS_TEST_STATE_DIR, CHECKPOINT_FILE_NAME, CONTENT_HASH_FILE_NAME,
+    CONTEXT_FILE_NAME, EVENTS_DB_FILE_NAME, EXPORT_DATA_FILE_NAME, LEGACY_BITLOOPS_METADATA_DIR,
+    METADATA_BRANCH_NAME, METADATA_FILE_NAME, PROMPT_FILE_NAME, RELATIONAL_DB_FILE_NAME,
+    RUNTIME_DB_FILE_NAME, SETTINGS_FILE_NAME, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME,
+    TRANSCRIPT_FILE_NAME_LEGACY,
 };
 pub use repo::{
     abs_path, bitloops_project_root, clear_repo_root_cache, open_repository, repo_root,
 };
 pub use storage::{
     default_blob_store_path, default_embedding_model_cache_dir, default_events_db_path,
-    default_relational_db_path, default_runtime_state_dir, default_session_tmp_dir,
-    extract_session_id_from_transcript_path, session_metadata_dir_from_session_id,
+    default_global_runtime_db_path, default_relational_db_path, default_repo_runtime_db_path,
+    default_runtime_state_dir, default_session_tmp_dir, extract_session_id_from_transcript_path,
+    legacy_session_metadata_dir_from_session_id,
 };
 pub use worktree::{get_main_repo_root, get_worktree_id, is_inside_worktree};
 
@@ -32,19 +34,20 @@ mod tests {
         default_embedding_model_cache_dir, default_events_db_path, default_relational_db_path,
         extract_session_id_from_transcript_path, get_claude_project_dir, get_main_repo_root,
         get_worktree_id, is_infrastructure_path, is_inside_worktree, is_protected_path,
-        open_repository, repo_root, sanitize_path_for_claude, session_metadata_dir_from_session_id,
-        to_relative_path,
+        legacy_session_metadata_dir_from_session_id, open_repository, repo_root,
+        sanitize_path_for_claude, to_relative_path,
     };
-    use crate::test_support::process_state::{with_cwd, with_env_var};
+    use crate::test_support::process_state::{
+        isolated_git_command, with_cwd, with_env_var, with_process_state,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tempfile::tempdir;
 
     fn init_git_repo(path: &Path) {
-        let status = Command::new("git")
+        let status = isolated_git_command(path)
             .arg("init")
-            .current_dir(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -54,9 +57,8 @@ mod tests {
     }
 
     fn run_git(path: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let output = isolated_git_command(path)
             .args(args)
-            .current_dir(path)
             .output()
             .expect("run git command");
 
@@ -90,6 +92,10 @@ mod tests {
             (".bitloops/metadata/test", true),
             (".bitloops", true),
             (".bitloops\\metadata\\test", true),
+            (
+                ".bitloops-test-state/daemon/repos/hash/tmp/pre-prompt.json",
+                true,
+            ),
             (".bitloopsfile", false),
         ];
 
@@ -141,8 +147,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_metadata_dir_from_session_id() {
-        let got = session_metadata_dir_from_session_id("sess-123");
+    fn test_legacy_session_metadata_dir_from_session_id() {
+        let got = legacy_session_metadata_dir_from_session_id("sess-123");
         assert_eq!(got, ".bitloops/metadata/sess-123");
     }
 
@@ -513,6 +519,31 @@ mod tests {
     }
 
     #[test]
+    fn test_repo_root_ignores_inherited_git_hook_env() {
+        let repo = tempdir().expect("create repo");
+        init_git_repo(repo.path());
+
+        let fake_git_dir = repo.path().join("nonexistent-hook-git-dir");
+        let fake_work_tree = repo.path().join("nonexistent-hook-worktree");
+        let fake_git_dir_value = fake_git_dir.to_string_lossy().to_string();
+        let fake_work_tree_value = fake_work_tree.to_string_lossy().to_string();
+
+        with_process_state(
+            Some(repo.path()),
+            &[
+                ("GIT_DIR", Some(fake_git_dir_value.as_str())),
+                ("GIT_WORK_TREE", Some(fake_work_tree_value.as_str())),
+                ("GIT_INDEX_FILE", Some(fake_git_dir_value.as_str())),
+            ],
+            || {
+                clear_repo_root_cache();
+                let root = repo_root().expect("repo_root should ignore inherited git hook env");
+                assert_eq!(canonical(&root), canonical(repo.path()));
+            },
+        );
+    }
+
+    #[test]
     fn test_repo_root_errors_outside_git_repository() {
         let non_repo = tempdir().expect("create temp dir");
         with_cwd(non_repo.path(), || {
@@ -541,13 +572,18 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         let result = bitloops_project_root(&app_dir).unwrap();
         assert_eq!(
             canonical(&result),
             canonical(&app_dir),
-            "should find nearest .bitloops at packages/app, not git root"
+            "should find nearest repo policy at packages/app, not git root"
         );
     }
 
@@ -563,7 +599,7 @@ mod tests {
         assert_eq!(
             canonical(&result),
             canonical(root.path()),
-            "should fall back to git root when no .bitloops marker"
+            "should fall back to git root when no repo policy marker"
         );
     }
 
@@ -573,7 +609,12 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
         let deep_dir = app_dir.join("src/components");
         fs::create_dir_all(&deep_dir).unwrap();
 
@@ -590,15 +631,24 @@ mod tests {
         let root = tempdir().expect("create monorepo root");
         init_git_repo(root.path());
 
-        fs::create_dir_all(root.path().join(".bitloops")).unwrap();
+        fs::write(
+            root.path().join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         let result = bitloops_project_root(&app_dir).unwrap();
         assert_eq!(
             canonical(&result),
             canonical(&app_dir),
-            "should prefer nearest .bitloops over git-root .bitloops"
+            "should prefer nearest repo policy over git-root policy"
         );
     }
 
@@ -608,7 +658,12 @@ mod tests {
         init_git_repo(root.path());
 
         let app_dir = root.path().join("packages/app");
-        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::write(
+            app_dir.join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         with_cwd(&app_dir, || {
             clear_repo_root_cache();
@@ -626,7 +681,11 @@ mod tests {
         let root = tempdir().expect("create single repo");
         init_git_repo(root.path());
 
-        fs::create_dir_all(root.path().join(".bitloops")).unwrap();
+        fs::write(
+            root.path().join(".bitloops.toml"),
+            "[capture]\nenabled = true\n",
+        )
+        .unwrap();
 
         let result = bitloops_project_root(root.path()).unwrap();
         assert_eq!(

@@ -1,8 +1,10 @@
 use crate::host::devql::CanonicalKindProjection;
 
+use super::LanguageKind;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CanonicalMapping {
-    pub(crate) language_kind: &'static str,
+    pub(crate) language_kind: LanguageKind,
     pub(crate) projection: CanonicalKindProjection,
     pub(crate) condition: MappingCondition,
 }
@@ -18,7 +20,7 @@ pub(crate) enum MappingCondition {
 /// language_kind, it takes precedence over the `Always` entry.
 pub(crate) fn resolve_canonical_kind(
     mappings: &[CanonicalMapping],
-    language_kind: &str,
+    language_kind: LanguageKind,
     inside_parent: bool,
 ) -> Option<CanonicalKindProjection> {
     let mut always_match = None;
@@ -42,6 +44,9 @@ pub(crate) fn resolve_canonical_kind(
 }
 
 /// Check whether a language_kind is in the supported set.
-pub(crate) fn is_supported_language_kind(supported: &[&str], language_kind: &str) -> bool {
+pub(crate) fn is_supported_language_kind(
+    supported: &[LanguageKind],
+    language_kind: LanguageKind,
+) -> bool {
     supported.contains(&language_kind)
 }

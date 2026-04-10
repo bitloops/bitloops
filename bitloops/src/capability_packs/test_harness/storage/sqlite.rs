@@ -20,8 +20,8 @@ use crate::models::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
     StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestHarnessCommitCounts,
+    TestRunRecord, derive_test_classification,
 };
 use crate::storage::init::open_existing_database;
 
@@ -33,8 +33,7 @@ use self::stage_serving::{
 };
 use self::writes::{
     clear_existing_test_discovery_data, upsert_test_artefact_current,
-    upsert_test_artefact_edge_current, upsert_test_classification,
-    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
+    upsert_test_artefact_edge_current, upsert_test_classification, upsert_test_run,
 };
 
 pub struct SqliteTestHarnessRepository {
@@ -50,7 +49,7 @@ impl SqliteTestHarnessRepository {
 }
 
 impl TestHarnessRepository for SqliteTestHarnessRepository {
-    fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
+    fn load_test_scenarios(&self, _commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
         let mut stmt = self
             .conn
             .prepare(
@@ -60,15 +59,14 @@ FROM test_artefacts_current ts
 LEFT JOIN test_artefacts_current parent
   ON parent.repo_id = ts.repo_id
  AND parent.symbol_id = ts.parent_symbol_id
-WHERE ts.commit_sha = ?1
-  AND ts.canonical_kind = 'test_scenario'
+WHERE ts.canonical_kind = 'test_scenario'
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
             )
             .context("failed preparing scenario lookup query")?;
 
         let rows = stmt
-            .query_map(params![commit_sha], |row| {
+            .query_map([], |row| {
                 Ok(ResolvedTestScenarioRecord {
                     scenario_id: row.get(0)?,
                     path: row.get(1)?,
@@ -90,8 +88,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         let tx = self
             .conn
@@ -99,10 +95,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
             .context("failed to start test discovery transaction")?;
         clear_existing_test_discovery_data(&tx, commit_sha)?;
 
-        upsert_test_discovery_run(&tx, discovery_run)?;
-        for diagnostic in diagnostics {
-            upsert_test_discovery_diagnostic(&tx, diagnostic)?;
-        }
         for artefact in test_artefacts {
             upsert_test_artefact_current(&tx, artefact)?;
         }
@@ -512,6 +504,63 @@ LIMIT 1
         }))
     }
 
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<HashMap<String, LatestTestRunRecord>> {
+        if test_symbol_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let placeholders = (0..test_symbol_ids.len())
+            .map(|idx| format!("?{}", idx + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+SELECT test_symbol_id, status, duration_ms, commit_sha
+FROM test_runs
+WHERE commit_sha = ?1
+  AND test_symbol_id IN ({placeholders})
+ORDER BY test_symbol_id, ran_at DESC
+"#
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("failed preparing latest runs query")?;
+
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(commit_sha.to_string())];
+        for test_symbol_id in test_symbol_ids {
+            params_vec.push(Box::new(test_symbol_id.clone()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|value| value.as_ref()).collect();
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    LatestTestRunRecord {
+                        status: row.get(1)?,
+                        duration_ms: row.get(2)?,
+                        commit_sha: row.get(3)?,
+                    },
+                ))
+            })
+            .context("failed querying latest runs")?;
+
+        let mut runs = HashMap::new();
+        for row in rows {
+            let (test_symbol_id, latest_run) = row.context("failed decoding latest run row")?;
+            runs.entry(test_symbol_id).or_insert(latest_run);
+        }
+        Ok(runs)
+    }
+
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
@@ -605,34 +654,34 @@ ORDER BY ch.line, ch.branch_id
     }
 
     fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts> {
-        fn count(conn: &Connection, sql: &str, commit_sha: &str) -> Result<u64> {
-            let n: i64 = conn
-                .query_row(sql, params![commit_sha], |row| row.get(0))
-                .context("test harness commit count query")?;
+        fn count(conn: &Connection, sql: &str, commit_sha: Option<&str>) -> Result<u64> {
+            let n: i64 = if let Some(commit_sha) = commit_sha {
+                conn.query_row(sql, params![commit_sha], |row| row.get(0))
+                    .context("test harness commit count query")?
+            } else {
+                conn.query_row(sql, [], |row| row.get(0))
+                    .context("test harness commit count query")?
+            };
             Ok(n.max(0) as u64)
         }
 
         let conn = &self.conn;
         Ok(TestHarnessCommitCounts {
-            test_artefacts: count(
-                conn,
-                "SELECT COUNT(*) FROM test_artefacts_current WHERE commit_sha = ?1",
-                commit_sha,
-            )?,
+            test_artefacts: count(conn, "SELECT COUNT(*) FROM test_artefacts_current", None)?,
             test_artefact_edges: count(
                 conn,
-                "SELECT COUNT(*) FROM test_artefact_edges_current WHERE commit_sha = ?1",
-                commit_sha,
+                "SELECT COUNT(*) FROM test_artefact_edges_current",
+                None,
             )?,
             test_classifications: count(
                 conn,
                 "SELECT COUNT(*) FROM test_classifications WHERE commit_sha = ?1",
-                commit_sha,
+                Some(commit_sha),
             )?,
             coverage_captures: count(
                 conn,
                 "SELECT COUNT(*) FROM coverage_captures WHERE commit_sha = ?1",
-                commit_sha,
+                Some(commit_sha),
             )?,
             coverage_hits: count(
                 conn,
@@ -641,7 +690,7 @@ SELECT COUNT(*) FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
 "#,
-                commit_sha,
+                Some(commit_sha),
             )?,
         })
     }

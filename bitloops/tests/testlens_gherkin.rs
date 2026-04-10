@@ -6,7 +6,7 @@ use cucumber::{World as _, given, then, when, writer::Stats as _};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use test_harness_support::{
-    ListedArtefact, Workspace, bootstrap_codex_workspace, discovered_languages, load_symbol_fqn,
+    ListedArtefact, Workspace, bootstrap_minimal_workspace, discovered_languages, load_symbol_fqn,
     load_test_scenario_signatures, run_bitloops_or_panic, scenario_link_exists,
     seed_production_artefacts, write_line_only_lcov_fixture, write_malformed_lcov_fixture,
     write_rust_additional_declarations_fixture, write_rust_coverage_fixture,
@@ -82,7 +82,7 @@ fn initialize_repository_with_production(
     workspace: Workspace,
     commit_sha: String,
 ) {
-    bootstrap_codex_workspace(&workspace);
+    bootstrap_minimal_workspace(&workspace);
     run_bitloops_or_panic(workspace.repo_dir(), &["devql", "init"]);
     seed_production_artefacts(&workspace, &commit_sha);
 
@@ -97,7 +97,13 @@ fn initialize_repository_with_production(
 fn when_ingest_tests(world: &mut TestHarnessWorld, commit_sha: String) {
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
-        &["testlens", "ingest-tests", "--commit", &commit_sha],
+        &[
+            "devql",
+            "test-harness",
+            "ingest-tests",
+            "--commit",
+            &commit_sha,
+        ],
     );
     world.ingest_output = Some(output);
 }
@@ -141,7 +147,8 @@ fn then_test_artefacts_are_discoverable(
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "list",
             "--commit",
             &commit_sha,
@@ -399,7 +406,13 @@ fn given_coverage_repository_with_tests(world: &mut TestHarnessWorld, commit_sha
     // Ingest tests so covering-test queries work
     run_bitloops_or_panic(
         world.workspace().repo_dir(),
-        &["testlens", "ingest-tests", "--commit", &commit_sha],
+        &[
+            "devql",
+            "test-harness",
+            "ingest-tests",
+            "--commit",
+            &commit_sha,
+        ],
     );
 }
 
@@ -423,7 +436,8 @@ fn when_ingest_valid_lcov(world: &mut TestHarnessWorld, commit_sha: String) {
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--lcov",
             lcov_path.to_str().unwrap(),
@@ -443,7 +457,8 @@ fn when_ingest_line_only_lcov(world: &mut TestHarnessWorld, commit_sha: String) 
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--lcov",
             lcov_path.to_str().unwrap(),
@@ -463,7 +478,8 @@ fn when_ingest_unmappable_lcov(world: &mut TestHarnessWorld, commit_sha: String)
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--lcov",
             lcov_path.to_str().unwrap(),
@@ -483,7 +499,8 @@ fn when_ingest_malformed_lcov(world: &mut TestHarnessWorld, commit_sha: String) 
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--lcov",
             lcov_path.to_str().unwrap(),
@@ -504,7 +521,8 @@ fn when_ingest_missing_file_lcov(world: &mut TestHarnessWorld, commit_sha: Strin
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &[
-            "testlens",
+            "devql",
+            "test-harness",
             "ingest-coverage",
             "--lcov",
             lcov_path.to_str().unwrap(),
@@ -853,7 +871,8 @@ fn query_artefact(
     let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
     let symbol_fqn = load_symbol_fqn(&conn, commit_sha, &format!("%{artefact_pattern}"));
     let mut args = vec![
-        "testlens",
+        "devql",
+        "test-harness",
         "query",
         "--artefact",
         &symbol_fqn,

@@ -296,8 +296,7 @@ pub(super) async fn sqlite_exec_path_inner(
             )
         }
         .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-        conn.busy_timeout(std::time::Duration::from_secs(30))
-            .context("setting SQLite busy timeout")?;
+        configure_sqlite_connection(&conn, "executing SQLite statements")?;
         conn.execute_batch(&statement)
             .context("executing SQLite statements")?;
         Ok(())
@@ -325,8 +324,7 @@ pub(super) async fn sqlite_exec_batch_transactional_path(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
         )
         .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-        conn.busy_timeout(std::time::Duration::from_secs(30))
-            .context("setting SQLite busy timeout")?;
+        configure_sqlite_connection(&conn, "executing SQLite transactional batch")?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
             .context("configuring SQLite WAL transaction settings")?;
 
@@ -402,11 +400,10 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
         }
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-        conn.busy_timeout(std::time::Duration::from_secs(30))
-            .context("setting SQLite busy timeout")?;
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        configure_sqlite_connection(&conn, "querying SQLite rows")?;
         let mut stmt = conn.prepare(&query).context("preparing SQLite query")?;
         let column_names = stmt
             .column_names()
@@ -431,6 +428,14 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
     })
     .await
     .context("joining SQLite query task")?
+}
+
+fn configure_sqlite_connection(conn: &rusqlite::Connection, context: &str) -> Result<()> {
+    conn.busy_timeout(std::time::Duration::from_secs(30))
+        .with_context(|| format!("setting SQLite busy timeout while {context}"))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .with_context(|| format!("enabling SQLite foreign keys while {context}"))?;
+    Ok(())
 }
 
 pub(crate) fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
@@ -630,7 +635,10 @@ mod tests {
         .context("creating sample table")?;
         drop(conn);
 
-        let runtime = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
         let statements = vec![
             "INSERT INTO sample (value) VALUES ('one');".to_string(),
             "INSERT INTO missing_table (value) VALUES ('boom');".to_string(),
@@ -665,7 +673,10 @@ mod tests {
             .context("creating sample table")?;
         drop(conn);
 
-        let runtime = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
         runtime
             .block_on(sqlite_exec_batch_transactional_path(
                 &sqlite_path,

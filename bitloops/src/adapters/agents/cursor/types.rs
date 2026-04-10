@@ -44,6 +44,18 @@ pub struct CursorSessionInfoRaw {
     pub conversation_id: String,
     #[serde(default)]
     pub transcript_path: Option<String>,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -54,6 +66,18 @@ pub struct CursorBeforeSubmitPromptRaw {
     pub transcript_path: Option<String>,
     #[serde(default)]
     pub prompt: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -64,6 +88,18 @@ pub struct CursorBeforeShellExecutionRaw {
     pub transcript_path: Option<String>,
     #[serde(default)]
     pub command: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -74,6 +110,18 @@ pub struct CursorAfterShellExecutionRaw {
     pub transcript_path: Option<String>,
     #[serde(default)]
     pub command: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -88,4 +136,16 @@ pub struct CursorSubagentRaw {
     pub subagent_type: String,
     #[serde(default)]
     pub task: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    pub model: String,
 }

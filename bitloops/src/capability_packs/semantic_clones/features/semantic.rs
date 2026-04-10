@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::{Result, anyhow};
 
 use crate::adapters::model_providers::llm::{LlmProvider, build_llm_provider};
+use crate::host::inference::TextGenerationService;
 
 use super::common::{normalize_repo_path, render_dependency_context, split_identifier_tokens};
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
@@ -22,6 +23,12 @@ pub struct SemanticSummaryCandidate {
 pub trait SemanticSummaryProvider: Send + Sync {
     fn cache_key(&self) -> String;
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate>;
+}
+
+pub fn summary_provider_from_service(
+    service: std::sync::Arc<dyn TextGenerationService>,
+) -> std::sync::Arc<dyn SemanticSummaryProvider> {
+    std::sync::Arc::new(TextGenerationServiceAdapter { service })
 }
 
 pub struct NoopSemanticSummaryProvider;
@@ -192,7 +199,33 @@ impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+struct TextGenerationServiceAdapter {
+    service: std::sync::Arc<dyn TextGenerationService>,
+}
+
+impl SemanticSummaryProvider for TextGenerationServiceAdapter {
+    fn cache_key(&self) -> String {
+        format!("provider={}", self.service.cache_key())
+    }
+
+    fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+        let content = self
+            .service
+            .complete(
+                "You summarize code symbols. Return only JSON with keys summary and confidence.",
+                &build_semantic_summary_prompt(input),
+            )
+            .ok()?;
+        let parsed = parse_semantic_summary_candidate_json(&content)?;
+        Some(SemanticSummaryCandidate {
+            summary: parsed.summary,
+            confidence: parsed.confidence.unwrap_or(0.75),
+            source_model: Some(self.service.descriptor()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 // Stores all semantic summary candidates plus the synthesized summary used downstream.
 pub struct SymbolSemanticsRow {
     pub artefact_id: String,
@@ -272,6 +305,13 @@ fn extract_summary_from_docstring(docstring: Option<&str>) -> Option<String> {
 
 pub(super) fn normalize_summary_text(summary: &str) -> String {
     summary.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) fn synthesize_deterministic_summary(
+    template_summary: &str,
+    docstring_summary: Option<&str>,
+) -> String {
+    synthesize_summary(template_summary, docstring_summary, None)
 }
 
 fn synthesize_summary(

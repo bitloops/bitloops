@@ -30,6 +30,7 @@ pub(super) async fn upsert_file_state_row(
     relational.exec(&sql).await
 }
 
+#[cfg(test)]
 pub(super) fn build_file_artefact_row_from_content(
     repo_id: &str,
     path: &str,
@@ -75,24 +76,35 @@ pub(super) async fn upsert_file_artefact_row(
     let docstring_sql = sql_nullable_text(file_docstring.as_deref());
 
     let sql = format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, 0, {}, NULL, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&artefact_id),
         esc_pg(&symbol_id),
         esc_pg(repo_id),
-        esc_pg(blob_sha),
-        esc_pg(path),
         esc_pg(&language),
         esc_pg(path),
-        line_count,
-        byte_count,
         modifiers_sql,
         docstring_sql,
         esc_pg(blob_sha),
     );
 
     relational.exec(&sql).await?;
+    relational
+        .exec(&build_upsert_historical_artefact_snapshot_sql(
+            repo_id,
+            blob_sha,
+            &HistoricalArtefactSnapshotRecord {
+                artefact_id: artefact_id.clone(),
+                path: path.to_string(),
+                parent_artefact_id: None,
+                start_line: 1,
+                end_line: line_count,
+                start_byte: 0,
+                end_byte: byte_count,
+            },
+        ))
+        .await?;
     Ok(FileArtefactRow {
         artefact_id,
         symbol_id,
@@ -127,139 +139,35 @@ pub(super) fn build_file_current_record(
     }
 }
 
-pub(super) async fn load_current_file_revision(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    branch: &str,
-    path: &str,
-) -> Result<Option<CurrentFileRevisionRecord>> {
-    let updated_at_unix_expr = updated_at_unix_expr(relational);
-    let sql = format!(
-        "SELECT revision_kind, revision_id, blob_sha, {} AS updated_at_unix \
-FROM artefacts_current WHERE repo_id = '{}' AND branch = '{}' AND symbol_id = '{}' LIMIT 1",
-        updated_at_unix_expr,
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
-        esc_pg(&file_symbol_id(path)),
-    );
-    let rows = relational.query_rows(&sql).await?;
-    let Some(row) = rows.first() else {
-        return Ok(None);
-    };
-
-    let revision_kind = row
-        .get("revision_kind")
-        .and_then(Value::as_str)
-        .and_then(TemporalRevisionKind::from_str)
-        .unwrap_or(TemporalRevisionKind::Commit);
-    let revision_id = row
-        .get("revision_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let blob_sha = row
-        .get("blob_sha")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let updated_at_unix = row
-        .get("updated_at_unix")
-        .and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
-        })
-        .unwrap_or_default();
-    Ok(Some(CurrentFileRevisionRecord {
-        revision_kind,
-        revision_id,
-        blob_sha,
-        updated_at_unix,
-    }))
-}
-
-pub(super) fn incoming_revision_is_newer(
-    existing: Option<&CurrentFileRevisionRecord>,
-    revision_kind: TemporalRevisionKind,
-    revision_id: &str,
-    revision_unix: i64,
-) -> bool {
-    match existing {
-        None => true,
-        Some(existing) => match (revision_kind, existing.revision_kind) {
-            (TemporalRevisionKind::Commit, TemporalRevisionKind::Temporary) => true,
-            (TemporalRevisionKind::Temporary, TemporalRevisionKind::Commit) => {
-                revision_unix >= existing.updated_at_unix
-            }
-            _ => {
-                revision_unix > existing.updated_at_unix
-                    || (revision_unix == existing.updated_at_unix
-                        && revision_id_is_newer(revision_id, &existing.revision_id))
-            }
-        },
-    }
-}
-
-pub(super) fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
-    match (
-        incoming
-            .strip_prefix("temp:")
-            .and_then(|v| v.parse::<u64>().ok()),
-        existing
-            .strip_prefix("temp:")
-            .and_then(|v| v.parse::<u64>().ok()),
-    ) {
-        (Some(incoming_idx), Some(existing_idx)) => incoming_idx > existing_idx,
-        _ => incoming > existing,
-    }
-}
-
-pub(super) async fn overwrite_current_revision_metadata_for_path(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    branch: &str,
-    rev: &FileRevision<'_>,
-) -> Result<()> {
-    let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
-    let temp_checkpoint_id_sql = rev
-        .revision
-        .temp_checkpoint_id
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "NULL".to_string());
-
-    let artefacts_sql = format!(
-        "UPDATE artefacts_current \
-SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
-        esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind.as_str()),
-        esc_pg(rev.revision.id),
-        temp_checkpoint_id_sql,
-        esc_pg(rev.blob_sha),
-        updated_at_sql,
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
-        esc_pg(rev.path),
-    );
-    relational.exec(&artefacts_sql).await?;
-
-    let edges_sql = format!(
-        "UPDATE artefact_edges_current \
-SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
-        esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind.as_str()),
-        esc_pg(rev.revision.id),
-        temp_checkpoint_id_sql,
-        esc_pg(rev.blob_sha),
-        updated_at_sql,
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
-        esc_pg(rev.path),
-    );
-    relational.exec(&edges_sql).await?;
-
-    Ok(())
+pub(super) fn build_upsert_historical_artefact_snapshot_sql(
+    repo_id: &str,
+    blob_sha: &str,
+    snapshot: &HistoricalArtefactSnapshotRecord,
+) -> String {
+    let parent_artefact_sql = sql_nullable_text(snapshot.parent_artefact_id.as_deref());
+    format!(
+        "INSERT INTO artefact_snapshots (
+            repo_id, blob_sha, path, artefact_id, parent_artefact_id, start_line, end_line, start_byte, end_byte
+         ) VALUES (
+            '{repo_id}', '{blob_sha}', '{path}', '{artefact_id}', {parent_artefact_id}, {start_line}, {end_line}, {start_byte}, {end_byte}
+         )
+         ON CONFLICT (repo_id, blob_sha, artefact_id) DO UPDATE SET
+            path = EXCLUDED.path,
+            parent_artefact_id = EXCLUDED.parent_artefact_id,
+            start_line = EXCLUDED.start_line,
+            end_line = EXCLUDED.end_line,
+            start_byte = EXCLUDED.start_byte,
+            end_byte = EXCLUDED.end_byte",
+        repo_id = esc_pg(repo_id),
+        blob_sha = esc_pg(blob_sha),
+        path = esc_pg(&snapshot.path),
+        artefact_id = esc_pg(&snapshot.artefact_id),
+        parent_artefact_id = parent_artefact_sql,
+        start_line = snapshot.start_line,
+        end_line = snapshot.end_line,
+        start_byte = snapshot.start_byte,
+        end_byte = snapshot.end_byte,
+    )
 }
 
 #[cfg(test)]

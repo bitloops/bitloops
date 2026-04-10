@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::config::{
     resolve_blob_local_path_for_repo, resolve_duckdb_db_path_for_repo,
-    resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
+    resolve_store_backend_config_for_repo,
 };
 
 const DUCKDB_CHECKPOINT_SCHEMA_SQL: &str = r#"
@@ -35,15 +35,23 @@ pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
     let cfg = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for store initialisation")?;
 
+    crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo_root)
+        .context("initialising repo runtime store")?;
+
     if !cfg.relational.has_postgres() {
-        let sqlite_path =
-            resolve_sqlite_db_path_for_repo(repo_root, cfg.relational.sqlite_path.as_deref())
-                .context("resolving SQLite path for `bitloops init`")?;
-        let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.clone())
-            .with_context(|| format!("creating SQLite database at {}", sqlite_path.display()))?;
+        let relational =
+            crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(
+                repo_root,
+            )
+            .context("opening relational store for `bitloops init`")?;
+        relational
+            .initialise_local_relational_checkpoint_schema()
+            .context("initialising SQLite relational checkpoint schema")?;
+        let sqlite = crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational)
+            .context("opening SQLite database for `bitloops init`")?;
         sqlite
-            .initialise_checkpoint_schema()
-            .context("initialising SQLite checkpoint/session schema")?;
+            .initialise_devql_schema()
+            .context("initialising SQLite DevQL schema")?;
     }
 
     if !cfg.events.has_clickhouse() {

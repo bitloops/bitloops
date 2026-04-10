@@ -113,7 +113,7 @@ VALUES ('{}', '{}', '{}', 'blob-b', 'src/a.ts', 'typescript', 'function', 'funct
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
-async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
+async fn init_postgres_schema_creates_checkpoint_provenance_tables() {
     let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
     tokio::spawn(async move {
@@ -125,24 +125,21 @@ async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
     init_postgres_schema(&cfg, &client).await.unwrap();
 
     let table_name: Option<String> = client
-        .query_one(
-            "SELECT to_regclass('public.checkpoint_file_snapshots')",
-            &[],
-        )
+        .query_one("SELECT to_regclass('public.checkpoint_files')", &[])
         .await
         .unwrap()
         .get(0);
     assert_eq!(
         table_name.as_deref(),
-        Some("checkpoint_file_snapshots"),
-        "expected init_postgres_schema to create checkpoint_file_snapshots"
+        Some("checkpoint_files"),
+        "expected init_postgres_schema to create checkpoint_files"
     );
 
     let index_rows = client
         .query(
             "SELECT indexname
              FROM pg_indexes
-             WHERE schemaname = 'public' AND tablename = 'checkpoint_file_snapshots'
+             WHERE schemaname = 'public' AND tablename = 'checkpoint_files'
              ORDER BY indexname",
             &[],
         )
@@ -152,14 +149,258 @@ async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
     assert_eq!(
         index_names,
         vec![
-            "checkpoint_file_snapshots_agent_time_idx".to_string(),
-            "checkpoint_file_snapshots_checkpoint_idx".to_string(),
-            "checkpoint_file_snapshots_commit_idx".to_string(),
-            "checkpoint_file_snapshots_event_time_idx".to_string(),
-            "checkpoint_file_snapshots_lookup_idx".to_string(),
-            "checkpoint_file_snapshots_pkey".to_string(),
+            "checkpoint_files_agent_time_idx".to_string(),
+            "checkpoint_files_change_kind_idx".to_string(),
+            "checkpoint_files_checkpoint_idx".to_string(),
+            "checkpoint_files_commit_idx".to_string(),
+            "checkpoint_files_copy_source_idx".to_string(),
+            "checkpoint_files_event_time_idx".to_string(),
+            "checkpoint_files_lookup_idx".to_string(),
+            "checkpoint_files_pkey".to_string(),
         ],
-        "expected init_postgres_schema to create the projection indexes"
+        "expected init_postgres_schema to create the checkpoint_files indexes"
+    );
+
+    let artefact_table_name: Option<String> = client
+        .query_one("SELECT to_regclass('public.checkpoint_artefacts')", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        artefact_table_name.as_deref(),
+        Some("checkpoint_artefacts"),
+        "expected init_postgres_schema to create checkpoint_artefacts"
+    );
+
+    let lineage_table_name: Option<String> = client
+        .query_one(
+            "SELECT to_regclass('public.checkpoint_artefact_lineage')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        lineage_table_name.as_deref(),
+        Some("checkpoint_artefact_lineage"),
+        "expected init_postgres_schema to create checkpoint_artefact_lineage"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn init_postgres_schema_preserves_existing_sync_rows_on_repeated_runs() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let mut cfg = test_cfg();
+    cfg.repo.repo_id = deterministic_uuid("repo://postgres-preserve-sync-rows");
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let insert_repo_sql = format!(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES ('{}', 'github', 'bitloops', 'preserve-sync-rows', 'main')
+         ON CONFLICT (repo_id) DO NOTHING",
+        esc_pg(&cfg.repo.repo_id)
+    );
+    postgres_exec(&client, &insert_repo_sql).await.unwrap();
+
+    let insert_sync_state_sql = format!(
+        "INSERT INTO repo_sync_state (
+            repo_id, repo_root, active_branch, head_commit_sha, head_tree_sha,
+            parser_version, extractor_version, last_sync_started_at,
+            last_sync_completed_at, last_sync_status, last_sync_reason
+         ) VALUES (
+            '{}', '/tmp/repo', 'main', 'commit-1', 'tree-1',
+            'parser-v1', 'extractor-v1', '2026-04-03T10:00:00Z',
+            '2026-04-03T10:01:00Z', 'completed', 'baseline'
+         )",
+        esc_pg(&cfg.repo.repo_id)
+    );
+    postgres_exec(&client, &insert_sync_state_sql)
+        .await
+        .unwrap();
+
+    let insert_current_file_state_sql = format!(
+        "INSERT INTO current_file_state (
+            repo_id, path, language, head_content_id, index_content_id,
+            worktree_content_id, effective_content_id, effective_source,
+            parser_version, extractor_version, exists_in_head,
+            exists_in_index, exists_in_worktree, last_synced_at
+         ) VALUES (
+            '{}', 'src/lib.rs', 'rust', 'head-1', 'index-1',
+            'worktree-1', 'effective-1', 'worktree',
+            'parser-v1', 'extractor-v1', 1, 1, 1, '2026-04-03T10:02:00Z'
+         )",
+        esc_pg(&cfg.repo.repo_id)
+    );
+    postgres_exec(&client, &insert_current_file_state_sql)
+        .await
+        .unwrap();
+
+    let insert_artefacts_current_sql = format!(
+        "INSERT INTO artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language,
+            canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
+            parent_artefact_id, start_line, end_line, start_byte, end_byte,
+            signature, modifiers, docstring, updated_at
+         ) VALUES (
+            '{}', 'src/lib.rs', 'content-1', '{}', '{}', 'rust',
+            'function', 'function_item', 'src/lib.rs::answer', NULL,
+            NULL, 1, 3, 0, 24, 'fn answer() -> i32', '[]'::jsonb, NULL,
+            '2026-04-03T10:03:00Z'
+         )",
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&deterministic_uuid("postgres-preserve-symbol")),
+        esc_pg(&deterministic_uuid("postgres-preserve-artefact")),
+    );
+    postgres_exec(&client, &insert_artefacts_current_sql)
+        .await
+        .unwrap();
+
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    for table in ["repo_sync_state", "current_file_state", "artefacts_current"] {
+        let row = client
+            .query_one(
+                &format!("SELECT COUNT(*) FROM {table} WHERE repo_id = $1"),
+                &[&cfg.repo.repo_id],
+            )
+            .await
+            .unwrap();
+        let count: i64 = row.get(0);
+        assert_eq!(count, 1, "expected `{table}` rows to be preserved");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn rebuilding_legacy_remote_sync_schema_upgrades_paths_sync_to_repair() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn answer() -> i32 {\n    42\n}\n",
+    )
+    .expect("write lib.rs");
+    fs::write(
+        repo.path().join("src/extra.rs"),
+        "pub fn bonus() -> i32 {\n    7\n}\n",
+    )
+    .expect("write extra.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "Seed legacy Postgres sync repo"],
+    );
+
+    let repo_identity = resolve_repo_identity(repo.path()).expect("resolve repo identity");
+    let mut cfg = DevqlConfig::from_roots(
+        repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        repo_identity,
+    )
+    .expect("build DevQL config");
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://postgres-legacy-path-upgrade");
+
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+
+    postgres_exec(&client, postgres_schema_sql()).await.unwrap();
+    postgres_exec(&client, crate::host::devql::sync::schema::sync_schema_sql())
+        .await
+        .unwrap();
+
+    postgres_exec(
+        &client,
+        r#"
+DROP TABLE IF EXISTS current_file_state;
+CREATE TABLE current_file_state (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    committed_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (repo_id, path)
+);
+"#,
+    )
+    .await
+    .unwrap();
+
+    let insert_legacy_current_state_sql = format!(
+        "INSERT INTO current_file_state (
+            repo_id, path, commit_sha, blob_sha, committed_at, updated_at
+         ) VALUES (
+            '{}', 'src/legacy.rs', 'legacy-commit', 'legacy-blob',
+            '2026-04-03T09:00:00Z', '2026-04-03T09:00:00Z'
+         )",
+        esc_pg(&cfg.repo.repo_id)
+    );
+    postgres_exec(&client, &insert_legacy_current_state_sql)
+        .await
+        .unwrap();
+
+    let schema_outcome = init_postgres_schema_for_sync_execution(&cfg, &client)
+        .await
+        .expect("prepare sync execution schema");
+    assert!(
+        schema_outcome.rebuilt_current_state,
+        "expected legacy remote sync schema to be rebuilt"
+    );
+
+    let effective_mode = effective_sync_mode_after_schema_preparation(
+        SyncMode::Paths(vec!["src/lib.rs".to_string()]),
+        SyncExecutionSchemaOutcome {
+            remote_current_state_rebuilt: schema_outcome.rebuilt_current_state,
+        },
+    );
+    assert!(
+        matches!(effective_mode, SyncMode::Repair),
+        "expected paths sync to be upgraded to repair, got {effective_mode:?}"
+    );
+
+    let summary = execute_sync(&cfg, &relational, effective_mode)
+        .await
+        .expect("execute upgraded repair sync");
+    assert_eq!(summary.mode, "repair");
+
+    let remote_paths = client
+        .query(
+            "SELECT path
+             FROM current_file_state
+             WHERE repo_id = $1
+             ORDER BY path",
+            &[&cfg.repo.repo_id],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        remote_paths,
+        vec!["src/extra.rs".to_string(), "src/lib.rs".to_string()],
+        "expected repaired remote current-state tables to include the whole workspace"
     );
 }
 

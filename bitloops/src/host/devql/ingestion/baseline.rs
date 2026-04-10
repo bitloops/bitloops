@@ -1,12 +1,14 @@
 use super::*;
 
-const BASELINE_BATCH_SIZE: usize = 200;
+#[cfg_attr(not(test), allow(dead_code))]
 const BASELINE_SYNC_STATE_KEY: &str = "baseline_commit_sha";
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn discover_baseline_files(repo_root: &Path) -> Result<Vec<String>> {
     discover_baseline_files_at_revision(repo_root, "HEAD")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn discover_baseline_files_at_revision(
     repo_root: &Path,
     revision: &str,
@@ -42,6 +44,7 @@ pub(super) fn discover_baseline_files_at_revision(
     Ok(files)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_supported_baseline_file(path: &str) -> bool {
     let Some(extension) = Path::new(path).extension().and_then(|value| value.to_str()) else {
         return false;
@@ -53,6 +56,7 @@ fn is_supported_baseline_file(path: &str) -> bool {
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn run_baseline_ingestion(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -65,14 +69,13 @@ pub(super) async fn run_baseline_ingestion(
         }
         Err(err) => return Err(err).context("resolving HEAD for baseline ingestion"),
     };
-    let branch = active_branch_name(&cfg.repo_root);
     let files = discover_baseline_files(&cfg.repo_root)?;
     let previous_baseline_sha =
         load_sync_state_value(cfg, relational, BASELINE_SYNC_STATE_KEY).await?;
-    let current_branch_rows = count_current_branch_file_rows(cfg, relational, &branch).await?;
+    let current_file_rows = count_current_file_rows(cfg, relational).await?;
 
     if previous_baseline_sha.as_deref() == Some(head_sha.as_str())
-        && (current_branch_rows > 0 || files.is_empty())
+        && (current_file_rows > 0 || files.is_empty())
     {
         println!("Baseline ingestion skipped: active branch is already indexed at HEAD.");
         return Ok(());
@@ -97,103 +100,27 @@ pub(super) async fn run_baseline_ingestion(
     }
 
     println!("Indexing codebase ({} files)...", files.len());
-    let mut processed = 0usize;
-    for chunk in files.chunks(BASELINE_BATCH_SIZE) {
-        for path in chunk {
-            let Some(blob_sha) = git_blob_sha_at_commit(&cfg.repo_root, &head_sha, path) else {
-                continue;
-            };
-
-            upsert_file_state_row(&cfg.repo.repo_id, relational, &head_sha, path, &blob_sha)
-                .await?;
-            let file_artefact = upsert_file_artefact_row(
-                &cfg.repo.repo_id,
-                &cfg.repo_root,
-                relational,
-                path,
-                &blob_sha,
-            )
-            .await?;
-            upsert_language_artefacts(
-                cfg,
-                relational,
-                &FileRevision {
-                    commit_sha: &head_sha,
-                    revision: TemporalRevisionRef {
-                        kind: TemporalRevisionKind::Commit,
-                        id: &head_sha,
-                        temp_checkpoint_id: None,
-                    },
-                    commit_unix: commit_info.commit_unix,
-                    path,
-                    blob_sha: &blob_sha,
-                },
-                &file_artefact,
-            )
-            .await?;
-            processed += 1;
-        }
-        println!("{}", render_baseline_progress(processed, files.len()));
-    }
-
-    let tracked_paths = files.iter().cloned().collect::<HashSet<_>>();
-    cleanup_removed_branch_paths(cfg, relational, &branch, &tracked_paths).await?;
+    prepare_sync_execution_schema(cfg, "baseline sync", &sync::types::SyncMode::Full)
+        .await
+        .context("preparing schema for baseline sync reconciliation")?;
+    super::commands_sync::execute_sync(cfg, relational, sync::types::SyncMode::Full)
+        .await
+        .context("running baseline sync reconciliation")?;
     upsert_sync_state_value(cfg, relational, BASELINE_SYNC_STATE_KEY, &head_sha).await?;
 
-    let artefacts_count =
-        count_current_branch_rows(cfg, relational, &branch, "artefacts_current").await?;
-    let edges_count =
-        count_current_branch_rows(cfg, relational, &branch, "artefact_edges_current").await?;
+    let artefacts_count = count_current_rows(cfg, relational, "artefacts_current").await?;
+    let edges_count = count_current_rows(cfg, relational, "artefact_edges_current").await?;
     println!(
         "Baseline ingestion complete: {} files, {} artefacts, {} edges",
-        processed, artefacts_count, edges_count
+        files.len(),
+        artefacts_count,
+        edges_count
     );
     Ok(())
 }
 
-fn render_baseline_progress(processed: usize, total: usize) -> String {
-    if total == 0 {
-        return "[------------------------------] 0/0 files (100%)".to_string();
-    }
-
-    let bar_width = 30usize;
-    let filled = (processed.saturating_mul(bar_width) + (total / 2)) / total;
-    let percent = (processed.saturating_mul(100) + (total / 2)) / total;
-    format!(
-        "[{}{}] {}/{} files ({}%)",
-        "=".repeat(filled.min(bar_width)),
-        "-".repeat(bar_width.saturating_sub(filled.min(bar_width))),
-        processed.min(total),
-        total,
-        percent.min(100),
-    )
-}
-
-async fn cleanup_removed_branch_paths(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    branch: &str,
-    tracked_paths: &HashSet<String>,
-) -> Result<()> {
-    let sql = format!(
-        "SELECT path FROM artefacts_current \
-WHERE repo_id = '{}' AND branch = '{}' AND canonical_kind = 'file'",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
-    );
-    let rows = relational.query_rows(&sql).await?;
-    for row in rows {
-        let Some(path) = row.get("path").and_then(Value::as_str) else {
-            continue;
-        };
-        if !tracked_paths.contains(path) {
-            delete_current_state_for_path(cfg, relational, path).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn load_sync_state_value(
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) async fn load_sync_state_value(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     key: &str,
@@ -229,7 +156,7 @@ ON CONFLICT (repo_id, state_key) DO UPDATE SET state_value = EXCLUDED.state_valu
     )
 }
 
-async fn upsert_sync_state_value(
+pub(super) async fn upsert_sync_state_value(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     key: &str,
@@ -239,35 +166,34 @@ async fn upsert_sync_state_value(
     relational.exec(&sql).await
 }
 
-async fn count_current_branch_file_rows(
+#[cfg_attr(not(test), allow(dead_code))]
+async fn count_current_file_rows(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    branch: &str,
 ) -> Result<usize> {
     let sql = format!(
         "SELECT COUNT(*) AS row_count FROM artefacts_current \
-WHERE repo_id = '{}' AND branch = '{}' AND canonical_kind = 'file'",
+WHERE repo_id = '{}' AND canonical_kind = 'file'",
         esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
     );
     count_rows(relational, &sql).await
 }
 
-async fn count_current_branch_rows(
+#[cfg_attr(not(test), allow(dead_code))]
+async fn count_current_rows(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    branch: &str,
     table_name: &str,
 ) -> Result<usize> {
     let sql = format!(
-        "SELECT COUNT(*) AS row_count FROM {} WHERE repo_id = '{}' AND branch = '{}'",
+        "SELECT COUNT(*) AS row_count FROM {} WHERE repo_id = '{}'",
         table_name,
         esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
     );
     count_rows(relational, &sql).await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn count_rows(relational: &RelationalStorage, sql: &str) -> Result<usize> {
     let rows = relational.query_rows(sql).await?;
     let count = rows

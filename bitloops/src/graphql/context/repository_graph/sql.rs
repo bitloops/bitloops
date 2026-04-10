@@ -10,7 +10,7 @@ use std::path::{Component, Path};
 
 pub(super) fn build_file_context_lookup_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     path: &str,
     temporal_scope: Option<&ResolvedTemporalScope>,
 ) -> String {
@@ -20,7 +20,7 @@ pub(super) fn build_file_context_lookup_sql(
             .resolved_commit();
         return format!(
             "SELECT fs.path AS path, fs.blob_sha AS blob_sha, \
-                    (SELECT a.language FROM artefacts a \
+                    (SELECT a.language FROM artefacts_historical a \
                       WHERE a.repo_id = fs.repo_id AND a.path = fs.path AND a.blob_sha = fs.blob_sha \
                       ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language \
                FROM file_state fs \
@@ -32,42 +32,30 @@ pub(super) fn build_file_context_lookup_sql(
         );
     }
 
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-        return format!(
-            "SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language \
-               FROM artefacts_current a \
-              WHERE a.repo_id = '{repo_id}' \
-                AND a.branch = '{branch}' \
-                AND a.canonical_kind = 'file' \
-                AND a.revision_kind = 'temporary' \
-                AND a.revision_id = '{revision_id}' \
-                AND a.path = '{path}' \
-              ORDER BY a.updated_at DESC, a.start_line, a.artefact_id \
-              LIMIT 1",
-            repo_id = esc_pg(repo_id),
-            branch = esc_pg(branch),
-            revision_id = esc_pg(revision_id),
-            path = esc_pg(path),
-        );
+    if temporal_scope
+        .and_then(ResolvedTemporalScope::save_revision)
+        .is_some()
+    {
+        // Save revision scoping relied on columns (revision_kind, revision_id) that no
+        // longer exist on artefacts_current. Fall through to the default current lookup.
     }
 
     format!(
         "SELECT path, blob_sha, language FROM ( \
-            SELECT c.path AS path, c.blob_sha AS blob_sha, \
+            SELECT c.path AS path, c.effective_content_id AS blob_sha, \
                    (SELECT a.language FROM artefacts_current a \
-                    WHERE a.repo_id = c.repo_id AND a.branch = '{branch}' AND a.path = c.path \
+                    WHERE a.repo_id = c.repo_id AND a.path = c.path \
                     ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language, \
                    0 AS precedence \
               FROM current_file_state c \
              WHERE c.repo_id = '{repo_id}' AND c.path = '{path}' \
             UNION ALL \
-            SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language, 1 AS precedence \
+            SELECT a.path AS path, a.content_id AS blob_sha, a.language AS language, 1 AS precedence \
               FROM artefacts_current a \
-             WHERE a.repo_id = '{repo_id}' AND a.branch = '{branch}' AND a.path = '{path}' \
+             WHERE a.repo_id = '{repo_id}' AND a.path = '{path}' \
         ) \
         ORDER BY precedence \
         LIMIT 1",
-        branch = esc_pg(branch),
         repo_id = esc_pg(repo_id),
         path = esc_pg(path),
     )
@@ -75,7 +63,7 @@ pub(super) fn build_file_context_lookup_sql(
 
 pub(super) fn build_file_context_list_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     glob: &str,
     temporal_scope: Option<&ResolvedTemporalScope>,
 ) -> String {
@@ -89,7 +77,7 @@ pub(super) fn build_file_context_list_sql(
             .resolved_commit();
         return format!(
             "SELECT fs.path AS path, fs.blob_sha AS blob_sha, \
-                    (SELECT a.language FROM artefacts a \
+                    (SELECT a.language FROM artefacts_historical a \
                       WHERE a.repo_id = fs.repo_id AND a.path = fs.path AND a.blob_sha = fs.blob_sha \
                       ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language \
                FROM file_state fs \
@@ -101,42 +89,29 @@ pub(super) fn build_file_context_list_sql(
         );
     }
 
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-        return format!(
-            "SELECT a.path AS path, a.blob_sha AS blob_sha, MIN(a.language) AS language \
-               FROM artefacts_current a \
-              WHERE a.repo_id = '{repo_id}' \
-                AND a.branch = '{branch}' \
-                AND a.canonical_kind = 'file' \
-                AND a.revision_kind = 'temporary' \
-                AND a.revision_id = '{revision_id}' \
-                AND {like_a} \
-           GROUP BY a.path, a.blob_sha \
-           ORDER BY a.path",
-            repo_id = esc_pg(repo_id),
-            branch = esc_pg(branch),
-            revision_id = esc_pg(revision_id),
-            like_a = like_a,
-        );
+    if temporal_scope
+        .and_then(ResolvedTemporalScope::save_revision)
+        .is_some()
+    {
+        // Fall through to default current lookup — revision columns removed from current tables.
     }
 
     format!(
         "SELECT path, blob_sha, MIN(language) AS language \
            FROM ( \
-                SELECT c.path AS path, c.blob_sha AS blob_sha, \
+                SELECT c.path AS path, c.effective_content_id AS blob_sha, \
                        (SELECT a.language FROM artefacts_current a \
-                        WHERE a.repo_id = c.repo_id AND a.branch = '{branch}' AND a.path = c.path \
+                        WHERE a.repo_id = c.repo_id AND a.path = c.path \
                         ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language \
                   FROM current_file_state c \
                  WHERE c.repo_id = '{repo_id}' AND {like_c} \
                 UNION ALL \
-                SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language \
+                SELECT a.path AS path, a.content_id AS blob_sha, a.language AS language \
                   FROM artefacts_current a \
-                 WHERE a.repo_id = '{repo_id}' AND a.branch = '{branch}' AND {like_a} \
+                 WHERE a.repo_id = '{repo_id}' AND {like_a} \
            ) files \
        GROUP BY path, blob_sha \
        ORDER BY path",
-        branch = esc_pg(branch),
         repo_id = esc_pg(repo_id),
         like_c = like_c,
         like_a = like_a,
@@ -212,7 +187,7 @@ pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> St
            FROM filtered{pagination_clause} \
        ORDER BY {order} \
           LIMIT {limit}",
-        columns = filtered_artefact_columns_sql(),
+        columns = filtered_artefact_columns_sql(spec.temporal_scope.use_historical_tables(),),
         order = order,
         limit = pagination.limit,
     )
@@ -224,7 +199,7 @@ fn filtered_artefact_reverse_order_sql() -> &'static str {
 
 pub(super) fn build_artefacts_by_ids_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     artefact_ids: &[String],
     project_path: Option<&str>,
     temporal_scope: Option<&ResolvedTemporalScope>,
@@ -235,8 +210,17 @@ pub(super) fn build_artefacts_by_ids_sql(
         format!("a.repo_id = '{}'", esc_pg(repo_id)),
         format!("a.artefact_id IN ({})", quoted_string_list(artefact_ids)),
     ];
-    if !use_historical_tables {
-        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
+    if use_historical_tables
+        && let Some(commit_sha) = temporal_scope
+            .filter(|scope| scope.use_historical_tables())
+            .map(ResolvedTemporalScope::resolved_commit)
+    {
+        clauses.push(file_state_exists_clause(
+            "a.path",
+            "a.blob_sha",
+            repo_id,
+            commit_sha,
+        ));
     }
     if let Some(project_path) = project_path {
         clauses.push(repo_path_prefix_clause("a.path", project_path));
@@ -255,7 +239,7 @@ pub(super) fn build_artefacts_by_ids_sql(
 
 pub(super) fn build_child_artefacts_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     parent_artefact_id: &str,
     project_path: Option<&str>,
     temporal_scope: Option<&ResolvedTemporalScope>,
@@ -266,8 +250,17 @@ pub(super) fn build_child_artefacts_sql(
         format!("a.repo_id = '{}'", esc_pg(repo_id)),
         format!("a.parent_artefact_id = '{}'", esc_pg(parent_artefact_id)),
     ];
-    if !use_historical_tables {
-        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
+    if use_historical_tables
+        && let Some(commit_sha) = temporal_scope
+            .filter(|scope| scope.use_historical_tables())
+            .map(ResolvedTemporalScope::resolved_commit)
+    {
+        clauses.push(file_state_exists_clause(
+            "a.path",
+            "a.blob_sha",
+            repo_id,
+            commit_sha,
+        ));
     }
     if let Some(project_path) = project_path {
         clauses.push(repo_path_prefix_clause("a.path", project_path));
@@ -286,7 +279,7 @@ pub(super) fn build_child_artefacts_sql(
 
 pub(super) fn build_current_dependency_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     scope: DependencyScope<'_>,
     project_path: Option<&str>,
     filter: DepsFilterInput,
@@ -296,9 +289,11 @@ pub(super) fn build_current_dependency_sql(
         temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
     let mut clauses = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
     if !use_historical_tables {
-        clauses.push(format!("e.branch = '{}'", esc_pg(branch)));
+        // branch column removed from artefact_edges_current in sync redesign
     }
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
+    if use_historical_tables
+        && let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision)
+    {
         clauses.push("e.revision_kind = 'temporary'".to_string());
         clauses.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
     }
@@ -338,7 +333,9 @@ pub(super) fn build_current_dependency_sql(
         }
     }
 
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
+    if use_historical_tables
+        && let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision)
+    {
         match filter.direction {
             DepsDirection::Out => clauses.push(current_revision_clause("src", revision_id)),
             DepsDirection::In => clauses.push(current_revision_clause("tgt", revision_id)),
@@ -394,16 +391,38 @@ pub(super) fn build_current_dependency_sql(
         }
     }
 
+    let src_join = if use_historical_tables {
+        format!(
+            "JOIN {artefacts_table} src ON src.repo_id = e.repo_id AND src.artefact_id = e.from_artefact_id AND src.blob_sha = e.blob_sha",
+            artefacts_table = artefacts_table_sql(true),
+        )
+    } else {
+        format!(
+            "JOIN {artefacts_table} src ON src.repo_id = e.repo_id AND src.artefact_id = e.from_artefact_id",
+            artefacts_table = artefacts_table_sql(false),
+        )
+    };
+    let tgt_join = if use_historical_tables {
+        let commit_sha = temporal_scope
+            .filter(|s| s.use_historical_tables())
+            .map(ResolvedTemporalScope::resolved_commit)
+            .expect("historical dependency queries require a resolved commit");
+        historical_dependency_tgt_join_sql(repo_id, commit_sha)
+    } else {
+        format!(
+            "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id",
+            artefacts_table = artefacts_table_sql(false),
+        )
+    };
+
     format!(
         "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, \
                 e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
                 src.path AS from_path, src.symbol_fqn AS from_symbol_fqn, \
                 tgt.path AS to_path, tgt.symbol_fqn AS to_symbol_fqn \
            FROM {edges_table} e \
-           JOIN {artefacts_table} src ON src.repo_id = e.repo_id {src_branch_join} \
-                                     AND src.artefact_id = e.from_artefact_id \
-      LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id {tgt_branch_join} \
-                                     AND tgt.artefact_id = e.to_artefact_id \
+           {src_join} \
+           {tgt_join} \
           WHERE {clauses} \
        ORDER BY src.path, COALESCE(e.start_line, 0), COALESCE(e.end_line, 0), \
                 e.edge_kind, COALESCE(tgt.path, ''), e.edge_id",
@@ -412,28 +431,15 @@ pub(super) fn build_current_dependency_sql(
         } else {
             "artefact_edges_current"
         },
-        artefacts_table = if use_historical_tables {
-            "artefacts"
-        } else {
-            "artefacts_current"
-        },
-        src_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND src.branch = e.branch".to_string()
-        },
-        tgt_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND tgt.branch = e.branch".to_string()
-        },
+        src_join = src_join,
+        tgt_join = tgt_join,
         clauses = clauses.join(" AND ")
     )
 }
 
 pub(super) fn build_current_dependency_batch_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     artefact_ids: &[String],
     direction: DepsDirection,
     filter: DepsFilterInput,
@@ -444,7 +450,7 @@ pub(super) fn build_current_dependency_batch_sql(
         temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
     let mut clauses = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
     if !use_historical_tables {
-        clauses.push(format!("e.branch = '{}'", esc_pg(branch)));
+        // branch column removed from artefact_edges_current in sync redesign
     }
 
     if let Some(kind) = filter.kind {
@@ -480,6 +486,30 @@ pub(super) fn build_current_dependency_batch_sql(
         }
     }
 
+    let src_join = if use_historical_tables {
+        format!(
+            "JOIN {artefacts_table} src ON src.repo_id = e.repo_id AND src.artefact_id = e.from_artefact_id AND src.blob_sha = e.blob_sha",
+            artefacts_table = artefacts_table_sql(true),
+        )
+    } else {
+        format!(
+            "JOIN {artefacts_table} src ON src.repo_id = e.repo_id AND src.artefact_id = e.from_artefact_id",
+            artefacts_table = artefacts_table_sql(false),
+        )
+    };
+    let tgt_join = if use_historical_tables {
+        let commit_sha = temporal_scope
+            .filter(|s| s.use_historical_tables())
+            .map(ResolvedTemporalScope::resolved_commit)
+            .expect("historical batch dependency queries require a resolved commit");
+        historical_dependency_tgt_join_sql(repo_id, commit_sha)
+    } else {
+        format!(
+            "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id",
+            artefacts_table = artefacts_table_sql(false),
+        )
+    };
+
     format!(
         "SELECT {owner_column} AS owner_artefact_id, \
                 e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, \
@@ -487,10 +517,8 @@ pub(super) fn build_current_dependency_batch_sql(
                 src.path AS from_path, src.symbol_fqn AS from_symbol_fqn, \
                 tgt.path AS to_path, tgt.symbol_fqn AS to_symbol_fqn \
            FROM {edges_table} e \
-           JOIN {artefacts_table} src ON src.repo_id = e.repo_id {src_branch_join} \
-                                     AND src.artefact_id = e.from_artefact_id \
-      LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id {tgt_branch_join} \
-                                     AND tgt.artefact_id = e.to_artefact_id \
+           {src_join} \
+           {tgt_join} \
           WHERE {clauses} \
        ORDER BY owner_artefact_id, src.path, COALESCE(e.start_line, 0), \
                 COALESCE(e.end_line, 0), e.edge_kind, COALESCE(tgt.path, ''), e.edge_id",
@@ -499,21 +527,8 @@ pub(super) fn build_current_dependency_batch_sql(
         } else {
             "artefact_edges_current"
         },
-        artefacts_table = if use_historical_tables {
-            "artefacts"
-        } else {
-            "artefacts_current"
-        },
-        src_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND src.branch = e.branch".to_string()
-        },
-        tgt_branch_join = if use_historical_tables {
-            String::new()
-        } else {
-            " AND tgt.branch = e.branch".to_string()
-        },
+        src_join = src_join,
+        tgt_join = tgt_join,
         clauses = clauses.join(" AND ")
     )
 }
@@ -593,6 +608,19 @@ fn file_state_exists_clause(
     )
 }
 
+/// Historical `artefacts_historical` can store multiple rows per `artefact_id` (different blobs).
+/// Joining the dependency target only on `artefact_id` duplicates rows or picks an arbitrary snapshot.
+/// Pin `tgt` to the tree at `commit_sha` by requiring `(tgt.path, tgt.blob_sha)` in `file_state`.
+fn historical_dependency_tgt_join_sql(repo_id: &str, commit_sha: &str) -> String {
+    format!(
+        "LEFT JOIN {artefacts_table} tgt ON tgt.repo_id = e.repo_id AND tgt.artefact_id = e.to_artefact_id \
+         AND {file_state_match}",
+        artefacts_table = artefacts_table_sql(true),
+        file_state_match =
+            file_state_exists_clause("tgt.path", "tgt.blob_sha", repo_id, commit_sha),
+    )
+}
+
 fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
     let prefix = format!("{}/%", escape_like_pattern(project_path));
     format!(
@@ -621,7 +649,7 @@ fn quoted_string_list(values: &[String]) -> String {
 
 fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
     if use_historical_tables {
-        "artefacts"
+        "artefacts_historical"
     } else {
         "artefacts_current"
     }
@@ -633,12 +661,20 @@ fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> Stri
     } else {
         format!("{alias}.updated_at AS created_at")
     };
+    let (blob_sha_expr, content_hash_expr) = if use_historical_tables {
+        (format!("{alias}.blob_sha"), format!("{alias}.content_hash"))
+    } else {
+        (
+            format!("{alias}.content_id AS blob_sha"),
+            "NULL AS content_hash".to_string(),
+        )
+    };
     format!(
         "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
          {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
          {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
          {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
-         {alias}.docstring, {alias}.blob_sha, {alias}.content_hash, {created_at_column}",
+         {alias}.docstring, {blob_sha_expr}, {content_hash_expr}, {created_at_column}",
     )
 }
 
@@ -660,6 +696,8 @@ mod tests {
         ArtefactActivityFilter, ArtefactPagination, ArtefactScope, ArtefactStructuralFilter,
         ArtefactTemporalScope,
     };
+    use crate::graphql::types::{DepsDirection, DepsFilterInput};
+    use crate::graphql::{ResolvedTemporalScope, TemporalAccessMode};
 
     fn activity_spec() -> ArtefactQuerySpec {
         ArtefactQuerySpec {
@@ -686,10 +724,10 @@ mod tests {
         let sql = build_current_artefacts_count_sql(&activity_spec());
 
         assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
-        assert!(sql.contains("cfs.path = a.path"));
-        assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
-        assert!(sql.contains("cfs.agent = 'codex'"));
+        assert!(sql.contains("FROM checkpoint_files cf"));
+        assert!(sql.contains("cf.path_after = a.path"));
+        assert!(sql.contains("cf.blob_sha_after = a.content_id"));
+        assert!(sql.contains("cf.agent = 'codex'"));
         assert!(sql.contains("SELECT COUNT(*) AS total_count FROM filtered"));
         assert!(!sql.contains("blob_sha IN"));
     }
@@ -699,7 +737,7 @@ mod tests {
         let sql = build_current_artefacts_cursor_exists_sql(&activity_spec(), "cursor-1");
 
         assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("FROM checkpoint_files cf"));
         assert!(sql.contains("FROM filtered"));
         assert!(sql.contains("WHERE artefact_id = 'cursor-1'"));
         assert!(!sql.contains("blob_sha IN"));
@@ -710,7 +748,7 @@ mod tests {
         let sql = build_current_artefacts_window_sql(&activity_spec());
 
         assert!(sql.contains("WITH filtered AS"));
-        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("FROM checkpoint_files cf"));
         assert!(sql.contains("FROM filtered"));
         assert!(sql.contains("ORDER BY path, kind_rank, start_line, end_line, artefact_id"));
         assert!(sql.contains("LIMIT 11"));
@@ -732,5 +770,44 @@ mod tests {
             "ORDER BY path DESC, kind_rank DESC, start_line DESC, end_line DESC, artefact_id DESC"
         ));
         assert!(sql.contains("LIMIT 7"));
+    }
+
+    #[test]
+    fn historical_dependency_sql_pins_tgt_to_file_state_at_commit() {
+        let scope =
+            ResolvedTemporalScope::new("abc123".to_string(), TemporalAccessMode::HistoricalCommit);
+        let sql = build_current_dependency_sql(
+            "repo-1",
+            "main",
+            DependencyScope::File("src/a.rs"),
+            None,
+            DepsFilterInput::default(),
+            Some(&scope),
+        );
+        assert!(sql.contains("LEFT JOIN artefacts_historical tgt"));
+        assert!(sql.contains("tgt.artefact_id = e.to_artefact_id"));
+        assert!(sql.contains("fs.path = tgt.path"));
+        assert!(sql.contains("fs.blob_sha = tgt.blob_sha"));
+        assert!(sql.contains("fs.commit_sha = 'abc123'"));
+    }
+
+    #[test]
+    fn historical_dependency_batch_sql_pins_tgt_to_file_state_at_commit() {
+        let scope = ResolvedTemporalScope::new(
+            "deadbeef".to_string(),
+            TemporalAccessMode::HistoricalCommit,
+        );
+        let sql = build_current_dependency_batch_sql(
+            "repo-1",
+            "main",
+            &["a1".to_string()],
+            DepsDirection::Out,
+            DepsFilterInput::default(),
+            None,
+            Some(&scope),
+        );
+        assert!(sql.contains("LEFT JOIN artefacts_historical tgt"));
+        assert!(sql.contains("fs.path = tgt.path"));
+        assert!(sql.contains("fs.commit_sha = 'deadbeef'"));
     }
 }

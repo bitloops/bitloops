@@ -70,9 +70,15 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
         )
         .expect("insert file_state row");
         conn.execute(
-            "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
-             VALUES (?1, ?2, ?3, ?4, '2026-03-26T10:00:00Z')",
-            rusqlite::params![repo_id.as_str(), path, commit_sha.as_str(), blob_sha],
+            "INSERT INTO current_file_state (
+                repo_id, path, language,
+                head_content_id, index_content_id, worktree_content_id,
+                effective_content_id, effective_source,
+                parser_version, extractor_version,
+                exists_in_head, exists_in_index, exists_in_worktree,
+                last_synced_at
+            ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T10:00:00Z')",
+            rusqlite::params![repo_id.as_str(), path, blob_sha],
         )
         .expect("insert current_file_state row");
     }
@@ -173,26 +179,18 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
         };
         conn.execute(
             "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
-                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, '2026-03-26T10:00:00Z'
+                ?1, ?2, ?3, 'typescript', ?4, ?5, ?6, NULL, ?7, ?8, ?9, '2026-03-26T10:00:00Z'
             )",
             rusqlite::params![
                 artefact_id,
                 symbol_id,
                 repo_id.as_str(),
-                blob_sha,
-                path,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                end_line * 10,
                 if canonical_kind == "file" {
                     "[]"
                 } else {
@@ -206,26 +204,41 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
                 format!("hash-{artefact_id}"),
             ],
         )
-        .expect("insert artefact row");
+        .expect("insert artefact metadata row");
         conn.execute(
-            "INSERT INTO artefacts_current (
-                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
-                temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
-                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, created_at
             ) VALUES (
-                ?1, 'main', ?2, ?3, ?4, 'commit', ?4,
-                NULL, ?5, ?6, 'typescript', ?7, ?8,
-                ?9, ?10, ?11, ?12, ?13,
-                0, ?14, NULL, ?15, ?16, ?17, '2026-03-26T10:00:00Z'
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, '2026-03-26T10:00:00Z'
             )",
             rusqlite::params![
                 repo_id.as_str(),
-                symbol_id,
-                artefact_id,
-                commit_sha.as_str(),
                 blob_sha,
                 path,
+                artefact_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert artefact snapshot row");
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                0, ?13, NULL, ?14, ?15, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                path,
+                blob_sha,
+                symbol_id,
+                artefact_id,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
@@ -244,7 +257,6 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
                 } else {
                     Some("Monorepo docstring")
                 },
-                format!("hash-{artefact_id}"),
             ],
         )
         .expect("insert artefact current row");
@@ -280,20 +292,17 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
     ] {
         conn.execute(
             "INSERT INTO artefact_edges_current (
-                edge_id, repo_id, branch, commit_sha, revision_kind, revision_id,
-                temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id,
+                repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
                 to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
                 start_line, end_line, metadata, updated_at
             ) VALUES (
-                ?1, ?2, 'main', ?3, 'commit', ?3,
-                NULL, 'blob-api-caller', 'packages/api/src/caller.ts', ?4, ?5,
-                ?6, ?7, ?8, 'calls', 'typescript',
-                ?9, ?9, '{\"resolution\":\"local\"}', '2026-03-26T10:00:00Z'
+                ?2, ?1, 'packages/api/src/caller.ts', 'blob-api-caller', ?3, ?4,
+                ?5, ?6, ?7, 'calls', 'typescript',
+                ?8, ?8, '{\"resolution\":\"local\"}', '2026-03-26T10:00:00Z'
             )",
             rusqlite::params![
                 edge_id,
                 repo_id.as_str(),
-                commit_sha.as_str(),
                 from_symbol_id,
                 from_artefact_id,
                 to_symbol_id,
@@ -371,32 +380,386 @@ pub(super) fn seed_graphql_clone_data(repo_root: &Path) {
             r#"{"reason":"cross-package helper overlap"}"#,
         ),
     ] {
+        for table in ["symbol_clone_edges", "symbol_clone_edges_current"] {
+            let sql = format!(
+                "INSERT INTO {table} (
+                    repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+                    relation_kind, score, semantic_score, lexical_score, structural_score,
+                    clone_input_hash, explanation_json
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5,
+                    ?6, ?7, ?8, ?9, ?10,
+                    ?11, ?12
+                )"
+            );
+            conn.execute(
+                &sql,
+                rusqlite::params![
+                    repo_id.as_str(),
+                    source_symbol_id,
+                    source_artefact_id,
+                    target_symbol_id,
+                    target_artefact_id,
+                    relation_kind,
+                    score,
+                    semantic_score,
+                    lexical_score,
+                    structural_score,
+                    clone_input_hash,
+                    explanation_json,
+                ],
+            )
+            .expect("insert clone edge");
+        }
+    }
+}
+
+pub(super) fn seed_graphql_clone_scoring_inputs(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open clone scoring sqlite");
+
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS symbol_semantics_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS symbol_features_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
+    parent_kind TEXT,
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
+    artefact_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    representation_kind TEXT NOT NULL DEFAULT 'baseline',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (artefact_id, representation_kind)
+);
+"#,
+    )
+    .expect("initialise clone scoring tables");
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .expect("initialise clone edge table");
+
+    for (artefact_id, path, content_id, symbol_id, semantic_hash, template_summary, summary) in [
+        (
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "blob-api-caller",
+            "sym::api-caller",
+            "semantic-hash-api-caller",
+            "Caller helper summary",
+            "Calls API target and web render helpers to build a response payload.",
+        ),
+        (
+            "artefact::api-target",
+            "packages/api/src/target.ts",
+            "blob-api-target",
+            "sym::api-target",
+            "semantic-hash-api-target",
+            "Target helper summary",
+            "Builds API response payload fields and returns the transformed target result.",
+        ),
+        (
+            "artefact::web-render",
+            "packages/web/src/page.ts",
+            "blob-web-page",
+            "sym::web-render",
+            "semantic-hash-web-render",
+            "Render helper summary",
+            "Renders a web payload fragment used by API caller output assembly.",
+        ),
+    ] {
         conn.execute(
-            "INSERT INTO symbol_clone_edges (
+            "INSERT OR REPLACE INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                template_summary, summary, confidence
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                path,
+                content_id,
+                symbol_id,
+                semantic_hash,
+                template_summary,
+                summary,
+                0.92_f64,
+            ],
+        )
+        .expect("insert current clone scoring semantics");
+    }
+
+    for (
+        artefact_id,
+        path,
+        content_id,
+        symbol_id,
+        semantic_hash,
+        normalized_name,
+        normalized_signature,
+        identifier_tokens,
+        body_tokens,
+        context_tokens,
+    ) in [
+        (
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "blob-api-caller",
+            "sym::api-caller",
+            "semantic-hash-api-caller",
+            "caller",
+            "function caller()",
+            r#"["api","caller","payload","target","render"]"#,
+            r#"["compose","payload","target","result"]"#,
+            r#"["packages","api","src"]"#,
+        ),
+        (
+            "artefact::api-target",
+            "packages/api/src/target.ts",
+            "blob-api-target",
+            "sym::api-target",
+            "semantic-hash-api-target",
+            "target",
+            "function caller()",
+            r#"["api","target","payload","response"]"#,
+            r#"["compose","payload","target","result"]"#,
+            r#"["packages","api","src"]"#,
+        ),
+        (
+            "artefact::web-render",
+            "packages/web/src/page.ts",
+            "blob-web-page",
+            "sym::web-render",
+            "semantic-hash-web-render",
+            "render",
+            "function render()",
+            r#"["web","render","payload","response"]"#,
+            r#"["render","payload","fragment","page"]"#,
+            r#"["packages","web","src"]"#,
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '[]', ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                path,
+                content_id,
+                symbol_id,
+                semantic_hash,
+                normalized_name,
+                normalized_signature,
+                identifier_tokens,
+                body_tokens,
+                "module",
+                context_tokens,
+            ],
+        )
+        .expect("insert current clone scoring features");
+    }
+
+    for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
+        (
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "blob-api-caller",
+            "sym::api-caller",
+            "embed-hash-api-caller",
+            "[0.95,0.05,0.0]",
+        ),
+        (
+            "artefact::api-target",
+            "packages/api/src/target.ts",
+            "blob-api-target",
+            "sym::api-target",
+            "embed-hash-api-target",
+            "[0.93,0.07,0.0]",
+        ),
+        (
+            "artefact::web-render",
+            "packages/web/src/page.ts",
+            "blob-web-page",
+            "sym::web-render",
+            "embed-hash-web-render",
+            "[0.81,0.19,0.0]",
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'baseline', ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                path,
+                content_id,
+                symbol_id,
+                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+                "bge-m3",
+                3,
+                input_hash,
+                embedding,
+            ],
+        )
+        .expect("insert current clone scoring embeddings");
+    }
+}
+
+pub(super) fn seed_graphql_same_file_method_clone_data(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open method clone sqlite");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .expect("initialise clone sqlite schema");
+
+    let path = "packages/api/src/change-path.ts";
+    let blob_sha = "blob-api-change-path";
+
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, language,
+            head_content_id, index_content_id, worktree_content_id,
+            effective_content_id, effective_source,
+            parser_version, extractor_version,
+            exists_in_head, exists_in_index, exists_in_worktree,
+            last_synced_at
+        ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T10:00:00Z')",
+        rusqlite::params![repo_id.as_str(), path, blob_sha],
+    )
+    .expect("insert method current_file_state row");
+
+    for (
+        symbol_id,
+        artefact_id,
+        symbol_fqn,
+        parent_symbol_id,
+        parent_artefact_id,
+        start_line,
+        end_line,
+    ) in [
+        (
+            "class::change-path",
+            "artefact::class-change-path",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            1_i64,
+            40_i64,
+        ),
+        (
+            "method::execute",
+            "artefact::method-execute",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::execute",
+            Some("class::change-path"),
+            Some("artefact::class-change-path"),
+            10_i64,
+            24_i64,
+        ),
+        (
+            "method::command",
+            "artefact::method-command",
+            "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command",
+            Some("class::change-path"),
+            Some("artefact::class-change-path"),
+            26_i64,
+            34_i64,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                0, ?13, NULL, '[\"public\"]', 'Method docstring', '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                path,
+                blob_sha,
+                symbol_id,
+                artefact_id,
+                if symbol_id == "class::change-path" {
+                    "type"
+                } else {
+                    "method"
+                },
+                if symbol_id == "class::change-path" {
+                    "class_declaration"
+                } else {
+                    "method_definition"
+                },
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert method artefact current row");
+    }
+
+    for table in ["symbol_clone_edges", "symbol_clone_edges_current"] {
+        let sql = format!(
+            "INSERT INTO {table} (
                 repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
                 relation_kind, score, semantic_score, lexical_score, structural_score,
                 clone_input_hash, explanation_json
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12
-            )",
-            rusqlite::params![
-                repo_id.as_str(),
-                source_symbol_id,
-                source_artefact_id,
-                target_symbol_id,
-                target_artefact_id,
-                relation_kind,
-                score,
-                semantic_score,
-                lexical_score,
-                structural_score,
-                clone_input_hash,
-                explanation_json,
-            ],
-        )
-        .expect("insert clone edge");
+                ?1, 'method::execute', 'artefact::method-execute', 'method::command', 'artefact::method-command',
+                'weak_clone_candidate', 0.61, 0.58, 0.44, 0.73,
+                'clone-hash-method-same-file', '{{\"reason\":\"same file helper overlap\"}}'
+            )"
+        );
+        conn.execute(&sql, rusqlite::params![repo_id.as_str()])
+            .expect("insert same-file method clone edge");
     }
 }
 
@@ -410,24 +773,11 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     };
     use crate::models::{
         CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
-        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     };
 
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     let mut repository = open_repository_for_repo(repo_root).expect("open test harness repository");
-    let discovery_run = TestDiscoveryRunRecord {
-        discovery_run_id: format!("discovery:{commit_sha}"),
-        repo_id: repo_id.clone(),
-        commit_sha: commit_sha.to_string(),
-        language: Some("typescript".to_string()),
-        started_at: "2026-03-26T11:00:00Z".to_string(),
-        finished_at: Some("2026-03-26T11:00:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("complete".to_string()),
-        notes_json: None,
-        stats_json: None,
-    };
-
     let mut test_artefacts = Vec::<TestArtefactCurrentRecord>::new();
     let mut test_edges = Vec::<TestArtefactEdgeCurrentRecord>::new();
     let mut coverage_captures = Vec::<CoverageCaptureRecord>::new();
@@ -446,8 +796,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             artefact_id: suite_artefact_id.clone(),
             symbol_id: suite_symbol_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-suite-{index}"),
+            content_id: format!("test-blob-suite-{index}"),
             path: test_path.clone(),
             language: "typescript".to_string(),
             canonical_kind: "test_suite".to_string(),
@@ -463,18 +812,14 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         test_artefacts.push(TestArtefactCurrentRecord {
             artefact_id: test_artefact_id.clone(),
             symbol_id: test_symbol_id.clone(),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-scenario-{index}"),
+            content_id: format!("test-blob-scenario-{index}"),
             path: test_path.clone(),
             language: "typescript".to_string(),
             canonical_kind: "test_scenario".to_string(),
@@ -490,17 +835,13 @@ pub(super) fn seed_graphql_test_harness_stage_data(
             signature: None,
             modifiers: "[]".to_string(),
             docstring: None,
-            content_hash: None,
             discovery_source: "static".to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         test_edges.push(TestArtefactEdgeCurrentRecord {
             edge_id: format!("test-edge-{index}"),
             repo_id: repo_id.clone(),
-            commit_sha: commit_sha.to_string(),
-            blob_sha: format!("test-blob-edge-{index}"),
+            content_id: format!("test-blob-edge-{index}"),
             path: test_path,
             from_artefact_id: test_artefact_id.clone(),
             from_symbol_id: test_symbol_id.clone(),
@@ -517,8 +858,6 @@ pub(super) fn seed_graphql_test_harness_stage_data(
                 "linkage_status": "linked"
             })
             .to_string(),
-            revision_kind: "commit".to_string(),
-            revision_id: commit_sha.to_string(),
         });
 
         coverage_captures.push(CoverageCaptureRecord {
@@ -566,13 +905,7 @@ pub(super) fn seed_graphql_test_harness_stage_data(
     }
 
     repository
-        .replace_test_discovery(
-            commit_sha,
-            &test_artefacts,
-            &test_edges,
-            &discovery_run,
-            &[],
-        )
+        .replace_test_discovery(commit_sha, &test_artefacts, &test_edges)
         .expect("replace test discovery");
     for capture in &coverage_captures {
         repository
@@ -590,6 +923,63 @@ pub(super) fn seed_graphql_test_harness_stage_data(
 pub(super) fn seed_graphql_monorepo_repo_with_duckdb_events() -> TempDir {
     let repo = seed_graphql_monorepo_repo();
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    seed_checkpoint_storage_for_dashboard(
+        repo.path(),
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-api",
+            branch: "main",
+            files_touched: &["packages/api/src/caller.ts", "packages/api/src/target.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({
+                "input_tokens": 50,
+                "output_tokens": 20,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "api_call_count": 1
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-api",
+                agent: "codex",
+                created_at: "2026-03-26T10:20:00Z",
+                checkpoints_count: 1,
+                transcript: "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"API checkpoint\"}]}}\n",
+                prompts: "API checkpoint",
+                context: "API checkpoint context",
+            }],
+            insert_mapping: true,
+        },
+    );
+    seed_checkpoint_storage_for_dashboard(
+        repo.path(),
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-web",
+            branch: "main",
+            files_touched: &["packages/web/src/page.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({
+                "input_tokens": 25,
+                "output_tokens": 10,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "api_call_count": 1
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-web",
+                agent: "codex",
+                created_at: "2026-03-26T10:25:00Z",
+                checkpoints_count: 1,
+                transcript: "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Web checkpoint\"}]}}\n",
+                prompts: "Web checkpoint",
+                context: "Web checkpoint context",
+            }],
+            insert_mapping: true,
+        },
+    );
 
     seed_duckdb_events(
         repo.path(),

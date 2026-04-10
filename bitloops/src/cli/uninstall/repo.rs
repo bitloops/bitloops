@@ -11,7 +11,7 @@ use crate::utils::platform_dirs::bitloops_state_dir;
 
 pub(super) struct ResolvedScope {
     pub(super) hook_repo_roots: Vec<PathBuf>,
-    pub(super) legacy_repo_roots: Vec<PathBuf>,
+    pub(super) repo_data_roots: Vec<PathBuf>,
 }
 
 pub(super) fn resolve_scope(
@@ -33,7 +33,7 @@ pub(super) fn resolve_scope(
         Vec::new()
     };
 
-    let legacy_repo_roots = if targets.contains(&UninstallTarget::Data) {
+    let repo_data_roots = if targets.contains(&UninstallTarget::Data) {
         discover_known_repo_roots()?
     } else {
         Vec::new()
@@ -41,7 +41,7 @@ pub(super) fn resolve_scope(
 
     Ok(ResolvedScope {
         hook_repo_roots,
-        legacy_repo_roots,
+        repo_data_roots,
     })
 }
 

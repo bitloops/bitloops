@@ -9,8 +9,9 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, ClonesFilterInput, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
+    CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
+    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
     paginate_items,
 };
 
@@ -95,12 +96,26 @@ impl ArtefactFilterInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 #[graphql(complex)]
+pub struct ArtefactCopyLineage {
+    pub checkpoint_id: String,
+    pub event_time: DateTimeScalar,
+    pub commit_sha: String,
+    pub source_symbol_id: String,
+    pub source_artefact_id: ID,
+    pub dest_symbol_id: String,
+    pub dest_artefact_id: ID,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[graphql(complex)]
 pub struct Artefact {
     pub id: ID,
     pub symbol_id: String,
     pub path: String,
     pub language: String,
-    pub canonical_kind: CanonicalKind,
+    pub canonical_kind: Option<CanonicalKind>,
     pub language_kind: Option<String>,
     pub symbol_fqn: Option<String>,
     pub parent_artefact_id: Option<ID>,
@@ -126,6 +141,33 @@ impl Artefact {
     pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
         self.scope = scope;
         self
+    }
+}
+
+#[ComplexObject]
+impl ArtefactCopyLineage {
+    async fn source(&self, ctx: &Context<'_>) -> Result<Option<Artefact>> {
+        ctx.data_unchecked::<DataLoaders>()
+            .load_artefact_by_id(self.source_artefact_id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve source artefact {}: {err:#}",
+                    self.source_artefact_id.as_ref()
+                ))
+            })
+    }
+
+    async fn destination(&self, ctx: &Context<'_>) -> Result<Option<Artefact>> {
+        ctx.data_unchecked::<DataLoaders>()
+            .load_artefact_by_id(self.dest_artefact_id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve destination artefact {}: {err:#}",
+                    self.dest_artefact_id.as_ref()
+                ))
+            })
     }
 }
 
@@ -255,6 +297,52 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "depsSummary")]
+    async fn deps_summary(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<DepsSummaryFilterInput>,
+    ) -> Result<DepsSummary> {
+        let filter = filter.unwrap_or_default();
+        let direction = filter.direction.unwrap_or(DepsDirection::Both);
+        let deps_filter = DepsFilterInput {
+            kind: filter.kind,
+            direction,
+            include_unresolved: filter.unresolved,
+        };
+
+        let loaders = ctx.data_unchecked::<DataLoaders>();
+        let outgoing = if matches!(direction, DepsDirection::Out | DepsDirection::Both) {
+            loaders
+                .load_outgoing_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve outgoing dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
+
+        let incoming = if matches!(direction, DepsDirection::In | DepsDirection::Both) {
+            loaders
+                .load_incoming_edges(self.id.as_ref(), Some(deps_filter), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to resolve incoming dependency summary for {}: {err:#}",
+                        self.id.as_ref()
+                    ))
+                })?
+        } else {
+            Vec::new()
+        };
+
+        Ok(DepsSummary::from_edges(&incoming, &outgoing))
+    }
+
     async fn clones(
         &self,
         ctx: &Context<'_>,
@@ -266,15 +354,6 @@ impl Artefact {
     ) -> Result<CloneConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
-        }
-        if self
-            .scope
-            .temporal_scope()
-            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
-        {
-            return Err(bad_user_input_error(
-                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
-            ));
         }
         let pagination = ConnectionPagination::from_graphql(
             20,
@@ -294,11 +373,13 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
+        let summary = CloneSummary::from_clones(&clones);
         let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
+            summary,
         ))
     }
 
@@ -378,6 +459,18 @@ impl Artefact {
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
+
+    async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_artefact_copy_lineage(self.id.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve checkpoint copy lineage for {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })
+    }
 }
 
 fn stage_limit(first: i32) -> Result<usize> {
@@ -416,14 +509,14 @@ fn build_tests_stage_args(
 
 fn artefact_stage_row(artefact: &Artefact) -> Value {
     json!({
-        "artefact_id": artefact.id.as_ref(),
-        "symbol_id": &artefact.symbol_id,
-        "symbol_fqn": &artefact.symbol_fqn,
-        "canonical_kind": artefact.canonical_kind.as_devql_value(),
-        "path": &artefact.path,
-        "start_line": artefact.start_line,
-        "end_line": artefact.end_line,
-    })
+    "artefact_id": artefact.id.as_ref(),
+    "symbol_id": &artefact.symbol_id,
+    "symbol_fqn": &artefact.symbol_fqn,
+    "canonical_kind": artefact.canonical_kind.map(|kind| kind.as_devql_value()),
+    "path": &artefact.path,
+    "start_line": artefact.start_line,
+    "end_line": artefact.end_line,
+        })
 }
 
 fn decode_stage_rows<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<Vec<T>> {

@@ -125,9 +125,15 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
         ("packages/web/src/page.ts", "blob-web-page-v1"),
     ] {
         conn.execute(
-            "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
-             VALUES (?1, ?2, ?3, ?4, '2026-03-26T09:00:00Z')",
-            rusqlite::params![repo_id.as_str(), path, second_commit.as_str(), blob_sha],
+            "INSERT INTO current_file_state (
+                repo_id, path, language,
+                head_content_id, index_content_id, worktree_content_id,
+                effective_content_id, effective_source,
+                parser_version, extractor_version,
+                exists_in_head, exists_in_index, exists_in_worktree,
+                last_synced_at
+            ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T09:00:00Z')",
+            rusqlite::params![repo_id.as_str(), path, blob_sha],
         )
         .expect("insert current_file_state row");
     }
@@ -278,26 +284,18 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
     ] {
         conn.execute(
             "INSERT INTO artefacts (
-                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
-                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
-                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, ?16
+                ?1, ?2, ?3, 'typescript', ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10
             )",
             rusqlite::params![
                 artefact_id,
                 symbol_id,
                 repo_id.as_str(),
-                blob_sha,
-                path,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
-                parent_artefact_id,
-                start_line,
-                end_line,
-                end_line * 10,
                 if canonical_kind == "file" {
                     "[]"
                 } else {
@@ -312,7 +310,27 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
                 created_at,
             ],
         )
-        .expect("insert historical artefact row");
+        .expect("insert historical artefact metadata row");
+        conn.execute(
+            "INSERT INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                blob_sha,
+                path,
+                artefact_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                created_at,
+            ],
+        )
+        .expect("insert historical artefact snapshot row");
     }
 
     for (
@@ -383,23 +401,19 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
     ] {
         conn.execute(
             "INSERT INTO artefacts_current (
-                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
-                temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
-                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-                start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
             ) VALUES (
-                ?1, 'main', ?2, ?3, ?4, 'commit', ?4,
-                NULL, ?5, ?6, 'typescript', ?7, ?8,
-                ?9, ?10, ?11, ?12, ?13,
-                0, ?14, NULL, ?15, ?16, ?17, '2026-03-26T09:00:00Z'
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                0, ?13, NULL, ?14, ?15, '2026-03-26T09:00:00Z'
             )",
             rusqlite::params![
                 repo_id.as_str(),
+                path,
+                blob_sha,
                 symbol_id,
                 artefact_id,
-                second_commit.as_str(),
-                blob_sha,
-                path,
                 canonical_kind,
                 language_kind,
                 symbol_fqn,
@@ -418,7 +432,6 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
                 } else {
                     Some("Current temporal docstring")
                 },
-                format!("hash-{artefact_id}"),
             ],
         )
         .expect("insert current artefact row");
@@ -439,17 +452,16 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
 
     conn.execute(
         "INSERT INTO artefact_edges_current (
-            edge_id, repo_id, branch, commit_sha, revision_kind, revision_id,
-            temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id,
+            repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
             to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
             start_line, end_line, metadata, updated_at
         ) VALUES (
-            'edge::v2-api-caller-web', ?1, 'main', ?2, 'commit', ?2,
-            NULL, 'blob-api-caller-v2', 'packages/api/src/caller.ts', 'sym::v2-api-caller', 'artefact::v2-api-caller',
+            ?1, 'edge::v2-api-caller-web', 'packages/api/src/caller.ts', 'blob-api-caller-v2',
+            'sym::v2-api-caller', 'artefact::v2-api-caller',
             'sym::v2-web-render', 'artefact::v2-web-render', 'packages/web/src/page.ts::render', 'calls', 'typescript',
             4, 4, '{\"resolution\":\"local\"}', '2026-03-26T09:00:00Z'
         )",
-        rusqlite::params![repo_id.as_str(), second_commit.as_str()],
+        rusqlite::params![repo_id.as_str()],
     )
     .expect("insert current edge row");
 
@@ -590,7 +602,7 @@ pub(super) fn seed_graphql_event_backed_repo() -> SeededGraphqlEventBackedRepo {
             &conn,
             repo_id.as_str(),
             path,
-            second_commit.as_str(),
+            "typescript",
             blob_sha,
             "2026-03-26T09:00:00Z",
         );
@@ -624,12 +636,8 @@ pub(super) fn seed_graphql_event_backed_repo() -> SeededGraphqlEventBackedRepo {
     insert_current_function_artefact(
         &conn,
         repo_id.as_str(),
-        "main",
         "artefact::caller-current",
         "sym::caller-current",
-        second_commit.as_str(),
-        "commit",
-        second_commit.as_str(),
         "blob-caller-v2",
         "packages/api/src/caller.ts",
         "packages/api/src/caller.ts::callerCurrent",
@@ -640,12 +648,8 @@ pub(super) fn seed_graphql_event_backed_repo() -> SeededGraphqlEventBackedRepo {
     insert_current_function_artefact(
         &conn,
         repo_id.as_str(),
-        "main",
         "artefact::target-current",
         "sym::target-current",
-        second_commit.as_str(),
-        "commit",
-        second_commit.as_str(),
         "blob-target-v2",
         "packages/api/src/target.ts",
         "packages/api/src/target.ts::targetCurrent",
@@ -656,12 +660,8 @@ pub(super) fn seed_graphql_event_backed_repo() -> SeededGraphqlEventBackedRepo {
     insert_current_function_artefact(
         &conn,
         repo_id.as_str(),
-        "main",
         "artefact::copy-current",
         "sym::copy-current",
-        second_commit.as_str(),
-        "commit",
-        second_commit.as_str(),
         "blob-target-v2",
         "packages/api/src/copy.ts",
         "packages/api/src/copy.ts::copyCurrent",
@@ -789,12 +789,8 @@ pub(super) fn seed_graphql_save_revision_event_backed_repo()
     insert_current_function_artefact(
         &conn,
         repo_id.as_str(),
-        "main",
         "artefact::caller-temp",
         "sym::caller-temp",
-        commit_sha.as_str(),
-        "temporary",
-        save_revision.as_str(),
         "blob-caller-temp",
         "packages/api/src/caller.ts",
         "packages/api/src/caller.ts::callerTemp",
@@ -805,12 +801,8 @@ pub(super) fn seed_graphql_save_revision_event_backed_repo()
     insert_current_function_artefact(
         &conn,
         repo_id.as_str(),
-        "main",
         "artefact::target-temp",
         "sym::target-temp",
-        commit_sha.as_str(),
-        "temporary",
-        save_revision.as_str(),
         "blob-target-temp",
         "packages/api/src/target.ts",
         "packages/api/src/target.ts::targetTemp",

@@ -5,7 +5,7 @@ title: Configuration
 
 # Configuration Reference
 
-Bitloops uses two separate TOML configuration surfaces:
+Bitloops uses two TOML configuration surfaces:
 
 - A global daemon config in the platform config directory.
 - A project policy discovered by walking upwards to the nearest `.bitloops.local.toml` or `.bitloops.toml`.
@@ -24,13 +24,17 @@ Bitloops stores daemon configuration at:
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+- `bitloops init --install-default-daemon` also auto-applies the default local embeddings setup when embeddings are not configured yet. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases and writes its managed absolute path into the runtime config.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
+- `bitloops start --config /path/to/config.toml --bootstrap-local-stores` keeps that explicit config path and creates the matching local SQLite, DuckDB, and blob-store artefacts before startup.
 - `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
+- `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile. When that profile uses the default local Bitloops-managed runtime, Bitloops also installs or updates the managed `bitloops-embeddings` binary.
 
 The daemon config owns:
 
 - Store backends and custom store paths
 - Provider credentials
+- Inference runtimes, profiles, and capability bindings
 - Dashboard defaults
 - Daemon runtime defaults such as `local_dev`, logging, and telemetry
 
@@ -46,11 +50,6 @@ enabled = true
 
 [logging]
 level = "info"
-
-[stores]
-embedding_provider = "local"
-embedding_model = "jinaai/jina-embeddings-v2-base-code"
-embedding_cache_dir = "/Users/alex/Library/Caches/bitloops/embeddings/models"
 
 [stores.relational]
 sqlite_path = "/Users/alex/.local/share/bitloops/stores/relational/relational.db"
@@ -69,9 +68,33 @@ site_url = "https://example.atlassian.net"
 email = "${ATLASSIAN_EMAIL}"
 token = "${ATLASSIAN_TOKEN}"
 
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
+[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "semantic_aware_once"
+ann_neighbors = 5
+enrichment_workers = 1
+
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
+model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1"
 
@@ -81,6 +104,19 @@ bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
 [dashboard.local_dashboard]
 tls = true
 ```
+
+### Accepted Top-Level Daemon Sections
+
+The current daemon parser accepts these top-level surfaces:
+
+- `runtime`
+- `telemetry`
+- `logging`
+- `stores`
+- `knowledge`
+- `semantic_clones`
+- `inference`
+- `dashboard`
 
 ### Telemetry Consent
 
@@ -103,15 +139,90 @@ Bitloops uses platform app directories by default:
 | Config | `${XDG_CONFIG_HOME:-~/.config}/bitloops/` | `config.toml` |
 | Data | `${XDG_DATA_HOME:-~/.local/share}/bitloops/` | SQLite, DuckDB, blob store |
 | Cache | `${XDG_CACHE_HOME:-~/.cache}/bitloops/` | Embedding model downloads, dashboard bundle |
-| State | `${XDG_STATE_HOME:-~/.local/state}/bitloops/` | Daemon runtime metadata, supervisor state, hook scratch |
+| State | `${XDG_STATE_HOME:-~/.local/state}/bitloops/` | Daemon runtime metadata, supervisor state, daemon runtime SQLite, hook scratch |
 
-The default repo footprint is now limited to optional policy files at the repo root. Bitloops no longer uses repo-local runtime storage by default.
+Bitloops also keeps repo-scoped workflow runtime state in a dedicated local runtime SQLite database under the active daemon config root.
 
 If you want to remove these platform directories again, use `bitloops uninstall` with explicit targets or `bitloops uninstall --full`.
 
+### Effective Daemon Config For Repo Commands
+
+Repo-scoped commands that need daemon settings resolve the effective daemon config in this order:
+
+1. `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`
+2. The nearest `config.toml` found by walking upwards from the current repo
+3. The default global daemon config
+
+`bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` all use that same precedence when deciding which daemon config to read, mutate, and bootstrap against.
+
+That means:
+
+- a repo-local `config.toml` is updated when it is the effective config
+- the default global config is only updated when no nearer config applies
+- the override environment variable is honoured consistently by both config mutation and runtime bootstrap
+
+### Default Embeddings Enablement
+
+When Bitloops auto-enables embeddings through `bitloops enable --install-embeddings`, interactive `bitloops enable`, or `bitloops init --install-default-daemon`, it creates the minimum daemon config needed for the default local profile only when no active profile is already configured:
+
+```toml
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+```
+
+Notes:
+
+- `local_code` is the default auto-created local embeddings profile name.
+- `bitloops_embeddings_ipc` is the default auto-created local embeddings driver.
+- `bitloops_embeddings` is the default auto-created runtime id.
+- `bge-m3` is the default auto-created local model.
+- When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above.
+- Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
+- Existing active embedding profiles are preserved. Bitloops does not overwrite an already configured non-local active profile.
+- The same runtime warm/bootstrap path used by `bitloops embeddings pull local_code` is reused for local-profile setup.
+
+## RuntimeStore And RelationalStore
+
+Bitloops now uses two internal storage boundaries:
+
+- `RuntimeStore`: local-only SQLite for workflow and daemon runtime state
+- `RelationalStore`: the approved relational boundary for queryable checkpoint and DevQL relational state
+
+The runtime store paths are derived by the host and are not configured under `[stores]`:
+
+| Runtime surface | Default path | Purpose |
+| --- | --- | --- |
+| Daemon runtime store | `<state dir>/daemon/runtime.sqlite` | daemon runtime state, service metadata, supervisor metadata, sync queue state, enrichment queue state |
+| Repo runtime store | `<config root>/stores/runtime/runtime.sqlite` | sessions, temporary checkpoints, pre-prompt states, pre-task markers, interaction spool |
+
+Configured relational, events, and blob stores still come from the daemon config:
+
+- `[stores.relational]` selects the `RelationalStore` backend, using SQLite or Postgres
+- `[stores.events]` selects the event backend, using DuckDB or ClickHouse
+- `[stores.blob]` selects the blob backend, using local disk or a remote object store
+
 ## Project Policy
 
-`bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, installing hooks, and running the initial baseline sync through the daemon.
+`bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.
+
+Interactive `bitloops init` can also ask whether you want to install the default local embeddings setup when embeddings are still unconfigured, whether you want to queue an initial DevQL current-state sync after hook setup, and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
+
+When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup if embeddings are not already configured. When init also runs sync or ingest, any managed `bitloops-embeddings` download happens afterwards.
+
+Use DevQL commands separately when you want to rerun ingest, sync, or validation after initial setup. `bitloops init` can run both initial sync and initial commit-history ingest when you opt into them.
 
 The thin CLI and hook layer resolve project policy by walking upwards from the current working directory towards the enclosing `.git` root.
 
@@ -124,6 +235,16 @@ Resolution rules:
 - If Bitloops reaches the enclosing `.git` root without finding either file, project-scoped commands tell you to run `bitloops init`.
 
 Project policy controls what the slim CLI and hooks send to the daemon. It does not configure store backends or daemon runtime paths.
+
+### Accepted Top-Level Repo-Policy Sections
+
+The current repo-policy surface is:
+
+- `capture`
+- `watch`
+- `scope`
+- `agents`
+- `imports`
 
 Example shared policy:
 
@@ -216,8 +337,9 @@ Arrays replace lower-precedence arrays. They are not deep-merged.
 
 Use the global daemon config for:
 
-- SQLite, DuckDB, ClickHouse, PostgreSQL, blob, and embedding cache paths
+- SQLite, DuckDB, ClickHouse, PostgreSQL, and blob paths
 - Provider credentials and service defaults
+- Capability policy plus inference runtimes, profiles, and slot bindings
 - Dashboard bundle overrides and TLS hints
 
 Use project policy for:

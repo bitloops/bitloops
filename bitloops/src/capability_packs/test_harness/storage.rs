@@ -13,7 +13,7 @@ use crate::models::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
+    TestHarnessCommitCounts, TestRunRecord,
 };
 
 pub mod dispatch;
@@ -40,8 +40,6 @@ pub trait TestHarnessRepository {
         commit_sha: &str,
         test_artefacts: &[TestArtefactCurrentRecord],
         test_edges: &[TestArtefactEdgeCurrentRecord],
-        discovery_run: &TestDiscoveryRunRecord,
-        diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()>;
     fn replace_test_runs(&mut self, commit_sha: &str, runs: &[TestRunRecord]) -> Result<()>;
     fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()>;
@@ -72,6 +70,19 @@ pub trait TestHarnessQueryRepository {
         commit_sha: &str,
         test_symbol_id: &str,
     ) -> Result<Option<LatestTestRunRecord>>;
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<HashMap<String, LatestTestRunRecord>> {
+        let mut runs = HashMap::new();
+        for test_symbol_id in test_symbol_ids {
+            if let Some(run) = self.load_latest_test_run(commit_sha, test_symbol_id)? {
+                runs.insert(test_symbol_id.clone(), run);
+            }
+        }
+        Ok(runs)
+    }
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
@@ -139,7 +150,7 @@ pub fn init_test_domain_database(db_path: &Path) -> Result<()> {
     conn.execute_batch(schema::sqlite_test_domain_schema_sql())
         .context("failed to create test-harness test-domain schema")?;
 
-    println!(
+    log::info!(
         "test-harness test-domain schema initialized at {}",
         db_path.display()
     );

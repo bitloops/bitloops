@@ -1,6 +1,8 @@
 #[path = "features/semantic_features.rs"]
 mod core;
 
+pub use core::SymbolSemanticsRow;
+pub(crate) use core::synthesize_deterministic_summary;
 pub use core::{
     NoopSemanticSummaryProvider, PreStageArtefactRow, PreStageDependencyRow,
     SemanticFeatureIndexState, SemanticFeatureIngestionStats, SemanticFeatureInput,
@@ -10,5 +12,6 @@ pub use core::{
     build_semantic_feature_inputs_from_artefacts_with_dependencies, build_semantic_feature_rows,
     build_semantic_summary_provider, is_semantic_enrichment_candidate,
     resolve_semantic_summary_endpoint, semantic_features_require_reindex,
+    summary_provider_from_service,
 };
 pub(crate) use core::{build_dependency_context_signal, render_dependency_context};

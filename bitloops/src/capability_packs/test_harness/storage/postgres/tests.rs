@@ -3,6 +3,9 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use tempfile::TempDir;
@@ -13,8 +16,7 @@ use crate::capability_packs::test_harness::storage::{
 };
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestRunRecord,
+    TestArtefactEdgeCurrentRecord, TestRunRecord,
 };
 
 #[allow(clippy::items_after_test_module)]
@@ -37,13 +39,25 @@ const SCENARIO_ID: &str = "scenario:checks-email-domain";
 const TEST_LINK_ID: &str = "link:checks-email-domain:create-user";
 const SUITE_ARTEFACT_ID: &str = "test-artefact:suite:user-service";
 const SCENARIO_ARTEFACT_ID: &str = "test-artefact:scenario:checks-email-domain";
-const DISCOVERY_RUN_ID: &str = "discovery:user-service";
-const DIAGNOSTIC_ID: &str = "diag:user-service";
 const RUN_ID: &str = "run:checks-email-domain";
 const CAPTURE_ID: &str = "capture:checks-email-domain";
+const POSTGRES_TEST_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+const TEMP_POSTGRES_START_ATTEMPTS: usize = 2;
+
+fn postgres_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn acquire_postgres_test_lock() -> MutexGuard<'static, ()> {
+    postgres_test_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[test]
 fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
+    let _lock = acquire_postgres_test_lock();
     let Some(postgres) = TempPostgres::start()? else {
         eprintln!(
             "skipping Postgres test-harness coverage test; local Postgres binaries not found"
@@ -54,25 +68,11 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     initialise_postgres_repository(&repository)?;
     seed_production_state(&repository)?;
 
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &stale_test_artefacts(),
-        &stale_test_edges(),
-        &stale_discovery_run(),
-        &[stale_diagnostic()],
-    )?;
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &test_artefacts(),
-        &test_edges(),
-        &discovery_run_record(),
-        &[diagnostic_record()],
-    )?;
+    repository.replace_test_discovery(COMMIT_SHA, &stale_test_artefacts(), &stale_test_edges())?;
+    repository.replace_test_discovery(COMMIT_SHA, &test_artefacts(), &test_edges())?;
 
     assert_eq!(table_count(&repository, "test_artefacts_current")?, 2);
     assert_eq!(table_count(&repository, "test_artefact_edges_current")?, 1);
-    assert_eq!(table_count(&repository, "test_discovery_runs")?, 1);
-    assert_eq!(table_count(&repository, "test_discovery_diagnostics")?, 1);
 
     let scenarios = repository.load_test_scenarios(COMMIT_SHA)?;
     assert_eq!(scenarios.len(), 1);
@@ -144,6 +144,7 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
 #[test]
 fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_classifications()
 -> Result<()> {
+    let _lock = acquire_postgres_test_lock();
     let Some(postgres) = TempPostgres::start()? else {
         eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
         return Ok(());
@@ -153,13 +154,7 @@ fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_cla
     initialise_postgres_repository(&repository)?;
     seed_production_state(&repository)?;
 
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &stale_test_artefacts(),
-        &stale_test_edges(),
-        &stale_discovery_run(),
-        &[stale_diagnostic()],
-    )?;
+    repository.replace_test_discovery(COMMIT_SHA, &stale_test_artefacts(), &stale_test_edges())?;
     repository.replace_test_runs(COMMIT_SHA, &[test_run_record()])?;
     repository.insert_coverage_capture(&coverage_capture_record())?;
     repository.insert_coverage_hits(&coverage_hits())?;
@@ -173,13 +168,7 @@ fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_cla
     assert_eq!(table_count(&repository, "coverage_hits")?, 6);
     assert_eq!(table_count(&repository, "test_classifications")?, 1);
 
-    repository.replace_test_discovery(
-        COMMIT_SHA,
-        &test_artefacts(),
-        &test_edges(),
-        &discovery_run_record(),
-        &[diagnostic_record()],
-    )?;
+    repository.replace_test_discovery(COMMIT_SHA, &test_artefacts(), &test_edges())?;
 
     assert_eq!(table_count(&repository, "test_runs")?, 0);
     assert_eq!(table_count(&repository, "coverage_captures")?, 0);
@@ -196,6 +185,7 @@ fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_cla
 
 #[test]
 fn postgres_repository_insert_coverage_diagnostics_empty_slice_is_noop() -> Result<()> {
+    let _lock = acquire_postgres_test_lock();
     let Some(postgres) = TempPostgres::start()? else {
         eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
         return Ok(());
@@ -212,6 +202,7 @@ fn postgres_repository_insert_coverage_diagnostics_empty_slice_is_noop() -> Resu
 
 #[test]
 fn postgres_repository_rebuild_classifications_returns_zero_without_covered_hits() -> Result<()> {
+    let _lock = acquire_postgres_test_lock();
     let Some(postgres) = TempPostgres::start()? else {
         eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
         return Ok(());
@@ -249,10 +240,44 @@ VALUES
   ('repo-postgres-test-harness', 'commit-postgres-test-harness', 'src/services/user_service.rs', 'blob-user'),
   ('repo-postgres-test-harness', 'commit-postgres-test-harness', 'src/services/email.rs', 'blob-email');
 
-INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
+INSERT INTO current_file_state (
+  repo_id, path, language, head_content_id, index_content_id, worktree_content_id,
+  effective_content_id, effective_source, parser_version, extractor_version,
+  exists_in_head, exists_in_index, exists_in_worktree, last_synced_at
+)
 VALUES
-  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'commit-postgres-test-harness', 'blob-user', '2026-03-19T12:00:00Z'),
-  ('repo-postgres-test-harness', 'src/services/email.rs', 'commit-postgres-test-harness', 'blob-email', '2026-03-19T12:00:00Z');
+  (
+    'repo-postgres-test-harness',
+    'src/services/user_service.rs',
+    'rust',
+    'content-user',
+    'content-user',
+    'content-user',
+    'content-user',
+    'head',
+    'parser-v1',
+    'extractor-v1',
+    1,
+    1,
+    1,
+    '2026-03-19T12:00:00Z'
+  ),
+  (
+    'repo-postgres-test-harness',
+    'src/services/email.rs',
+    'rust',
+    'content-email',
+    'content-email',
+    'content-email',
+    'content-email',
+    'head',
+    'parser-v1',
+    'extractor-v1',
+    1,
+    1,
+    1,
+    '2026-03-19T12:00:00Z'
+  );
 
 INSERT INTO artefacts (
   artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind,
@@ -266,15 +291,15 @@ INSERT INTO artefacts (
   ('artefact:function:normalize_email', 'symbol:function:normalize_email', 'repo-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, 'hash-normalize-email');
 
 INSERT INTO artefacts_current (
-  repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind,
+  repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
   language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-  start_byte, end_byte, signature, modifiers, docstring, content_hash
+  start_byte, end_byte, signature, modifiers, docstring, updated_at
 ) VALUES
-  ('repo-postgres-test-harness', 'symbol:file:user_service', 'artefact:file:user_service', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'file', 'source_file', 'src/services/user_service.rs', NULL, NULL, 1, 40, 0, 800, NULL, '[]'::jsonb, NULL, 'hash-file-user'),
-  ('repo-postgres-test-harness', 'symbol:file:email', 'artefact:file:email', 'commit-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'file', 'source_file', 'src/services/email.rs', NULL, NULL, 1, 30, 0, 600, NULL, '[]'::jsonb, NULL, 'hash-file-email'),
-  ('repo-postgres-test-harness', 'symbol:struct:user', 'artefact:struct:user', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', NULL, 'Struct', 'src/services/user_service.rs::User', 'symbol:file:user_service', 'artefact:file:user_service', 3, 8, 24, 96, NULL, '[]'::jsonb, NULL, 'hash-user-struct'),
-  ('repo-postgres-test-harness', 'symbol:function:create_user', 'artefact:function:create_user', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'function', 'function_item', 'src/services/user_service.rs::create_user', 'symbol:file:user_service', 'artefact:file:user_service', 10, 20, 100, 350, 'pub fn create_user(name: &str) -> User', '[]'::jsonb, NULL, 'hash-create-user'),
-  ('repo-postgres-test-harness', 'symbol:function:normalize_email', 'artefact:function:normalize_email', 'commit-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'symbol:file:email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, 'hash-normalize-email');
+  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'content-user', 'symbol:file:user_service', 'artefact:file:user_service', 'rust', 'file', 'source_file', 'src/services/user_service.rs', NULL, NULL, 1, 40, 0, 800, NULL, '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/email.rs', 'content-email', 'symbol:file:email', 'artefact:file:email', 'rust', 'file', 'source_file', 'src/services/email.rs', NULL, NULL, 1, 30, 0, 600, NULL, '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'content-user', 'symbol:struct:user', 'artefact:struct:user', 'rust', NULL, 'Struct', 'src/services/user_service.rs::User', 'symbol:file:user_service', 'artefact:file:user_service', 3, 8, 24, 96, NULL, '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'content-user', 'symbol:function:create_user', 'artefact:function:create_user', 'rust', 'function', 'function_item', 'src/services/user_service.rs::create_user', 'symbol:file:user_service', 'artefact:file:user_service', 10, 20, 100, 350, 'pub fn create_user(name: &str) -> User', '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/email.rs', 'content-email', 'symbol:function:normalize_email', 'artefact:function:normalize_email', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'symbol:file:email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, '2026-03-19T12:00:00Z');
 "#,
         )
         .context("seeding production state")?;
@@ -375,36 +400,6 @@ fn stale_test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
     }]
 }
 
-fn stale_discovery_run() -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: "discovery:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-19T12:01:00Z".to_string(),
-        finished_at: Some("2026-03-19T12:01:01Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("static_only".to_string()),
-        notes_json: Some("{\"note\":\"stale\"}".to_string()),
-        stats_json: Some("{\"files\":1}".to_string()),
-    }
-}
-
-fn stale_diagnostic() -> TestDiscoveryDiagnosticRecord {
-    TestDiscoveryDiagnosticRecord {
-        diagnostic_id: "diag:stale".to_string(),
-        discovery_run_id: "discovery:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        path: Some("tests/stale.rs".to_string()),
-        line: Some(1),
-        severity: "warning".to_string(),
-        code: "stale".to_string(),
-        message: "stale diagnostic".to_string(),
-        metadata_json: Some("{\"stale\":true}".to_string()),
-    }
-}
-
 fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {
     vec![
         TestArtefactCurrentRecord {
@@ -482,36 +477,6 @@ fn test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
         revision_kind: "commit".to_string(),
         revision_id: COMMIT_SHA.to_string(),
     }]
-}
-
-fn discovery_run_record() -> TestDiscoveryRunRecord {
-    TestDiscoveryRunRecord {
-        discovery_run_id: DISCOVERY_RUN_ID.to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        language: Some("rust".to_string()),
-        started_at: "2026-03-19T12:02:00Z".to_string(),
-        finished_at: Some("2026-03-19T12:02:03Z".to_string()),
-        status: "complete".to_string(),
-        enumeration_status: Some("hybrid_full".to_string()),
-        notes_json: Some("{\"mode\":\"hybrid\"}".to_string()),
-        stats_json: Some("{\"files\":2,\"scenarios\":1}".to_string()),
-    }
-}
-
-fn diagnostic_record() -> TestDiscoveryDiagnosticRecord {
-    TestDiscoveryDiagnosticRecord {
-        diagnostic_id: DIAGNOSTIC_ID.to_string(),
-        discovery_run_id: DISCOVERY_RUN_ID.to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        path: Some("tests/user_service.rs".to_string()),
-        line: Some(8),
-        severity: "info".to_string(),
-        code: "enumeration".to_string(),
-        message: "hybrid enumeration used cargo-backed discovery".to_string(),
-        metadata_json: Some("{\"enumerated\":1}".to_string()),
-    }
 }
 
 fn test_run_record() -> TestRunRecord {
@@ -619,16 +584,14 @@ impl TempPostgres {
             return Ok(None);
         };
 
-        // Retry up to 3 times: free_port() has a race window between dropping the
-        // listener and pg_ctl binding the port — under parallel test load another
-        // process can steal the port and cause pg_ctl to fail.
-        for _ in 0..3 {
+        // Retry to tolerate occasional transient startup failures.
+        for _ in 0..TEMP_POSTGRES_START_ATTEMPTS {
             match Self::try_start(&initdb_path, &pg_ctl_path) {
                 Ok(pg) => return Ok(Some(pg)),
                 Err(e) => eprintln!("TempPostgres startup attempt failed: {e:#}"),
             }
         }
-        eprintln!("skipping Postgres test: all startup attempts failed under parallel load");
+        eprintln!("skipping Postgres test: all startup attempts failed");
         Ok(None)
     }
 
@@ -695,8 +658,8 @@ impl TempPostgres {
 
 impl Drop for TempPostgres {
     fn drop(&mut self) {
-        let _ = Command::new(&self.pg_ctl_path)
-            .args([
+        let _ = run_status_command_best_effort(
+            Command::new(&self.pg_ctl_path).args([
                 "-D",
                 self.data_dir.to_string_lossy().as_ref(),
                 "-o",
@@ -707,10 +670,9 @@ impl Drop for TempPostgres {
                 "-m",
                 "immediate",
                 "stop",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+            ]),
+            Duration::from_secs(5),
+        );
     }
 }
 
@@ -738,40 +700,107 @@ fn find_postgres_binary(name: &str) -> Option<PathBuf> {
 }
 
 fn run_command(command: &mut Command, label: &str) -> Result<()> {
-    let output = command
-        .output()
-        .with_context(|| format!("running {label}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("spawning {label}"))?;
+    let started = Instant::now();
 
-    bail!(
-        "{label} failed with status {}:\nstdout:\n{}\nstderr:\n{}",
-        output
-            .status
-            .code()
-            .map_or_else(|| "signal".to_string(), |code| code.to_string()),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    loop {
+        match child
+            .try_wait()
+            .with_context(|| format!("waiting for {label}"))?
+        {
+            Some(_) => {
+                let output = child
+                    .wait_with_output()
+                    .with_context(|| format!("collecting output from {label}"))?;
+                if output.status.success() {
+                    return Ok(());
+                }
+                bail!(
+                    "{label} failed with status {}:\nstdout:\n{}\nstderr:\n{}",
+                    output
+                        .status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            None if started.elapsed() >= POSTGRES_TEST_COMMAND_TIMEOUT => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .with_context(|| format!("collecting output after timeout from {label}"))?;
+                bail!(
+                    "{label} timed out after {}s:\nstdout:\n{}\nstderr:\n{}",
+                    POSTGRES_TEST_COMMAND_TIMEOUT.as_secs(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            None => thread::sleep(Duration::from_millis(20)),
+        }
+    }
 }
 
 fn run_status_command(command: &mut Command, label: &str) -> Result<()> {
-    let status = command
+    let mut child = command
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("running {label}"))?;
-    if status.success() {
-        return Ok(());
-    }
+        .spawn()
+        .with_context(|| format!("spawning {label}"))?;
+    let started = Instant::now();
 
-    bail!(
-        "{label} failed with status {}",
-        status
-            .code()
-            .map_or_else(|| "signal".to_string(), |code| code.to_string())
-    );
+    loop {
+        match child
+            .try_wait()
+            .with_context(|| format!("waiting for {label}"))?
+        {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => {
+                bail!(
+                    "{label} failed with status {}",
+                    status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |code| code.to_string())
+                );
+            }
+            None if started.elapsed() >= POSTGRES_TEST_COMMAND_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!(
+                    "{label} timed out after {}s",
+                    POSTGRES_TEST_COMMAND_TIMEOUT.as_secs()
+                );
+            }
+            None => thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+fn run_status_command_best_effort(command: &mut Command, timeout: Duration) -> Result<()> {
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("spawning best-effort command")?;
+    let started = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(err) => return Err(err).context("waiting for best-effort command"),
+        }
+    }
 }
 
 fn free_port() -> Result<u16> {

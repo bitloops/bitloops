@@ -3,7 +3,7 @@ use super::*;
 #[test]
 pub(crate) fn condense_session_files_touched_fallback_empty_state() {
     let dir = tempfile::tempdir().unwrap();
-    let base_head = setup_git_repo(&dir);
+    let base_head = setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("agent.rs"), "package main\n").unwrap();
     git_ok(dir.path(), &["add", "agent.rs"]);
@@ -27,23 +27,23 @@ pub(crate) fn condense_session_files_touched_fallback_empty_state() {
         .unwrap();
 
     let metadata = read_checkpoint_session_metadata_from_branch(dir.path(), checkpoint_id);
-    let files = metadata["files_touched"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|v| v.as_str().map(ToString::to_string))
-        .collect::<Vec<_>>();
+    assert!(
+        metadata.get("files_touched").is_none(),
+        "committed session metadata should no longer persist files_touched"
+    );
+    let summary = read_committed(dir.path(), checkpoint_id)
+        .unwrap()
+        .expect("expected committed checkpoint summary");
     assert_eq!(
-        files,
+        summary.files_touched,
         vec!["agent.rs".to_string()],
-        "fallback should use committed files when state.files_touched is empty"
+        "checkpoint summary should derive files_touched from checkpoint_files"
     );
 }
 #[test]
 pub(crate) fn condense_session_files_touched_no_fallback_no_overlap() {
     let dir = tempfile::tempdir().unwrap();
-    let base_head = setup_git_repo(&dir);
+    let base_head = setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("session_file.rs"), "package session\n").unwrap();
     fs::write(dir.path().join("other_file.rs"), "package other\n").unwrap();
@@ -73,16 +73,17 @@ pub(crate) fn condense_session_files_touched_no_fallback_no_overlap() {
         .unwrap();
 
     let metadata = read_checkpoint_session_metadata_from_branch(dir.path(), checkpoint_id);
-    let files = metadata["files_touched"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|v| v.as_str().map(ToString::to_string))
-        .collect::<Vec<_>>();
     assert!(
-        files.is_empty(),
-        "should not fallback to committed files when session already tracked non-overlapping files: {files:?}"
+        metadata.get("files_touched").is_none(),
+        "committed session metadata should no longer persist files_touched"
+    );
+    let summary = read_committed(dir.path(), checkpoint_id)
+        .unwrap()
+        .expect("expected committed checkpoint summary");
+    assert_eq!(
+        summary.files_touched,
+        vec!["other_file.rs".to_string()],
+        "checkpoint summary should reflect the committed diff, not transient session files_touched"
     );
 }
 
@@ -90,7 +91,7 @@ pub(crate) fn condense_session_files_touched_no_fallback_no_overlap() {
 #[test]
 pub(crate) fn condense_session_writes_turn_and_transcript_start_metadata() {
     let dir = tempfile::tempdir().unwrap();
-    let base_head = setup_git_repo(&dir);
+    let base_head = setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("agent.rs"), "package main\n").unwrap();
     git_ok(dir.path(), &["add", "agent.rs"]);
@@ -101,8 +102,8 @@ pub(crate) fn condense_session_writes_turn_and_transcript_start_metadata() {
     let session_id = "test-turn-and-transcript-start";
     let mut state = idle_state(session_id, &base_head, vec!["agent.rs".to_string()], 1);
     state.turn_id = "turn-123".to_string();
-    state.transcript_identifier_at_start = "user-1".to_string();
-    state.checkpoint_transcript_start = 1;
+    state.pending.transcript_identifier_at_start = "user-1".to_string();
+    state.pending.checkpoint_transcript_start = 1;
     let transcript_path = write_session_transcript(
         dir.path(),
         session_id,
@@ -151,7 +152,7 @@ pub(crate) fn condense_session_writes_turn_and_transcript_start_metadata() {
 #[test]
 pub(crate) fn update_summary_updates_session_metadata() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "f1e2d3c4b5a6";
     let session_id = "test-session-summary";
     write_committed(
@@ -216,13 +217,16 @@ pub(crate) fn update_summary_updates_session_metadata() {
     assert_eq!(after["summary"]["intent"], "Test intent");
     assert_eq!(after["summary"]["outcome"], "Test outcome");
     assert_eq!(after["session_id"], session_id);
-    assert_eq!(after["files_touched"].as_array().map(Vec::len), Some(2));
+    assert!(
+        after.get("files_touched").is_none(),
+        "committed session metadata should no longer persist files_touched"
+    );
 }
 
 #[test]
 pub(crate) fn update_summary_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let result = update_summary(
         dir.path(),
         "000000000000",
@@ -242,7 +246,7 @@ pub(crate) fn update_summary_not_found() {
 #[test]
 pub(crate) fn list_committed_reads_db_entries_without_metadata_branch() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "abcdef123456";
     write_committed(
         dir.path(),
@@ -310,7 +314,7 @@ pub(crate) fn get_checkpoint_author_no_sessions_branch() {
 #[test]
 pub(crate) fn get_checkpoint_author_returns_author() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "a1b2c3d4e5f6";
     write_committed(
         dir.path(),
@@ -359,7 +363,7 @@ pub(crate) fn get_checkpoint_author_returns_author() {
 #[test]
 pub(crate) fn get_checkpoint_author_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     let result = get_checkpoint_author(dir.path(), "ffffffffffff");
     assert!(
         result.is_ok(),
@@ -373,7 +377,7 @@ pub(crate) fn get_checkpoint_author_not_found() {
 #[test]
 pub(crate) fn write_committed_multiple_sessions_same_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let head = setup_git_repo(&dir);
+    let head = setup_git_repo_with_checkpoint_backends(&dir);
     let checkpoint_id = "a1a2a3a4a5a6";
     let strategy = ManualCommitStrategy::new(dir.path());
 

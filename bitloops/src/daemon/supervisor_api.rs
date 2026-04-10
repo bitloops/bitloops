@@ -8,19 +8,16 @@ pub(super) async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs)
         .local_addr()
         .context("reading Bitloops daemon supervisor listener address")?;
     let control_url = format!("http://127.0.0.1:{}", control_addr.port());
-    let runtime_path = supervisor_runtime_state_path()?;
     let fingerprint = current_binary_fingerprint()?;
+    log::info!("daemon supervisor started: control_url={}", control_url);
 
-    write_json(
-        &runtime_path,
-        &SupervisorRuntimeState {
-            version: 1,
-            pid: std::process::id(),
-            control_url: control_url.clone(),
-            binary_fingerprint: fingerprint,
-            updated_at_unix: unix_timestamp_now(),
-        },
-    )?;
+    write_supervisor_runtime_state(&SupervisorRuntimeState {
+        version: 1,
+        pid: std::process::id(),
+        control_url: control_url.clone(),
+        binary_fingerprint: fingerprint,
+        updated_at_unix: unix_timestamp_now(),
+    })?;
 
     let app = Router::new()
         .route("/health", get(supervisor_health))
@@ -35,7 +32,7 @@ pub(super) async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs)
         .with_graceful_shutdown(wait_for_shutdown_signal())
         .await;
 
-    let _ = fs::remove_file(runtime_path);
+    let _ = delete_supervisor_runtime_state();
     result.context("running Bitloops daemon supervisor")
 }
 
@@ -50,6 +47,14 @@ async fn handle_supervisor_start_repo(
     Json(request): Json<SupervisorStartRequest>,
 ) -> Result<Json<DaemonRuntimeState>, (axum::http::StatusCode, String)> {
     let _guard = state.operation_lock.lock().await;
+    log::info!(
+        "supervisor start request: config={} host={:?} port={} force_http={} bundle_dir={:?}",
+        request.config_path.display(),
+        request.config.host,
+        request.config.port,
+        request.config.force_http,
+        request.config.bundle_dir
+    );
     let daemon_config =
         resolve_daemon_config(Some(request.config_path.as_path())).map_err(supervisor_api_error)?;
     ensure_service_managed_repo_runtime(&daemon_config, request.config, request.telemetry)
@@ -63,6 +68,7 @@ async fn handle_supervisor_stop_repo(
     Json(_request): Json<SupervisorStopRequest>,
 ) -> Result<Json<SupervisorHealthResponse>, (axum::http::StatusCode, String)> {
     let _guard = state.operation_lock.lock().await;
+    log::info!("supervisor stop request received");
     stop_service_managed_repo_runtime().map_err(supervisor_api_error)?;
     Ok(Json(SupervisorHealthResponse {
         status: "ok".to_string(),
@@ -74,6 +80,14 @@ async fn handle_supervisor_restart_repo(
     Json(request): Json<SupervisorStartRequest>,
 ) -> Result<Json<DaemonRuntimeState>, (axum::http::StatusCode, String)> {
     let _guard = state.operation_lock.lock().await;
+    log::info!(
+        "supervisor restart request: config={} host={:?} port={} force_http={} bundle_dir={:?}",
+        request.config_path.display(),
+        request.config.host,
+        request.config.port,
+        request.config.force_http,
+        request.config.bundle_dir
+    );
     let daemon_config =
         resolve_daemon_config(Some(request.config_path.as_path())).map_err(supervisor_api_error)?;
     restart_service_managed_repo_runtime(&daemon_config, request.config)

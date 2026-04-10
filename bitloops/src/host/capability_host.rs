@@ -3,6 +3,8 @@ pub mod config_view;
 pub mod contexts;
 pub mod descriptor;
 pub mod diagnostics;
+pub mod event_dispatch;
+pub mod events;
 pub mod gateways;
 pub mod health;
 pub mod host;
@@ -25,6 +27,12 @@ pub use descriptor::{CapabilityDependency, CapabilityDescriptor};
 pub use diagnostics::{
     HostRegistryReport, PackLifecycleReport, collect_health_outcomes,
     format_pack_lifecycle_report_human, format_registry_report_human,
+};
+pub use event_dispatch::dispatch_event;
+pub use events::{
+    ChangedArtefact, ChangedFile, EventHandlerContext, EventHandlerFuture, HostEvent,
+    HostEventHandler, HostEventKind, RemovedArtefact, RemovedFile, SyncArtefactDiff,
+    SyncCompletedPayload, SyncFileDiff,
 };
 pub use health::{CapabilityHealthCheck, CapabilityHealthResult};
 pub use host::DevqlCapabilityHost;

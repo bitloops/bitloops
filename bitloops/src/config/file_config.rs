@@ -47,8 +47,6 @@ impl StoreFileConfig {
             .get(BLOB_CONFIG_KEY)
             .or_else(|| root.get(BLOBS_CONFIG_KEY))
             .and_then(Value::as_object);
-        let semantic = root.get(SEMANTIC_CONFIG_KEY).and_then(Value::as_object);
-
         Self {
             sqlite_path: read_any_string_opt(relational, &["sqlite_path", "path"])
                 .or_else(|| read_any_string(root, &["sqlite_path"])),
@@ -64,21 +62,6 @@ impl StoreFileConfig {
                 .or_else(|| read_any_string(root, &["clickhouse_password"])),
             clickhouse_database: read_any_string_opt(events, &["clickhouse_database"])
                 .or_else(|| read_any_string(root, &["clickhouse_database"])),
-            semantic_provider: read_any_string_opt(semantic, &["provider", "semantic_provider"])
-                .or_else(|| read_any_string(root, &["semantic_provider"])),
-            semantic_model: read_any_string_opt(semantic, &["model", "semantic_model"])
-                .or_else(|| read_any_string(root, &["semantic_model"])),
-            semantic_api_key: read_any_string_opt(semantic, &["api_key", "semantic_api_key"])
-                .or_else(|| read_any_string(root, &["semantic_api_key"])),
-            semantic_base_url: read_any_string_opt(semantic, &["base_url", "semantic_base_url"])
-                .or_else(|| read_any_string(root, &["semantic_base_url"])),
-            embedding_provider: read_any_string(
-                root,
-                &["embedding_provider", ENV_EMBEDDING_PROVIDER],
-            ),
-            embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
-            embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
-            embedding_cache_dir: read_any_string(root, &["embedding_cache_dir"]),
             blob_local_path: read_any_string_opt(blobs, &["local_path"])
                 .or_else(|| read_any_string(root, &["blob_local_path"])),
             blob_s3_bucket: read_any_string_opt(blobs, &["s3_bucket"])

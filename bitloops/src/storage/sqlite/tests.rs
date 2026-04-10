@@ -2,7 +2,32 @@ use anyhow::{Context, Result};
 use tempfile::TempDir;
 
 use super::SqliteConnectionPool;
-use super::introspection::sqlite_table_pk_columns;
+use super::introspection::{sqlite_table_has_column, sqlite_table_pk_columns};
+
+#[test]
+fn sqlite_connection_pool_uses_wal_and_normal_synchronous() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("runtime.sqlite");
+    let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+    let (journal_mode, synchronous): (String, i64) = sqlite.with_connection(|conn| {
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .context("read journal_mode pragma")?;
+        let synchronous: i64 = conn
+            .query_row("PRAGMA synchronous;", [], |row| row.get(0))
+            .context("read synchronous pragma")?;
+        Ok((journal_mode, synchronous))
+    })?;
+
+    assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    assert_eq!(
+        synchronous, 1,
+        "SQLite NORMAL synchronous pragma should be enabled"
+    );
+
+    Ok(())
+}
 
 #[test]
 fn sqlite_connection_pool_initialises_devql_schema_workspace_revisions_table() -> Result<()> {
@@ -41,7 +66,7 @@ fn sqlite_connection_pool_initialises_devql_schema_workspace_revisions_table() -
 }
 
 #[test]
-fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> Result<()> {
+fn sqlite_connection_pool_initialises_checkpoint_provenance_tables() -> Result<()> {
     let temp = TempDir::new().context("creating temp dir")?;
     let sqlite_path = temp.path().join("devql.sqlite");
     let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
@@ -49,7 +74,7 @@ fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> 
 
     let exists = sqlite.with_connection(|conn| {
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_file_snapshots'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_files'",
             [],
             |row| row.get(0),
         )?;
@@ -57,28 +82,19 @@ fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> 
     })?;
     assert!(
         exists,
-        "checkpoint_file_snapshots should exist after initialise_devql_schema"
+        "checkpoint_files should exist after initialise_devql_schema"
     );
 
-    let pk_columns = sqlite
-        .with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_file_snapshots"))?;
-    assert_eq!(
-        pk_columns,
-        vec![
-            "repo_id".to_string(),
-            "checkpoint_id".to_string(),
-            "path".to_string(),
-            "blob_sha".to_string(),
-        ],
-        "checkpoint_file_snapshots should use the composite projection key"
-    );
+    let pk_columns =
+        sqlite.with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_files"))?;
+    assert_eq!(pk_columns, vec!["relation_id".to_string()]);
 
     let index_names: Vec<String> = sqlite.with_connection(|conn| {
         let mut stmt = conn.prepare(
             "SELECT name
              FROM sqlite_master
              WHERE type = 'index'
-               AND tbl_name = 'checkpoint_file_snapshots'
+               AND tbl_name = 'checkpoint_files'
                AND name NOT LIKE 'sqlite_autoindex_%'
              ORDER BY name",
         )?;
@@ -89,13 +105,45 @@ fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> 
     assert_eq!(
         index_names,
         vec![
-            "checkpoint_file_snapshots_agent_time_idx".to_string(),
-            "checkpoint_file_snapshots_checkpoint_idx".to_string(),
-            "checkpoint_file_snapshots_commit_idx".to_string(),
-            "checkpoint_file_snapshots_event_time_idx".to_string(),
-            "checkpoint_file_snapshots_lookup_idx".to_string(),
+            "checkpoint_files_agent_time_idx".to_string(),
+            "checkpoint_files_change_kind_idx".to_string(),
+            "checkpoint_files_checkpoint_idx".to_string(),
+            "checkpoint_files_commit_idx".to_string(),
+            "checkpoint_files_copy_source_idx".to_string(),
+            "checkpoint_files_event_time_idx".to_string(),
+            "checkpoint_files_lookup_idx".to_string(),
         ],
-        "checkpoint_file_snapshots should create the expected lookup indexes"
+        "checkpoint_files should create the expected lookup indexes"
+    );
+
+    let artefact_exists = sqlite.with_connection(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_artefacts'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count == 1)
+    })?;
+    assert!(
+        artefact_exists,
+        "checkpoint_artefacts should exist after initialise_devql_schema"
+    );
+
+    let artefact_pk_columns =
+        sqlite.with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_artefacts"))?;
+    assert_eq!(artefact_pk_columns, vec!["relation_id".to_string()]);
+
+    let lineage_exists = sqlite.with_connection(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_artefact_lineage'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count == 1)
+    })?;
+    assert!(
+        lineage_exists,
+        "checkpoint_artefact_lineage should exist after initialise_devql_schema"
     );
 
     Ok(())
@@ -221,7 +269,7 @@ fn initialise_devql_schema_is_idempotent() -> Result<()> {
 
     let projection_exists = sqlite.with_connection(|conn| {
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_file_snapshots'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_files'",
             [],
             |row| row.get(0),
         )?;
@@ -229,7 +277,7 @@ fn initialise_devql_schema_is_idempotent() -> Result<()> {
     })?;
     assert!(
         projection_exists,
-        "checkpoint_file_snapshots should still exist after double init"
+        "checkpoint_files should still exist after double init"
     );
     Ok(())
 }
@@ -556,6 +604,89 @@ fn initialise_devql_schema_assigns_legacy_current_state_rows_to_repository_defau
     assert_eq!(
         migrated_edge_rows, 1,
         "legacy artefact_edges_current rows should migrate to the repository default branch"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn initialise_devql_schema_cuts_over_legacy_historical_artefacts_shape() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+    sqlite.execute_batch(
+        "CREATE TABLE artefacts (
+            artefact_id TEXT PRIMARY KEY,
+            symbol_id TEXT,
+            repo_id TEXT NOT NULL,
+            blob_sha TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            canonical_kind TEXT,
+            language_kind TEXT,
+            symbol_fqn TEXT,
+            parent_artefact_id TEXT,
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            signature TEXT,
+            modifiers TEXT NOT NULL DEFAULT '[]',
+            docstring TEXT,
+            content_hash TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind,
+            symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature,
+            modifiers, docstring, content_hash
+        ) VALUES (
+            'legacy-a1', 'legacy-s1', 'repo-legacy', 'blob-1', 'src/main.rs', 'rust', 'function',
+            'function', 'src::main::f', NULL, 10, 20, 100, 200, 'f()', '[]', 'docs', 'hash-1'
+        );",
+    )?;
+
+    sqlite.initialise_devql_schema()?;
+
+    let has_legacy_blob_sha =
+        sqlite.with_connection(|conn| sqlite_table_has_column(conn, "artefacts", "blob_sha"))?;
+    assert!(
+        !has_legacy_blob_sha,
+        "artefacts.blob_sha should be removed after cutover"
+    );
+
+    let has_legacy_start_line =
+        sqlite.with_connection(|conn| sqlite_table_has_column(conn, "artefacts", "start_line"))?;
+    assert!(
+        !has_legacy_start_line,
+        "artefacts.start_line should be removed after cutover"
+    );
+
+    let snapshots_row_count: i64 = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM artefact_snapshots WHERE repo_id = 'repo-legacy' AND artefact_id = 'legacy-a1' AND blob_sha = 'blob-1'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(
+        snapshots_row_count, 1,
+        "cutover should backfill one artefact snapshot row from legacy artefacts placement columns"
+    );
+
+    let historical_view_sql: String = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'artefacts_historical'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert!(
+        !historical_view_sql.contains("UNION ALL"),
+        "artefacts_historical should be recreated as join-only view after cutover"
     );
 
     Ok(())

@@ -1,9 +1,30 @@
 use super::*;
+use crate::host::checkpoints::session::state::PendingCheckpointState;
+use crate::host::interactions::store::InteractionSpool;
+
+fn rewrite_post_commit_events_path(repo_root: &Path, replacement: &Path) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let content = fs::read_to_string(&config_path).expect("read post-commit test config");
+    let updated = content
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("duckdb_path =") {
+                format!("duckdb_path = {:?}", replacement.to_string_lossy())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&config_path, updated).expect("rewrite post-commit events path");
+}
 
 #[test]
 pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
 
     // Create a session with active state.
     let backend = session_backend(dir.path());
@@ -13,11 +34,15 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
         base_commit: head.clone(),
         agent_type: "claude-code".to_string(),
         first_prompt: "test prompt".to_string(),
-        step_count: 1,
-        files_touched: vec!["change.txt".to_string()],
+        pending: PendingCheckpointState {
+            step_count: 1,
+            files_touched: vec!["change.txt".to_string()],
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
+    seed_interaction_turn(dir.path(), "pc1", "pc1-turn", &["change.txt"]);
 
     // Make a regular commit.
     fs::write(dir.path().join("change.txt"), "change").unwrap();
@@ -55,11 +80,62 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     );
 }
 
+#[test]
+pub(crate) fn post_commit_falls_back_to_local_spool_when_interaction_repository_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn(
+        dir.path(),
+        "pc-fallback",
+        "pc-fallback-turn",
+        &["src/change.rs"],
+    );
+
+    let blocked_parent = dir.path().join("blocked-events-parent");
+    fs::write(&blocked_parent, "not a directory").unwrap();
+    rewrite_post_commit_events_path(dir.path(), &blocked_parent.join("events.duckdb"));
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/change.rs"),
+        "pub fn change() -> usize { 1 }\n",
+    )
+    .unwrap();
+    git_command()
+        .args(["add", "."])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    git_command()
+        .args(["commit", "-m", "fix: spool fallback"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy.post_commit().unwrap();
+
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("checkpoint mapping should exist after spool fallback post_commit");
+    let turns = open_test_spool(dir.path())
+        .list_turns_for_session("pc-fallback", 10)
+        .expect("list turns after spool fallback derivation");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].checkpoint_id.as_deref(),
+        Some(checkpoint_id.as_str()),
+        "local spool should record the assigned checkpoint id when canonical interaction storage is unavailable"
+    );
+}
+
 // New test: post_commit creates full checkpoint structure.
 #[test]
 pub(crate) fn post_commit_creates_full_checkpoint_structure() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
 
     let backend = session_backend(dir.path());
     let state = SessionState {
@@ -67,10 +143,14 @@ pub(crate) fn post_commit_creates_full_checkpoint_structure() {
         phase: crate::host::checkpoints::session::phase::SessionPhase::Idle,
         base_commit: head.clone(),
         agent_type: "claude-code".to_string(),
-        files_touched: vec!["change2.txt".to_string()],
+        pending: PendingCheckpointState {
+            files_touched: vec!["change2.txt".to_string()],
+            ..Default::default()
+        },
         ..Default::default()
     };
     backend.save_session(&state).unwrap();
+    seed_interaction_turn(dir.path(), "pc2", "pc2-turn", &["change2.txt"]);
 
     // post_commit should assign and persist checkpoint ID.
     fs::write(dir.path().join("change2.txt"), "change2").unwrap();
@@ -107,17 +187,27 @@ pub(crate) fn post_commit_creates_full_checkpoint_structure() {
 pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-no-checkpoint-condense".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["condense.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["condense.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-no-checkpoint-condense",
+        "pc-no-checkpoint-condense-turn",
+        &["condense.txt"],
+    );
 
     fs::write(dir.path().join("condense.txt"), "condense").unwrap();
     git_ok(dir.path(), &["add", "condense.txt"]);
@@ -140,17 +230,22 @@ pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_
 pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let initial_head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-squash".to_string(),
             phase: SessionPhase::Idle,
             base_commit: initial_head,
-            step_count: 2,
-            files_touched: vec!["squash.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 2,
+                files_touched: vec!["squash.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(dir.path(), "pc-squash", "pc-squash-turn", &["squash.txt"]);
 
     fs::write(dir.path().join("squash.txt"), "first\n").unwrap();
     git_ok(dir.path(), &["add", "squash.txt"]);
@@ -177,11 +272,11 @@ pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head(
 
     let loaded = backend.load_session("pc-squash").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 0,
+        loaded.pending.step_count, 0,
         "squash commit should condense pending session state"
     );
     assert!(
-        loaded.files_touched.is_empty(),
+        loaded.pending.files_touched.is_empty(),
         "files_touched should be reset after squash condensation"
     );
 }
@@ -190,6 +285,7 @@ pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head(
 pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
@@ -235,17 +331,27 @@ pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit() {
 pub(crate) fn post_commit_skips_already_mapped_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-skip-mapped".to_string(),
             phase: SessionPhase::Active,
             base_commit: head,
-            step_count: 1,
-            files_touched: vec!["mapped.txt".to_string()],
+            pending: PendingCheckpointState {
+                step_count: 1,
+                files_touched: vec!["mapped.txt".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         })
         .unwrap();
+    seed_interaction_turn(
+        dir.path(),
+        "pc-skip-mapped",
+        "pc-skip-mapped-turn",
+        &["mapped.txt"],
+    );
 
     fs::write(dir.path().join("mapped.txt"), "first").unwrap();
     git_ok(dir.path(), &["add", "mapped.txt"]);
@@ -262,15 +368,15 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
 
     let mut resumed = backend.load_session("pc-skip-mapped").unwrap().unwrap();
     resumed.phase = SessionPhase::Active;
-    resumed.step_count = 1;
-    resumed.files_touched = vec!["mapped.txt".to_string()];
+    resumed.pending.step_count = 1;
+    resumed.pending.files_touched = vec!["mapped.txt".to_string()];
     backend.save_session(&resumed).unwrap();
 
     strategy.post_commit().unwrap();
 
     let loaded = backend.load_session("pc-skip-mapped").unwrap().unwrap();
     assert_eq!(
-        loaded.step_count, 1,
+        loaded.pending.step_count, 1,
         "already-mapped HEAD should be ignored by post_commit"
     );
     assert_eq!(
@@ -284,6 +390,7 @@ pub(crate) fn post_commit_skips_already_mapped_head() {
 pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit_during_rebase() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
+    init_devql_schema(dir.path());
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {

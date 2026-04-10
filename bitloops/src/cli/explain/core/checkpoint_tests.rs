@@ -17,6 +17,7 @@ fn seed_repo_with_single_commit(message: &str) -> (TempDir, String) {
     std::fs::write(dir.path().join("README.md"), "seed").expect("write readme");
     git_ok(dir.path(), &["add", "README.md"]);
     git_ok(dir.path(), &["commit", "-m", message]);
+    crate::test_support::git_fixtures::write_test_daemon_config(dir.path());
     let head_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
     (dir, head_sha)
 }
@@ -48,12 +49,13 @@ fn insert_commit_checkpoint_mapping(
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_checkpoint_schema(repo_root: &std::path::Path) {
@@ -77,15 +79,14 @@ fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &
             conn.execute(
                 "INSERT INTO checkpoints (
                     checkpoint_id, repo_id, strategy, branch, cli_version,
-                    files_touched, checkpoints_count
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    checkpoints_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     checkpoint_id,
                     repo_id.as_str(),
                     "manual-commit",
                     "",
                     "0.0.3",
-                    "[]",
                     1_i64,
                 ],
             )?;

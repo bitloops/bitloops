@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use clap::Parser;
@@ -10,11 +11,14 @@ use super::targets::{
     ALL_TARGETS, UninstallTarget, collect_requested_targets, validate_scope_flags,
 };
 use super::{
-    BinaryCandidatesFn, NO_FLAGS_ERROR, RunContext, ServiceUninstaller, UninstallArgs,
-    UninstallSelector, run_with_context,
+    BinaryCandidatesFn, DaemonStopper, NO_FLAGS_ERROR, RunContext, ServiceUninstaller,
+    UninstallArgs, UninstallSelector, run_with_context,
 };
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
+use crate::cli::embeddings::{
+    managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
+};
 use crate::cli::enable::SHELL_COMPLETION_COMMENT;
 use crate::config::settings::SETTINGS_DIR;
 use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry};
@@ -100,6 +104,7 @@ fn run_uninstall_for_test(
     args: UninstallArgs,
     cwd: Option<&Path>,
     select_fn: Option<&UninstallSelector>,
+    daemon_stopper: &DaemonStopper,
     service_uninstaller: &ServiceUninstaller,
     binary_candidates: &BinaryCandidatesFn,
 ) -> Result<String> {
@@ -111,6 +116,7 @@ fn run_uninstall_for_test(
     let mut err = Vec::new();
     let context = RunContext {
         select_fn,
+        daemon_stopper,
         service_uninstaller,
         binary_candidates,
     };
@@ -160,7 +166,7 @@ fn no_flags_selector_maps_targets() {
 fn no_flags_without_tty_errors() {
     let mut out = Vec::new();
     let err = collect_requested_targets(&UninstallArgs::default(), &mut out, None).unwrap_err();
-    assert!(format!("{err:#}").contains(NO_FLAGS_ERROR));
+    assert_eq!(err.to_string(), NO_FLAGS_ERROR);
 }
 
 #[test]
@@ -262,6 +268,7 @@ fn uninstall_git_hooks_uses_all_known_repos_by_default() {
             },
             None,
             None,
+            &|| Box::pin(async { Ok(()) }),
             &|| Ok(()),
             &|| Ok(Vec::new()),
         )
@@ -309,6 +316,7 @@ fn only_current_project_limits_hook_removal() {
                 },
                 None,
                 None,
+                &|| Box::pin(async { Ok(()) }),
                 &|| Ok(()),
                 &|| Ok(Vec::new()),
             )
@@ -342,6 +350,7 @@ fn data_target_removes_only_data() {
             },
             None,
             None,
+            &|| Box::pin(async { Ok(()) }),
             &|| Ok(()),
             &|| Ok(Vec::new()),
         )
@@ -351,6 +360,55 @@ fn data_target_removes_only_data() {
         assert!(bitloops_cache_dir().unwrap().exists());
         assert!(bitloops_config_dir().unwrap().exists());
         assert!(bitloops_state_dir().unwrap().exists());
+    });
+}
+
+#[test]
+fn binaries_target_removes_managed_embeddings_binary_and_metadata() {
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+
+    with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        let managed_binary = managed_embeddings_binary_path().expect("managed binary path");
+        let managed_bundle_dir = managed_embeddings_binary_dir().expect("managed bundle dir");
+        let managed_metadata = managed_embeddings_metadata_path().expect("managed metadata path");
+        if let Some(parent) = managed_binary.parent() {
+            fs::create_dir_all(parent).expect("create managed binary dir");
+        }
+        fs::write(&managed_binary, "binary").expect("write managed binary");
+        fs::create_dir_all(managed_bundle_dir.join("_internal")).expect("create support dir");
+        fs::write(
+            managed_bundle_dir.join("_internal").join("Python"),
+            "python-runtime",
+        )
+        .expect("write support file");
+        fs::write(&managed_metadata, "{}").expect("write managed metadata");
+
+        run_uninstall_for_test(
+            UninstallArgs {
+                binaries: true,
+                force: true,
+                ..UninstallArgs::default()
+            },
+            None,
+            None,
+            &|| Box::pin(async { Ok(()) }),
+            &|| Ok(()),
+            &|| {
+                Ok(vec![
+                    managed_embeddings_binary_path().expect("managed binary path from closure"),
+                ])
+            },
+        )
+        .unwrap();
+
+        assert!(!managed_binary.exists());
+        assert!(!managed_bundle_dir.exists());
+        assert!(!managed_metadata.exists());
+        assert!(bitloops_data_dir().unwrap().exists());
     });
 }
 
@@ -385,6 +443,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             )
             .unwrap();
             codex_hooks::install_hooks_at(repo.path(), false, false).unwrap();
+            assert!(repo.path().join(".codex/config.toml").exists());
             git_hooks::install_git_hooks(repo.path(), false).unwrap();
 
             let registry_path = bitloops_state_dir()
@@ -408,6 +467,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
                 },
                 None,
                 None,
+                &|| Box::pin(async { Ok(()) }),
                 &move || {
                     service_called_ref.store(true, std::sync::atomic::Ordering::SeqCst);
                     Ok(())
@@ -418,6 +478,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
 
             assert!(service_called.load(std::sync::atomic::Ordering::SeqCst));
             assert!(!codex_hooks::are_hooks_installed_at(repo.path()));
+            assert!(repo.path().join(".codex/config.toml").exists());
             assert!(!git_hooks::is_git_hook_installed(repo.path()));
             assert!(!repo.path().join(SETTINGS_DIR).exists());
             assert!(!bitloops_config_dir().unwrap().exists());
@@ -429,4 +490,45 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             assert!(!binary_path.exists());
         },
     );
+}
+
+#[test]
+fn service_uninstall_stops_daemon_best_effort_then_runs_service_uninstaller() {
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+
+    with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop_events = events.clone();
+        let service_events = events.clone();
+
+        run_uninstall_for_test(
+            UninstallArgs {
+                service: true,
+                force: true,
+                ..UninstallArgs::default()
+            },
+            None,
+            None,
+            &move || {
+                let stop_events = stop_events.clone();
+                Box::pin(async move {
+                    stop_events.lock().unwrap().push("stop");
+                    Ok(())
+                })
+            },
+            &move || {
+                service_events.lock().unwrap().push("service");
+                Ok(())
+            },
+            &|| Ok(Vec::new()),
+        )
+        .unwrap();
+
+        let recorded = events.lock().unwrap().clone();
+        assert_eq!(recorded, vec!["stop", "service"]);
+    });
 }

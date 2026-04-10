@@ -7,7 +7,7 @@ title: FAQ
 
 ### Do I still run `bitloops init` inside every repo?
 
-Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and runs the initial baseline sync through the daemon.
+Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and prepares local repo policy for capture. It can also queue an initial current-state sync after hook setup. Use DevQL commands separately for ingest and for any later explicit sync or validation runs.
 
 ### Where does Bitloops keep its data now?
 
@@ -16,7 +16,9 @@ In platform app directories by default:
 - config directory for `config.toml`
 - data directory for relational, event, and blob stores
 - cache directory for embedding downloads and dashboard bundle assets
-- state directory for daemon runtime metadata and hook scratch files
+- state directory for daemon runtime metadata and the daemon runtime SQLite
+
+Bitloops also keeps repo-scoped workflow runtime state in `<config root>/stores/runtime/runtime.sqlite`.
 
 ### How do I remove Bitloops completely?
 
@@ -48,8 +50,29 @@ Machine-scoped settings such as:
 
 - store paths and backends
 - provider credentials
+- inference profiles, runtimes, and capability bindings
 - dashboard defaults
 - daemon runtime defaults
+
+`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create the default local embeddings profile for you when it is missing.
+
+### How do I turn on local embeddings now?
+
+Use one of these paths:
+
+```bash
+bitloops enable --install-embeddings
+bitloops daemon enable --install-embeddings
+bitloops init --install-default-daemon --sync=true
+```
+
+Interactive `bitloops enable` also offers embeddings install automatically when embeddings are not already configured, with a default-yes `[Y/n]` prompt.
+
+Bitloops writes the default local profile to the effective daemon config, using this order:
+
+1. `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`
+2. nearest repo `config.toml`
+3. default global daemon config
 
 ### Does `bitloops dashboard` still run the server?
 
@@ -58,6 +81,8 @@ No. It launches the browser and ensures the daemon is running.
 ### What creates the daemon config now?
 
 Interactive `bitloops start` prompts to create the default daemon config when it is missing. For scripted or non-interactive setups, use `bitloops start --create-default-config` together with an explicit telemetry flag. `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+
+If you already have a custom config file and only need the matching local file-backed stores, use `bitloops start --config /path/to/config.toml --bootstrap-local-stores`.
 
 ### When does Bitloops ask about telemetry?
 
@@ -72,7 +97,9 @@ After that:
 
 ### What replaced `bitloops status` for repo capture status?
 
-Use `bitloops checkpoints status`.
+Use `bitloops checkpoints status` for detailed capture and repo-policy status.
+
+`bitloops status` now focuses on daemon health, sync queue totals, and the active or most recent sync task for the current repo when you run it inside a repository.
 
 ### Is there an automatic migration from the older JSON config?
 

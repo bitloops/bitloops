@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::language_adapter::{LanguageKind, RustKind};
 
 #[test]
 fn extract_rust_artefacts_covers_phase1_kinds() {
@@ -33,19 +34,19 @@ fn run() {
 
     let trait_item = artefacts
         .iter()
-        .find(|a| a.language_kind == "trait_item" && a.name == "DoThing")
+        .find(|a| a.language_kind == LanguageKind::rust(RustKind::TraitItem) && a.name == "DoThing")
         .expect("expected trait artefact");
     assert_eq!(trait_item.canonical_kind.as_deref(), Some("interface"));
 
     let struct_item = artefacts
         .iter()
-        .find(|a| a.language_kind == "struct_item" && a.name == "User")
+        .find(|a| a.language_kind == LanguageKind::rust(RustKind::StructItem) && a.name == "User")
         .expect("expected struct artefact");
     assert_eq!(struct_item.canonical_kind, None);
 
     let impl_item = artefacts
         .iter()
-        .find(|a| a.language_kind == "impl_item")
+        .find(|a| a.language_kind == LanguageKind::rust(RustKind::ImplItem))
         .expect("expected impl artefact");
     assert_eq!(impl_item.canonical_kind, None);
 }
@@ -233,14 +234,20 @@ pub async unsafe fn run() {}
 
     let trait_item = artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "trait_item" && artefact.name == "Repository")
+        .find(|artefact| {
+            artefact.language_kind == LanguageKind::rust(RustKind::TraitItem)
+                && artefact.name == "Repository"
+        })
         .expect("expected trait artefact");
     assert_eq!(trait_item.modifiers, vec!["pub(crate)".to_string()]);
     assert_eq!(trait_item.docstring.as_deref(), Some("repository contract"));
 
     let static_item = artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "static_item" && artefact.name == "CACHE")
+        .find(|artefact| {
+            artefact.language_kind == LanguageKind::rust(RustKind::StaticItem)
+                && artefact.name == "CACHE"
+        })
         .expect("expected static artefact");
     assert_eq!(
         static_item.modifiers,
@@ -251,7 +258,7 @@ pub async unsafe fn run() {}
     let function = artefacts
         .iter()
         .find(|artefact| {
-            artefact.language_kind == "function_item"
+            artefact.language_kind == LanguageKind::rust(RustKind::FunctionItem)
                 && artefact.name == "run"
                 && artefact.parent_symbol_fqn.is_none()
         })
@@ -282,7 +289,10 @@ mod api {
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
     let module = artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "mod_item" && artefact.name == "api")
+        .find(|artefact| {
+            artefact.language_kind == LanguageKind::rust(RustKind::ModItem)
+                && artefact.name == "api"
+        })
         .expect("expected module artefact");
 
     assert_eq!(
@@ -589,4 +599,40 @@ fn boot() {
         }),
         "AppServer::new() call should not also emit a references edge for AppServer (duplicate)"
     );
+}
+
+#[test]
+fn extract_rust_dependency_edges_emit_two_calls_for_module_qualified_main_calls() {
+    let content = r#"mod greeting;
+mod log;
+
+const APP_VERSION: &str = "0.1.0";
+
+fn main() {
+    log::banner();
+    println!("{}", greeting::greet());
+    println!("Version: {}", APP_VERSION);
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "rust-app/src/main.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "rust-app/src/main.rs", &artefacts).unwrap();
+
+    let call_edges = edges
+        .iter()
+        .filter(|edge| edge.edge_kind == "calls")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        call_edges.len(),
+        2,
+        "expected calls edges for log::banner and greeting::greet"
+    );
+
+    assert!(call_edges.iter().any(|edge| {
+        edge.from_symbol_fqn == "rust-app/src/main.rs::main"
+            && edge.to_symbol_ref.as_deref() == Some("log::banner")
+    }));
+    assert!(call_edges.iter().any(|edge| {
+        edge.from_symbol_fqn == "rust-app/src/main.rs::main"
+            && edge.to_symbol_ref.as_deref() == Some("greeting::greet")
+    }));
 }

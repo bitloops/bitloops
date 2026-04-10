@@ -15,6 +15,12 @@ use super::lifecycle;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CodexAgent;
 
+impl CodexAgent {
+    pub(crate) fn detect_presence_at(&self, repo_root: &Path) -> bool {
+        repo_root.join(".codex").is_dir() || repo_root.join(".codex/hooks.json").exists()
+    }
+}
+
 impl Agent for CodexAgent {
     fn name(&self) -> String {
         AGENT_NAME_CODEX.to_string()
@@ -34,7 +40,7 @@ impl Agent for CodexAgent {
 
     fn detect_presence(&self) -> Result<bool> {
         let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
-        Ok(repo_root.join(".codex").is_dir() || repo_root.join(".codex/hooks.json").exists())
+        Ok(self.detect_presence_at(&repo_root))
     }
 
     fn get_session_id(&self, input: &HookInput) -> String {
@@ -46,9 +52,17 @@ impl Agent for CodexAgent {
     }
 
     fn hook_names(&self) -> Vec<String> {
+        use crate::host::checkpoints::lifecycle::adapters::{
+            CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START,
+            CODEX_HOOK_STOP, CODEX_HOOK_USER_PROMPT_SUBMIT,
+        };
+
         vec![
-            lifecycle::HOOK_NAME_SESSION_START.to_string(),
-            lifecycle::HOOK_NAME_STOP.to_string(),
+            CODEX_HOOK_SESSION_START.to_string(),
+            CODEX_HOOK_USER_PROMPT_SUBMIT.to_string(),
+            CODEX_HOOK_PRE_TOOL_USE.to_string(),
+            CODEX_HOOK_POST_TOOL_USE.to_string(),
+            CODEX_HOOK_STOP.to_string(),
         ]
     }
 

@@ -172,8 +172,7 @@ pub struct TestArtefactCurrentRecord {
     pub artefact_id: String,
     pub symbol_id: String,
     pub repo_id: String,
-    pub commit_sha: String,
-    pub blob_sha: String,
+    pub content_id: String,
     pub path: String,
     pub language: String,
     pub canonical_kind: String,
@@ -189,18 +188,14 @@ pub struct TestArtefactCurrentRecord {
     pub signature: Option<String>,
     pub modifiers: String,
     pub docstring: Option<String>,
-    pub content_hash: Option<String>,
     pub discovery_source: String,
-    pub revision_kind: String,
-    pub revision_id: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct TestArtefactEdgeCurrentRecord {
     pub edge_id: String,
     pub repo_id: String,
-    pub commit_sha: String,
-    pub blob_sha: String,
+    pub content_id: String,
     pub path: String,
     pub from_artefact_id: String,
     pub from_symbol_id: String,
@@ -212,8 +207,6 @@ pub struct TestArtefactEdgeCurrentRecord {
     pub start_line: Option<i64>,
     pub end_line: Option<i64>,
     pub metadata: String,
-    pub revision_kind: String,
-    pub revision_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -357,34 +350,6 @@ pub struct CoverageHitRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct TestDiscoveryRunRecord {
-    pub discovery_run_id: String,
-    pub repo_id: String,
-    pub commit_sha: String,
-    pub language: Option<String>,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub status: String,
-    pub enumeration_status: Option<String>,
-    pub notes_json: Option<String>,
-    pub stats_json: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TestDiscoveryDiagnosticRecord {
-    pub diagnostic_id: String,
-    pub discovery_run_id: String,
-    pub repo_id: String,
-    pub commit_sha: String,
-    pub path: Option<String>,
-    pub line: Option<i64>,
-    pub severity: String,
-    pub code: String,
-    pub message: String,
-    pub metadata_json: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct CoverageDiagnosticRecord {
     pub diagnostic_id: String,
     pub capture_id: String,
@@ -458,10 +423,15 @@ pub struct StageCoveringTestRecord {
     pub test_name: String,
     pub suite_name: Option<String>,
     pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
     pub confidence: f64,
     pub discovery_source: String,
     pub linkage_source: String,
     pub linkage_status: String,
+    pub classification: Option<String>,
+    pub classification_source: Option<String>,
+    pub fan_out: Option<i64>,
 }
 
 /// Per-line coverage row for the `coverage()` stage.
@@ -541,8 +511,7 @@ mod tests {
             artefact_id: "artefact".into(),
             symbol_id: "symbol".into(),
             repo_id: "repo".into(),
-            commit_sha: "commit".into(),
-            blob_sha: "blob".into(),
+            content_id: "content-1".into(),
             path: "tests/example.rs".into(),
             language: "rust".into(),
             canonical_kind: "test_scenario".into(),
@@ -558,17 +527,13 @@ mod tests {
             signature: Some("fn example()".into()),
             modifiers: "[]".into(),
             docstring: Some("doc".into()),
-            content_hash: Some("hash".into()),
             discovery_source: "source".into(),
-            revision_kind: "commit".into(),
-            revision_id: "commit".into(),
         };
 
         let edge = TestArtefactEdgeCurrentRecord {
             edge_id: "edge".into(),
             repo_id: "repo".into(),
-            commit_sha: "commit".into(),
-            blob_sha: "blob".into(),
+            content_id: "content-1".into(),
             path: "tests/example.rs".into(),
             from_artefact_id: artefact.artefact_id.clone(),
             from_symbol_id: artefact.symbol_id.clone(),
@@ -580,8 +545,6 @@ mod tests {
             start_line: Some(1),
             end_line: Some(1),
             metadata: "{}".into(),
-            revision_kind: "commit".into(),
-            revision_id: "commit".into(),
         };
 
         let run = TestRunRecord {

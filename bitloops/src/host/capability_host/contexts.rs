@@ -7,6 +7,7 @@ use crate::capability_packs::knowledge::storage::{
 };
 use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::{EmptyInferenceGateway, InferenceGateway};
 
 use super::config_view::CapabilityConfigView;
 use super::gateways::{
@@ -19,6 +20,10 @@ pub trait CapabilityExecutionContext: Send {
     fn repo_root(&self) -> &Path;
     fn graph(&self) -> &dyn CanonicalGraphGateway;
     fn host_relational(&self) -> &dyn RelationalGateway;
+    fn inference(&self) -> &dyn InferenceGateway {
+        static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
+        &EMPTY
+    }
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
         static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
@@ -39,6 +44,10 @@ pub trait CapabilityIngestContext: Send {
     fn connector_context(&self) -> &dyn super::gateways::ConnectorContext;
     fn provenance(&self) -> &dyn ProvenanceBuilder;
     fn host_relational(&self) -> &dyn RelationalGateway;
+    fn inference(&self) -> &dyn InferenceGateway {
+        static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
+        &EMPTY
+    }
     fn languages(&self) -> &dyn LanguageServicesGateway {
         static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
         &EMPTY
@@ -48,11 +57,11 @@ pub trait CapabilityIngestContext: Send {
         None
     }
 
-    fn clone_rebuild_relational(&self) -> Result<&crate::host::devql::RelationalStorage> {
+    fn clone_edges_rebuild_relational(&self) -> Result<&crate::host::devql::RelationalStorage> {
         let capability_id = self.invoking_capability_id().unwrap_or("<unknown>");
         let ingester_id = self.invoking_ingester_id().unwrap_or("<unknown>");
         bail!(
-            "clone rebuild relational access is not available for capability `{capability_id}` ingester `{ingester_id}`"
+            "clone-edge rebuild relational access is not available for capability `{capability_id}` ingester `{ingester_id}`"
         );
     }
 
@@ -117,4 +126,8 @@ pub trait CapabilityHealthContext: Send + Sync {
     fn config_view(&self, capability_id: &str) -> Result<CapabilityConfigView>;
     fn connectors(&self) -> &dyn ConnectorRegistry;
     fn stores(&self) -> &dyn StoreHealthGateway;
+    fn inference(&self) -> &dyn InferenceGateway {
+        static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
+        &EMPTY
+    }
 }

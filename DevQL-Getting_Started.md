@@ -1,247 +1,220 @@
 # DevQL Getting Started
 
-This guide shows the minimum commands to get DevQL working in the CLI.
+This guide shows the current daemon-first flow for DevQL.
 
-DevQL now uses the shared Bitloops store backends. These stores also hold checkpoint and session runtime data, so they are not DevQL-only.
+If you prefer running from source instead of an installed binary, replace `bitloops ...` with `cargo run -- ...`.
 
 ## Backend model
 
-Backend configuration is defined in `<repo>/.bitloops/config.json` under `stores`. The model is provider-less: local backends (SQLite, DuckDB, local blob) are always available with defaults. Remote backends activate when their connection string or bucket is present.
+DevQL uses the Bitloops daemon plus the shared store backends configured in the global daemon `config.toml`. Repo policy still lives in `.bitloops.toml` and `.bitloops.local.toml`.
 
 Available backends:
 
-- Relational: SQLite (always available) + Postgres (when `postgres_dsn` is set)
-- Events: DuckDB (default) or ClickHouse (when `clickhouse_url` is set)
-- Blob: local filesystem (default), S3 (when `s3_bucket` is set), or GCS (when `gcs_bucket` is set)
+- Relational: SQLite by default, optionally Postgres
+- Events: DuckDB by default, optionally ClickHouse
+- Blob: local filesystem by default, optionally S3 or GCS
 
 Important:
 
-- Store paths default to repo-local `.bitloops/stores/*` locations.
-- Database files are expected to be created during `bitloops init`.
+- Default local store paths live under the Bitloops platform data directory, not under `<repo>/.bitloops/stores/...`.
+- `bitloops init` bootstraps repo policy and hooks. It can optionally queue an initial current-state sync, but it does not ingest checkpoint history.
+- `bitloops devql sync` is queue-based. It returns immediately by default and only follows the task when you pass `--status`.
 
-Current command support matrix:
-
-- `devql connection-status` and dashboard DB health checks support all configured backends.
-- `devql init` creates store files for all configured backends.
-- `devql ingest` supports configured events and relational backends (DuckDB/ClickHouse + SQLite/Postgres).
-- `devql query` supports:
-  - `checkpoints()`/`telemetry()` on DuckDB or ClickHouse
-  - `artefacts()`/`deps()`/`chatHistory()` on SQLite or Postgres
-
-## 0) (Optional) Run Postgres and ClickHouse with Docker
+## 1) Start the daemon
 
 ```bash
-docker run -d --name mypostgres -p 5432:5432 \
-  -e POSTGRES_USER=bitloops \
-  -e POSTGRES_PASSWORD=bitloops \
-  -e POSTGRES_DB=bitloops \
-  postgres
+bitloops start --create-default-config
 ```
 
-## 1) Configure stores and semantic provider
+On a fresh machine, this creates the default daemon config and local default store paths. Interactive bootstrap can also ask for telemetry consent unless you pass an explicit telemetry flag.
 
-Create `<repo>/.bitloops/config.json`:
+## 2) Configure stores and inference profiles
 
-```json
-{
-  "stores": {
-    "relational": {
-      "sqlite_path": ".bitloops/stores/relational/relational.db"
-    },
-    "event": {
-      "duckdb_path": ".bitloops/stores/event/events.duckdb"
-    },
-    "blob": {
-      "local_path": ".bitloops/stores/blob"
-    }
-  },
-  "semantic": {
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "api_key": "YOUR_KEY"
-  }
-}
+Edit the global daemon config (`config.toml`) and set the stores and inference profiles you want. Example:
+
+```toml
+[stores.relational]
+sqlite_path = "/absolute/path/to/bitloops/stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "/absolute/path/to/bitloops/stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "/absolute/path/to/bitloops/stores/blob"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "openai"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
+
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "summary_llm"
 ```
 
 What this does:
 
-- Uses SQLite for relational data and DuckDB for event data.
-- Uses local filesystem blob storage.
-- Uses repo-local paths for all stores.
+- uses SQLite for relational data
+- uses DuckDB for event data
+- uses local filesystem blob storage
+- keeps all machine-specific backend configuration in the daemon config rather than in the repo
 
-If you omit file paths, defaults are used:
+To use ClickHouse for events instead, configure `[stores.events]` with `clickhouse_url` and related settings. To use Postgres for relational data instead, configure `[stores.relational]` with `postgres_dsn`.
 
-- SQLite defaults to `<repo>/.bitloops/stores/relational/relational.db`
-- DuckDB defaults to `<repo>/.bitloops/stores/event/events.duckdb`
-- Local blob store defaults to `<repo>/.bitloops/stores/blob`
+## 3) Initialise a repo
 
-To use ClickHouse for events instead, add the ClickHouse connection settings:
-
-```json
-{
-  "stores": {
-    "event": {
-      "clickhouse_url": "http://localhost:8123",
-      "clickhouse_database": "bitloops",
-      "clickhouse_user": "bitloops",
-      "clickhouse_password": "bitloops"
-    }
-  }
-}
-```
-
-## 2) Initialise stores in the repo
-
-Run:
+From inside the repository or subproject you want DevQL to work against:
 
 ```bash
-cargo run -- init --agent claude-code
+bitloops init --sync=true
 ```
 
 What this does:
 
-- Creates and initialises local store files/directories for configured backends.
-- For default local stores, this creates:
-  - `.bitloops/stores/relational/relational.db`
-  - `.bitloops/stores/event/events.duckdb`
-  - `.bitloops/stores/blob`
+- creates or updates `.bitloops.local.toml`
+- adds `.bitloops.local.toml` to `.git/info/exclude`
+- installs or reconciles Bitloops git hooks and agent hooks
+- queues an initial DevQL current-state sync and waits for it to finish
 
-If store DB files are missing later, runtime commands fail with an error instructing you to run `bitloops init`.
+Other useful variants:
 
-## 3) Check backend connectivity
+```bash
+bitloops init --sync=false
+bitloops init --install-default-daemon --sync=true
+```
+
+Notes:
+
+- if you omit `--sync` in an interactive terminal, Bitloops asks whether you want to sync the codebase after hook setup
+- in non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`
+- that initial sync only reconciles current workspace state; it does not ingest committed checkpoints or event history
+
+## 4) Check backend connectivity
 
 Run either:
 
 ```bash
-cargo run -- --connection-status
+bitloops --connection-status
 ```
 
 or:
 
 ```bash
-cargo run -- devql connection-status
+bitloops devql connection-status
 ```
 
-What this does:
+This checks the configured logical backends and exits non-zero if any configured backend is unavailable.
 
-- Runs a connectivity check against configured logical backends.
-- Prints a `DB Status` table with statuses:
-  - `Connected`
-  - `Could not authenticate`
-  - `Could not reach DB`
-  - `Not configured`
-- Exits non-zero if any configured backend fails.
-
-Example output:
-
-```text
-
-+------------+-----------------------+
-| DB         | Status                |
-+------------+-----------------------+
-| Relational | Connected             |
-| Events     | Could not reach DB    |
-+------------+-----------------------+
-```
-
-## 4) Initialise DevQL schema
+## 5) Explicitly ensure schema (optional)
 
 ```bash
-cargo run -- devql init
+bitloops devql init
 ```
 
-What this does:
+The daemon normally bootstraps the DevQL schema automatically on startup, and queued sync tasks also ensure schema exists before they run. `bitloops devql init` remains useful when you want to force that check explicitly.
 
-- Creates DevQL schema for configured backends.
-- With defaults, this initialises SQLite relational DevQL tables and DuckDB `checkpoint_events` table.
-
-## 5) Ingest checkpoint + artefact data
+## 6) Ingest checkpoint and artefact history
 
 ```bash
-cargo run -- devql ingest
+bitloops devql ingest
 ```
 
-What this does:
+This reads committed checkpoints from the repo and writes checkpoint/event data plus relational DevQL rows to the configured backends.
 
-- Reads committed checkpoints from the repo.
-- Writes checkpoint events to the configured event backend (DuckDB by default, or ClickHouse when `clickhouse_url` is set).
-- Writes repository/commit/file/artefact rows to the configured relational backend (SQLite by default, or Postgres when `postgres_dsn` is set).
-
-Optional flags:
+Optional flag:
 
 ```bash
-cargo run -- devql ingest --init=false --max-checkpoints 200
+bitloops devql ingest --max-checkpoints 200
 ```
 
-- `--init=false`: skip schema bootstrap step.
-- `--max-checkpoints N`: limit how many checkpoints are ingested.
+Use `--max-checkpoints` when you want to bound ingestion to the newest N checkpoints.
 
-## 6) Query with DevQL
+## 7) Sync current workspace state
+
+Use sync when you want `artefacts_current`, `artefact_edges_current`, and related current-state tables reconciled with the present workspace:
+
+```bash
+bitloops devql sync
+bitloops devql sync --status
+```
+
+By default, `bitloops devql sync` queues a sync task and returns immediately after printing the queued task id.
+
+Use `--status` when you want the CLI to hold the terminal open, stream the task state, and print the final summary.
+
+For a read-only drift check:
+
+```bash
+bitloops devql sync --validate --status
+```
+
+Useful status commands:
+
+```bash
+bitloops status
+bitloops daemon status
+```
+
+These show global sync queue totals, and when you run them inside a repository they also show the active or most recent sync task for that repo.
+
+## 8) Query with DevQL
 
 Checkpoints query:
 
 ```bash
-cargo run -- devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'
+bitloops devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'
 ```
 
 Artefacts query at a ref:
 
 ```bash
-cargo run -- devql query 'repo("bitloops-cli")->asOf(ref:"main")->file("bitloops/src/main.rs")->artefacts()->limit(20)'
+bitloops devql query 'repo("bitloops-cli")->asOf(ref:"main")->file("bitloops/src/main.rs")->artefacts()->limit(20)'
 ```
 
 Artefacts changed by a specific agent:
 
 ```bash
-cargo run -- devql query 'repo("bitloops-cli")->artefacts(agent:"claude-code")->select(path,canonical_kind,symbol_fqn,start_line,end_line)->limit(50)'
-```
-
-Same, constrained to recent events:
-
-```bash
-cargo run -- devql query 'repo("bitloops-cli")->artefacts(agent:"claude-code",since:"2026-03-01")->select(path,canonical_kind,symbol_fqn,start_line,end_line)->limit(50)'
+bitloops devql query 'repo("bitloops-cli")->artefacts(agent:"claude-code")->select(path,canonical_kind,symbol_fqn,start_line,end_line)->limit(50)'
 ```
 
 Chat history for a specific artefact selection:
 
 ```bash
-cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(lines:1..20,kind:"function")->chatHistory()->limit(5)'
+bitloops devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(lines:1..20,kind:"function")->chatHistory()->limit(5)'
 ```
-
-Chat histories for all artefacts in a file line range:
-
-```bash
-cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(lines:1..200)->chatHistory()->select(path,symbol_fqn,start_line,end_line,chat_history)->limit(50)'
-```
-
-What this does:
-
-- Executes the shared GraphQL schema in-process.
-- Treats inputs containing `->` as DevQL DSL and compiles them to GraphQL before execution.
-- Treats other inputs as raw GraphQL by default.
-- Routes checkpoint/telemetry stages to the configured event backend (DuckDB or ClickHouse).
-- Routes artefact stages to the configured relational backend (SQLite or Postgres).
-- `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
-- Prints table output for DSL-friendly result shapes and JSON for raw GraphQL.
 
 Raw GraphQL examples:
 
 ```bash
-cargo run -- devql query '{ repo(name: "bitloops-cli") { artefacts(first: 5) { edges { node { path symbolFqn canonicalKind } } } } }'
-cargo run -- devql query --graphql --compact '{ health { relational { backend connected } events { backend connected } } }'
+bitloops devql query '{ repo(name: "bitloops-cli") { artefacts(first: 5) { edges { node { path symbolFqn canonicalKind } } } } }'
+bitloops devql query --graphql --compact '{ health { relational { backend connected } events { backend connected } } }'
 ```
 
-Helpful flags:
+Notes:
 
-- `--graphql`: force raw GraphQL execution explicitly
-- `--compact`: emit compact JSON instead of formatted output
+- inputs containing `->` are treated as DevQL DSL and compiled to GraphQL
+- inputs without `->` are treated as raw GraphQL by default
+- `--graphql` forces raw GraphQL mode explicitly
+- `--compact` emits compact JSON
 
-### Knowledge association ref semantics
+## 9) Optional dashboard
+
+```bash
+bitloops dashboard
+```
+
+The dashboard uses the same daemon and backend configuration as the CLI.
+
+## 10) Knowledge refs
 
 Knowledge association source and target refs are version-aware:
 
-- `knowledge:<item_id>` resolves to the latest version for that item.
-- `knowledge:<item_id>:<version_id>` uses the explicit version.
+- `knowledge:<item_id>` resolves to the latest version for that item
+- `knowledge:<item_id>:<version_id>` uses the explicit version
 
 Examples:
 
@@ -249,60 +222,4 @@ Examples:
 bitloops devql knowledge associate "knowledge:<source_item_id>" --to "knowledge:<target_item_id>"
 bitloops devql knowledge associate "knowledge:<source_item_id>:<source_version_id>" --to "knowledge:<target_item_id>"
 bitloops devql knowledge associate "knowledge:<source_item_id>" --to "knowledge:<target_item_id>:<target_version_id>"
-```
-
-## 7) (Optional) Explore the HTTP and SDL surfaces
-
-Start the dashboard server:
-
-```bash
-cargo run -- dashboard --no-open
-```
-
-GraphQL routes:
-
-```text
-http://127.0.0.1:5667/devql
-http://127.0.0.1:5667/devql/playground
-http://127.0.0.1:5667/devql/sdl
-ws://127.0.0.1:5667/devql/ws
-```
-
-Export the checked-in SDL snapshot from the `bitloops/` crate directory:
-
-```bash
-cargo run --example export-schema > schema.graphql
-```
-
-The exported file is versioned in-repo and checked by tests against the runtime schema.
-
-## 8) (Optional) Use dashboard with DB startup health
-
-```bash
-cargo run -- dashboard --no-open
-```
-
-What this does:
-
-- On startup, checks DB health for configured backends.
-- Uses the same `DB Status` table/status semantics as `--connection-status`.
-- Keeps live health checks for configured adapters while dashboard runs.
-- Exposes live health at:
-
-```text
-http://127.0.0.1:5667/api/db/health
-```
-
-## Installed binary equivalents
-
-If `bitloops` is already installed, replace `cargo run -- ...` with:
-
-```bash
-bitloops --connection-status
-bitloops init --agent claude-code
-bitloops devql init
-bitloops devql ingest
-bitloops devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'
-bitloops devql query '{ health { relational { backend connected } } }'
-bitloops dashboard --no-open
 ```

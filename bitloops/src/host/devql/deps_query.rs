@@ -36,7 +36,7 @@ pub(super) fn build_relational_deps_query(
         None
     };
     let artefacts_table = if use_historical_tables {
-        "artefacts"
+        "artefacts_historical"
     } else {
         "artefacts_current"
     };
@@ -45,16 +45,7 @@ pub(super) fn build_relational_deps_query(
     } else {
         "artefact_edges_current"
     };
-    let current_branch = (!use_historical_tables).then(|| active_branch_name(&cfg.repo_root));
-
     let mut edge_filters = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
-    if let Some(branch) = current_branch.as_deref() {
-        edge_filters.push(format!("e.branch = '{}'", esc_pg(branch)));
-    }
-    if let Some(AsOfSelector::SaveRevision(revision_id)) = parsed.as_of.as_ref() {
-        edge_filters.push("e.revision_kind = 'temporary'".to_string());
-        edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
-    }
     if let Some(kind) = parsed.deps.kind {
         edge_filters.push(format!("e.edge_kind = '{}'", esc_pg(kind.as_str())));
     }
@@ -73,20 +64,16 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
                 .to_string()
         }
     };
-    let edge_to_target_join_scope = if use_historical_tables {
-        String::new()
-    } else {
-        " AND at.repo_id = e.repo_id AND at.branch = e.branch".to_string()
-    };
+    let edge_to_target_join_scope = " AND at.repo_id = e.repo_id".to_string();
     let edge_to_from_join_scope = if use_historical_tables {
-        String::new()
+        " AND af.repo_id = e.repo_id AND af.blob_sha = e.blob_sha".to_string()
     } else {
-        " AND af.repo_id = e.repo_id AND af.branch = e.branch".to_string()
+        " AND af.repo_id = e.repo_id".to_string()
     };
     let edge_to_source_alias_scope = if use_historical_tables {
-        String::new()
+        " AND a.repo_id = e.repo_id AND a.blob_sha = e.blob_sha".to_string()
     } else {
-        " AND a.repo_id = e.repo_id AND a.branch = e.branch".to_string()
+        " AND a.repo_id = e.repo_id".to_string()
     };
 
     let sql = if parsed.deps.direction == DepsDirection::In {
@@ -198,14 +185,6 @@ pub(super) fn build_deps_source_filters(
     historical_commit_selector: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut source_filters = vec![format!("{alias}.repo_id = '{}'", esc_pg(repo_id))];
-    if historical_commit_selector.is_none() {
-        let branch = active_branch_name(&cfg.repo_root);
-        source_filters.push(format!("{alias}.branch = '{}'", esc_pg(&branch)));
-    }
-    if let Some(AsOfSelector::SaveRevision(revision_id)) = parsed.as_of.as_ref() {
-        source_filters.push(format!("{alias}.revision_kind = 'temporary'"));
-        source_filters.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));
-    }
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
         source_filters.push(canonical_kind_filter_sql(
             &format!("{alias}.canonical_kind"),

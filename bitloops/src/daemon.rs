@@ -24,12 +24,18 @@ use tokio::sync::Mutex;
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
+#[path = "daemon/capability_events.rs"]
+mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/enrichment.rs"]
+mod enrichment;
 #[path = "daemon/graphql_client.rs"]
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
+#[path = "daemon/logger.rs"]
+mod logger;
 #[path = "daemon/process.rs"]
 mod process;
 #[path = "daemon/server_runtime.rs"]
@@ -44,6 +50,8 @@ mod state_store;
 mod supervisor_api;
 #[path = "daemon/supervisor_client.rs"]
 mod supervisor_client;
+#[path = "daemon/sync.rs"]
+mod sync;
 #[path = "daemon/types.rs"]
 mod types;
 
@@ -51,11 +59,24 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
+pub use self::enrichment::EnrichmentControlResult;
+pub use self::enrichment::EnrichmentCoordinator;
+pub use self::enrichment::EnrichmentJobTarget;
+pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
+pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
+pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
 pub use self::types::{
-    DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
-    DaemonServiceMetadata, DaemonStatusReport, InternalDaemonProcessArgs,
+    CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
+    CapabilityEventRunStatus, DaemonHealthSummary, DaemonMode, DaemonProcessModeArg,
+    DaemonRuntimeState, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, InternalDaemonProcessArgs,
     InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
-    SupervisorServiceMetadata,
+    SupervisorServiceMetadata, SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord,
+    SyncTaskSource, SyncTaskStatus,
+};
+pub(crate) use self::types::{
+    ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
 };
 
 use self::process::*;
@@ -65,20 +86,86 @@ use self::service_manager::*;
 use self::state_store::*;
 use self::supervisor_client::*;
 #[cfg(test)]
+use self::types::RUNTIME_STATE_FILE_NAME;
+#[cfg(test)]
 use self::types::global_daemon_dir_fallback;
 use self::types::{
     GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME, READY_TIMEOUT, STOP_TIMEOUT,
     SupervisorAppState, SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest,
-    global_daemon_dir, supervisor_runtime_state_path, supervisor_service_metadata_path,
-    unix_timestamp_now,
+    global_daemon_dir, supervisor_service_metadata_path, unix_timestamp_now,
 };
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {
     types::runtime_state_path(repo_root)
 }
 
+#[cfg(test)]
+pub(crate) fn repo_local_runtime_state_path_for_tests(repo_root: &Path) -> Option<PathBuf> {
+    if repo_root.as_os_str().is_empty() || repo_root == Path::new(".") {
+        return None;
+    }
+    Some(
+        repo_root
+            .join(".bitloops-test-state")
+            .join("daemon")
+            .join(RUNTIME_STATE_FILE_NAME),
+    )
+}
+
 pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
     types::service_metadata_path(repo_root)
+}
+
+pub fn current_binary_fingerprint() -> Result<String> {
+    process::current_binary_fingerprint()
+}
+
+pub fn require_current_repo_runtime(
+    repo_root: &Path,
+    operation: &str,
+) -> Result<DaemonRuntimeState> {
+    #[cfg(test)]
+    let runtime = repo_local_runtime_state_path_for_tests(repo_root)
+        .map(|path| state_store::read_json::<DaemonRuntimeState>(&path))
+        .transpose()?
+        .flatten()
+        .filter(|runtime| {
+            runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
+        })
+        .or(
+            state_store::read_runtime_state_legacy(repo_root)?.filter(|runtime| {
+                runtime.pid == std::process::id()
+                    || process_is_running(runtime.pid).unwrap_or(false)
+            }),
+        )
+        .filter(|runtime| {
+            runtime.pid == std::process::id() || process_is_running(runtime.pid).unwrap_or(false)
+        })
+        .or(state_store::read_runtime_state(repo_root)?);
+
+    #[cfg(not(test))]
+    let runtime = state_store::read_runtime_state(repo_root)?;
+
+    let runtime = runtime.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Bitloops daemon is not running for this repository. Run `bitloops init` or `bitloops daemon restart` before {operation}."
+        )
+    })?;
+    let current = current_binary_fingerprint().unwrap_or_default();
+    if !runtime.binary_fingerprint.is_empty()
+        && !current.is_empty()
+        && runtime.binary_fingerprint != current
+    {
+        if matches!(runtime.mode, DaemonMode::Foreground) {
+            bail!(
+                "Bitloops daemon is running in foreground with an older CLI binary. Restart it manually and rerun `bitloops init` before {operation}."
+            );
+        }
+        bail!(
+            "Bitloops daemon is stale for this repository. Run `bitloops init` or `bitloops daemon restart` before {operation}."
+        );
+    }
+    Ok(runtime)
 }
 
 pub fn resolve_daemon_config(explicit_config_path: Option<&Path>) -> Result<ResolvedDaemonConfig> {
@@ -162,6 +249,63 @@ pub async fn status() -> Result<DaemonStatusReport> {
     lifecycle::status().await
 }
 
+pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
+    enrichment::snapshot()
+}
+
+pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+    CapabilityEventCoordinator::shared().snapshot(repo_id)
+}
+
+pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
+    enrichment::pause_enrichments(reason)
+}
+
+pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
+    enrichment::resume_enrichments()
+}
+
+pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
+    enrichment::retry_failed_enrichments()
+}
+
+pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
+    EnrichmentCoordinator::shared()
+}
+
+pub fn shared_capability_event_coordinator() -> Arc<CapabilityEventCoordinator> {
+    CapabilityEventCoordinator::shared()
+}
+
+pub fn shared_sync_coordinator() -> Arc<SyncCoordinator> {
+    SyncCoordinator::shared()
+}
+
+pub(crate) fn activate_sync_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
+    CapabilityEventCoordinator::shared().activate_worker();
+    SyncCoordinator::shared().activate_worker(Some(subscription_hub));
+}
+
+pub fn sync_status(repo_id: Option<&str>) -> Result<SyncQueueStatus> {
+    SyncCoordinator::shared().snapshot(repo_id)
+}
+
+pub fn sync_task(task_id: &str) -> Result<Option<SyncTaskRecord>> {
+    SyncCoordinator::shared().task(task_id)
+}
+
+pub fn sync_tasks(repo_id: Option<&str>, limit: Option<usize>) -> Result<Vec<SyncTaskRecord>> {
+    SyncCoordinator::shared().tasks(repo_id, limit)
+}
+
+pub fn enqueue_sync_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: SyncTaskSource,
+    mode: crate::host::devql::SyncMode,
+) -> Result<SyncEnqueueResult> {
+    SyncCoordinator::shared().enqueue(cfg, source, mode)
+}
+
 pub async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeState> {
     lifecycle::wait_until_ready(timeout).await
 }
@@ -189,4 +333,8 @@ pub fn choose_dashboard_launch_mode() -> Result<Option<DaemonMode>> {
 
 pub fn daemon_url() -> Result<Option<String>> {
     graphql_client::daemon_url()
+}
+
+pub(crate) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
+    process::daemon_http_client(url)
 }

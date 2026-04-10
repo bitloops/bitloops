@@ -1,4 +1,7 @@
 use super::*;
+use crate::host::checkpoints::transcript::metadata::{
+    SessionMetadataBundle, TaskCheckpointMetadataBundle,
+};
 
 // ── Checkpoint metadata structs ───────────────────────────────────────────────
 
@@ -97,7 +100,6 @@ pub(crate) struct CommittedMetadata {
     pub(crate) cli_version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) turn_id: String,
-    pub(crate) files_touched: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) is_task: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -164,6 +166,7 @@ pub(crate) struct WriteCommittedOptions {
     pub(crate) prompts: Option<Vec<String>>,
     pub(crate) context: Option<Vec<u8>>,
     pub(crate) checkpoints_count: u32,
+    #[allow(dead_code)]
     pub(crate) files_touched: Vec<String>,
     pub(crate) token_usage_input: Option<u64>,
     pub(crate) token_usage_output: Option<u64>,
@@ -191,8 +194,7 @@ pub(crate) struct WriteTemporaryOptions {
     pub(crate) modified_files: Vec<String>,
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted_files: Vec<String>,
-    pub(crate) metadata_dir: String,
-    pub(crate) metadata_dir_abs: String,
+    pub(crate) session_metadata: Option<SessionMetadataBundle>,
     pub(crate) commit_message: String,
     pub(crate) author_name: String,
     pub(crate) author_email: String,
@@ -215,9 +217,8 @@ pub(crate) struct WriteTemporaryTaskOptions {
     pub(crate) modified_files: Vec<String>,
     pub(crate) new_files: Vec<String>,
     pub(crate) deleted_files: Vec<String>,
-    pub(crate) transcript_path: String,
-    pub(crate) subagent_transcript_path: String,
-    pub(crate) checkpoint_uuid: String,
+    pub(crate) session_metadata: Option<SessionMetadataBundle>,
+    pub(crate) task_metadata: Option<TaskCheckpointMetadataBundle>,
     pub(crate) is_incremental: bool,
     pub(crate) incremental_sequence: u32,
     pub(crate) incremental_type: String,

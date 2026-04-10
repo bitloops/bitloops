@@ -9,12 +9,20 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+    setup_git_repo_with_initial_branch("main")
+}
+
+fn setup_git_repo_with_initial_branch(
+    initial_branch: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     run_git_cmd(&root, &["init"]);
+    run_git_cmd(&root, &["checkout", "-B", initial_branch]);
     run_git_cmd(&root, &["config", "user.name", "Test"]);
     run_git_cmd(&root, &["config", "user.email", "test@example.com"]);
     run_git_cmd(&root, &["config", "commit.gpgsign", "false"]);
+    crate::test_support::git_fixtures::write_test_daemon_config(&root);
     ensure_relational_store_file(&root);
     (tmp, root)
 }
@@ -61,12 +69,13 @@ fn make_checkpoint_commit(
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        crate::utils::paths::default_relational_db_path(repo_root)
-    }
+    let path = cfg
+        .relational
+        .sqlite_path
+        .as_deref()
+        .expect("test daemon config should set sqlite_path");
+    crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        .expect("resolve configured sqlite path")
 }
 
 fn ensure_relational_store_file(repo_root: &std::path::Path) {
@@ -116,15 +125,14 @@ fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &
             conn.execute(
                 "INSERT INTO checkpoints (
                     checkpoint_id, repo_id, strategy, branch, cli_version,
-                    files_touched, checkpoints_count
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    checkpoints_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     checkpoint_id,
                     repo_id.as_str(),
                     "manual-commit",
                     "",
                     "0.0.3",
-                    "[]",
                     1_i64,
                 ],
             )?;
@@ -141,11 +149,13 @@ fn write_committed_checkpoint_metadata_with_mappings(
     run_git_cmd(root, &["checkout", "--orphan", "bitloops/checkpoints/v1"]);
     run_git_cmd(root, &["rm", "-rf", "--ignore-unmatch", "."]);
 
+    let mut buckets_to_stage = std::collections::BTreeSet::new();
     for (checkpoint_id, _) in checkpoints {
         let bucket = &checkpoint_id[..2];
         let suffix = &checkpoint_id[2..];
         let metadata_dir = root.join(bucket).join(suffix);
         std::fs::create_dir_all(&metadata_dir).expect("failed to create metadata dir");
+        buckets_to_stage.insert(bucket.to_string());
         let metadata_path = metadata_dir.join("metadata.json");
         let metadata_json = serde_json::json!({
             "checkpoint_id": checkpoint_id,
@@ -161,9 +171,13 @@ fn write_committed_checkpoint_metadata_with_mappings(
         .expect("write metadata");
     }
 
-    run_git_cmd(root, &["add", "."]);
+    for bucket in buckets_to_stage {
+        run_git_cmd(root, &["add", bucket.as_str()]);
+    }
     run_git_cmd(root, &["commit", "-m", "seed checkpoint metadata"]);
     run_git_cmd(root, &["checkout", &current_branch]);
+    crate::test_support::git_fixtures::write_test_daemon_config(root);
+    ensure_relational_store_file(root);
 
     for (checkpoint_id, commit_sha) in checkpoints {
         insert_committed_checkpoint_row(root, checkpoint_id);
@@ -2168,7 +2182,7 @@ fn TestGetBranchCheckpointsReal_FiltersMainCommits() {
 
 #[test]
 fn TestGetBranchCheckpointsReal_DefaultBranchFindsMergedCheckpoints() {
-    let (_tmp, root) = setup_git_repo();
+    let (_tmp, root) = setup_git_repo_with_initial_branch("trunk");
     let checkpoint_id = "fea112233344";
 
     let _ = make_commit(&root, "file.txt", "initial", "initial commit");
@@ -2308,8 +2322,8 @@ fn TestHasCodeChanges_FirstCommitReturnsTrue() {
 #[test]
 fn TestHasCodeChanges_OnlyMetadataChanges() {
     let changed = vec![
-        ".bitloops/metadata/session-123/full.jsonl".to_string(),
-        ".bitloops/metadata/session-123/prompt.txt".to_string(),
+        ".bitloops/internal/sessions/session-123/full.jsonl".to_string(),
+        ".bitloops/internal/sessions/session-123/prompt.txt".to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
@@ -2318,14 +2332,14 @@ fn TestHasCodeChanges_OnlyMetadataChanges() {
 }
 
 #[test]
-fn TestHasCodeChanges_OnlyLegacyMetadataChanges() {
+fn TestHasCodeChanges_OnlyCheckpointArtefactTaskChanges() {
     let changed = vec![
-        ".bitloops/metadata/session-123/full.jsonl".to_string(),
-        ".bitloops/metadata/session-123/prompt.txt".to_string(),
+        ".bitloops/internal/sessions/session-123/tasks/toolu_abc/context.json".to_string(),
+        ".bitloops/internal/sessions/session-123/tasks/toolu_abc/output.json".to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
-        "expected legacy metadata-only change set to be treated as non-code"
+        "expected checkpoint artefact-only change set to be treated as non-code"
     );
 }
 
@@ -2341,7 +2355,7 @@ fn TestHasCodeChanges_WithCodeChanges() {
 #[test]
 fn TestHasCodeChanges_MixedChanges() {
     let changed = vec![
-        ".bitloops/metadata/session-123/full.jsonl".to_string(),
+        ".bitloops/internal/sessions/session-123/full.jsonl".to_string(),
         "src/main.rs".to_string(),
     ];
     assert!(
