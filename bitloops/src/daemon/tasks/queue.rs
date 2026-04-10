@@ -50,7 +50,10 @@ pub(super) fn merge_existing_task(
         if let Some(existing) = state.tasks.iter_mut().find(|task| {
             task.repo_id == cfg.repo.repo_id
                 && task.kind == DevqlTaskKind::Ingest
-                && matches!(task.status, DevqlTaskStatus::Queued | DevqlTaskStatus::Running)
+                && matches!(
+                    task.status,
+                    DevqlTaskStatus::Queued | DevqlTaskStatus::Running
+                )
                 && task.spec == *spec
         }) {
             existing.updated_at_unix = unix_timestamp_now();
@@ -65,18 +68,21 @@ pub(super) fn merge_existing_task(
         && let Some(existing) = state.tasks.iter_mut().find(|task| {
             task.repo_id == cfg.repo.repo_id
                 && task.kind == DevqlTaskKind::Sync
-                && matches!(task.status, DevqlTaskStatus::Queued | DevqlTaskStatus::Running)
-                && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| match (
-                    &existing_spec.mode,
-                    mode,
-                ) {
-                    (SyncTaskMode::Repair, _) => true,
-                    (existing_mode, incoming_mode)
-                        if is_full_like(existing_mode) && is_weaker_than_repair(incoming_mode) =>
-                    {
-                        true
+                && matches!(
+                    task.status,
+                    DevqlTaskStatus::Queued | DevqlTaskStatus::Running
+                )
+                && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| {
+                    match (&existing_spec.mode, mode) {
+                        (SyncTaskMode::Repair, _) => true,
+                        (existing_mode, incoming_mode)
+                            if is_full_like(existing_mode)
+                                && is_weaker_than_repair(incoming_mode) =>
+                        {
+                            true
+                        }
+                        _ => false,
                     }
-                    _ => false,
                 })
         })
     {
@@ -177,7 +183,12 @@ pub(super) fn recompute_queue_positions(tasks: &mut [DevqlTaskRecord]) {
 
     let lanes = tasks
         .iter()
-        .filter(|task| matches!(task.status, DevqlTaskStatus::Running | DevqlTaskStatus::Queued))
+        .filter(|task| {
+            matches!(
+                task.status,
+                DevqlTaskStatus::Running | DevqlTaskStatus::Queued
+            )
+        })
         .map(task_lane)
         .collect::<HashSet<_>>();
 
@@ -188,7 +199,10 @@ pub(super) fn recompute_queue_positions(tasks: &mut [DevqlTaskRecord]) {
             .filter(|(_, task)| {
                 task.repo_id == lane.repo_id
                     && task.kind == lane.kind
-                    && matches!(task.status, DevqlTaskStatus::Running | DevqlTaskStatus::Queued)
+                    && matches!(
+                        task.status,
+                        DevqlTaskStatus::Running | DevqlTaskStatus::Queued
+                    )
             })
             .map(|(index, task)| {
                 (
@@ -198,12 +212,14 @@ pub(super) fn recompute_queue_positions(tasks: &mut [DevqlTaskRecord]) {
                 )
             })
             .collect::<Vec<_>>();
-        order.sort_by(|(_, left_running, left_key), (_, right_running, right_key)| {
-            left_running
-                .cmp(right_running)
-                .reverse()
-                .then_with(|| left_key.cmp(right_key))
-        });
+        order.sort_by(
+            |(_, left_running, left_key), (_, right_running, right_key)| {
+                left_running
+                    .cmp(right_running)
+                    .reverse()
+                    .then_with(|| left_key.cmp(right_key))
+            },
+        );
 
         for (index, (task_index, _, _)) in order.into_iter().enumerate() {
             let position = (index as u64) + 1;

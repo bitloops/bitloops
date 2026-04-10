@@ -87,9 +87,18 @@ fn live_task_status_line_elides_to_terminal_width() {
         .as_mut()
         .expect("sync progress")
         .current_path = Some("bitloops/src/host/devql/commands_sync/orchestrator.rs".to_string());
-    task.sync_progress.as_mut().expect("sync progress").paths_total = 764;
-    task.sync_progress.as_mut().expect("sync progress").paths_completed = 472;
-    task.sync_progress.as_mut().expect("sync progress").paths_remaining = 292;
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .paths_total = 764;
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .paths_completed = 472;
+    task.sync_progress
+        .as_mut()
+        .expect("sync progress")
+        .paths_remaining = 292;
 
     let rendered = format_live_task_status_line(&task, "*", Some(48));
     assert!(rendered.chars().count() <= 48);
@@ -107,9 +116,18 @@ fn live_task_progress_bar_line_fits_requested_width() {
             .as_mut()
             .expect("sync progress")
             .current_path = None;
-        task.sync_progress.as_mut().expect("sync progress").paths_total = 764;
-        task.sync_progress.as_mut().expect("sync progress").paths_completed = 472;
-        task.sync_progress.as_mut().expect("sync progress").paths_remaining = 292;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_total = 764;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_completed = 472;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_remaining = 292;
 
         let rendered = format_live_task_progress_bar_line(&task, 0, Some(48));
         assert!(rendered.chars().count() <= 48);
@@ -141,9 +159,21 @@ fn live_task_status_line_covers_terminal_states() {
 fn live_task_progress_bar_line_handles_non_progress_states() {
     with_env_vars(&[("NO_COLOR", Some("1"))], || {
         let mut queued = sample_task("queued");
-        queued.sync_progress.as_mut().expect("sync progress").paths_total = 0;
-        queued.sync_progress.as_mut().expect("sync progress").paths_completed = 0;
-        queued.sync_progress.as_mut().expect("sync progress").paths_remaining = 0;
+        queued
+            .sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_total = 0;
+        queued
+            .sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_completed = 0;
+        queued
+            .sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_remaining = 0;
         queued.sync_progress.as_mut().expect("sync progress").phase =
             "building_manifest".to_string();
 
@@ -151,9 +181,21 @@ fn live_task_progress_bar_line_handles_non_progress_states() {
         assert!(rendered.contains("building manifest"));
 
         let mut failed = sample_task("failed");
-        failed.sync_progress.as_mut().expect("sync progress").paths_total = 10;
-        failed.sync_progress.as_mut().expect("sync progress").paths_completed = 3;
-        failed.sync_progress.as_mut().expect("sync progress").paths_remaining = 7;
+        failed
+            .sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_total = 10;
+        failed
+            .sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_completed = 3;
+        failed
+            .sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_remaining = 7;
         let failed_line = format_live_task_progress_bar_line(&failed, 0, Some(40));
         assert!(failed_line.contains(" 30% 3/10"));
     });
@@ -163,9 +205,18 @@ fn live_task_progress_bar_line_handles_non_progress_states() {
 fn live_task_progress_bar_line_elides_when_too_narrow() {
     with_env_vars(&[("NO_COLOR", Some("1"))], || {
         let mut task = sample_task("running");
-        task.sync_progress.as_mut().expect("sync progress").paths_total = 100;
-        task.sync_progress.as_mut().expect("sync progress").paths_completed = 20;
-        task.sync_progress.as_mut().expect("sync progress").paths_remaining = 80;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_total = 100;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_completed = 20;
+        task.sync_progress
+            .as_mut()
+            .expect("sync progress")
+            .paths_remaining = 80;
 
         let rendered = format_live_task_progress_bar_line(&task, 0, Some(8));
         assert!(rendered.chars().count() <= 16);

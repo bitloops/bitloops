@@ -391,7 +391,8 @@ async fn run_tasks_command(scope: &SlimCliRepoScope, args: DevqlTasksArgs) -> Re
             Ok(())
         }
         DevqlTasksCommand::Pause(args) => {
-            let result = graphql::pause_task_queue_via_graphql(scope, args.reason.as_deref()).await?;
+            let result =
+                graphql::pause_task_queue_via_graphql(scope, args.reason.as_deref()).await?;
             println!("{}", format_task_queue_control_result(&result));
             Ok(())
         }
@@ -453,7 +454,9 @@ fn validate_task_enqueue_args(args: &DevqlTaskEnqueueArgs) -> Result<()> {
     match args.kind {
         DevqlTaskKindArg::Sync => {
             if args.backfill.is_some() {
-                bail!("`--backfill` is only supported for `bitloops devql tasks enqueue --kind ingest`");
+                bail!(
+                    "`--backfill` is only supported for `bitloops devql tasks enqueue --kind ingest`"
+                );
             }
         }
         DevqlTaskKindArg::Ingest => {
@@ -496,7 +499,10 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None)).await
 }
 
-pub(crate) fn format_task_queue_submission(task: &graphql::TaskGraphqlRecord, merged: bool) -> String {
+pub(crate) fn format_task_queue_submission(
+    task: &graphql::TaskGraphqlRecord,
+    merged: bool,
+) -> String {
     let mut line = format!(
         "task queued: task={} repo={} kind={}",
         task.task_id,

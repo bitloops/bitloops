@@ -145,20 +145,22 @@ impl From<DevqlTaskRecord> for TaskObject {
         let ingest_spec = value.ingest_spec().map(|spec| IngestTaskSpecObject {
             backfill: spec.backfill.map(to_graphql_count),
         });
-        let sync_progress = value.sync_progress().map(|progress| SyncTaskProgressObject {
-            phase: progress.phase.as_str().to_string(),
-            current_path: progress.current_path.clone(),
-            paths_total: to_graphql_count(progress.paths_total),
-            paths_completed: to_graphql_count(progress.paths_completed),
-            paths_remaining: to_graphql_count(progress.paths_remaining),
-            paths_unchanged: to_graphql_count(progress.paths_unchanged),
-            paths_added: to_graphql_count(progress.paths_added),
-            paths_changed: to_graphql_count(progress.paths_changed),
-            paths_removed: to_graphql_count(progress.paths_removed),
-            cache_hits: to_graphql_count(progress.cache_hits),
-            cache_misses: to_graphql_count(progress.cache_misses),
-            parse_errors: to_graphql_count(progress.parse_errors),
-        });
+        let sync_progress = value
+            .sync_progress()
+            .map(|progress| SyncTaskProgressObject {
+                phase: progress.phase.as_str().to_string(),
+                current_path: progress.current_path.clone(),
+                paths_total: to_graphql_count(progress.paths_total),
+                paths_completed: to_graphql_count(progress.paths_completed),
+                paths_remaining: to_graphql_count(progress.paths_remaining),
+                paths_unchanged: to_graphql_count(progress.paths_unchanged),
+                paths_added: to_graphql_count(progress.paths_added),
+                paths_changed: to_graphql_count(progress.paths_changed),
+                paths_removed: to_graphql_count(progress.paths_removed),
+                cache_hits: to_graphql_count(progress.cache_hits),
+                cache_misses: to_graphql_count(progress.cache_misses),
+                parse_errors: to_graphql_count(progress.parse_errors),
+            });
         let ingest_progress = value.ingest_progress().cloned().map(Into::into);
         let sync_result = value.sync_result().cloned().map(Into::into);
         let ingest_result = value.ingest_result().cloned().map(Into::into);
@@ -259,7 +261,11 @@ impl From<DevqlTaskQueueStatus> for TaskQueueStatusObject {
                 .and_then(|control| control.paused_reason.clone()),
             last_action: value.state.last_action,
             last_updated_unix: value.state.last_updated_unix as i64,
-            current_repo_tasks: value.current_repo_tasks.into_iter().map(Into::into).collect(),
+            current_repo_tasks: value
+                .current_repo_tasks
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }

@@ -59,6 +59,8 @@ impl SubscriptionHub {
 
     pub(crate) fn publish_task(&self, task: DevqlTaskRecord) {
         let task_id = task.task_id.clone();
-        let _ = self.task_progress.send(TaskProgressMessage { task_id, task });
+        let _ = self
+            .task_progress
+            .send(TaskProgressMessage { task_id, task });
     }
 }

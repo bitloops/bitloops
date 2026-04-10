@@ -277,8 +277,8 @@ impl SlimQueryRoot {
             status.map(Into::into),
             limit,
         )
-            .map(|tasks| tasks.into_iter().map(Into::into).collect())
-            .map_err(|err| backend_error(format!("failed to list tasks: {err:#}")))
+        .map(|tasks| tasks.into_iter().map(Into::into).collect())
+        .map_err(|err| backend_error(format!("failed to list tasks: {err:#}")))
     }
 
     #[graphql(name = "taskQueue")]

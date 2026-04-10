@@ -251,10 +251,7 @@ fn append_capability_event_lines(
 
 fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQueueStatus) {
     lines.push("DevQL task queue: available".to_string());
-    lines.push(format!(
-        "DevQL queued tasks: {}",
-        status.state.queued_tasks
-    ));
+    lines.push(format!("DevQL queued tasks: {}", status.state.queued_tasks));
     lines.push(format!(
         "DevQL running tasks: {}",
         status.state.running_tasks
@@ -307,10 +304,7 @@ fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQu
             }
         }
         if let Some(progress) = task.ingest_progress() {
-            lines.push(format!(
-                "Current repo ingest phase: {:?}",
-                progress.phase
-            ));
+            lines.push(format!("Current repo ingest phase: {:?}", progress.phase));
             if let Some(commit_sha) = progress.current_commit_sha.as_ref() {
                 lines.push(format!("Current repo ingest commit: {commit_sha}"));
             }

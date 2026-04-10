@@ -1255,32 +1255,32 @@ async fn devql_graphql_task_progress_subscription_receives_published_task_events
         completed_at_unix: None,
         queue_position: None,
         tasks_ahead: None,
-        progress: crate::daemon::DevqlTaskProgress::Ingest(crate::host::devql::IngestionProgressUpdate {
-            phase,
-            commits_total: 1,
-            commits_processed,
-            current_checkpoint_id: Some("aabbccddeeff".to_string()),
-            current_commit_sha: Some(git_ok(repo.path(), &["rev-parse", "HEAD"])),
-            counters: crate::host::devql::IngestionCounters {
-                success: matches!(phase, crate::host::devql::IngestionProgressPhase::Complete),
-                checkpoint_companions_processed: commits_processed,
-                events_inserted: commits_processed,
-                artefacts_upserted: commits_processed + 1,
-                ..Default::default()
+        progress: crate::daemon::DevqlTaskProgress::Ingest(
+            crate::host::devql::IngestionProgressUpdate {
+                phase,
+                commits_total: 1,
+                commits_processed,
+                current_checkpoint_id: Some("aabbccddeeff".to_string()),
+                current_commit_sha: Some(git_ok(repo.path(), &["rev-parse", "HEAD"])),
+                counters: crate::host::devql::IngestionCounters {
+                    success: matches!(phase, crate::host::devql::IngestionProgressPhase::Complete),
+                    checkpoint_companions_processed: commits_processed,
+                    events_inserted: commits_processed,
+                    artefacts_upserted: commits_processed + 1,
+                    ..Default::default()
+                },
             },
-        }),
+        ),
         error: None,
         result: None,
     };
 
-    context
-        .subscriptions()
-        .publish_task(make_task(
-            "other-task",
-            crate::daemon::DevqlTaskStatus::Running,
-            crate::host::devql::IngestionProgressPhase::Failed,
-            0,
-        ));
+    context.subscriptions().publish_task(make_task(
+        "other-task",
+        crate::daemon::DevqlTaskStatus::Running,
+        crate::host::devql::IngestionProgressPhase::Failed,
+        0,
+    ));
     context.subscriptions().publish_task(make_task(
         "ingest-task-1",
         crate::daemon::DevqlTaskStatus::Running,
@@ -1354,42 +1354,46 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
         "demo",
         crate::graphql::Checkpoint::from_ingested(&checkpoint_info, Some(head_sha.as_str())),
     );
-    context.subscriptions().publish_task(crate::daemon::DevqlTaskRecord {
-        task_id: "ingest-task-1".to_string(),
-        repo_id: "repo-1".to_string(),
-        repo_name: "demo".to_string(),
-        repo_provider: "local".to_string(),
-        repo_organisation: "local".to_string(),
-        repo_identity: "local/demo".to_string(),
-        daemon_config_root: repo.path().to_path_buf(),
-        repo_root: repo.path().to_path_buf(),
-        kind: crate::daemon::DevqlTaskKind::Ingest,
-        source: crate::daemon::DevqlTaskSource::ManualCli,
-        spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec::default()),
-        status: crate::daemon::DevqlTaskStatus::Completed,
-        submitted_at_unix: 1,
-        started_at_unix: Some(2),
-        updated_at_unix: 3,
-        completed_at_unix: Some(4),
-        queue_position: None,
-        tasks_ahead: None,
-        progress: crate::daemon::DevqlTaskProgress::Ingest(crate::host::devql::IngestionProgressUpdate {
-            phase: crate::host::devql::IngestionProgressPhase::Complete,
-            commits_total: 1,
-            commits_processed: 1,
-            current_checkpoint_id: Some("checkpoint-1".to_string()),
-            current_commit_sha: Some(head_sha.clone()),
-            counters: crate::host::devql::IngestionCounters {
-                success: true,
-                checkpoint_companions_processed: 1,
-                events_inserted: 1,
-                artefacts_upserted: 1,
-                ..Default::default()
-            },
-        }),
-        error: None,
-        result: None,
-    });
+    context
+        .subscriptions()
+        .publish_task(crate::daemon::DevqlTaskRecord {
+            task_id: "ingest-task-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_name: "demo".to_string(),
+            repo_provider: "local".to_string(),
+            repo_organisation: "local".to_string(),
+            repo_identity: "local/demo".to_string(),
+            daemon_config_root: repo.path().to_path_buf(),
+            repo_root: repo.path().to_path_buf(),
+            kind: crate::daemon::DevqlTaskKind::Ingest,
+            source: crate::daemon::DevqlTaskSource::ManualCli,
+            spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec::default()),
+            status: crate::daemon::DevqlTaskStatus::Completed,
+            submitted_at_unix: 1,
+            started_at_unix: Some(2),
+            updated_at_unix: 3,
+            completed_at_unix: Some(4),
+            queue_position: None,
+            tasks_ahead: None,
+            progress: crate::daemon::DevqlTaskProgress::Ingest(
+                crate::host::devql::IngestionProgressUpdate {
+                    phase: crate::host::devql::IngestionProgressPhase::Complete,
+                    commits_total: 1,
+                    commits_processed: 1,
+                    current_checkpoint_id: Some("checkpoint-1".to_string()),
+                    current_commit_sha: Some(head_sha.clone()),
+                    counters: crate::host::devql::IngestionCounters {
+                        success: true,
+                        checkpoint_companions_processed: 1,
+                        events_inserted: 1,
+                        artefacts_upserted: 1,
+                        ..Default::default()
+                    },
+                },
+            ),
+            error: None,
+            result: None,
+        });
 
     let checkpoint = tokio::time::timeout(std::time::Duration::from_secs(5), checkpoint_rx.recv())
         .await
@@ -1402,5 +1406,8 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
         .expect("task progress event should arrive")
         .expect("task progress subscription payload");
     assert_eq!(progress.task_id, "ingest-task-1");
-    assert_eq!(progress.task.status, crate::daemon::DevqlTaskStatus::Completed);
+    assert_eq!(
+        progress.task.status,
+        crate::daemon::DevqlTaskStatus::Completed
+    );
 }

@@ -1,6 +1,8 @@
 use super::backend_error;
 use super::context::DevqlGraphqlContext;
-use super::types::{HealthStatus, Repository, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus};
+use super::types::{
+    HealthStatus, Repository, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
+};
 use async_graphql::{Context, Object, Result};
 
 #[derive(Default)]
@@ -44,8 +46,8 @@ impl QueryRoot {
             status.map(Into::into),
             limit,
         )
-            .map(|tasks| tasks.into_iter().map(Into::into).collect())
-            .map_err(|err| backend_error(format!("failed to list tasks: {err:#}")))
+        .map(|tasks| tasks.into_iter().map(Into::into).collect())
+        .map_err(|err| backend_error(format!("failed to list tasks: {err:#}")))
     }
 
     #[graphql(name = "taskQueue")]

@@ -622,7 +622,9 @@ impl MutationRoot {
     }
 }
 
-fn parse_task_source(raw: Option<&str>) -> std::result::Result<crate::daemon::DevqlTaskSource, String> {
+fn parse_task_source(
+    raw: Option<&str>,
+) -> std::result::Result<crate::daemon::DevqlTaskSource, String> {
     match raw.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(crate::daemon::DevqlTaskSource::ManualCli),
         Some("init") => Ok(crate::daemon::DevqlTaskSource::Init),
@@ -630,9 +632,7 @@ fn parse_task_source(raw: Option<&str>) -> std::result::Result<crate::daemon::De
             Ok(crate::daemon::DevqlTaskSource::ManualCli)
         }
         Some("watcher") => Ok(crate::daemon::DevqlTaskSource::Watcher),
-        Some("post_commit") | Some("post-commit") => {
-            Ok(crate::daemon::DevqlTaskSource::PostCommit)
-        }
+        Some("post_commit") | Some("post-commit") => Ok(crate::daemon::DevqlTaskSource::PostCommit),
         Some("post_merge") | Some("post-merge") => Ok(crate::daemon::DevqlTaskSource::PostMerge),
         Some("post_checkout") | Some("post-checkout") => {
             Ok(crate::daemon::DevqlTaskSource::PostCheckout)
@@ -683,9 +683,7 @@ fn resolve_enqueue_task_input(
                         crate::host::devql::SyncMode::Paths(paths) => {
                             crate::daemon::SyncTaskMode::Paths { paths }
                         }
-                        crate::host::devql::SyncMode::Repair => {
-                            crate::daemon::SyncTaskMode::Repair
-                        }
+                        crate::host::devql::SyncMode::Repair => crate::daemon::SyncTaskMode::Repair,
                         crate::host::devql::SyncMode::Validate => {
                             crate::daemon::SyncTaskMode::Validate
                         }

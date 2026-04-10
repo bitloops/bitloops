@@ -2,10 +2,10 @@ use super::*;
 use crate::cli::{Cli, Commands};
 use crate::daemon::{
     CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
-    CapabilityEventRunStatus, DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, ServiceManagerKind, DevqlTaskKind,
+    CapabilityEventRunStatus, DaemonServiceMetadata, DaemonStatusReport, DevqlTaskKind,
     DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState, DevqlTaskQueueStatus,
-    DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, RepoTaskControlState,
+    DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, RepoTaskControlState, ServiceManagerKind,
     SyncTaskMode, SyncTaskSpec,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};

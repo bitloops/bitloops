@@ -56,7 +56,11 @@ fn sync_enqueue_command(
     })
 }
 
-fn queued_sync_task_payload(task_id: &str, mode: &str, paths: Option<Vec<&str>>) -> serde_json::Value {
+fn queued_sync_task_payload(
+    task_id: &str,
+    mode: &str,
+    paths: Option<Vec<&str>>,
+) -> serde_json::Value {
     json!({
         "taskId": task_id,
         "repoId": "repo-1",
@@ -340,13 +344,7 @@ fn devql_cli_parses_sync_enqueue_modes() {
     assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from([
-        "bitloops",
-        "devql",
-        "tasks",
-        "enqueue",
-        "--kind",
-        "sync",
-        "--repair",
+        "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--repair",
     ])
     .expect("devql task sync repair should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
@@ -366,13 +364,7 @@ fn devql_cli_parses_sync_enqueue_modes() {
     assert!(!sync.require_daemon);
 
     let parsed = Cli::try_parse_from([
-        "bitloops",
-        "devql",
-        "tasks",
-        "enqueue",
-        "--kind",
-        "sync",
-        "--full",
+        "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--full",
     ])
     .expect("devql task sync full should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
@@ -421,13 +413,7 @@ fn devql_cli_parses_sync_enqueue_modes() {
 #[test]
 fn devql_cli_parses_sync_enqueue_status_flag() {
     let parsed = Cli::try_parse_from([
-        "bitloops",
-        "devql",
-        "tasks",
-        "enqueue",
-        "--kind",
-        "sync",
-        "--status",
+        "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--status",
     ])
     .expect("devql task sync enqueue --status should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
@@ -496,10 +482,24 @@ fn devql_cli_rejects_conflicting_sync_enqueue_modes() {
             "--repair",
         ],
         vec![
-            "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--validate", "--repair",
+            "bitloops",
+            "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
+            "sync",
+            "--validate",
+            "--repair",
         ],
         vec![
-            "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--validate", "--full",
+            "bitloops",
+            "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
+            "sync",
+            "--validate",
+            "--full",
         ],
         vec![
             "bitloops",
@@ -1328,7 +1328,9 @@ fn devql_run_ingest_require_daemon_fails_without_bootstrap() {
                     .block_on(run(DevqlArgs {
                         command: Some(ingest_enqueue_command(true)),
                     }))
-                    .expect_err("devql task ingest enqueue --require-daemon should fail without a daemon");
+                    .expect_err(
+                        "devql task ingest enqueue --require-daemon should fail without a daemon",
+                    );
 
                 assert!(
                     err.to_string().contains("Bitloops daemon is not running"),
@@ -1582,9 +1584,7 @@ fn devql_run_sync_require_daemon_fails_without_bootstrap() {
             || {
                 let err = test_runtime()
                     .block_on(run(DevqlArgs {
-                        command: Some(sync_enqueue_command(
-                            false, None, false, false, false, true,
-                        )),
+                        command: Some(sync_enqueue_command(false, None, false, false, false, true)),
                     }))
                     .expect_err("devql sync --require-daemon should fail without a daemon");
 

@@ -718,12 +718,14 @@ async fn devql_mutations_initialise_schema_and_enqueue_ingest_with_typed_results
     let repository_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
         .expect("count repositories");
-    assert_eq!(repository_count, 0, "enqueueing should not execute ingest inline");
+    assert_eq!(
+        repository_count, 0,
+        "enqueueing should not execute ingest inline"
+    );
 }
 
 #[tokio::test]
 async fn enqueue_task_ingest_accepts_backfill_input() {
-
     let repo = seed_graphql_mutation_repo();
     fs::write(
         repo.path().join("src/lib.rs"),
@@ -781,7 +783,10 @@ async fn enqueue_task_ingest_accepts_backfill_input() {
         .into_json()
         .expect("graphql data to json");
     assert_eq!(enqueue_json["enqueueTask"]["task"]["kind"], "INGEST");
-    assert_eq!(enqueue_json["enqueueTask"]["task"]["ingestSpec"]["backfill"], 1);
+    assert_eq!(
+        enqueue_json["enqueueTask"]["task"]["ingestSpec"]["backfill"],
+        1
+    );
     assert_eq!(enqueue_json["enqueueTask"]["task"]["status"], "QUEUED");
 }
 
@@ -925,7 +930,11 @@ async fn graphql_sync_and_ingest_mutations_are_not_exposed() {
         ))
         .await;
 
-    assert_eq!(ingest_response.errors.len(), 1, "expected one graphql error");
+    assert_eq!(
+        ingest_response.errors.len(),
+        1,
+        "expected one graphql error"
+    );
     assert!(
         ingest_response.errors[0].message.contains("Unknown field")
             && ingest_response.errors[0].message.contains("ingest"),
@@ -1068,8 +1077,7 @@ async fn devql_mutations_report_validation_and_backend_errors() {
     if sqlite_file_path.exists() {
         fs::remove_file(&sqlite_file_path).expect("remove seeded sqlite file");
     }
-    fs::create_dir_all(&sqlite_file_path)
-        .expect("create directory in place of sqlite file");
+    fs::create_dir_all(&sqlite_file_path).expect("create directory in place of sqlite file");
     let backend_schema = slim_schema_for_repo(repo.path());
     let backend_error = backend_schema
         .execute(async_graphql::Request::new(

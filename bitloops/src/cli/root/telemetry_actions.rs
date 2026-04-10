@@ -776,12 +776,7 @@ mod telemetry_actions_unit_tests {
     #[test]
     fn telemetry_action_for_devql_tasks_enqueue_ingest_has_no_legacy_checkpoint_limit_property() {
         let cli = crate::cli::Cli::try_parse_from([
-            "bitloops",
-            "devql",
-            "tasks",
-            "enqueue",
-            "--kind",
-            "ingest",
+            "bitloops", "devql", "tasks", "enqueue", "--kind", "ingest",
         ])
         .expect("devql task enqueue should parse");
         let action = telemetry_action_for_command(

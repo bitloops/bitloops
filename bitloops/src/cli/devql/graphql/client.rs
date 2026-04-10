@@ -6,17 +6,17 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use super::documents::{
-    CANCEL_TASK_MUTATION, ENQUEUE_TASK_MUTATION, INIT_SCHEMA_MUTATION,
-    PAUSE_TASK_QUEUE_MUTATION, RESUME_TASK_QUEUE_MUTATION, TASK_QUERY, TASK_QUEUE_QUERY,
-    TASKS_QUERY,
+    CANCEL_TASK_MUTATION, ENQUEUE_TASK_MUTATION, INIT_SCHEMA_MUTATION, PAUSE_TASK_QUEUE_MUTATION,
+    RESUME_TASK_QUEUE_MUTATION, TASK_QUERY, TASK_QUEUE_QUERY, TASKS_QUERY,
 };
-use super::progress::{TASK_PROGRESS_POLL_INTERVAL, TASK_RENDER_TICK_INTERVAL, TaskProgressRenderer};
+use super::progress::{
+    TASK_PROGRESS_POLL_INTERVAL, TASK_RENDER_TICK_INTERVAL, TaskProgressRenderer,
+};
 use super::subscription::watch_task_via_subscription;
 use super::types::{
     CancelTaskMutationData, EnqueueTaskMutationData, InitSchemaMutationData,
-    PauseTaskQueueMutationData, ResumeTaskQueueMutationData, TaskGraphqlRecord,
-    TaskQueryData, TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord, TaskQueueQueryData,
-    TasksQueryData,
+    PauseTaskQueueMutationData, ResumeTaskQueueMutationData, TaskGraphqlRecord, TaskQueryData,
+    TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord, TaskQueueQueryData, TasksQueryData,
 };
 use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::format_init_schema_summary;
@@ -32,8 +32,7 @@ enum DaemonStartPolicy {
 type TaskDaemonBootstrapHook = dyn Fn(&Path) -> Result<()> + 'static;
 
 #[cfg(test)]
-type TaskDaemonBootstrapHookCell =
-    std::cell::RefCell<Option<std::rc::Rc<TaskDaemonBootstrapHook>>>;
+type TaskDaemonBootstrapHookCell = std::cell::RefCell<Option<std::rc::Rc<TaskDaemonBootstrapHook>>>;
 
 #[cfg(test)]
 thread_local! {
@@ -460,7 +459,10 @@ pub(crate) fn with_task_daemon_bootstrap_hook<T>(
     f: impl FnOnce() -> T,
 ) -> T {
     TASK_DAEMON_BOOTSTRAP_HOOK.with(|cell: &TaskDaemonBootstrapHookCell| {
-        assert!(cell.borrow().is_none(), "task daemon hook already installed");
+        assert!(
+            cell.borrow().is_none(),
+            "task daemon hook already installed"
+        );
         *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
     });
     let _guard = ThreadLocalHookGuard(clear_task_daemon_bootstrap_hook);

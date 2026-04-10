@@ -11,9 +11,9 @@ pub(crate) use self::client::with_graphql_executor_hook;
 #[cfg(test)]
 pub(crate) use self::client::with_ingest_daemon_bootstrap_hook;
 #[cfg(test)]
-pub(crate) use self::client::with_task_daemon_bootstrap_hook as with_ingest_daemon_runtime_hook;
-#[cfg(test)]
 pub(crate) use self::client::with_schema_sdl_fetch_hook;
+#[cfg(test)]
+pub(crate) use self::client::with_task_daemon_bootstrap_hook as with_ingest_daemon_runtime_hook;
 pub(crate) use self::client::{
     cancel_task_via_graphql, enqueue_ingest_task_via_graphql, enqueue_sync_task_via_graphql,
     execute_devql_graphql, fetch_global_schema_sdl_via_daemon, fetch_slim_schema_sdl_via_daemon,

@@ -1197,7 +1197,9 @@ fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_i
                                                 }));
                                             }
 
-                                            if query.contains("task(") || query.contains("query Task") {
+                                            if query.contains("task(")
+                                                || query.contains("query Task")
+                                            {
                                                 return Ok(serde_json::json!({
                                                     "task": null
                                                 }));

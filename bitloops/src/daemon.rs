@@ -73,9 +73,9 @@ pub use self::types::{
     DevqlTaskKind, DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState,
     DevqlTaskQueueStatus, DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskSpec,
     DevqlTaskStatus, EnrichmentQueueMode, EnrichmentQueueState, EnrichmentQueueStatus,
-    IngestTaskSpec, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
-    RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
-    SupervisorServiceMetadata, SyncTaskMode, SyncTaskSpec,
+    IngestTaskSpec, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, RepoTaskControlState,
+    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
+    SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -345,10 +345,7 @@ pub fn enqueue_ingest_for_config(
     )
 }
 
-pub fn pause_devql_tasks(
-    repo_id: &str,
-    reason: Option<String>,
-) -> Result<DevqlTaskControlResult> {
+pub fn pause_devql_tasks(repo_id: &str, reason: Option<String>) -> Result<DevqlTaskControlResult> {
     DevqlTaskCoordinator::shared().pause_repo(repo_id, reason)
 }
 
