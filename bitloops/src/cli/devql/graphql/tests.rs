@@ -1,7 +1,7 @@
 use crate::test_support::process_state::with_env_vars;
 
 use serde_json::json;
-use std::path::Path;
+use std::path::PathBuf;
 
 use super::progress::{format_live_task_progress_bar_line, format_live_task_status_line};
 use super::subscription::should_accept_invalid_daemon_websocket_certs;
@@ -91,10 +91,20 @@ fn sample_task_json(status: &str) -> serde_json::Value {
 }
 
 fn test_scope() -> crate::devql_transport::SlimCliRepoScope {
-    crate::devql_transport::discover_slim_cli_repo_scope(Some(Path::new(env!(
-        "CARGO_MANIFEST_DIR"
-    ))))
-    .expect("discover test repo scope")
+    crate::devql_transport::SlimCliRepoScope {
+        repo: crate::host::devql::RepoIdentity {
+            provider: "local".to_string(),
+            organization: "local".to_string(),
+            name: "bitloops".to_string(),
+            identity: "local://local/bitloops".to_string(),
+            repo_id: "repo-1".to_string(),
+        },
+        repo_root: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        branch_name: "main".to_string(),
+        project_path: None,
+        git_dir_relative_path: ".git".to_string(),
+        config_fingerprint: "test-config-fingerprint".to_string(),
+    }
 }
 
 #[test]
