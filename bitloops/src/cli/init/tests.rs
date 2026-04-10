@@ -3,6 +3,9 @@ use super::agent_hooks::{
 };
 use super::*;
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
+use crate::cli::embeddings::{
+    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
     with_test_assume_daemon_running, with_test_tty_override,
@@ -119,6 +122,12 @@ done
     ("sh".to_string(), vec![script_path.display().to_string()])
 }
 
+#[cfg(unix)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::path::PathBuf::from(args[0].clone())
+}
+
 #[cfg(windows)]
 fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-init-embeddings-runtime.ps1");
@@ -179,6 +188,25 @@ while (($line = $stdin.ReadLine()) -ne $null) {
             script_path.display().to_string(),
         ],
     )
+}
+
+#[cfg(windows)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let script_dir = repo_root.join(".bitloops/test-bin");
+    std::fs::create_dir_all(&script_dir).expect("create managed runtime dir");
+    let powershell_script = script_dir.join("fake-managed-init-embeddings-runtime.ps1");
+    let launcher = script_dir.join("fake-managed-init-embeddings-runtime.cmd");
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
+    std::fs::write(
+        &launcher,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+            powershell_script.display()
+        ),
+    )
+    .expect("write managed runtime launcher");
+    launcher
 }
 
 fn write_runtime_only_daemon_config(config_path: &Path, command: &str, args: &[String]) {
@@ -620,7 +648,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
             },
             || {
                 let mut out = Vec::new();
-                let mut input = Cursor::new("\n");
+                let mut input = Cursor::new("\nn\n");
                 let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
                 let runtime = test_runtime();
                 runtime
@@ -791,9 +819,86 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
 }
 
 #[test]
+fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, true, true, || {
+        let config_path = ensure_daemon_config_exists().expect("create default daemon config");
+        write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+
+        with_global_graphql_executor_hook(
+            |_runtime_root, _query, variables| {
+                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                Ok(serde_json::json!({
+                    "updateCliTelemetryConsent": {
+                        "telemetry": false,
+                        "needsPrompt": false
+                    }
+                }))
+            },
+            || {
+                with_managed_embeddings_install_hook(
+                    move |repo_root| {
+                        Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                            version: "v0.1.0".to_string(),
+                            binary_path: fake_managed_runtime_path(repo_root),
+                            freshly_installed: true,
+                        })
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("\n");
+                        let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    install_default_daemon: false,
+                                    force: false,
+                                    agent: None,
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                Some(&select),
+                            ))
+                            .expect("run init");
+
+                        let rendered = String::from_utf8(out).expect("utf8 output");
+                        assert!(rendered.contains("Install local embeddings as well?"));
+                        assert!(rendered.contains("Install embeddings now? (Y/n)"));
+                        assert!(rendered.contains("> "));
+                        assert!(rendered.contains("Preparing local embeddings setup..."));
+                        assert!(rendered.contains(
+                            "This can take a moment if the managed runtime needs to be downloaded."
+                        ));
+                        assert!(rendered.contains("Installed managed standalone"));
+                        assert!(rendered.contains("Pulled embedding profile `local_code`."));
+
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(daemon_config).expect("read daemon config");
+                        assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                        assert!(daemon_config.contains("[inference.profiles.local_code]"));
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
 fn run_init_with_install_default_daemon_auto_installs_embeddings() {
     let repo = tempfile::tempdir().unwrap();
-    let repo_root = repo.path().to_path_buf();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
@@ -803,8 +908,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                 assert!(install_default_daemon);
                 let config_path =
                     ensure_daemon_config_exists().expect("create default daemon config");
-                let (command, args) = fake_runtime_command_and_args(&repo_root);
-                write_runtime_only_daemon_config(&config_path, &command, &args);
+                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
                 Ok(())
             },
             || {
@@ -819,46 +923,66 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                         }))
                     },
                     || {
-                        let mut out = Vec::new();
-                        let mut input = Cursor::new("");
-                        let runtime = test_runtime();
-                        runtime
-                            .block_on(run_with_io_async_for_project_root(
-                                InitArgs {
-                                    install_default_daemon: true,
-                                    force: false,
-                                    agent: None,
-                                    telemetry: Some(false),
-                                    no_telemetry: false,
-                                    skip_baseline: false,
-                                    sync: Some(false),
-                                    ingest: Some(false),
-                                    backfill: None,
-                                },
-                                repo.path(),
-                                &mut out,
-                                &mut input,
-                                None,
-                            ))
-                            .expect("run init");
+                        with_managed_embeddings_install_hook(
+                            move |repo_root| {
+                                Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                                    version: "v0.1.0".to_string(),
+                                    binary_path: fake_managed_runtime_path(repo_root),
+                                    freshly_installed: true,
+                                })
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            install_default_daemon: true,
+                                            force: false,
+                                            agent: None,
+                                            telemetry: Some(false),
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: Some(false),
+                                            ingest: Some(false),
+                                            backfill: None,
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        None,
+                                    ))
+                                    .expect("run init");
 
-                        let rendered = String::from_utf8(out).expect("utf8 output");
-                        assert!(rendered.contains("Pulled embedding profile `local_code`."));
-                        let config = std::fs::read_to_string(
-                            repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
-                        )
-                        .unwrap_or_else(|_| String::new());
-                        assert!(
-                            config.is_empty(),
-                            "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(rendered.contains("Preparing local embeddings setup..."));
+                                assert!(rendered.contains(
+                                    "This can take a moment if the managed runtime needs to be downloaded."
+                                ));
+                                assert!(rendered.contains("Installed managed standalone"));
+                                assert!(
+                                    rendered.contains("Pulled embedding profile `local_code`.")
+                                );
+                                let config = std::fs::read_to_string(
+                                    repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+                                )
+                                .unwrap_or_else(|_| String::new());
+                                assert!(
+                                    config.is_empty(),
+                                    "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                                );
+                                let daemon_config = ensure_daemon_config_exists()
+                                    .expect("resolve daemon config after init");
+                                let daemon_config = std::fs::read_to_string(daemon_config)
+                                    .expect("read daemon config");
+                                assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                                assert!(daemon_config.contains("[inference.profiles.local_code]"));
+                                assert!(
+                                    daemon_config.contains("driver = \"bitloops_embeddings_ipc\"")
+                                );
+                            },
                         );
-                        let daemon_config = ensure_daemon_config_exists()
-                            .expect("resolve daemon config after init");
-                        let daemon_config =
-                            std::fs::read_to_string(daemon_config).expect("read daemon config");
-                        assert!(daemon_config.contains("code_embeddings = \"local_code\""));
-                        assert!(daemon_config.contains("[inference.profiles.local_code]"));
-                        assert!(daemon_config.contains("driver = \"bitloops_embeddings_ipc\""));
                     },
                 );
             },
@@ -1051,6 +1175,9 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                         None,
                                     ))
                                     .expect("run init");
+
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(rendered.contains("Starting initial DevQL ingest..."));
                             },
                         )
                     },

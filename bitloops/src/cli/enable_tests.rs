@@ -4,6 +4,9 @@ use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::cli::embeddings::{
+    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
 };
@@ -67,11 +70,17 @@ fn with_isolated_daemon_config_process_state<T>(
     f: impl FnOnce() -> T,
 ) -> T {
     let config_dir = tempfile::tempdir().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
     let config_dir_value = config_dir.path().to_string_lossy().into_owned();
+    let data_dir_value = data_dir.path().to_string_lossy().into_owned();
     let mut env = Vec::with_capacity(extra_env.len() + 1);
     env.push((
         "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
         Some(config_dir_value.as_str()),
+    ));
+    env.push((
+        "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+        Some(data_dir_value.as_str()),
     ));
     env.extend_from_slice(extra_env);
     with_process_state(cwd, &env, f)
@@ -160,6 +169,12 @@ done
     ("sh".to_string(), vec![script_path.display().to_string()])
 }
 
+#[cfg(unix)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::path::PathBuf::from(args[0].clone())
+}
+
 #[cfg(windows)]
 fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-enable-embeddings-runtime.ps1");
@@ -220,6 +235,25 @@ while (($line = $stdin.ReadLine()) -ne $null) {
             script_path.display().to_string(),
         ],
     )
+}
+
+#[cfg(windows)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let script_dir = repo_root.join(".bitloops/test-bin");
+    fs::create_dir_all(&script_dir).expect("create managed runtime dir");
+    let powershell_script = script_dir.join("fake-managed-enable-embeddings-runtime.ps1");
+    let launcher = script_dir.join("fake-managed-enable-embeddings-runtime.cmd");
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
+    fs::write(
+        &launcher,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+            powershell_script.display()
+        ),
+    )
+    .expect("write managed runtime launcher");
+    launcher
 }
 
 fn write_runtime_only_daemon_config(command: &str, args: &[String]) {
@@ -1024,8 +1058,7 @@ enabled = false
             ("BITLOOPS_TEST_TTY", Some("1")),
         ],
         || {
-            let (command, args) = fake_runtime_command_and_args(repo.path());
-            write_runtime_only_daemon_config(&command, &args);
+            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
 
             with_global_graphql_executor_hook(
                 |_runtime_root, _query, _variables| {
@@ -1037,33 +1070,45 @@ enabled = false
                     }))
                 },
                 || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("\n");
-                    let runtime = test_runtime();
-                    runtime
-                        .block_on(run_with_io(
-                            EnableArgs {
-                                local: false,
-                                project: false,
-                                force: false,
-                                agent: None,
-                                telemetry: None,
-                                no_telemetry: false,
-                                install_embeddings: false,
-                            },
-                            &mut out,
-                            &mut input,
-                        ))
-                        .expect("run enable");
+                    with_managed_embeddings_install_hook(
+                        move |repo_root| {
+                            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                                version: "v0.1.0".to_string(),
+                                binary_path: fake_managed_runtime_path(repo_root),
+                                freshly_installed: true,
+                            })
+                        },
+                        || {
+                            let mut out = Vec::new();
+                            let mut input = Cursor::new("\n");
+                            let runtime = test_runtime();
+                            runtime
+                                .block_on(run_with_io(
+                                    EnableArgs {
+                                        local: false,
+                                        project: false,
+                                        force: false,
+                                        agent: None,
+                                        telemetry: None,
+                                        no_telemetry: false,
+                                        install_embeddings: false,
+                                    },
+                                    &mut out,
+                                    &mut input,
+                                ))
+                                .expect("run enable");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(rendered.contains("Install embeddings now? [Y/n]"));
-                    assert!(rendered.contains("Pulled embedding profile `local_code`."));
-                    let daemon_config = fs::read_to_string(
-                        default_daemon_config_path().expect("daemon config path"),
-                    )
-                    .expect("read daemon config");
-                    assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                            let rendered = String::from_utf8(out).expect("utf8 output");
+                            assert!(rendered.contains("Install embeddings now? [Y/n]"));
+                            assert!(rendered.contains("Installed managed standalone"));
+                            assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                            let daemon_config = fs::read_to_string(
+                                default_daemon_config_path().expect("daemon config path"),
+                            )
+                            .expect("read daemon config");
+                            assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                        },
+                    );
                 },
             );
         },
@@ -1090,31 +1135,42 @@ enabled = false
             }
         }),
         || {
-            let (command, args) = fake_runtime_command_and_args(repo.path());
-            write_runtime_only_daemon_config(&command, &args);
+            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
 
-            let mut out = Vec::new();
-            let mut input = Cursor::new("");
-            let runtime = test_runtime();
-            runtime
-                .block_on(run_with_io(
-                    EnableArgs {
-                        local: false,
-                        project: false,
-                        force: false,
-                        agent: None,
-                        telemetry: None,
-                        no_telemetry: false,
-                        install_embeddings: true,
-                    },
-                    &mut out,
-                    &mut input,
-                ))
-                .expect("run enable");
+            with_managed_embeddings_install_hook(
+                move |repo_root| {
+                    Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                        version: "v0.1.0".to_string(),
+                        binary_path: fake_managed_runtime_path(repo_root),
+                        freshly_installed: true,
+                    })
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = test_runtime();
+                    runtime
+                        .block_on(run_with_io(
+                            EnableArgs {
+                                local: false,
+                                project: false,
+                                force: false,
+                                agent: None,
+                                telemetry: None,
+                                no_telemetry: false,
+                                install_embeddings: true,
+                            },
+                            &mut out,
+                            &mut input,
+                        ))
+                        .expect("run enable");
 
-            let rendered = String::from_utf8(out).expect("utf8 output");
-            assert!(!rendered.contains("Install embeddings now? [Y/n]"));
-            assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(!rendered.contains("Install embeddings now? [Y/n]"));
+                    assert!(rendered.contains("Installed managed standalone"));
+                    assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                },
+            );
         },
     );
 }

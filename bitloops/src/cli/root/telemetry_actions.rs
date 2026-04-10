@@ -652,6 +652,9 @@ fn embeddings_action(
     args: &crate::cli::embeddings::EmbeddingsArgs,
 ) -> Option<crate::telemetry::analytics::ActionDescriptor> {
     match args.command.as_ref()? {
+        crate::cli::embeddings::EmbeddingsCommand::Install(_) => {
+            Some(new_action("bitloops embeddings install", HashMap::new()))
+        }
         crate::cli::embeddings::EmbeddingsCommand::Pull(_) => {
             Some(new_action("bitloops embeddings pull", HashMap::new()))
         }

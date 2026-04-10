@@ -404,6 +404,12 @@ pub(crate) fn prepare_daemon_embeddings_install(
 
         let runtimes = ensure_child_table(inference, "runtimes");
         let runtime = ensure_child_table(runtimes, BITLOOPS_EMBEDDINGS_RUNTIME_ID);
+        let current_runtime_command = runtime
+            .get("command")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .map(ToOwned::to_owned);
         if runtime
             .get("command")
             .and_then(Item::as_value)
@@ -413,7 +419,20 @@ pub(crate) fn prepare_daemon_embeddings_install(
             runtime["command"] = Item::Value("bitloops-embeddings".into());
             modified = true;
         }
-        if !runtime.get("args").is_some_and(Item::is_value) {
+
+        let manages_default_args = current_runtime_command.is_none()
+            || matches!(
+                current_runtime_command.as_deref(),
+                Some("") | Some("bitloops-embeddings") | Some("bitloops-embeddings.exe")
+            );
+        let runtime_args_are_empty = runtime
+            .get("args")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_array())
+            .is_some_and(|value| value.is_empty());
+        if (manages_default_args && !runtime_args_are_empty)
+            || !runtime.get("args").is_some_and(Item::is_value)
+        {
             runtime["args"] = Item::Value(TomlValue::Array(Array::new()));
             modified = true;
         }
@@ -741,5 +760,38 @@ local_path = "stores/blob"
         assert!(dir.path().join("stores/relational/relational.db").is_file());
         assert!(dir.path().join("stores/event/events.duckdb").is_file());
         assert!(dir.path().join("stores/blob").is_dir());
+    }
+
+    #[test]
+    fn prepare_daemon_embeddings_install_clears_stale_default_runtime_args() {
+        let config = NamedTempFile::new().expect("create temp config");
+        fs::write(
+            config.path(),
+            r#"
+[runtime]
+local_dev = false
+
+[inference.runtimes.bitloops_embeddings]
+command = "bitloops-embeddings"
+args = ["-B", "-m", "bitloops_embeddings"]
+startup_timeout_secs = 60
+request_timeout_secs = 300
+"#,
+        )
+        .expect("write temp config");
+
+        let plan =
+            prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
+        assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
+
+        let rendered = fs::read_to_string(config.path()).expect("read updated config");
+        assert!(
+            rendered.contains("args = []"),
+            "expected args reset:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("\"-B\""),
+            "expected stale python-style args removed:\n{rendered}"
+        );
     }
 }

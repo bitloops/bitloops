@@ -422,15 +422,15 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
         let mut session = self
             .session
             .lock()
-            .map_err(|_| anyhow!("python embeddings session mutex was poisoned"))?;
+            .map_err(|_| anyhow!("standalone embeddings runtime session mutex was poisoned"))?;
         match session.embed(&texts) {
             Ok(mut vectors) => {
                 let vector = vectors
                     .drain(..)
                     .next()
-                    .ok_or_else(|| anyhow!("python embeddings daemon returned no vectors"))?;
+                    .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))?;
                 if vector.is_empty() {
-                    bail!("python embeddings daemon returned an empty vector");
+                    bail!("standalone embeddings runtime returned an empty vector");
                 }
                 Ok(vector)
             }
@@ -438,26 +438,26 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
                 *session =
                     PythonEmbeddingsSession::start(&self.session_config).with_context(|| {
                         format!(
-                            "restarting python embeddings daemon for profile `{}` after failure",
+                            "restarting standalone `bitloops-embeddings` runtime for profile `{}` after failure",
                             self.profile_name
                         )
                     })?;
                 let mut vectors = session.embed(&texts).with_context(|| {
                     format!(
-                        "retrying python embeddings daemon request for profile `{}`",
+                        "retrying standalone `bitloops-embeddings` runtime request for profile `{}`",
                         self.profile_name
                     )
                 })?;
                 let vector = vectors
                     .drain(..)
                     .next()
-                    .ok_or_else(|| anyhow!("python embeddings daemon returned no vectors"))?;
+                    .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))?;
                 if vector.is_empty() {
-                    bail!("python embeddings daemon returned an empty vector");
+                    bail!("standalone embeddings runtime returned an empty vector");
                 }
                 if vector.len() != self.output_dimension {
                     bail!(
-                        "python embeddings daemon returned dimension {} but expected {} after restart; initial failure: {first_err:#}",
+                        "standalone embeddings runtime returned dimension {} but expected {} after restart; initial failure: {first_err:#}",
                         vector.len(),
                         self.output_dimension
                     );
@@ -500,18 +500,18 @@ impl PythonEmbeddingsSession {
 
         let mut child = command.spawn().with_context(|| {
             format!(
-                "spawning python embeddings runtime `{}` for model `{}`",
+                "spawning standalone `bitloops-embeddings` runtime `{}` for model `{}`",
                 config.command, config.model
             )
         })?;
         let stdin = child
             .stdin
             .take()
-            .context("capturing python embeddings daemon stdin")?;
+            .context("capturing standalone embeddings runtime stdin")?;
         let stdout = child
             .stdout
             .take()
-            .context("capturing python embeddings daemon stdout")?;
+            .context("capturing standalone embeddings runtime stdout")?;
         let mut session = Self {
             config: config.clone(),
             child,
@@ -537,9 +537,9 @@ impl PythonEmbeddingsSession {
         let vectors = self.embed(&texts)?;
         let vector = vectors
             .first()
-            .ok_or_else(|| anyhow!("python embeddings daemon returned no probe vector"))?;
+            .ok_or_else(|| anyhow!("standalone embeddings runtime returned no probe vector"))?;
         if vector.is_empty() {
-            bail!("python embeddings daemon returned an empty probe vector");
+            bail!("standalone embeddings runtime returned an empty probe vector");
         }
         Ok(vector.len())
     }
@@ -556,32 +556,34 @@ impl PythonEmbeddingsSession {
         let _timeout = self.config.request_timeout_secs;
         let value = self.read_json_line()?;
         if value.get("id").and_then(Value::as_str) != Some(request_id.as_str()) {
-            bail!("python embeddings daemon returned mismatched request id");
+            bail!("standalone embeddings runtime returned mismatched request id");
         }
         if value.get("ok").and_then(Value::as_bool) != Some(true) {
             let message = value
                 .pointer("/error/message")
                 .and_then(Value::as_str)
-                .unwrap_or("unknown python embeddings daemon error");
+                .unwrap_or("unknown standalone embeddings runtime error");
             bail!("{message}");
         }
 
         let vectors = value
             .get("vectors")
             .and_then(Value::as_array)
-            .ok_or_else(|| anyhow!("python embeddings daemon response did not include vectors"))?;
+            .ok_or_else(|| {
+                anyhow!("standalone embeddings runtime response did not include vectors")
+            })?;
         let mut out = Vec::with_capacity(vectors.len());
         for vector in vectors {
-            let values = vector
-                .as_array()
-                .ok_or_else(|| anyhow!("python embeddings daemon returned a non-array vector"))?;
+            let values = vector.as_array().ok_or_else(|| {
+                anyhow!("standalone embeddings runtime returned a non-array vector")
+            })?;
             let mut row = Vec::with_capacity(values.len());
             for value in values {
                 let Some(number) = value.as_f64() else {
-                    bail!("python embeddings daemon returned a non-numeric embedding value");
+                    bail!("standalone embeddings runtime returned a non-numeric embedding value");
                 };
                 if !number.is_finite() {
-                    bail!("python embeddings daemon returned a non-finite embedding value");
+                    bail!("standalone embeddings runtime returned a non-finite embedding value");
                 }
                 row.push(number as f32);
             }
@@ -602,12 +604,12 @@ impl PythonEmbeddingsSession {
     }
 
     fn write_json_line(&mut self, value: &Value) -> Result<()> {
-        let line =
-            serde_json::to_string(value).context("serializing python embeddings daemon request")?;
-        writeln!(self.stdin, "{line}").context("writing python embeddings daemon request")?;
+        let line = serde_json::to_string(value)
+            .context("serializing standalone embeddings runtime request")?;
+        writeln!(self.stdin, "{line}").context("writing standalone embeddings runtime request")?;
         self.stdin
             .flush()
-            .context("flushing python embeddings daemon request")
+            .context("flushing standalone embeddings runtime request")
     }
 
     fn read_json_line(&mut self) -> Result<Value> {
@@ -615,11 +617,12 @@ impl PythonEmbeddingsSession {
         let bytes = self
             .reader
             .read_line(&mut line)
-            .context("reading python embeddings daemon response")?;
+            .context("reading standalone embeddings runtime response")?;
         if bytes == 0 {
-            bail!("python embeddings daemon exited before replying");
+            bail!("standalone embeddings runtime exited before replying");
         }
-        serde_json::from_str(line.trim_end()).context("parsing python embeddings daemon response")
+        serde_json::from_str(line.trim_end())
+            .context("parsing standalone embeddings runtime response")
     }
 }
 
