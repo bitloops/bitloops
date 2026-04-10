@@ -33,6 +33,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -51,9 +52,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       - name: Compile test targets
-        run: cargo test -p bitloops --no-default-features
+        run: cargo nextest run -p bitloops --no-default-features --profile ci --no-run
 
   test-full:
     name: Full test suite
@@ -64,6 +66,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
         with:

@@ -49,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Testing Migrated to nextest**: moved from cargo test to cargo nextest for faster and more targeted testing
 - **Breaking — semantic inference configuration is now slot-based**: replaced legacy `[semantic]`, `[embeddings]`, and `semantic_clones.{summary_profile, embedding_profile}` configuration with unified `[inference]` runtimes/profiles plus `[semantic_clones.inference]` slot bindings. Production runtime selection now belongs entirely to the host layer.
 - **Semantic-clone enrichment now runs through the capability host**: DevQL ingest, current-state sync projection, semantic-clone health checks, and daemon enrichment now resolve slot-scoped host inference/config surfaces and execute semantic summary refresh, symbol embedding refresh, and clone-edge rebuild via `DevqlCapabilityHost` ingesters instead of constructing semantic-clone providers directly in host and daemon runtime paths.
 - **Inference and embeddings documentation refreshed**: updated the changelog-adjacent docs, configuration reference, CLI reference, DevQL guidance, storage guidance, quick-start material, and `RUN.md` examples so they describe the unified `[inference]` configuration model, `semantic_clones.inference` slot bindings, and the standalone `bitloops-embeddings` IPC runtime.

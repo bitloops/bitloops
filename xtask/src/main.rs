@@ -27,7 +27,6 @@ const MERGE_SMOKE_TARGETS: &[&str] = &[
     "graphql_smoke",
 ];
 const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
-const DEFAULT_FAST_TEST_THREADS: u64 = 8;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -131,15 +130,13 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
     let workspace_root = workspace_root()?;
     let lane_commands = test_lane_command_groups(lane)?;
     let test_threads = test_threads_for_lane(lane)?;
+    let profile_args = nextest_profile_args();
 
     if should_sign() {
         let mut compiled_binaries = BTreeSet::new();
         for lane_args in &lane_commands {
-            let mut compile_args = lane_args.clone();
-            compile_args.push("--no-run".to_string());
-            compile_args.push("--message-format=json-render-diagnostics".to_string());
-
-            for binary in collect_test_binaries(&workspace_root, &compile_args)? {
+            let list_args = nextest_list_args(lane_args, &profile_args)?;
+            for binary in collect_test_binaries(&workspace_root, &list_args)? {
                 compiled_binaries.insert(binary);
             }
         }
@@ -150,13 +147,11 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
 
     for lane_args in lane_commands {
         let mut run_args = lane_args;
-        run_args.push("--".to_string());
-        run_args.push("--format=terse".to_string());
+        run_args.extend(profile_args.clone());
         if let Some(test_threads) = test_threads {
             run_args.push(format!("--test-threads={test_threads}"));
         }
-        let mut command = vec!["cargo".to_string()];
-        command.extend(run_args.iter().cloned());
+        let command = prepend_cargo(&run_args);
         run_command_owned(
             &workspace_root,
             &format!("cargo {}", run_args.join(" ")),
@@ -267,15 +262,46 @@ fn llvm_cov_report_html_display_command(html_dir: &str) -> String {
     )
 }
 
-fn parse_test_binary_json_line(line: &str) -> Option<PathBuf> {
-    let json = serde_json::from_str::<Value>(line).ok()?;
-    let executable = json.get("executable")?.as_str()?;
-    let is_test_profile = json.get("profile")?.get("test")?.as_bool().unwrap_or(false);
-    if is_test_profile {
-        Some(PathBuf::from(executable))
-    } else {
-        None
+fn collect_nextest_binary_paths(value: &Value, out: &mut BTreeSet<PathBuf>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if matches!(key.as_str(), "binary-path" | "binary_path")
+                    && let Some(path) = child.as_str()
+                {
+                    out.insert(PathBuf::from(path));
+                }
+                collect_nextest_binary_paths(child, out);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                collect_nextest_binary_paths(child, out);
+            }
+        }
+        _ => {}
     }
+}
+
+fn parse_nextest_binary_paths(output: &str) -> Vec<PathBuf> {
+    let mut binaries = BTreeSet::new();
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
+        collect_nextest_binary_paths(&json, &mut binaries);
+        return binaries.into_iter().collect();
+    }
+
+    for line in trimmed.lines() {
+        if let Ok(json) = serde_json::from_str::<Value>(line) {
+            collect_nextest_binary_paths(&json, &mut binaries);
+        }
+    }
+
+    binaries.into_iter().collect()
 }
 
 fn otool_list_output_links_libduckdb(text: &str) -> bool {
@@ -512,10 +538,10 @@ fn print_coverage_comparison(
 
 fn base_test_lane_args() -> Vec<String> {
     vec![
-        "test".to_string(),
+        "nextest".to_string(),
+        "run".to_string(),
         "--manifest-path".to_string(),
         BITLOOPS_MANIFEST.to_string(),
-        "--no-fail-fast".to_string(),
         "--no-default-features".to_string(),
     ]
 }
@@ -579,7 +605,7 @@ fn test_threads_for_lane(lane: &str) -> Result<Option<u64>, String> {
         Ok(value) => {
             let trimmed = value.trim();
             if trimmed.is_empty() {
-                return Ok(Some(DEFAULT_FAST_TEST_THREADS));
+                return Ok(None);
             }
 
             let parsed = trimmed
@@ -590,8 +616,37 @@ fn test_threads_for_lane(lane: &str) -> Result<Option<u64>, String> {
             }
             Ok(Some(parsed))
         }
-        Err(_) => Ok(Some(DEFAULT_FAST_TEST_THREADS)),
+        Err(_) => Ok(None),
     }
+}
+
+fn nextest_profile_args() -> Vec<String> {
+    if env::var("GITHUB_ACTIONS")
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        vec!["--profile".to_string(), "ci".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+fn nextest_list_args(run_args: &[String], profile_args: &[String]) -> Result<Vec<String>, String> {
+    let mut args = run_args.to_vec();
+    if args.get(0).map(String::as_str) != Some("nextest")
+        || args.get(1).map(String::as_str) != Some("run")
+    {
+        return Err("expected nextest run arguments for test lane".to_string());
+    }
+    args[1] = "list".to_string();
+    args.extend_from_slice(profile_args);
+    args.push("--list-type".to_string());
+    args.push("binaries-only".to_string());
+    args.push("--message-format".to_string());
+    args.push("json".to_string());
+    args.push("--cargo-message-format".to_string());
+    args.push("json-render-diagnostics".to_string());
+    Ok(args)
 }
 
 fn collect_test_binaries(cwd: &Path, args: &[String]) -> Result<Vec<PathBuf>, String> {
@@ -603,20 +658,15 @@ fn collect_test_binaries(cwd: &Path, args: &[String]) -> Result<Vec<PathBuf>, St
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()
-        .map_err(|err| format!("failed to start cargo test compile step: {err}"))?;
+        .map_err(|err| format!("failed to start cargo nextest list step: {err}"))?;
 
     if !output.status.success() {
-        return Err("command failed: cargo test compile step".to_string());
+        return Err("command failed: cargo nextest list step".to_string());
     }
 
-    let mut binaries = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some(path) = parse_test_binary_json_line(line) {
-            binaries.insert(path);
-        }
-    }
-
-    Ok(binaries.into_iter().collect())
+    Ok(parse_nextest_binary_paths(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
 }
 
 fn should_sign() -> bool {
@@ -982,6 +1032,7 @@ fn is_gitignored(file: &Path, git_toplevel: Option<&Path>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::env;
     use std::fs;
     use std::io::Write;
@@ -991,15 +1042,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BITLOOPS_MANIFEST, DEFAULT_FAST_TEST_THREADS, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS,
-        SLOW_TEST_TARGETS, collect_rs_files, count_lines, env_u64, is_regression, is_test_file,
-        llvm_cov_lcov_cargo_args, llvm_cov_lcov_display_command, llvm_cov_report_html_cargo_args,
-        llvm_cov_report_html_display_command, otool_list_output_links_libduckdb,
-        otool_load_output_contains_rpath, parse_compare_options, parse_coverage_all_paths,
-        parse_f64_flag, parse_lcov_metrics, parse_lcov_path, parse_test_binary_json_line,
-        parse_u64_value, percentage, prepend_cargo, read_lcov_metrics, resolve_workspace_path,
-        run_file_size_check, test_lane_args, test_lane_command_groups, test_threads_for_lane,
-        unknown_coverage_subcommand_error, workspace_root,
+        BITLOOPS_MANIFEST, DEFAULT_LCOV_PATH, MERGE_SMOKE_TARGETS, SLOW_TEST_TARGETS,
+        collect_nextest_binary_paths, collect_rs_files, count_lines, env_u64, is_regression,
+        is_test_file, llvm_cov_lcov_cargo_args, llvm_cov_lcov_display_command,
+        llvm_cov_report_html_cargo_args, llvm_cov_report_html_display_command,
+        otool_list_output_links_libduckdb, otool_load_output_contains_rpath, parse_compare_options,
+        parse_coverage_all_paths, parse_f64_flag, parse_lcov_metrics, parse_lcov_path,
+        parse_nextest_binary_paths, parse_u64_value, percentage, prepend_cargo, read_lcov_metrics,
+        resolve_workspace_path, run_file_size_check, test_lane_args, test_lane_command_groups,
+        test_threads_for_lane, unknown_coverage_subcommand_error, workspace_root,
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -1181,16 +1232,13 @@ mod tests {
     }
 
     #[test]
-    fn fast_lane_uses_eight_threads_by_default_and_allows_override() {
+    fn fast_lane_uses_profile_defaults_and_allows_override() {
         let _g = ENV_LOCK.lock().expect("env lock");
         unsafe {
             env::remove_var("BITLOOPS_TEST_THREADS");
         }
 
-        assert_eq!(
-            test_threads_for_lane("fast").unwrap(),
-            Some(DEFAULT_FAST_TEST_THREADS)
-        );
+        assert_eq!(test_threads_for_lane("fast").unwrap(), None);
         assert_eq!(test_threads_for_lane("smoke").unwrap(), None);
 
         unsafe {
@@ -1213,13 +1261,55 @@ mod tests {
     }
 
     #[test]
+    fn nextest_profile_args_use_ci_on_github_actions() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        unsafe {
+            env::remove_var("GITHUB_ACTIONS");
+        }
+        assert!(super::nextest_profile_args().is_empty());
+
+        unsafe {
+            env::set_var("GITHUB_ACTIONS", "true");
+        }
+        assert_eq!(
+            super::nextest_profile_args(),
+            vec!["--profile".to_string(), "ci".to_string()]
+        );
+
+        unsafe {
+            env::remove_var("GITHUB_ACTIONS");
+        }
+    }
+
+    #[test]
+    fn nextest_list_args_swap_run_for_list_and_append_machine_output() {
+        let args = vec![
+            "nextest".to_string(),
+            "run".to_string(),
+            "--manifest-path".to_string(),
+            BITLOOPS_MANIFEST.to_string(),
+            "--no-default-features".to_string(),
+            "--lib".to_string(),
+        ];
+        let out = super::nextest_list_args(&args, &["--profile".to_string(), "ci".to_string()])
+            .expect("list args");
+        assert_eq!(out[0], "nextest");
+        assert_eq!(out[1], "list");
+        assert!(out.contains(&"--profile".to_string()));
+        assert!(out.contains(&"ci".to_string()));
+        assert!(out.contains(&"--list-type".to_string()));
+        assert!(out.contains(&"binaries-only".to_string()));
+        assert!(out.contains(&"json-render-diagnostics".to_string()));
+    }
+
+    #[test]
     fn test_lane_args_builds_expected_fragments() {
         let base = || {
             vec![
-                "test".to_string(),
+                "nextest".to_string(),
+                "run".to_string(),
                 "--manifest-path".to_string(),
                 BITLOOPS_MANIFEST.to_string(),
-                "--no-fail-fast".to_string(),
                 "--no-default-features".to_string(),
             ]
         };
@@ -1434,18 +1524,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_test_binary_json_line_filters_executable() {
-        let line = r#"{"executable":"/tmp/t","profile":{"test":true}}"#;
+    fn parse_nextest_binary_paths_extracts_binary_paths() {
+        let line =
+            r#"{"rust-suites":[{"binary-id":"bitloops::tests/graphql","binary-path":"/tmp/t"}]}"#;
         assert_eq!(
-            parse_test_binary_json_line(line),
-            Some(PathBuf::from("/tmp/t"))
+            parse_nextest_binary_paths(line),
+            vec![PathBuf::from("/tmp/t")]
         );
-        assert!(parse_test_binary_json_line(r#"{"profile":{"test":true}}"#).is_none());
         assert!(
-            parse_test_binary_json_line(r#"{"executable":"/x","profile":{"test":false}}"#)
-                .is_none()
+            parse_nextest_binary_paths(
+                r#"{"rust-suites":[{"binary_path":"/tmp/a"},{"binary-path":"/tmp/b"}]}"#
+            )
+            .contains(&PathBuf::from("/tmp/a"))
         );
-        assert!(parse_test_binary_json_line("not json").is_none());
+        assert_eq!(
+            parse_nextest_binary_paths("not json"),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn collect_nextest_binary_paths_walks_nested_json() {
+        let json = serde_json::json!({
+            "outer": {
+                "binary-path": "/tmp/one",
+                "items": [
+                    {"binary_path": "/tmp/two"},
+                    {"ignored": true}
+                ]
+            }
+        });
+        let mut out = BTreeSet::new();
+        collect_nextest_binary_paths(&json, &mut out);
+        assert_eq!(
+            out.into_iter().collect::<Vec<_>>(),
+            vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")]
+        );
     }
 
     #[test]
