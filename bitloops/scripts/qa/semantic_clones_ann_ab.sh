@@ -171,7 +171,7 @@ calc_stats() {
 speedup_percent() {
   local baseline_ms="$1"
   local improved_ms="$2"
-  awk -v baseline="$baseline_ms" -v improved="$improved_ms" '
+  LC_ALL=C awk -v baseline="$baseline_ms" -v improved="$improved_ms" '
     BEGIN {
       if (baseline <= 0) {
         printf "0.00"
