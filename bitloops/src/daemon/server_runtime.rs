@@ -122,6 +122,7 @@ pub(super) async fn run_server(
             shutdown_message: Some("Bitloops daemon stopped.".to_string()),
             on_ready: Some(ready_hook),
             on_shutdown: Some(on_shutdown),
+            config_path: Some(daemon_config.config_path.clone()),
             config_root: Some(config_root),
             repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
         },

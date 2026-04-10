@@ -164,9 +164,15 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
         log_level: file.logging.level.unwrap_or_default(),
     };
 
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let canonical_root = canonical_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(root.clone());
+
     Ok(LoadedDaemonSettings {
-        path,
-        root,
+        path: canonical_path,
+        root: canonical_root,
         settings: UnifiedSettings {
             enabled: None,
             strategy: None,
@@ -756,7 +762,12 @@ local_path = "stores/blob"
         let returned_path =
             ensure_daemon_store_artifacts(Some(config_path.as_path())).expect("bootstrap stores");
 
-        assert_eq!(returned_path, config_path);
+        assert_eq!(
+            returned_path,
+            config_path
+                .canonicalize()
+                .unwrap_or_else(|_| config_path.clone())
+        );
         assert!(dir.path().join("stores/relational/relational.db").is_file());
         assert!(dir.path().join("stores/event/events.duckdb").is_file());
         assert!(dir.path().join("stores/blob").is_dir());

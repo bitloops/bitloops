@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::config::{
-    resolve_daemon_config_root_for_repo, resolve_repo_runtime_db_path_for_config_root,
+    resolve_bound_daemon_config_root_for_repo, resolve_repo_runtime_db_path_for_config_root,
 };
 use crate::host::checkpoints::session::DbSessionBackend;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
@@ -14,7 +14,7 @@ use super::types::RepoSqliteRuntimeStore;
 
 impl RepoSqliteRuntimeStore {
     pub fn open(repo_root: &Path) -> Result<Self> {
-        let daemon_config_root = resolve_daemon_config_root_for_repo(repo_root)
+        let daemon_config_root = resolve_bound_daemon_config_root_for_repo(repo_root)
             .context("resolving daemon config root for runtime store")?;
         Self::open_for_roots(&daemon_config_root, repo_root)
     }

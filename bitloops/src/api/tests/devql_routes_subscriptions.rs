@@ -74,6 +74,12 @@ fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
             crate::devql_transport::HEADER_SCOPE_CONFIG_FINGERPRINT.to_string(),
             fingerprint,
         ),
+        (
+            crate::devql_transport::HEADER_DAEMON_BINDING.to_string(),
+            crate::devql_transport::daemon_binding_identifier_for_config_path(
+                &repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+            ),
+        ),
     ]
 }
 
@@ -97,6 +103,84 @@ async fn request_slim_query(
         Body::from(json!({ "query": query }).to_string()),
     )
     .await
+}
+
+#[tokio::test]
+async fn devql_slim_route_rejects_missing_daemon_binding_for_repo_scoped_requests() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let slim_headers = slim_scope_headers(temp.path())
+        .into_iter()
+        .filter(|(name, _)| name != crate::devql_transport::HEADER_DAEMON_BINDING)
+        .collect::<Vec<_>>();
+    let slim_headers_ref = slim_headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (_status, body) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql",
+        "application/json",
+        &slim_headers_ref,
+        Body::from(json!({ "query": "{ health { relational { backend } } }" }).to_string()),
+    )
+    .await;
+
+    assert!(
+        body["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Run `bitloops init`")),
+        "unexpected response body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn devql_global_route_rejects_mismatched_daemon_binding_for_repo_scoped_requests() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+    let repo_root = temp.path().to_string_lossy().to_string();
+    let headers = [
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ROOT,
+            crate::devql_transport::encode_scope_header_value(&repo_root),
+        ),
+        (
+            crate::devql_transport::HEADER_DAEMON_BINDING,
+            "mismatched-binding".to_string(),
+        ),
+    ];
+    let headers_ref = headers
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (_status, body) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql/global",
+        "application/json",
+        &headers_ref,
+        Body::from(json!({ "query": "{ health { relational { backend } } }" }).to_string()),
+    )
+    .await;
+
+    assert!(
+        body["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Run `bitloops init`")),
+        "unexpected response body: {body}"
+    );
 }
 
 #[tokio::test]

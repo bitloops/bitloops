@@ -221,6 +221,10 @@ pub(super) async fn run(
     }
 
     let state = DashboardState {
+        config_path: options
+            .config_path
+            .clone()
+            .unwrap_or_else(|| config_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH)),
         config_root: config_root.clone(),
         repo_root,
         repo_registry_path: options.repo_registry_path.clone(),

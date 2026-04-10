@@ -56,6 +56,7 @@ pub struct DashboardRuntimeOptions {
     pub shutdown_message: Option<String>,
     pub on_ready: Option<DashboardReadyHook>,
     pub on_shutdown: Option<DashboardShutdownHook>,
+    pub config_path: Option<PathBuf>,
     pub config_root: Option<PathBuf>,
     pub repo_registry_path: Option<PathBuf>,
 }
@@ -70,6 +71,7 @@ impl Default for DashboardRuntimeOptions {
             shutdown_message: Some("Dashboard server stopped.".to_string()),
             on_ready: None,
             on_shutdown: None,
+            config_path: None,
             config_root: None,
             repo_registry_path: None,
         }
@@ -176,6 +178,7 @@ pub(crate) struct DashboardBundleSourceOverrides {
 
 #[derive(Clone)]
 pub(crate) struct DashboardState {
+    pub(super) config_path: PathBuf,
     pub(super) config_root: PathBuf,
     pub(super) repo_root: PathBuf,
     pub(super) repo_registry_path: Option<PathBuf>,

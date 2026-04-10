@@ -8,9 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Repo-bound daemon config binding for safe capture**: added a local-only `[daemon].config_path` binding in `.bitloops.local.toml`, wired `bitloops init` to store the running daemon's canonicalised config path as the repo binding, and added the `x-bitloops-daemon-binding` request header so repo-scoped daemon requests carry a stable binding identifier derived from that config path.
+
 ### Changed
 
+- **Repo-scoped daemon-backed writes now resolve config strictly from the repo binding**: interaction spool opening, repo runtime-store access, repo-scoped DevQL GraphQL/SDL/WebSocket requests, and other daemon-backed write paths now use `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE` first and the repo's local daemon binding second. They no longer fall back to the nearest `config.toml` or the default global daemon config for capture, queue, spool, or turn-data writes.
+
 ### Fixed
+
+- **Cross-project daemon/config misrouting**: Bitloops now rejects repo-scoped daemon requests whose repo binding does not match the running daemon's config path, with a clear `bitloops init` rebind error. When repo binding information is missing or invalid, hook capture now warns and skips instead of guessing another config and risking writes into the wrong project's stores.
 
 ## [0.0.13] - 2026-04-10
 

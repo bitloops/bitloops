@@ -7,6 +7,7 @@ pub(super) fn test_state(
 ) -> DashboardState {
     let db = crate::api::DashboardDbPools::default();
     DashboardState {
+        config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
         config_root: repo_root.clone(),
         repo_registry_path: None,
         subscription_hub: crate::graphql::SubscriptionHub::new_arc(),

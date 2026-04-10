@@ -375,43 +375,44 @@ jobs:
           tar -xzf bitloops-aarch64-unknown-linux-musl.tar.gz -C arm64
           chmod +x arm64/bitloops
           qemu-aarch64 arm64/bitloops --version
-          - name: Generate Slack message
-          id: slack_msg
-          shell: bash
-          run: |
-            VERSION="${GITHUB_REF_NAME#v}"
 
-            PART1=(
-              "🚀 Bitloops CLI v${VERSION} just dropped"
-              "🚀 Bitloops CLI v${VERSION} is live"
-              "🚀 Bitloops CLI v${VERSION} just shipped"
-              "🚀 Bitloops CLI v${VERSION} is out in the wild"
-              "🚀 Bitloops CLI v${VERSION} just landed"
-              "🚀 Bitloops CLI v${VERSION} is now available"
-              "🚀 Bitloops CLI v${VERSION} deployed successfully"
-              "🚀 Bitloops CLI v${VERSION} rollout complete"
-              "🚀 Bitloops CLI v${VERSION} is officially out"
-              "🚀 Bitloops CLI v${VERSION} release complete"
-            )
+      - name: Generate Slack message
+        id: slack_msg
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
 
-            PART2=(
-              "— built through strong cross-team collaboration 👏"
-              "— another solid team delivery 💪"
-              "— delivered with great engineering effort ⚙️"
-              "— a result of coordinated team execution 🤝"
-              "— reflecting high-quality team craftsmanship 🛠️"
-              "— powered by focused team iteration 🔁"
-              "— showcasing strong ownership across the team 🧠"
-              "— driven by consistent team momentum 📈"
-              "— executed with precision across contributors 🎯"
-              "— backed by collective engineering excellence ✨"
-            )
+          PART1=(
+            "🚀 Bitloops CLI v${VERSION} just dropped"
+            "🚀 Bitloops CLI v${VERSION} is live"
+            "🚀 Bitloops CLI v${VERSION} just shipped"
+            "🚀 Bitloops CLI v${VERSION} is out in the wild"
+            "🚀 Bitloops CLI v${VERSION} just landed"
+            "🚀 Bitloops CLI v${VERSION} is now available"
+            "🚀 Bitloops CLI v${VERSION} deployed successfully"
+            "🚀 Bitloops CLI v${VERSION} rollout complete"
+            "🚀 Bitloops CLI v${VERSION} is officially out"
+            "🚀 Bitloops CLI v${VERSION} release complete"
+          )
 
-            P1_INDEX=$((RANDOM % ${#PART1[@]}))
-            P2_INDEX=$((RANDOM % ${#PART2[@]}))
-            MESSAGE="${PART1[$P1_INDEX]} ${PART2[$P2_INDEX]}"
+          PART2=(
+            "— built through strong cross-team collaboration 👏"
+            "— another solid team delivery 💪"
+            "— delivered with great engineering effort ⚙️"
+            "— a result of coordinated team execution 🤝"
+            "— reflecting high-quality team craftsmanship 🛠️"
+            "— powered by focused team iteration 🔁"
+            "— showcasing strong ownership across the team 🧠"
+            "— driven by consistent team momentum 📈"
+            "— executed with precision across contributors 🎯"
+            "— backed by collective engineering excellence ✨"
+          )
 
-            echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+          P1_INDEX=$((RANDOM % ${#PART1[@]}))
+          P2_INDEX=$((RANDOM % ${#PART2[@]}))
+          MESSAGE="${PART1[$P1_INDEX]} ${PART2[$P2_INDEX]}"
+
+          echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
 
       - name: Send Slack notification
         uses: slackapi/slack-github-action@v2.1.1

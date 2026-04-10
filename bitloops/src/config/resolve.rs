@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use super::daemon_config::{
     LoadedDaemonSettings, default_daemon_config_exists, default_daemon_config_path,
     load_daemon_settings,
 };
-use super::repo_policy::discover_repo_policy_optional;
+use super::repo_policy::{REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy_optional};
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
     normalize_sqlite_path, read_any_string, read_any_u64, read_non_empty_env,
@@ -38,6 +38,23 @@ fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSetting
     };
     let loaded = load_daemon_settings(Some(Path::new(&explicit_path)))?;
     Ok(Some((loaded.root, loaded.settings)))
+}
+
+fn canonicalize_loaded_daemon_settings(mut loaded: LoadedDaemonSettings) -> LoadedDaemonSettings {
+    if let Ok(path) = loaded.path.canonicalize() {
+        loaded.root = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| loaded.root.clone());
+        loaded.path = path;
+    }
+    loaded
+}
+
+fn load_strict_daemon_settings(path: &Path) -> Result<LoadedDaemonSettings> {
+    load_daemon_settings(Some(path))
+        .map(canonicalize_loaded_daemon_settings)
+        .with_context(|| format!("loading Bitloops daemon config {}", path.display()))
 }
 
 fn discover_nearest_daemon_config(start: &Path) -> Option<PathBuf> {
@@ -124,6 +141,50 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
     }
 
     Ok((repo_root.to_path_buf(), UnifiedSettings::default()))
+}
+
+fn repo_bound_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        return load_strict_daemon_settings(Path::new(&explicit_path)).with_context(|| {
+            format!(
+                "resolving repo-bound Bitloops daemon config from `{}`",
+                ENV_DAEMON_CONFIG_PATH_OVERRIDE
+            )
+        });
+    }
+
+    let policy = discover_repo_policy_optional(repo_root)?;
+    let Some(bound_path) = policy.daemon_config_path.as_deref() else {
+        bail!(
+            "Bitloops repo daemon binding is missing. Run `bitloops init` to bind this repo, or set `{}` to an explicit daemon config path.",
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE
+        );
+    };
+
+    load_strict_daemon_settings(bound_path).with_context(|| {
+        format!(
+            "resolving repo-bound Bitloops daemon config from `{}`; rerun `bitloops init` to rebind this repo",
+            REPO_POLICY_LOCAL_FILE_NAME
+        )
+    })
+}
+
+pub fn resolve_bound_daemon_config_root_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    repo_bound_daemon_settings_for_repo(repo_root).map(|loaded| loaded.root)
+}
+
+pub fn resolve_bound_daemon_config_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    repo_bound_daemon_settings_for_repo(repo_root).map(|loaded| loaded.path)
+}
+
+pub fn resolve_bound_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBackendConfig> {
+    let loaded = repo_bound_daemon_settings_for_repo(repo_root)?;
+    resolve_store_backend_from_unified(&loaded.settings, &loaded.root)
+}
+
+pub fn resolve_bound_repo_runtime_db_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    let config_root = resolve_bound_daemon_config_root_for_repo(repo_root)?;
+    Ok(resolve_repo_runtime_db_path_for_config_root(&config_root))
 }
 
 #[cfg(not(test))]
