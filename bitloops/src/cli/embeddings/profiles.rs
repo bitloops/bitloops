@@ -168,8 +168,14 @@ pub(crate) fn doctor_profile(
                 lines.push(format!("Runtime: {runtime_name}"));
                 if let Some(runtime) = runtime {
                     lines.push(format!("Runtime command: {}", runtime.command));
-                    if let Some(version) = managed_runtime_version_for_command(&runtime.command) {
-                        lines.push(format!("Managed runtime version: {version}"));
+                    match managed_runtime_version_for_command(&runtime.command) {
+                        Ok(Some(version)) => {
+                            lines.push(format!("Managed runtime version: {version}"));
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            lines.push(format!("Managed runtime metadata warning: {err}"));
+                        }
                     }
                 }
             }

@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Value as TomlValue};
@@ -20,6 +22,57 @@ pub(crate) const MANAGED_EMBEDDINGS_VERSION_OVERRIDE_ENV: &str =
 pub(crate) struct ManagedEmbeddingsInstallMetadata {
     pub(crate) version: String,
     pub(crate) binary_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) enum ManagedEmbeddingsMetadataError {
+    ResolvePath {
+        source: anyhow::Error,
+    },
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    Parse {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+}
+
+impl fmt::Display for ManagedEmbeddingsMetadataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ResolvePath { source } => {
+                write!(f, "resolving managed embeddings metadata path: {}", source)
+            }
+            Self::Read { path, source } => {
+                write!(
+                    f,
+                    "reading managed embeddings metadata {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+            Self::Parse { path, source } => {
+                write!(
+                    f,
+                    "parsing managed embeddings metadata {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+        }
+    }
+}
+
+impl StdError for ManagedEmbeddingsMetadataError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::ResolvePath { source } => Some(source.root_cause()),
+            Self::Read { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
+        }
+    }
 }
 
 pub(crate) fn managed_embeddings_binary_name() -> &'static str {
@@ -45,19 +98,18 @@ pub(crate) fn managed_embeddings_metadata_path() -> Result<PathBuf> {
 }
 
 pub(crate) fn load_managed_embeddings_install_metadata()
--> Result<Option<ManagedEmbeddingsInstallMetadata>> {
-    let path = managed_embeddings_metadata_path()?;
+-> std::result::Result<Option<ManagedEmbeddingsInstallMetadata>, ManagedEmbeddingsMetadataError> {
+    let path = managed_embeddings_metadata_path()
+        .map_err(|source| ManagedEmbeddingsMetadataError::ResolvePath { source })?;
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!("reading managed embeddings metadata {}", path.display())
-            });
-        }
+        Err(err) => return Err(ManagedEmbeddingsMetadataError::Read { path, source: err }),
     };
 
-    Ok(serde_json::from_str(&contents).ok())
+    serde_json::from_str(&contents)
+        .map(Some)
+        .map_err(|err| ManagedEmbeddingsMetadataError::Parse { path, source: err })
 }
 
 pub(crate) fn save_managed_embeddings_install_metadata(
@@ -69,10 +121,20 @@ pub(crate) fn save_managed_embeddings_install_metadata(
     write_file_atomically(&path, &bytes, false)
 }
 
-pub(crate) fn managed_runtime_version_for_command(command: &str) -> Option<String> {
-    let metadata = load_managed_embeddings_install_metadata().ok().flatten()?;
+pub(crate) fn managed_runtime_version_for_command(command: &str) -> Result<Option<String>> {
     let command = Path::new(command.trim());
-    (command == metadata.binary_path).then_some(metadata.version)
+    if !command.is_absolute() {
+        return Ok(None);
+    }
+
+    if !command.starts_with(managed_embeddings_binary_dir()?) {
+        return Ok(None);
+    }
+
+    let Some(metadata) = load_managed_embeddings_install_metadata()? else {
+        return Ok(None);
+    };
+    Ok((command == metadata.binary_path).then_some(metadata.version))
 }
 
 pub(crate) fn managed_embeddings_bundle_is_complete(binary_path: &Path) -> bool {

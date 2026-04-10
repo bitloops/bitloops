@@ -114,6 +114,66 @@ async fn rebuild_wrapper_matches_default_options_on_empty_snapshot() {
     );
 }
 
+#[tokio::test]
+async fn rebuild_wrapper_syncs_empty_historical_result_into_current_projection() {
+    let tmp = tempdir().expect("temp dir");
+    let sqlite_path = tmp.path().join("devql.sqlite");
+
+    sqlite_exec_path_allow_create(&sqlite_path, devql_schema_sql_sqlite())
+        .await
+        .expect("core devql schema");
+    init_sqlite_semantic_features_schema(&sqlite_path)
+        .await
+        .expect("semantic feature schema");
+    init_sqlite_semantic_embeddings_schema(&sqlite_path)
+        .await
+        .expect("semantic embedding schema");
+    sqlite_exec_path_allow_create(&sqlite_path, semantic_clones_sqlite_schema_sql())
+        .await
+        .expect("semantic clone schema");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO symbol_clone_edges_current (
+            repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+            relation_kind, score, semantic_score, lexical_score, structural_score,
+            clone_input_hash, explanation_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            "repo-1",
+            "source",
+            "artefact-source",
+            "target",
+            "artefact-target",
+            "similar_implementation",
+            0.91_f64,
+            0.9_f64,
+            0.8_f64,
+            0.7_f64,
+            "input-hash",
+            r#"{"reason":"stale"}"#,
+        ],
+    )
+    .expect("insert stale current clone edge");
+    drop(conn);
+
+    let relational = RelationalStorage::local_only(sqlite_path.clone());
+    let build = rebuild_symbol_clone_edges(&relational, "repo-1")
+        .await
+        .expect("wrapper rebuild");
+    assert!(build.edges.is_empty());
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let current_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
+            ["repo-1"],
+            |row| row.get(0),
+        )
+        .expect("count current clone edges");
+    assert_eq!(current_count, 0);
+}
+
 #[test]
 fn current_projection_returns_none_when_multiple_code_setups_exist() {
     let chosen = choose_current_projection_embedding_state(&[

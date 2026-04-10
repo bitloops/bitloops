@@ -1,5 +1,8 @@
 use super::managed::archive::{ManagedEmbeddingsArchiveKind, sha256_hex};
-use super::managed::config::{managed_embeddings_binary_name, raw_managed_runtime_command};
+use super::managed::config::{
+    load_managed_embeddings_install_metadata, managed_embeddings_binary_name,
+    raw_managed_runtime_command,
+};
 use super::managed::install::{
     install_managed_embeddings_binary_from_release_bytes, managed_embeddings_asset_spec_for,
 };
@@ -485,6 +488,82 @@ fn doctor_reports_disabled_when_no_profiles_exist() {
         lines
             .iter()
             .any(|line| line.contains("Embeddings: disabled"))
+    );
+}
+
+#[test]
+fn load_managed_embeddings_install_metadata_reports_invalid_json() {
+    let repo = TempDir::new().expect("tempdir");
+    let data = TempDir::new().expect("data tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    let data_root = data.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[("BITLOOPS_TEST_DATA_DIR_OVERRIDE", Some(data_root.as_str()))],
+    );
+
+    let metadata_path = super::managed_embeddings_metadata_path().expect("metadata path");
+    fs::create_dir_all(metadata_path.parent().expect("metadata parent"))
+        .expect("create metadata parent");
+    fs::write(&metadata_path, "{ not valid json").expect("write corrupt metadata");
+
+    let err = load_managed_embeddings_install_metadata().expect_err("invalid metadata error");
+    assert!(
+        err.to_string()
+            .contains("parsing managed embeddings metadata"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn doctor_reports_invalid_managed_runtime_metadata() {
+    let repo = TempDir::new().expect("tempdir");
+    let data = TempDir::new().expect("data tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    write_embedding_config(repo.path());
+    let data_root = data.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[("BITLOOPS_TEST_DATA_DIR_OVERRIDE", Some(data_root.as_str()))],
+    );
+
+    with_managed_embeddings_install_hook(
+        move |_repo_root| {
+            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                binary_path: super::managed_embeddings_binary_path().expect("managed runtime path"),
+                freshly_installed: true,
+            })
+        },
+        || {
+            let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+            super::managed::ensure_managed_embeddings_runtime(repo.path(), Some(&config_path))
+                .expect("install managed runtime");
+            let metadata_path = super::managed_embeddings_metadata_path().expect("metadata path");
+            fs::create_dir_all(metadata_path.parent().expect("metadata parent"))
+                .expect("create metadata parent");
+            fs::write(&metadata_path, "{ not valid json").expect("write corrupt metadata");
+
+            let capability = resolve_embedding_capability_config_for_repo(repo.path());
+            let lines = doctor_profile(repo.path(), &capability, None).expect("doctor report");
+
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Managed runtime metadata warning:")),
+                "expected metadata warning, got: {lines:?}"
+            );
+        },
     );
 }
 

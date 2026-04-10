@@ -23,8 +23,8 @@ use super::archive::{
 };
 use super::config::{
     MANAGED_EMBEDDINGS_VERSION_OVERRIDE_ENV, ManagedEmbeddingsInstallMetadata,
-    load_managed_embeddings_install_metadata, managed_embeddings_binary_dir,
-    managed_embeddings_binary_name, managed_embeddings_binary_path,
+    ManagedEmbeddingsMetadataError, load_managed_embeddings_install_metadata,
+    managed_embeddings_binary_dir, managed_embeddings_binary_name, managed_embeddings_binary_path,
     managed_embeddings_bundle_is_complete, reset_managed_embeddings_install_dir,
     rewrite_managed_runtime_command_if_eligible, save_managed_embeddings_install_metadata,
 };
@@ -167,7 +167,7 @@ fn install_managed_embeddings_binary(
 
     let _ = repo_root;
     let binary_path = managed_embeddings_binary_path()?;
-    let install_metadata = load_managed_embeddings_install_metadata()?;
+    let install_metadata = load_managed_embeddings_install_metadata_for_install()?;
     let release_request = managed_embeddings_release_request();
     let required_version = match &release_request {
         ManagedEmbeddingsReleaseRequest::Latest => None,
@@ -184,6 +184,22 @@ fn install_managed_embeddings_binary(
     let release = fetch_managed_embeddings_release(&release_request)?;
 
     install_managed_embeddings_binary_from_release(&release)
+}
+
+fn load_managed_embeddings_install_metadata_for_install()
+-> Result<Option<ManagedEmbeddingsInstallMetadata>> {
+    match load_managed_embeddings_install_metadata() {
+        Ok(metadata) => Ok(metadata),
+        Err(ManagedEmbeddingsMetadataError::Parse { path, source }) => {
+            eprintln!(
+                "[bitloops] Warning: invalid managed embeddings metadata at {}: {}. Ignoring cached metadata and reinstalling the managed runtime.",
+                path.display(),
+                source
+            );
+            Ok(None)
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub(crate) fn install_managed_embeddings_binary_from_release_bytes(
