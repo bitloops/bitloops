@@ -11,8 +11,8 @@ use crate::graphql::{Checkpoint, SubscriptionHub};
 use crate::host::capability_host::{SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff};
 use crate::host::devql::{
     DevqlConfig, IngestedCheckpointNotification, IngestionCounters, IngestionObserver,
-    IngestionProgressPhase, IngestionProgressUpdate, RepoIdentity, SyncObserver,
-    SyncProgressPhase, SyncProgressUpdate, SyncSummary,
+    IngestionProgressPhase, IngestionProgressUpdate, RepoIdentity, SyncObserver, SyncProgressPhase,
+    SyncProgressUpdate, SyncSummary,
 };
 #[cfg(test)]
 use crate::utils::paths::default_global_runtime_db_path;
@@ -504,7 +504,10 @@ impl DevqlTaskCoordinator {
             schema_outcome,
         );
         let effective_spec = sync_task_mode_from_host(&effective_mode);
-        if task.sync_spec().is_none_or(|spec| spec.mode != effective_spec) {
+        if task
+            .sync_spec()
+            .is_none_or(|spec| spec.mode != effective_spec)
+        {
             self.update_sync_mode(&task.task_id, effective_spec)?;
         }
 
@@ -671,7 +674,7 @@ impl DevqlTaskCoordinator {
             task.updated_at_unix = now;
             task.completed_at_unix = Some(now);
             task.error = None;
-            task.result = Some(DevqlTaskResult::Sync(summary.clone()));
+            task.result = Some(DevqlTaskResult::Sync(Box::new(summary.clone())));
             task.progress = DevqlTaskProgress::Sync(sync_progress_from_summary(&summary));
             state.last_action = Some("completed".to_string());
             Ok(())
@@ -679,7 +682,11 @@ impl DevqlTaskCoordinator {
         .map(|_: ()| ())
     }
 
-    fn finish_ingest_task_completed(&self, task_id: &str, summary: IngestionCounters) -> Result<()> {
+    fn finish_ingest_task_completed(
+        &self,
+        task_id: &str,
+        summary: IngestionCounters,
+    ) -> Result<()> {
         let task_id = task_id.to_string();
         self.mutate_state(|state| {
             let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
@@ -733,12 +740,13 @@ impl DevqlTaskCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow!("DevQL task coordinator lock poisoned"))?;
-        let (result, tasks_to_publish) = self.runtime_store.mutate_devql_task_queue_state(|state| {
-            let previous_tasks = state.tasks.clone();
-            let result = mutate(state)?;
-            let tasks_to_publish = Self::save_state(state, &previous_tasks)?;
-            Ok((result, tasks_to_publish))
-        })?;
+        let (result, tasks_to_publish) =
+            self.runtime_store.mutate_devql_task_queue_state(|state| {
+                let previous_tasks = state.tasks.clone();
+                let result = mutate(state)?;
+                let tasks_to_publish = Self::save_state(state, &previous_tasks)?;
+                Ok((result, tasks_to_publish))
+            })?;
         drop(guard);
         self.publish_tasks(tasks_to_publish);
         self.notify.notify_waiters();

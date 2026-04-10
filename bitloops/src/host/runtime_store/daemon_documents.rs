@@ -446,7 +446,9 @@ fn migrate_legacy_sync_queue_state(
                 tasks_ahead: task.tasks_ahead,
                 progress: crate::daemon::DevqlTaskProgress::Sync(task.progress),
                 error: task.error,
-                result: task.summary.map(crate::daemon::DevqlTaskResult::Sync),
+                result: task
+                    .summary
+                    .map(|summary| crate::daemon::DevqlTaskResult::Sync(Box::new(summary))),
             })
             .collect(),
         repo_controls: Default::default(),

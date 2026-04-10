@@ -482,7 +482,7 @@ pub enum DevqlTaskProgress {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum DevqlTaskResult {
-    Sync(crate::host::devql::SyncSummary),
+    Sync(Box<crate::host::devql::SyncSummary>),
     Ingest(crate::host::devql::IngestionCounters),
 }
 
@@ -549,7 +549,7 @@ impl DevqlTaskRecord {
 
     pub fn sync_result(&self) -> Option<&crate::host::devql::SyncSummary> {
         match &self.result {
-            Some(DevqlTaskResult::Sync(result)) => Some(result),
+            Some(DevqlTaskResult::Sync(result)) => Some(result.as_ref()),
             _ => None,
         }
     }
