@@ -1,5 +1,7 @@
 use super::*;
-use crate::config::resolve_daemon_config_root_for_repo;
+use crate::config::{
+    resolve_bound_daemon_config_root_for_repo, resolve_bound_store_backend_config_for_repo,
+};
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -24,8 +26,25 @@ pub struct DevqlConfig {
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
-        let daemon_config_root = resolve_daemon_config_root_for_repo(&repo_root)?;
-        Self::from_roots(daemon_config_root, repo_root, repo)
+        let daemon_config_root = resolve_bound_daemon_config_root_for_repo(&repo_root)?;
+        let backend_cfg = resolve_bound_store_backend_config_for_repo(&repo_root)
+            .context("resolving backend config for DevQL runtime")?;
+        Ok(Self {
+            daemon_config_root,
+            repo_root,
+            repo,
+            pg_dsn: backend_cfg.relational.postgres_dsn,
+            clickhouse_url: backend_cfg
+                .events
+                .clickhouse_url
+                .unwrap_or_else(|| "http://localhost:8123".to_string()),
+            clickhouse_user: backend_cfg.events.clickhouse_user,
+            clickhouse_password: backend_cfg.events.clickhouse_password,
+            clickhouse_database: backend_cfg
+                .events
+                .clickhouse_database
+                .unwrap_or_else(|| "default".to_string()),
+        })
     }
 
     pub fn from_roots(

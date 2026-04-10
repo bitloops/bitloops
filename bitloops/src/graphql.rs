@@ -44,7 +44,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::devql_transport::{parse_slim_cli_scope_headers, upsert_repo_path_registry_scope};
+use crate::devql_transport::{
+    daemon_binding_identifier_for_config_path, parse_daemon_binding_header, parse_repo_root_header,
+    parse_slim_cli_scope_headers, upsert_repo_path_registry_scope,
+};
 
 pub(crate) type DevqlSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 pub(crate) type SlimDevqlSchema = Schema<SlimQueryRoot, MutationRoot, SlimSubscriptionRoot>;
@@ -161,6 +164,25 @@ pub(crate) async fn slim_graphql_handler(
             return response;
         }
     };
+    if let Err(err) = validate_repo_daemon_binding(
+        &headers,
+        &state,
+        scope.as_ref().map(|scope| scope.repo_root.as_path()),
+    ) {
+        let response = graphql_error_response(err).into_response();
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: state.repo_root.as_path(),
+            event: "bitloops devql slim http",
+            scope: "slim",
+            transport: "http",
+            request_kind: &signature.0,
+            operation_family: &signature.1,
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
+        return response;
+    }
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
@@ -217,6 +239,39 @@ pub(crate) async fn global_graphql_handler(
     let started = Instant::now();
     let request = request.into_inner();
     let signature = graphql_request_signature(&request);
+    let repo_root = match parse_repo_root_header(&headers) {
+        Ok(repo_root) => repo_root,
+        Err(err) => {
+            let response = graphql_error_response(err).into_response();
+            track_devql_action(DevqlGraphqlTelemetry {
+                repo_root: state.repo_root.as_path(),
+                event: "bitloops devql global http",
+                scope: "global",
+                transport: "http",
+                request_kind: &signature.0,
+                operation_family: &signature.1,
+                success: false,
+                status: response.status(),
+                duration: started.elapsed(),
+            });
+            return response;
+        }
+    };
+    if let Err(err) = validate_repo_daemon_binding(&headers, &state, repo_root.as_deref()) {
+        let response = graphql_error_response(err).into_response();
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: repo_root.as_deref().unwrap_or(state.repo_root.as_path()),
+            event: "bitloops devql global http",
+            scope: "global",
+            transport: "http",
+            request_kind: &signature.0,
+            operation_family: &signature.1,
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
+        return response;
+    }
     let context = DevqlGraphqlContext::for_global_request(
         state.config_root.clone(),
         state.repo_root.clone(),
@@ -266,6 +321,25 @@ pub(crate) async fn slim_graphql_ws_handler(
             return response;
         }
     };
+    if let Err(err) = validate_repo_daemon_binding(
+        &headers,
+        &state,
+        scope.as_ref().map(|scope| scope.repo_root.as_path()),
+    ) {
+        let response = graphql_error_response(err).into_response();
+        track_devql_action(DevqlGraphqlTelemetry {
+            repo_root: state.repo_root.as_path(),
+            event: "bitloops devql slim ws",
+            scope: "slim",
+            transport: "ws",
+            request_kind: "subscription",
+            operation_family: "anonymous",
+            success: false,
+            status: response.status(),
+            duration: started.elapsed(),
+        });
+        return response;
+    }
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
@@ -322,8 +396,16 @@ pub(crate) async fn global_graphql_ws_handler(
     State(state): State<crate::api::DashboardState>,
     protocol: GraphQLProtocol,
     upgrade: WebSocketUpgrade,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let started = Instant::now();
+    let repo_root = match parse_repo_root_header(&headers) {
+        Ok(repo_root) => repo_root,
+        Err(err) => return graphql_error_response(err).into_response(),
+    };
+    if let Err(err) = validate_repo_daemon_binding(&headers, &state, repo_root.as_deref()) {
+        return graphql_error_response(err).into_response();
+    }
     let context = DevqlGraphqlContext::for_global_request(
         state.config_root.clone(),
         state.repo_root.clone(),
@@ -350,6 +432,43 @@ pub(crate) async fn global_graphql_ws_handler(
         duration: started.elapsed(),
     });
     response
+}
+
+fn validate_repo_daemon_binding(
+    headers: &HeaderMap,
+    state: &crate::api::DashboardState,
+    repo_root: Option<&Path>,
+) -> Result<()> {
+    let binding = parse_daemon_binding_header(headers)?;
+    let Some(repo_root) = repo_root else {
+        if binding.is_some() {
+            anyhow::bail!(
+                "This repo is not configured to work with the current Bitloops daemon. Run `bitloops init` to bind or rebind this repo."
+            );
+        }
+        return Ok(());
+    };
+
+    let Some(binding) = binding else {
+        anyhow::bail!(
+            "This repo is not configured to work with the current Bitloops daemon. Run `bitloops init` to bind or rebind this repo."
+        );
+    };
+
+    let expected = daemon_binding_identifier_for_config_path(
+        &state
+            .config_path
+            .canonicalize()
+            .unwrap_or_else(|_| state.config_path.clone()),
+    );
+    if binding == expected {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "This repo at {} is not configured to work with the current Bitloops daemon. Run `bitloops init` to bind or rebind this repo.",
+        repo_root.display()
+    )
 }
 
 async fn execute_graphql_request<Query, Mutation, Subscription>(
@@ -527,20 +646,46 @@ fn graphql_playground_response(
 
 pub(crate) async fn slim_graphql_sdl_handler(
     State(state): State<crate::api::DashboardState>,
-) -> impl IntoResponse {
+    headers: HeaderMap,
+) -> AxumResponse {
+    let scope = match parse_slim_cli_scope_headers(&headers) {
+        Ok(scope) => scope,
+        Err(err) => {
+            return (axum::http::StatusCode::BAD_REQUEST, err.to_string()).into_response();
+        }
+    };
+    if let Err(err) = validate_repo_daemon_binding(
+        &headers,
+        &state,
+        scope.as_ref().map(|scope| scope.repo_root.as_path()),
+    ) {
+        return (axum::http::StatusCode::CONFLICT, err.to_string()).into_response();
+    }
     (
         [("content-type", "text/plain; charset=utf-8")],
         state.devql_slim_schema().sdl(),
     )
+        .into_response()
 }
 
 pub(crate) async fn global_graphql_sdl_handler(
     State(state): State<crate::api::DashboardState>,
-) -> impl IntoResponse {
+    headers: HeaderMap,
+) -> AxumResponse {
+    let repo_root = match parse_repo_root_header(&headers) {
+        Ok(repo_root) => repo_root,
+        Err(err) => {
+            return (axum::http::StatusCode::BAD_REQUEST, err.to_string()).into_response();
+        }
+    };
+    if let Err(err) = validate_repo_daemon_binding(&headers, &state, repo_root.as_deref()) {
+        return (axum::http::StatusCode::CONFLICT, err.to_string()).into_response();
+    }
     (
         [("content-type", "text/plain; charset=utf-8")],
         state.devql_global_schema().sdl(),
     )
+        .into_response()
 }
 
 fn map_execution_error(error: &ServerError) -> anyhow::Error {

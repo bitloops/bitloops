@@ -993,6 +993,10 @@ async fn daemon_bootstrap_creates_devql_schema_tables() {
             shutdown_message: None,
             on_ready: None,
             on_shutdown: None,
+            config_path: Some(
+                repo.path()
+                    .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+            ),
             config_root: Some(repo.path().to_path_buf()),
             repo_registry_path: None,
         },

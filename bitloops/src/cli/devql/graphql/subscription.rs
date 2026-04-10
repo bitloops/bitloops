@@ -14,8 +14,10 @@ use super::documents::TASK_PROGRESS_SUBSCRIPTION;
 use super::progress::{TASK_RENDER_TICK_INTERVAL, TaskProgressRenderer};
 use super::types::{TaskGraphqlRecord, TaskProgressSubscriptionData};
 use crate::daemon;
+use crate::devql_transport::SlimCliRepoScope;
 
 pub(super) async fn watch_task_via_subscription(
+    scope: &SlimCliRepoScope,
     task_id: &str,
     renderer: &mut TaskProgressRenderer,
 ) -> Result<Option<TaskGraphqlRecord>> {
@@ -27,6 +29,24 @@ pub(super) async fn watch_task_via_subscription(
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         HeaderValue::from_static("graphql-transport-ws"),
+    );
+    request.headers_mut().insert(
+        crate::devql_transport::HEADER_SCOPE_REPO_ROOT,
+        HeaderValue::from_str(&crate::devql_transport::encode_scope_header_value(
+            &scope.repo_root.to_string_lossy(),
+        ))
+        .context("encoding DevQL websocket repo root header")?,
+    );
+    request.headers_mut().insert(
+        crate::devql_transport::HEADER_DAEMON_BINDING,
+        HeaderValue::from_str(
+            &crate::devql_transport::daemon_binding_identifier_for_config_path(
+                &crate::config::resolve_bound_daemon_config_path_for_repo(
+                    scope.repo_root.as_path(),
+                )?,
+            ),
+        )
+        .context("encoding DevQL websocket daemon binding header")?,
     );
 
     let (mut websocket, _) = connect_devql_websocket(request, &endpoint)

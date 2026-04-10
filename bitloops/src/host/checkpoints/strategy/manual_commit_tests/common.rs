@@ -24,9 +24,11 @@ fn write_test_store_backend_config(repo_root: &Path, include_events: bool) {
     let config = format!(
         "[stores.relational]\nsqlite_path = \"stores/relational/relational.db\"\n{events_section}\n[stores.blob]\nlocal_path = \"stores/blob\"\n"
     );
-    fs::write(
-        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
-        config,
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    fs::write(&config_path, config).unwrap();
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
     )
     .unwrap();
 }

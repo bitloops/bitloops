@@ -262,7 +262,7 @@ pub(crate) async fn watch_task_via_graphql(
         return handle_terminal_task(task_id.as_str(), initial_task).map(Some);
     }
 
-    match watch_task_via_subscription(task_id.as_str(), &mut renderer).await {
+    match watch_task_via_subscription(scope, task_id.as_str(), &mut renderer).await {
         Ok(final_task) => {
             renderer.finish()?;
             return Ok(final_task);
@@ -353,6 +353,10 @@ async fn fetch_schema_sdl_via_daemon(
 
     let mut request = client.get(endpoint);
     if let Some(scope) = scope {
+        request = crate::devql_transport::attach_repo_daemon_binding_headers(
+            request,
+            scope.repo_root.as_path(),
+        )?;
         request = crate::devql_transport::attach_slim_cli_scope_headers(request, scope);
     }
 
@@ -411,12 +415,12 @@ fn graphql_enum_name(raw: &str) -> String {
 }
 
 async fn ensure_daemon_available_for_tasks(
-    _repo_root: &Path,
+    repo_root: &Path,
     policy: DaemonStartPolicy,
 ) -> Result<()> {
     #[cfg(test)]
     if matches!(policy, DaemonStartPolicy::AutoStart)
-        && let Some(result) = maybe_bootstrap_daemon_via_hook(_repo_root)
+        && let Some(result) = maybe_bootstrap_daemon_via_hook(repo_root)
     {
         return result;
     }
@@ -430,7 +434,8 @@ async fn ensure_daemon_available_for_tasks(
     }
 
     let report = daemon::status().await?;
-    let daemon_config = daemon::resolve_daemon_config(None)?;
+    let daemon_config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)?;
+    let daemon_config = daemon::resolve_daemon_config(Some(daemon_config_path.as_path()))?;
     let config = DashboardServerConfig {
         host: None,
         port: crate::api::DEFAULT_DASHBOARD_PORT,

@@ -83,7 +83,12 @@ fn write_daemon_test_config(repo_root: &Path, settings: serde_json::Value) {
     for (key, value) in settings.as_object().expect("top-level config object") {
         doc[key] = json_value_to_toml_item(value);
     }
-    fs::write(config_path, doc.to_string()).expect("write config");
+    fs::write(&config_path, doc.to_string()).expect("write config");
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
 }
 
 pub(super) fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {

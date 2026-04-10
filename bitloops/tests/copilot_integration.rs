@@ -224,8 +224,9 @@ fn run_git_without_hooks_expect_success(
 }
 
 fn write_repo_config(repo: &Path) {
+    let config_path = repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
     fs::write(
-        repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        &config_path,
         r#"[stores.relational]
 sqlite_path = "stores/relational/relational.db"
 
@@ -237,6 +238,11 @@ local_path = "stores/blob"
 "#,
     )
     .expect("write repo config");
+    bitloops::config::settings::write_repo_daemon_binding(
+        &repo.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
 }
 
 fn init_repo(repo: &Path, home: &Path) {

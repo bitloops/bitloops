@@ -382,6 +382,111 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
 }
 
 #[test]
+fn run_init_binds_repo_to_running_daemon_config() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let daemon_root = tempfile::tempdir().expect("daemon tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        write_current_daemon_runtime_state(daemon_root.path());
+
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let local_policy = std::fs::read_to_string(repo.path().join(".bitloops.local.toml"))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains(
+                daemon_root
+                    .path()
+                    .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "expected daemon binding in local policy:\n{local_policy}"
+        );
+    });
+}
+
+#[test]
+fn run_init_rewrites_existing_daemon_binding() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let old_daemon_root = tempfile::tempdir().expect("old daemon tempdir");
+    let new_daemon_root = tempfile::tempdir().expect("new daemon tempdir");
+    setup_git_repo(&repo);
+
+    crate::config::settings::write_repo_daemon_binding(
+        &repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &old_daemon_root.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("write initial repo daemon binding");
+
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        write_current_daemon_runtime_state(new_daemon_root.path());
+
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let local_policy = std::fs::read_to_string(repo.path().join(".bitloops.local.toml"))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains(
+                new_daemon_root
+                    .path()
+                    .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "expected updated daemon binding in local policy:\n{local_policy}"
+        );
+        assert!(
+            !local_policy.contains(
+                old_daemon_root
+                    .path()
+                    .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "old daemon binding should be replaced:\n{local_policy}"
+        );
+    });
+}
+
+#[test]
 fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_requested() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
