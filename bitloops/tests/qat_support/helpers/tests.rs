@@ -119,6 +119,28 @@ fn text_has_missing_production_artefacts_error_detects_relational_materializatio
 }
 
 #[test]
+fn error_chain_contains_not_found_detects_missing_binary_errors() {
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "No such file or directory",
+    ))
+    .context("executing bitloops daemon stop");
+
+    assert!(error_chain_contains_not_found(&err));
+}
+
+#[test]
+fn error_chain_contains_not_found_ignores_other_io_errors() {
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "Permission denied",
+    ))
+    .context("executing bitloops daemon stop");
+
+    assert!(!error_chain_contains_not_found(&err));
+}
+
+#[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(

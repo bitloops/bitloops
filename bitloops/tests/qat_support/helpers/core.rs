@@ -88,6 +88,14 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     );
 }
 
+fn error_chain_contains_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
 pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     if world.run_dir.is_none() || world.repo_dir.is_none() || world.terminal_log_path.is_none() {
         return Ok(());
@@ -117,6 +125,12 @@ pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
                 stop_error = Some(anyhow!(
                     "bitloops daemon stop returned non-zero\nstdout:\n{stdout}\nstderr:\n{stderr}"
                 ));
+            }
+            Err(err) if error_chain_contains_not_found(&err) => {
+                append_world_log(
+                    world,
+                    "Daemon stop skipped because the bitloops binary is no longer present.\n",
+                )?;
             }
             Err(err) => {
                 append_world_log(world, &format!("Daemon stop failed: {err:#}\n"))?;

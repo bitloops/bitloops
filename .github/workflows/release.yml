@@ -73,6 +73,28 @@ jobs:
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
         run: cargo build --release --target ${{ matrix.target }} -p bitloops
 
+      - name: Stage DuckDB runtime (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bin_dir="target/${{ matrix.target }}/release"
+          dylib="$bin_dir/deps/libduckdb.dylib"
+          if [ ! -f "$dylib" ]; then
+            echo "Missing expected DuckDB runtime: $dylib" >&2
+            exit 1
+          fi
+          cp "$dylib" "$bin_dir/libduckdb.dylib"
+
+      - name: Stage DuckDB runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = "target/${{ matrix.target }}/release"
+          $dll = Join-Path $binDir "deps/duckdb.dll"
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
+          }
+          Copy-Item $dll (Join-Path $binDir "duckdb.dll") -Force
+
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
         run: ./target/${{ matrix.target }}/release/bitloops --version
@@ -91,8 +113,11 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $path = "target/${{ matrix.target }}/release/bitloops.exe"
-          if (-not (Test-Path $path)) { throw "Missing expected binary: $path" }
+          $binDir = "target/${{ matrix.target }}/release"
+          $exe = Join-Path $binDir "bitloops.exe"
+          $dll = Join-Path $binDir "duckdb.dll"
+          if (-not (Test-Path $exe)) { throw "Missing expected binary: $exe" }
+          if (-not (Test-Path $dll)) { throw "Missing expected DuckDB runtime: $dll" }
 
       - name: Import Apple signing certificate
         if: runner.os == 'macOS'
@@ -126,12 +151,17 @@ jobs:
         run: |
           codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" \
+            "target/${{ matrix.target }}/release/libduckdb.dylib"
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
             "target/${{ matrix.target }}/release/bitloops"
 
       - name: Verify macOS signature
         if: runner.os == 'macOS'
         run: |
+          codesign --verify --verbose=4 "target/${{ matrix.target }}/release/libduckdb.dylib"
           codesign --verify --verbose=4 "target/${{ matrix.target }}/release/bitloops"
+          codesign --display --verbose=4 "target/${{ matrix.target }}/release/libduckdb.dylib"
           codesign --display --verbose=4 "target/${{ matrix.target }}/release/bitloops"
           spctl -a -t exec -vv "target/${{ matrix.target }}/release/bitloops" || true
 
@@ -148,6 +178,7 @@ jobs:
         run: |
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
+          cp "target/${{ matrix.target }}/release/libduckdb.dylib" dist/package/libduckdb.dylib
           ditto -c -k --keepParent dist/package "dist/bitloops-${{ matrix.target }}.zip"
 
       - name: Restore App Store Connect key
@@ -175,6 +206,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/bitloops.exe" "dist/package/bitloops.exe" -Force
+          Copy-Item "target/${{ matrix.target }}/release/duckdb.dll" "dist/package/duckdb.dll" -Force
           Compress-Archive -Path dist/package/* -DestinationPath dist/bitloops-${{ matrix.target }}.zip
 
       - name: Upload build artifact
