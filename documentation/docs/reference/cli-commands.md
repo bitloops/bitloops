@@ -38,7 +38,7 @@ Notes:
 
 - Run `bitloops start` first when the daemon is already configured.
 - Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
-- When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup before any init-triggered sync runs. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from `bitloops/bitloops-embeddings` automatically and writes the managed absolute path into the runtime config.
+- When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from `bitloops/bitloops-embeddings` automatically and writes the managed absolute path into the runtime config.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
@@ -48,12 +48,12 @@ Notes:
 - In non-interactive mode, plain `init` does not change embeddings config.
 - If embeddings are already configured, `init --install-default-daemon` leaves the active profile in place. Active `bitloops_embeddings_ipc` profiles may still be warmed; hosted or other non-local drivers are treated as already enabled.
 - `init` can queue an initial DevQL current-state sync after hook setup.
-- With `--install-default-daemon`, embeddings setup runs before any init-triggered sync so that sync can include embeddings immediately.
+- With `--install-default-daemon`, init-triggered sync and ingest run first. The managed embeddings runtime download then runs afterwards when the default local runtime still needs to be installed.
 - `--sync=true` queues that sync and follows it to completion.
 - `--sync=false` skips the initial sync explicitly.
 - If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
 - In non-interactive mode, `init` requires `--sync=true` or `--sync=false`.
-- `init` still does not run DevQL ingest. The `--skip-baseline` flag is accepted for compatibility only.
+- `init` can also run DevQL ingest when you opt in with `--ingest=true` or accept the interactive prompt. The `--skip-baseline` flag is accepted for compatibility only.
 - Use `--agent <name>` to pin the supported agent set.
 - `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.

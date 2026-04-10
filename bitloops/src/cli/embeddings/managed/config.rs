@@ -9,7 +9,6 @@ use crate::utils::platform_dirs::{bitloops_data_dir, ensure_dir};
 
 use super::archive::write_file_atomically;
 
-pub(crate) const DEFAULT_MANAGED_EMBEDDINGS_VERSION: &str = "v0.1.0";
 const MANAGED_EMBEDDINGS_INSTALL_PARENT_DIR: &str = "tools";
 const MANAGED_EMBEDDINGS_INSTALL_DIR_NAME: &str = "bitloops-embeddings";
 const MANAGED_EMBEDDINGS_METADATA_FILE_NAME: &str = "bitloops-embeddings-install.json";

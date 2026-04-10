@@ -1,7 +1,5 @@
 use super::managed::archive::{ManagedEmbeddingsArchiveKind, sha256_hex};
-use super::managed::config::{
-    DEFAULT_MANAGED_EMBEDDINGS_VERSION, managed_embeddings_binary_name, raw_managed_runtime_command,
-};
+use super::managed::config::{managed_embeddings_binary_name, raw_managed_runtime_command};
 use super::managed::install::{
     install_managed_embeddings_binary_from_release_bytes, managed_embeddings_asset_spec_for,
 };
@@ -22,6 +20,7 @@ use xz2::write::XzEncoder;
 use zip::write::FileOptions;
 
 const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
+const TEST_MANAGED_EMBEDDINGS_VERSION: &str = "v1.2.3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PullRuntimeConfig {
@@ -347,34 +346,38 @@ fn embeddings_cli_parses_pull_and_clear_cache() {
 #[test]
 fn managed_embeddings_asset_spec_matches_external_release_names() {
     assert_eq!(
-        managed_embeddings_asset_spec_for("macos", "aarch64", "v0.1.0")
+        managed_embeddings_asset_spec_for("macos", "aarch64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("mac arm asset")
             .asset_name,
-        "bitloops-embeddings-v0.1.0-aarch64-apple-darwin.zip"
+        format!("bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-aarch64-apple-darwin.zip")
     );
     assert_eq!(
-        managed_embeddings_asset_spec_for("macos", "x86_64", "v0.1.0")
+        managed_embeddings_asset_spec_for("macos", "x86_64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("mac x64 asset")
             .asset_name,
-        "bitloops-embeddings-v0.1.0-x86_64-apple-darwin.zip"
+        format!("bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-apple-darwin.zip")
     );
     assert_eq!(
-        managed_embeddings_asset_spec_for("linux", "aarch64", "v0.1.0")
+        managed_embeddings_asset_spec_for("linux", "aarch64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("linux arm asset")
             .asset_name,
-        "bitloops-embeddings-v0.1.0-aarch64-unknown-linux-gnu.tar.xz"
+        format!(
+            "bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-aarch64-unknown-linux-gnu.tar.xz"
+        )
     );
     assert_eq!(
-        managed_embeddings_asset_spec_for("linux", "x86_64", "v0.1.0")
+        managed_embeddings_asset_spec_for("linux", "x86_64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("linux x64 asset")
             .asset_name,
-        "bitloops-embeddings-v0.1.0-x86_64-unknown-linux-gnu.tar.xz"
+        format!(
+            "bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-unknown-linux-gnu.tar.xz"
+        )
     );
     assert_eq!(
-        managed_embeddings_asset_spec_for("windows", "x86_64", "v0.1.0")
+        managed_embeddings_asset_spec_for("windows", "x86_64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("windows x64 asset")
             .asset_name,
-        "bitloops-embeddings-v0.1.0-x86_64-pc-windows-msvc.zip"
+        format!("bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-pc-windows-msvc.zip")
     );
 }
 
@@ -391,7 +394,7 @@ fn managed_install_rejects_mismatched_digest() {
     );
 
     let err = install_managed_embeddings_binary_from_release_bytes(
-        "v0.1.0",
+        TEST_MANAGED_EMBEDDINGS_VERSION,
         "asset.zip",
         archive_kind,
         &"0".repeat(64),
@@ -416,7 +419,7 @@ fn managed_install_writes_binary_and_metadata() {
     );
 
     let outcome = install_managed_embeddings_binary_from_release_bytes(
-        "v0.1.0",
+        TEST_MANAGED_EMBEDDINGS_VERSION,
         "asset.zip",
         archive_kind,
         &expected_digest,
@@ -424,7 +427,7 @@ fn managed_install_writes_binary_and_metadata() {
     )
     .expect("install managed runtime");
 
-    assert_eq!(outcome.version, "v0.1.0");
+    assert_eq!(outcome.version, TEST_MANAGED_EMBEDDINGS_VERSION);
     assert!(outcome.binary_path.is_file());
     assert!(
         outcome
@@ -438,7 +441,9 @@ fn managed_install_writes_binary_and_metadata() {
     let metadata =
         fs::read_to_string(super::managed_embeddings_metadata_path().expect("metadata path"))
             .expect("read metadata");
-    assert!(metadata.contains("\"version\": \"v0.1.0\""));
+    assert!(metadata.contains(&format!(
+        "\"version\": \"{TEST_MANAGED_EMBEDDINGS_VERSION}\""
+    )));
 }
 
 #[test]
@@ -586,7 +591,7 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
     with_managed_embeddings_install_hook(
         move |repo_root| {
             Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                version: DEFAULT_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
                 binary_path: fake_managed_runtime_path(repo_root),
                 freshly_installed: true,
             })
@@ -727,7 +732,7 @@ fn pull_installs_managed_runtime_for_default_local_runtime() {
     with_managed_embeddings_install_hook(
         move |repo_root| {
             Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                version: DEFAULT_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
                 binary_path: fake_managed_runtime_path(repo_root),
                 freshly_installed: true,
             })

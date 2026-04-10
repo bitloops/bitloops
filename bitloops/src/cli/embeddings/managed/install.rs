@@ -22,9 +22,9 @@ use super::archive::{
     write_file_atomically,
 };
 use super::config::{
-    DEFAULT_MANAGED_EMBEDDINGS_VERSION, MANAGED_EMBEDDINGS_VERSION_OVERRIDE_ENV,
-    ManagedEmbeddingsInstallMetadata, load_managed_embeddings_install_metadata,
-    managed_embeddings_binary_dir, managed_embeddings_binary_name, managed_embeddings_binary_path,
+    MANAGED_EMBEDDINGS_VERSION_OVERRIDE_ENV, ManagedEmbeddingsInstallMetadata,
+    load_managed_embeddings_install_metadata, managed_embeddings_binary_dir,
+    managed_embeddings_binary_name, managed_embeddings_binary_path,
     managed_embeddings_bundle_is_complete, reset_managed_embeddings_install_dir,
     rewrite_managed_runtime_command_if_eligible, save_managed_embeddings_install_metadata,
 };
@@ -33,6 +33,14 @@ const MANAGED_EMBEDDINGS_RELEASES_API_BASE: &str =
     "https://api.github.com/repos/bitloops/bitloops-embeddings";
 const MANAGED_EMBEDDINGS_HTTP_TIMEOUT_SECS: u64 = 300;
 const MANAGED_EMBEDDINGS_USER_AGENT: &str = "bitloops-cli";
+
+// TODO: replace latest-resolution with compatibility-range negotiation once the
+// managed embeddings runtime exposes an explicit compatibility contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ManagedEmbeddingsReleaseRequest {
+    Latest,
+    Tag(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManagedEmbeddingsBinaryInstallOutcome {
@@ -158,43 +166,24 @@ fn install_managed_embeddings_binary(
     }
 
     let _ = repo_root;
-    let version = managed_embeddings_target_version();
     let binary_path = managed_embeddings_binary_path()?;
-    if let Some(metadata) = load_managed_embeddings_install_metadata()?
-        && metadata.version == version
-        && metadata.binary_path == binary_path
-        && managed_embeddings_bundle_is_complete(&binary_path)
-    {
-        return Ok(ManagedEmbeddingsBinaryInstallOutcome {
-            version,
-            binary_path,
-            freshly_installed: false,
-        });
+    let install_metadata = load_managed_embeddings_install_metadata()?;
+    let release_request = managed_embeddings_release_request();
+    let required_version = match &release_request {
+        ManagedEmbeddingsReleaseRequest::Latest => None,
+        ManagedEmbeddingsReleaseRequest::Tag(version) => Some(version.as_str()),
+    };
+    if let Some(outcome) = installed_managed_embeddings_outcome(
+        install_metadata.as_ref(),
+        &binary_path,
+        required_version,
+    ) {
+        return Ok(outcome);
     }
 
-    let asset_spec = managed_embeddings_asset_spec(&version)?;
-    let release = fetch_managed_embeddings_release(&version)?;
-    let asset = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == asset_spec.asset_name)
-        .ok_or_else(|| {
-            anyhow!(
-                "managed bitloops-embeddings release `{}` did not contain asset `{}`",
-                release.tag_name,
-                asset_spec.asset_name
-            )
-        })?;
-    let expected_digest = parse_sha256_digest(asset.digest.as_deref())?;
-    let archive_bytes = download_managed_embeddings_asset(&asset.browser_download_url)?;
+    let release = fetch_managed_embeddings_release(&release_request)?;
 
-    install_managed_embeddings_binary_from_release_bytes(
-        &release.tag_name,
-        &asset.name,
-        asset_spec.archive_kind,
-        &expected_digest,
-        archive_bytes.as_ref(),
-    )
+    install_managed_embeddings_binary_from_release(&release)
 }
 
 pub(crate) fn install_managed_embeddings_binary_from_release_bytes(
@@ -283,15 +272,79 @@ fn managed_embeddings_target_version() -> String {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_MANAGED_EMBEDDINGS_VERSION.to_string())
+        .unwrap_or_default()
+}
+
+fn managed_embeddings_release_request() -> ManagedEmbeddingsReleaseRequest {
+    let version = managed_embeddings_target_version();
+    if version.is_empty() {
+        ManagedEmbeddingsReleaseRequest::Latest
+    } else {
+        ManagedEmbeddingsReleaseRequest::Tag(version)
+    }
 }
 
 fn managed_embeddings_asset_spec(version: &str) -> Result<ManagedEmbeddingsAssetSpec> {
     managed_embeddings_asset_spec_for(env::consts::OS, env::consts::ARCH, version)
 }
 
-fn fetch_managed_embeddings_release(version: &str) -> Result<GitHubReleasePayload> {
-    let url = format!("{MANAGED_EMBEDDINGS_RELEASES_API_BASE}/releases/tags/{version}");
+fn installed_managed_embeddings_outcome(
+    metadata: Option<&ManagedEmbeddingsInstallMetadata>,
+    binary_path: &Path,
+    required_version: Option<&str>,
+) -> Option<ManagedEmbeddingsBinaryInstallOutcome> {
+    let metadata = metadata?;
+    if metadata.binary_path != binary_path || !managed_embeddings_bundle_is_complete(binary_path) {
+        return None;
+    }
+    if let Some(required_version) = required_version
+        && metadata.version != required_version
+    {
+        return None;
+    }
+
+    Some(ManagedEmbeddingsBinaryInstallOutcome {
+        version: metadata.version.clone(),
+        binary_path: binary_path.to_path_buf(),
+        freshly_installed: false,
+    })
+}
+
+fn install_managed_embeddings_binary_from_release(
+    release: &GitHubReleasePayload,
+) -> Result<ManagedEmbeddingsBinaryInstallOutcome> {
+    let asset_spec = managed_embeddings_asset_spec(&release.tag_name)?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == asset_spec.asset_name)
+        .ok_or_else(|| {
+            anyhow!(
+                "managed bitloops-embeddings release `{}` did not contain asset `{}`",
+                release.tag_name,
+                asset_spec.asset_name
+            )
+        })?;
+    let expected_digest = parse_sha256_digest(asset.digest.as_deref())?;
+    let archive_bytes = download_managed_embeddings_asset(&asset.browser_download_url)?;
+
+    install_managed_embeddings_binary_from_release_bytes(
+        &release.tag_name,
+        &asset.name,
+        asset_spec.archive_kind,
+        &expected_digest,
+        archive_bytes.as_ref(),
+    )
+}
+
+fn fetch_managed_embeddings_release(
+    request: &ManagedEmbeddingsReleaseRequest,
+) -> Result<GitHubReleasePayload> {
+    let release_path = match request {
+        ManagedEmbeddingsReleaseRequest::Latest => "latest".to_string(),
+        ManagedEmbeddingsReleaseRequest::Tag(version) => format!("tags/{version}"),
+    };
+    let url = format!("{MANAGED_EMBEDDINGS_RELEASES_API_BASE}/releases/{release_path}");
     managed_embeddings_http_client()?
         .get(url)
         .header(ACCEPT, "application/vnd.github+json")
@@ -354,4 +407,39 @@ pub(crate) fn with_managed_embeddings_install_hook<T>(
         *cell.borrow_mut() = None;
     });
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ManagedEmbeddingsReleaseRequest, managed_embeddings_release_request};
+    use crate::test_support::process_state::enter_process_state;
+    use tempfile::TempDir;
+
+    #[test]
+    fn managed_embeddings_release_request_defaults_to_latest() {
+        let repo = TempDir::new().expect("tempdir");
+        let _guard = enter_process_state(
+            Some(repo.path()),
+            &[("BITLOOPS_EMBEDDINGS_VERSION_OVERRIDE", None)],
+        );
+
+        assert_eq!(
+            managed_embeddings_release_request(),
+            ManagedEmbeddingsReleaseRequest::Latest
+        );
+    }
+
+    #[test]
+    fn managed_embeddings_release_request_uses_override_tag() {
+        let repo = TempDir::new().expect("tempdir");
+        let _guard = enter_process_state(
+            Some(repo.path()),
+            &[("BITLOOPS_EMBEDDINGS_VERSION_OVERRIDE", Some("v1.2.3"))],
+        );
+
+        assert_eq!(
+            managed_embeddings_release_request(),
+            ManagedEmbeddingsReleaseRequest::Tag("v1.2.3".to_string())
+        );
+    }
 }

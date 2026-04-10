@@ -202,24 +202,16 @@ async fn run_with_io_async_for_project_root(
         out,
     )?;
 
-    if should_install_embeddings_during_init(project_root, args.install_default_daemon, out, input)?
-    {
-        writeln!(out, "Preparing local embeddings setup...")?;
-        writeln!(
-            out,
-            "This can take a moment if the managed runtime needs to be downloaded."
-        )?;
-        out.flush()?;
-        match install_or_bootstrap_embeddings(project_root) {
-            Ok(lines) => {
-                for line in lines {
-                    writeln!(out, "{line}")?;
-                }
-            }
-            Err(err) => {
-                bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
-            }
-        }
+    let should_install_embeddings = should_install_embeddings_during_init(
+        project_root,
+        args.install_default_daemon,
+        out,
+        input,
+    )?;
+    let defer_embeddings_install_until_after_sync =
+        should_install_embeddings && args.install_default_daemon;
+    if should_install_embeddings && !defer_embeddings_install_until_after_sync {
+        install_embeddings_during_init(project_root, out)?;
     }
 
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
@@ -259,7 +251,30 @@ async fn run_with_io_async_for_project_root(
             .await?;
         }
     }
+    if defer_embeddings_install_until_after_sync {
+        install_embeddings_during_init(project_root, out)?;
+    }
     Ok(())
+}
+
+fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
+    writeln!(out, "Preparing local embeddings setup...")?;
+    writeln!(
+        out,
+        "This can take a moment if the managed runtime needs to be downloaded."
+    )?;
+    out.flush()?;
+    match install_or_bootstrap_embeddings(project_root) {
+        Ok(lines) => {
+            for line in lines {
+                writeln!(out, "{line}")?;
+            }
+            Ok(())
+        }
+        Err(err) => {
+            bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
+        }
+    }
 }
 
 fn should_install_embeddings_during_init(

@@ -54,7 +54,7 @@ Use plain `bitloops init` when the daemon is already running. Use `bitloops init
 
 This creates or updates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
 
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile, installs the managed standalone `bitloops-embeddings` runtime when the default local runtime is selected, and warms that profile before any init-triggered sync runs.
+When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile, installs the managed standalone `bitloops-embeddings` runtime when the default local runtime is selected, and warms that profile. If init also runs sync or ingest, the managed runtime download happens afterwards.
 
 In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
 
@@ -62,7 +62,7 @@ In an interactive terminal, plain `bitloops init` also asks whether you want to 
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
 
-That initial sync only reconciles current workspace state. Use `bitloops devql ingest` separately when you want checkpoint, commit, and event history materialised.
+That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql ingest` separately, when you want checkpoint, commit, and event history materialised.
 
 If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 

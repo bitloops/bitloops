@@ -220,7 +220,7 @@ Configured relational, events, and blob stores still come from the daemon config
 
 Interactive `bitloops init` can also ask whether you want to install the default local embeddings setup when embeddings are still unconfigured, whether you want to queue an initial DevQL current-state sync after hook setup, and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
 
-When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup before any init-triggered sync if embeddings are not already configured.
+When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup if embeddings are not already configured. When init also runs sync or ingest, any managed `bitloops-embeddings` download happens afterwards.
 
 Use DevQL commands separately when you want to rerun ingest, sync, or validation after initial setup. `bitloops init` can run both initial sync and initial commit-history ingest when you opt into them.
 

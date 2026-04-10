@@ -436,6 +436,7 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
         ],
     )
     .expect("insert target embedding");
+    drop(conn);
 
     let parsed_neighbors = parse_devql_query(
         r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/pdf.ts::createInvoicePdf")->clones(neighbors:5,min_score:0.5)->limit(10)"#,
