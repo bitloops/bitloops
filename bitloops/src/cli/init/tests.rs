@@ -368,7 +368,10 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(!rendered.contains("Bitloops project bootstrap is ready."));
         assert!(repo.path().join(".bitloops.local.toml").exists());
-        assert!(repo.path().join(".claude/settings.json").exists());
+        assert_eq!(
+            crate::cli::enable::initialized_agents(repo.path()),
+            vec![DEFAULT_AGENT.to_string()]
+        );
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
