@@ -212,6 +212,10 @@ resolve_binary_path() {
     echo "$binary"
     return 0
   fi
+  if [[ -n "${!MOCK_ENV:-}" && "${!MOCK_ENV}" != "0" ]]; then
+    echo "$binary"
+    return 0
+  fi
   command -v "$binary"
 }
 

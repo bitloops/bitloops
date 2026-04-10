@@ -133,6 +133,17 @@ jobs:
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
         run: cargo build --release -p bitloops --target ${{ matrix.target }}
 
+      - name: Stage DuckDB runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = "target/${{ matrix.target }}/release"
+          $dll = Join-Path $binDir "deps/duckdb.dll"
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
+          }
+          Copy-Item $dll (Join-Path $binDir "duckdb.dll") -Force
+
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
         run: ./target/${{ matrix.target }}/release/bitloops --version
@@ -151,7 +162,12 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $path = "target/${{ matrix.target }}/release/bitloops.exe"
-          if (-not (Test-Path $path)) {
-            throw "Missing expected binary: $path"
+          $binDir = "target/${{ matrix.target }}/release"
+          $exe = Join-Path $binDir "bitloops.exe"
+          $dll = Join-Path $binDir "duckdb.dll"
+          if (-not (Test-Path $exe)) {
+            throw "Missing expected binary: $exe"
+          }
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
           }
