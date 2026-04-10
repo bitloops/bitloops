@@ -73,76 +73,6 @@ jobs:
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
         run: cargo build --release --target ${{ matrix.target }} -p bitloops
 
-      - name: Download embeddings runtime (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          case "${{ runner.os }}" in
-            macOS)
-              ARCHIVE_EXT="zip"
-              ;;
-            Linux)
-              ARCHIVE_EXT="tar.gz"
-              ;;
-            *)
-              echo "Unsupported runner OS: ${{ runner.os }}" >&2
-              exit 1
-              ;;
-          esac
-
-          TAG="${GITHUB_REF_NAME}"
-          ASSET_NAME="bitloops-embeddings-${{ matrix.target }}.${ARCHIVE_EXT}"
-          ASSET_URL="https://github.com/bitloops/bitloops-embeddings/releases/download/${TAG}/${ASSET_NAME}"
-          TMP_DIR="$(mktemp -d)"
-          trap 'rm -rf "$TMP_DIR"' EXIT
-
-          curl -fL "$ASSET_URL" -o "${TMP_DIR}/${ASSET_NAME}"
-
-          case "$ARCHIVE_EXT" in
-            zip)
-              ditto -x -k "${TMP_DIR}/${ASSET_NAME}" "${TMP_DIR}/extract"
-              ;;
-            tar.gz)
-              mkdir -p "${TMP_DIR}/extract"
-              tar -xzf "${TMP_DIR}/${ASSET_NAME}" -C "${TMP_DIR}/extract"
-              ;;
-            *)
-              echo "Unsupported archive type: ${ARCHIVE_EXT}" >&2
-              exit 1
-              ;;
-          esac
-
-          EMBEDDINGS_BINARY="$(find "${TMP_DIR}/extract" -type f -name 'bitloops-embeddings' -print -quit)"
-          if [[ -z "${EMBEDDINGS_BINARY}" ]]; then
-            echo "Error: extracted archive did not contain 'bitloops-embeddings' binary" >&2
-            exit 1
-          fi
-
-          install -m 0755 "${EMBEDDINGS_BINARY}" "target/${{ matrix.target }}/release/bitloops-embeddings"
-
-      - name: Download embeddings runtime (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'aarch64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME
-          $assetName = "bitloops-embeddings-${{ matrix.target }}.zip"
-          $assetUrl = "https://github.com/bitloops/bitloops-embeddings/releases/download/$tag/$assetName"
-          $tmpDir = Join-Path $env:RUNNER_TEMP "bitloops-embeddings"
-          $extractDir = Join-Path $tmpDir "extract"
-
-          New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-          Invoke-WebRequest -Uri $assetUrl -OutFile (Join-Path $tmpDir $assetName)
-          Expand-Archive -Path (Join-Path $tmpDir $assetName) -DestinationPath $extractDir -Force
-
-          $embeddingsBinary = Get-ChildItem -Path $extractDir -Recurse -Filter bitloops-embeddings.exe | Select-Object -First 1
-          if (-not $embeddingsBinary) {
-            throw "Extracted archive did not contain bitloops-embeddings.exe"
-          }
-
-          Copy-Item -Path $embeddingsBinary.FullName -Destination "target/${{ matrix.target }}/release/bitloops-embeddings.exe" -Force
-
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
         run: ./target/${{ matrix.target }}/release/bitloops --version
@@ -211,15 +141,13 @@ jobs:
           mkdir -p dist
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
-          cp "target/${{ matrix.target }}/release/bitloops-embeddings" dist/package/bitloops-embeddings
-          tar -C dist/package -czf dist/bitloops-${{ matrix.target }}.tar.gz bitloops bitloops-embeddings
+          tar -C dist/package -czf dist/bitloops-${{ matrix.target }}.tar.gz bitloops
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
-          cp "target/${{ matrix.target }}/release/bitloops-embeddings" dist/package/bitloops-embeddings
           ditto -c -k --keepParent dist/package "dist/bitloops-${{ matrix.target }}.zip"
 
       - name: Restore App Store Connect key
@@ -247,7 +175,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/bitloops.exe" "dist/package/bitloops.exe" -Force
-          Copy-Item "target/${{ matrix.target }}/release/bitloops-embeddings.exe" "dist/package/bitloops-embeddings.exe" -Force
           Compress-Archive -Path dist/package/* -DestinationPath dist/bitloops-${{ matrix.target }}.zip
 
       - name: Upload build artifact
