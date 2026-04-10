@@ -302,6 +302,7 @@ fn perform_full_rewind(repo_root: &Path, point: &RewindPoint) -> Result<()> {
 
 #[derive(Debug, Clone)]
 struct TreeEntry {
+    #[cfg(unix)]
     mode: String,
     hash: String,
     path: String,
@@ -362,6 +363,7 @@ fn list_checkpoint_tree_entries(repo_root: &Path, commit_id: &str) -> Result<Vec
         }
 
         entries.push(TreeEntry {
+            #[cfg(unix)]
             mode: mode.to_string(),
             hash: hash.to_string(),
             path: path.to_string(),

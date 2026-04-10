@@ -456,25 +456,35 @@ mod build_linked {
         fs::create_dir_all(&download_dir)?;
 
         let archive_path = download_dir.join(archive.archive_name);
-        let lib_marker = download_dir.join(archive.dynamic_lib);
+        let required_artifacts = archive.required_artifacts();
+        let missing_artifacts = required_artifacts
+            .iter()
+            .filter(|artifact| !download_dir.join(artifact).exists())
+            .copied()
+            .collect::<Vec<_>>();
 
-        if lib_marker.exists() {
+        if missing_artifacts.is_empty() {
             println!("cargo:warning=Reusing libduckdb from {}", download_dir.display());
         } else {
             let client = http_client()?;
             let url = archive.download_url(&version);
             ensure_libduckdb(&client, &url, &archive_path)?;
             extract_libduckdb(&archive_path, &download_dir)?;
-            if !lib_marker.exists() {
+            let still_missing = required_artifacts
+                .iter()
+                .filter(|artifact| !download_dir.join(artifact).exists())
+                .copied()
+                .collect::<Vec<_>>();
+            if !still_missing.is_empty() {
                 return Err(format!(
-                    "Downloaded archive did not contain expected library '{}'",
-                    archive.dynamic_lib
+                    "Downloaded archive did not contain expected artefacts: {}",
+                    still_missing.join(", ")
                 )
                 .into());
             }
         }
 
-        let deps_dir = copy_libduckdb(&download_dir, archive.dynamic_lib, out_dir)?;
+        let deps_dir = copy_libduckdb(&download_dir, &required_artifacts, out_dir)?;
         configure_link_search(&deps_dir);
 
         Ok(HeaderLocation::FromPath(download_dir.to_string_lossy().into_owned()))
@@ -525,20 +535,22 @@ mod build_linked {
     // the default Cargo rpath, just like when DUCKDB_LIB_DIR is set.
     fn copy_libduckdb(
         download_dir: &Path,
-        lib_filename: &str,
+        lib_filenames: &[&str],
         out_dir: &str,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let Some(deps_dir) = profile_deps_dir(out_dir) else {
             return Err("Could not determine target/deps directory for runtime lib copy".into());
         };
         fs::create_dir_all(&deps_dir)?;
-        let source = download_dir.join(lib_filename);
-        let dest = deps_dir.join(lib_filename);
-        if dest.exists() {
-            fs::remove_file(&dest)?;
+        for lib_filename in lib_filenames {
+            let source = download_dir.join(lib_filename);
+            let dest = deps_dir.join(lib_filename);
+            if dest.exists() {
+                fs::remove_file(&dest)?;
+            }
+            fs::copy(&source, &dest)?;
+            println!("cargo:warning=Copied libduckdb to {}", dest.display());
         }
-        fs::copy(&source, &dest)?;
-        println!("cargo:warning=Copied libduckdb to {}", dest.display());
         Ok(deps_dir)
     }
 
@@ -590,6 +602,7 @@ mod build_linked {
     struct LibduckdbArchive {
         archive_name: &'static str,
         dynamic_lib: &'static str,
+        import_lib: Option<&'static str>,
     }
 
     impl LibduckdbArchive {
@@ -598,25 +611,38 @@ mod build_linked {
                 t if t.ends_with("apple-darwin") => Some(Self {
                     archive_name: "libduckdb-osx-universal.zip",
                     dynamic_lib: "libduckdb.dylib",
+                    import_lib: None,
                 }),
                 "x86_64-unknown-linux-gnu" => Some(Self {
                     archive_name: "libduckdb-linux-amd64.zip",
                     dynamic_lib: "libduckdb.so",
+                    import_lib: None,
                 }),
                 "aarch64-unknown-linux-gnu" => Some(Self {
                     archive_name: "libduckdb-linux-arm64.zip",
                     dynamic_lib: "libduckdb.so",
+                    import_lib: None,
                 }),
                 "x86_64-pc-windows-msvc" => Some(Self {
                     archive_name: "libduckdb-windows-amd64.zip",
                     dynamic_lib: "duckdb.dll",
+                    import_lib: Some("duckdb.lib"),
                 }),
                 "aarch64-pc-windows-msvc" => Some(Self {
                     archive_name: "libduckdb-windows-arm64.zip",
                     dynamic_lib: "duckdb.dll",
+                    import_lib: Some("duckdb.lib"),
                 }),
                 _ => None,
             }
+        }
+
+        fn required_artifacts(&self) -> Vec<&'static str> {
+            let mut artefacts = vec![self.dynamic_lib];
+            if let Some(import_lib) = self.import_lib {
+                artefacts.push(import_lib);
+            }
+            artefacts
         }
 
         fn download_url(&self, version: &str) -> String {

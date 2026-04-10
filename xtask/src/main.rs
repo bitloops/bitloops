@@ -20,6 +20,7 @@ const SLOW_TEST_TARGETS: &[&str] = &[
     "testlens_gherkin",
     "testlens_sqlite_acceptance",
 ];
+const SLOW_LIB_TESTS: &[&str] = &["host::devql::cucumber_bdd::devql_bdd_features_pass"];
 const MERGE_SMOKE_TARGETS: &[&str] = &[
     "agent_cli_smoke",
     "checkpoint_rewind_smoke",
@@ -557,6 +558,17 @@ fn slow_test_lane_args(targets: &[&str]) -> Vec<String> {
     args
 }
 
+fn slow_lib_test_lane_args(test_name: &str) -> Vec<String> {
+    let mut args = base_test_lane_args();
+    args.push("--features".to_string());
+    args.push("slow-tests".to_string());
+    args.push("--lib".to_string());
+    args.push("--".to_string());
+    args.push(test_name.to_string());
+    args.push("--exact".to_string());
+    args
+}
+
 fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
     let mut args = base_test_lane_args();
 
@@ -592,6 +604,15 @@ fn test_lane_args(lane: &str) -> Result<Vec<String>, String> {
 fn test_lane_command_groups(lane: &str) -> Result<Vec<Vec<String>>, String> {
     match lane {
         "merge" => Ok(vec![test_lane_args("fast")?, test_lane_args("smoke")?]),
+        "slow" => {
+            let mut groups = vec![test_lane_args("slow")?];
+            groups.extend(
+                SLOW_LIB_TESTS
+                    .iter()
+                    .map(|test_name| slow_lib_test_lane_args(test_name)),
+            );
+            Ok(groups)
+        }
         _ => Ok(vec![test_lane_args(lane)?]),
     }
 }

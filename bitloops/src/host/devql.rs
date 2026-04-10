@@ -890,18 +890,21 @@ mod mapping_tests;
 mod core_contract_tests;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/cucumber_world.rs"]
 mod cucumber_world;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/cucumber_steps/mod.rs"]
 mod cucumber_steps;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "slow-tests"))]
 #[path = "devql/tests/cucumber_bdd.rs"]
 mod cucumber_bdd;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;
 
