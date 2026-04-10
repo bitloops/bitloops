@@ -1,24 +1,42 @@
-use async_graphql::SimpleObject;
+use async_graphql::{Enum, SimpleObject};
 
-use crate::daemon::SyncTaskRecord;
-use crate::graphql::mutation_root::SyncResult;
+use crate::daemon::{
+    DevqlTaskControlResult, DevqlTaskKindCounts, DevqlTaskQueueStatus, DevqlTaskRecord,
+    DevqlTaskStatus,
+};
+use crate::graphql::mutation_root::{IngestResult, SyncResult};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum TaskKind {
+    Sync,
+    Ingest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum TaskStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
 
 #[derive(Debug, Clone, SimpleObject)]
-#[graphql(name = "SyncTask")]
-pub struct SyncTaskObject {
-    pub task_id: String,
-    pub repo_id: String,
-    pub repo_name: String,
-    pub repo_identity: String,
-    pub source: String,
+#[graphql(name = "SyncTaskSpec")]
+pub struct SyncTaskSpecObject {
     pub mode: String,
-    pub status: String,
-    pub submitted_at_unix: i64,
-    pub started_at_unix: Option<i64>,
-    pub updated_at_unix: i64,
-    pub completed_at_unix: Option<i64>,
-    pub queue_position: Option<i32>,
-    pub tasks_ahead: Option<i32>,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "IngestTaskSpec")]
+pub struct IngestTaskSpecObject {
+    pub backfill: Option<i32>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "SyncTaskProgress")]
+pub struct SyncTaskProgressObject {
     pub phase: String,
     pub current_path: Option<String>,
     pub paths_total: i32,
@@ -31,227 +49,239 @@ pub struct SyncTaskObject {
     pub cache_hits: i32,
     pub cache_misses: i32,
     pub parse_errors: i32,
-    pub error: Option<String>,
-    pub summary: Option<SyncResult>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-#[graphql(name = "SyncProgressEvent")]
-pub struct SyncProgressEvent {
+#[graphql(name = "Task")]
+pub struct TaskObject {
     pub task_id: String,
     pub repo_id: String,
     pub repo_name: String,
     pub repo_identity: String,
+    pub kind: TaskKind,
     pub source: String,
-    pub mode: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub submitted_at_unix: i64,
     pub started_at_unix: Option<i64>,
     pub updated_at_unix: i64,
     pub completed_at_unix: Option<i64>,
     pub queue_position: Option<i32>,
     pub tasks_ahead: Option<i32>,
-    pub phase: String,
-    pub current_path: Option<String>,
-    pub paths_total: i32,
-    pub paths_completed: i32,
-    pub paths_remaining: i32,
-    pub paths_unchanged: i32,
-    pub paths_added: i32,
-    pub paths_changed: i32,
-    pub paths_removed: i32,
-    pub cache_hits: i32,
-    pub cache_misses: i32,
-    pub parse_errors: i32,
     pub error: Option<String>,
-    pub summary: Option<SyncResult>,
+    pub sync_spec: Option<SyncTaskSpecObject>,
+    pub ingest_spec: Option<IngestTaskSpecObject>,
+    pub sync_progress: Option<SyncTaskProgressObject>,
+    pub ingest_progress: Option<super::IngestionProgressEvent>,
+    pub sync_result: Option<SyncResult>,
+    pub ingest_result: Option<IngestResult>,
 }
 
-impl From<SyncTaskRecord> for SyncTaskObject {
-    fn from(value: SyncTaskRecord) -> Self {
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "TaskProgressEvent")]
+pub struct TaskProgressEvent {
+    pub task: TaskObject,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "TaskKindCounts")]
+pub struct TaskKindCountsObject {
+    pub kind: TaskKind,
+    pub queued_tasks: i32,
+    pub running_tasks: i32,
+    pub failed_tasks: i32,
+    pub completed_recent_tasks: i32,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "TaskQueueStatus")]
+pub struct TaskQueueStatusObject {
+    pub persisted: bool,
+    pub queued_tasks: i32,
+    pub running_tasks: i32,
+    pub failed_tasks: i32,
+    pub completed_recent_tasks: i32,
+    pub by_kind: Vec<TaskKindCountsObject>,
+    pub paused: bool,
+    pub paused_reason: Option<String>,
+    pub last_action: Option<String>,
+    pub last_updated_unix: i64,
+    pub current_repo_tasks: Vec<TaskObject>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "TaskQueueControlResult")]
+pub struct TaskQueueControlResultObject {
+    pub message: String,
+    pub repo_id: String,
+    pub paused: bool,
+    pub paused_reason: Option<String>,
+    pub updated_at_unix: i64,
+}
+
+impl From<DevqlTaskRecord> for TaskObject {
+    fn from(value: DevqlTaskRecord) -> Self {
+        let sync_spec = value.sync_spec().map(|spec| match &spec.mode {
+            crate::daemon::SyncTaskMode::Auto => SyncTaskSpecObject {
+                mode: "auto".to_string(),
+                paths: Vec::new(),
+            },
+            crate::daemon::SyncTaskMode::Full => SyncTaskSpecObject {
+                mode: "full".to_string(),
+                paths: Vec::new(),
+            },
+            crate::daemon::SyncTaskMode::Paths { paths } => SyncTaskSpecObject {
+                mode: "paths".to_string(),
+                paths: paths.clone(),
+            },
+            crate::daemon::SyncTaskMode::Repair => SyncTaskSpecObject {
+                mode: "repair".to_string(),
+                paths: Vec::new(),
+            },
+            crate::daemon::SyncTaskMode::Validate => SyncTaskSpecObject {
+                mode: "validate".to_string(),
+                paths: Vec::new(),
+            },
+        });
+        let ingest_spec = value.ingest_spec().map(|spec| IngestTaskSpecObject {
+            backfill: spec.backfill.map(to_graphql_count),
+        });
+        let sync_progress = value
+            .sync_progress()
+            .map(|progress| SyncTaskProgressObject {
+                phase: progress.phase.as_str().to_string(),
+                current_path: progress.current_path.clone(),
+                paths_total: to_graphql_count(progress.paths_total),
+                paths_completed: to_graphql_count(progress.paths_completed),
+                paths_remaining: to_graphql_count(progress.paths_remaining),
+                paths_unchanged: to_graphql_count(progress.paths_unchanged),
+                paths_added: to_graphql_count(progress.paths_added),
+                paths_changed: to_graphql_count(progress.paths_changed),
+                paths_removed: to_graphql_count(progress.paths_removed),
+                cache_hits: to_graphql_count(progress.cache_hits),
+                cache_misses: to_graphql_count(progress.cache_misses),
+                parse_errors: to_graphql_count(progress.parse_errors),
+            });
+        let ingest_progress = value.ingest_progress().cloned().map(Into::into);
+        let sync_result = value.sync_result().cloned().map(Into::into);
+        let ingest_result = value.ingest_result().cloned().map(Into::into);
+
         Self {
             task_id: value.task_id,
             repo_id: value.repo_id,
             repo_name: value.repo_name,
             repo_identity: value.repo_identity,
+            kind: match value.kind {
+                crate::daemon::DevqlTaskKind::Sync => TaskKind::Sync,
+                crate::daemon::DevqlTaskKind::Ingest => TaskKind::Ingest,
+            },
             source: value.source.to_string(),
-            mode: value.mode.to_string(),
-            status: value.status.to_string(),
+            status: match value.status {
+                DevqlTaskStatus::Queued => TaskStatus::Queued,
+                DevqlTaskStatus::Running => TaskStatus::Running,
+                DevqlTaskStatus::Completed => TaskStatus::Completed,
+                DevqlTaskStatus::Failed => TaskStatus::Failed,
+                DevqlTaskStatus::Cancelled => TaskStatus::Cancelled,
+            },
             submitted_at_unix: value.submitted_at_unix as i64,
             started_at_unix: value.started_at_unix.map(|value| value as i64),
             updated_at_unix: value.updated_at_unix as i64,
             completed_at_unix: value.completed_at_unix.map(|value| value as i64),
             queue_position: value.queue_position.map(to_graphql_count),
             tasks_ahead: value.tasks_ahead.map(to_graphql_count),
-            phase: value.progress.phase.as_str().to_string(),
-            current_path: value.progress.current_path,
-            paths_total: to_graphql_count(value.progress.paths_total),
-            paths_completed: to_graphql_count(value.progress.paths_completed),
-            paths_remaining: to_graphql_count(value.progress.paths_remaining),
-            paths_unchanged: to_graphql_count(value.progress.paths_unchanged),
-            paths_added: to_graphql_count(value.progress.paths_added),
-            paths_changed: to_graphql_count(value.progress.paths_changed),
-            paths_removed: to_graphql_count(value.progress.paths_removed),
-            cache_hits: to_graphql_count(value.progress.cache_hits),
-            cache_misses: to_graphql_count(value.progress.cache_misses),
-            parse_errors: to_graphql_count(value.progress.parse_errors),
             error: value.error,
-            summary: value.summary.map(Into::into),
+            sync_spec,
+            ingest_spec,
+            sync_progress,
+            ingest_progress,
+            sync_result,
+            ingest_result,
         }
     }
 }
 
-impl From<SyncTaskRecord> for SyncProgressEvent {
-    fn from(value: SyncTaskRecord) -> Self {
-        let task: SyncTaskObject = value.into();
+impl From<DevqlTaskRecord> for TaskProgressEvent {
+    fn from(value: DevqlTaskRecord) -> Self {
+        Self { task: value.into() }
+    }
+}
+
+impl From<TaskKind> for crate::daemon::DevqlTaskKind {
+    fn from(value: TaskKind) -> Self {
+        match value {
+            TaskKind::Sync => Self::Sync,
+            TaskKind::Ingest => Self::Ingest,
+        }
+    }
+}
+
+impl From<TaskStatus> for crate::daemon::DevqlTaskStatus {
+    fn from(value: TaskStatus) -> Self {
+        match value {
+            TaskStatus::Queued => Self::Queued,
+            TaskStatus::Running => Self::Running,
+            TaskStatus::Completed => Self::Completed,
+            TaskStatus::Failed => Self::Failed,
+            TaskStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl From<DevqlTaskKindCounts> for TaskKindCountsObject {
+    fn from(value: DevqlTaskKindCounts) -> Self {
         Self {
-            task_id: task.task_id,
-            repo_id: task.repo_id,
-            repo_name: task.repo_name,
-            repo_identity: task.repo_identity,
-            source: task.source,
-            mode: task.mode,
-            status: task.status,
-            submitted_at_unix: task.submitted_at_unix,
-            started_at_unix: task.started_at_unix,
-            updated_at_unix: task.updated_at_unix,
-            completed_at_unix: task.completed_at_unix,
-            queue_position: task.queue_position,
-            tasks_ahead: task.tasks_ahead,
-            phase: task.phase,
-            current_path: task.current_path,
-            paths_total: task.paths_total,
-            paths_completed: task.paths_completed,
-            paths_remaining: task.paths_remaining,
-            paths_unchanged: task.paths_unchanged,
-            paths_added: task.paths_added,
-            paths_changed: task.paths_changed,
-            paths_removed: task.paths_removed,
-            cache_hits: task.cache_hits,
-            cache_misses: task.cache_misses,
-            parse_errors: task.parse_errors,
-            error: task.error,
-            summary: task.summary,
+            kind: match value.kind {
+                crate::daemon::DevqlTaskKind::Sync => TaskKind::Sync,
+                crate::daemon::DevqlTaskKind::Ingest => TaskKind::Ingest,
+            },
+            queued_tasks: to_graphql_count(value.queued_tasks),
+            running_tasks: to_graphql_count(value.running_tasks),
+            failed_tasks: to_graphql_count(value.failed_tasks),
+            completed_recent_tasks: to_graphql_count(value.completed_recent_tasks),
+        }
+    }
+}
+
+impl From<DevqlTaskQueueStatus> for TaskQueueStatusObject {
+    fn from(value: DevqlTaskQueueStatus) -> Self {
+        Self {
+            persisted: value.persisted,
+            queued_tasks: to_graphql_count(value.state.queued_tasks),
+            running_tasks: to_graphql_count(value.state.running_tasks),
+            failed_tasks: to_graphql_count(value.state.failed_tasks),
+            completed_recent_tasks: to_graphql_count(value.state.completed_recent_tasks),
+            by_kind: value.state.by_kind.into_iter().map(Into::into).collect(),
+            paused: value
+                .current_repo_control
+                .as_ref()
+                .map(|control| control.paused)
+                .unwrap_or(false),
+            paused_reason: value
+                .current_repo_control
+                .as_ref()
+                .and_then(|control| control.paused_reason.clone()),
+            last_action: value.state.last_action,
+            last_updated_unix: value.state.last_updated_unix as i64,
+            current_repo_tasks: value
+                .current_repo_tasks
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+impl From<DevqlTaskControlResult> for TaskQueueControlResultObject {
+    fn from(value: DevqlTaskControlResult) -> Self {
+        Self {
+            message: value.message,
+            repo_id: value.control.repo_id,
+            paused: value.control.paused,
+            paused_reason: value.control.paused_reason,
+            updated_at_unix: value.control.updated_at_unix as i64,
         }
     }
 }
 
 fn to_graphql_count(value: impl TryInto<i32>) -> i32 {
     value.try_into().unwrap_or(i32::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_sync_record() -> SyncTaskRecord {
-        SyncTaskRecord {
-            task_id: "sync-task-1".to_string(),
-            repo_id: "repo-1".to_string(),
-            repo_name: "bitloops".to_string(),
-            repo_provider: "local".to_string(),
-            repo_organisation: "local".to_string(),
-            repo_identity: "local/bitloops".to_string(),
-            daemon_config_root: std::path::PathBuf::from("/tmp/config"),
-            repo_root: std::path::PathBuf::from("/tmp/repo"),
-            source: crate::daemon::SyncTaskSource::ManualCli,
-            mode: crate::daemon::SyncTaskMode::Validate,
-            status: crate::daemon::SyncTaskStatus::Running,
-            submitted_at_unix: 1,
-            started_at_unix: Some(2),
-            updated_at_unix: 3,
-            completed_at_unix: None,
-            queue_position: Some((i32::MAX as u64) + 1),
-            tasks_ahead: Some((i32::MAX as u64) + 2),
-            progress: crate::host::devql::SyncProgressUpdate {
-                phase: crate::host::devql::SyncProgressPhase::MaterialisingPaths,
-                current_path: Some("src/lib.rs".to_string()),
-                paths_total: (i32::MAX as usize) + 3,
-                paths_completed: (i32::MAX as usize) + 4,
-                paths_remaining: (i32::MAX as usize) + 5,
-                paths_unchanged: (i32::MAX as usize) + 6,
-                paths_added: (i32::MAX as usize) + 7,
-                paths_changed: (i32::MAX as usize) + 8,
-                paths_removed: (i32::MAX as usize) + 9,
-                cache_hits: (i32::MAX as usize) + 10,
-                cache_misses: (i32::MAX as usize) + 11,
-                parse_errors: (i32::MAX as usize) + 12,
-            },
-            error: Some("boom".to_string()),
-            summary: Some(crate::host::devql::SyncSummary {
-                success: false,
-                mode: "validate".to_string(),
-                parser_version: "parser@1".to_string(),
-                extractor_version: "extractor@1".to_string(),
-                active_branch: Some("main".to_string()),
-                head_commit_sha: Some("abc".to_string()),
-                head_tree_sha: Some("def".to_string()),
-                paths_unchanged: 1,
-                paths_added: 2,
-                paths_changed: 3,
-                paths_removed: 4,
-                cache_hits: 5,
-                cache_misses: 6,
-                parse_errors: 7,
-                validation: Some(crate::host::devql::SyncValidationSummary {
-                    valid: false,
-                    expected_artefacts: 10,
-                    actual_artefacts: 9,
-                    expected_edges: 8,
-                    actual_edges: 7,
-                    missing_artefacts: 1,
-                    stale_artefacts: 2,
-                    mismatched_artefacts: 3,
-                    missing_edges: 4,
-                    stale_edges: 5,
-                    mismatched_edges: 6,
-                    files_with_drift: vec![crate::host::devql::SyncValidationFileDrift {
-                        path: "src/lib.rs".to_string(),
-                        missing_artefacts: 1,
-                        stale_artefacts: 2,
-                        mismatched_artefacts: 3,
-                        missing_edges: 4,
-                        stale_edges: 5,
-                        mismatched_edges: 6,
-                    }],
-                }),
-            }),
-        }
-    }
-
-    #[test]
-    fn sync_task_object_from_record_maps_fields_and_clamps_counts() {
-        let object = SyncTaskObject::from(sample_sync_record());
-        assert_eq!(object.task_id, "sync-task-1");
-        assert_eq!(object.source, "manual_cli");
-        assert_eq!(object.mode, "validate");
-        assert_eq!(object.status, "running");
-        assert_eq!(object.phase, "materialising_paths");
-        assert_eq!(object.queue_position, Some(i32::MAX));
-        assert_eq!(object.tasks_ahead, Some(i32::MAX));
-        assert_eq!(object.paths_total, i32::MAX);
-        assert_eq!(object.cache_misses, i32::MAX);
-        assert_eq!(object.parse_errors, i32::MAX);
-        let summary = object.summary.expect("summary");
-        assert_eq!(summary.mode, "validate");
-        assert_eq!(summary.paths_added, 2);
-        assert!(summary.validation.is_some());
-    }
-
-    #[test]
-    fn sync_progress_event_reuses_sync_task_conversion() {
-        let event = SyncProgressEvent::from(sample_sync_record());
-        assert_eq!(event.task_id, "sync-task-1");
-        assert_eq!(event.phase, "materialising_paths");
-        assert_eq!(event.queue_position, Some(i32::MAX));
-        assert_eq!(event.paths_changed, i32::MAX);
-        assert_eq!(event.error.as_deref(), Some("boom"));
-        assert!(event.summary.is_some());
-    }
-
-    #[test]
-    fn to_graphql_count_clamps_large_inputs() {
-        assert_eq!(to_graphql_count(123u32), 123);
-        assert_eq!(to_graphql_count((i32::MAX as i64) + 1), i32::MAX);
-    }
 }

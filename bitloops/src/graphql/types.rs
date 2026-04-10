@@ -46,7 +46,10 @@ pub use knowledge::{
 pub use project::Project;
 pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
-pub use sync::{SyncProgressEvent, SyncTaskObject};
+pub use sync::{
+    TaskKind, TaskObject, TaskProgressEvent, TaskQueueControlResultObject, TaskQueueStatusObject,
+    TaskStatus,
+};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
 pub use test_harness::{

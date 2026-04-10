@@ -220,6 +220,7 @@ pub(crate) fn build_sync_completed_runs(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn test_shared_instance_at(db_path: PathBuf) -> Arc<CapabilityEventCoordinator> {
     CapabilityEventCoordinator::new_shared_instance(
         DaemonSqliteRuntimeStore::open_at(db_path)

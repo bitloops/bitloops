@@ -4,8 +4,6 @@ use std::io::Write;
 use std::time::Instant;
 
 use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
-use crate::capability_packs::semantic_clones::runtime_config::embeddings_enabled;
-use crate::config::{SemanticSummaryMode, resolve_embedding_capability_config_for_repo};
 use crate::devql_transport::{
     SlimCliRepoScope, discover_slim_cli_repo_scope, is_repo_root_discovery_error,
 };
@@ -27,15 +25,17 @@ mod tests;
 pub use crate::host::devql::run_connection_status;
 pub use args::{
     DevqlArgs, DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs,
-    DevqlIngestArgs, DevqlInitArgs, DevqlKnowledgeAddArgs, DevqlKnowledgeArgs,
-    DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand, DevqlKnowledgeRefArgs, DevqlPacksArgs,
-    DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSchemaArgs, DevqlSyncArgs,
-    DevqlTestHarnessArgs, DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
-    DevqlTestHarnessIngestCoverageBatchArgs, DevqlTestHarnessIngestResultsArgs,
-    DevqlTestHarnessIngestTestsArgs,
+    DevqlInitArgs, DevqlKnowledgeAddArgs, DevqlKnowledgeArgs, DevqlKnowledgeAssociateArgs,
+    DevqlKnowledgeCommand, DevqlKnowledgeRefArgs, DevqlPacksArgs, DevqlProjectionArgs,
+    DevqlProjectionCommand, DevqlQueryArgs, DevqlSchemaArgs, DevqlTaskCancelArgs,
+    DevqlTaskEnqueueArgs, DevqlTaskKindArg, DevqlTaskListArgs, DevqlTaskPauseArgs,
+    DevqlTaskResumeArgs, DevqlTaskStatusArg, DevqlTaskStatusArgs, DevqlTaskWatchArgs,
+    DevqlTasksArgs, DevqlTasksCommand, DevqlTestHarnessArgs, DevqlTestHarnessCommand,
+    DevqlTestHarnessIngestCoverageArgs, DevqlTestHarnessIngestCoverageBatchArgs,
+    DevqlTestHarnessIngestResultsArgs, DevqlTestHarnessIngestTestsArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
 const SCHEMA_SCOPE_REQUIRED_MESSAGE: &str = "`bitloops devql schema` requires a Git repository scope. Run it from within a repository or use `bitloops devql schema --global`.";
 
 fn format_schema_sdl_output(args: &DevqlSchemaArgs, sdl: &str) -> String {
@@ -241,44 +241,10 @@ where
     }
 
     let cfg = DevqlConfig::from_env(repo_root, repo)?;
-    let enrichment_capability = resolve_embedding_capability_config_for_repo(&cfg.repo_root);
-    let enrichment_enabled = enrichment_capability.semantic_clones.summary_mode
-        != SemanticSummaryMode::Off
-        || embeddings_enabled(&enrichment_capability.semantic_clones);
 
     match command {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
-        DevqlCommand::Ingest(args) => {
-            if enrichment_enabled {
-                graphql::run_ingest_via_graphql(&scope, None, args.require_daemon).await
-            } else {
-                let _ = args;
-                crate::daemon::require_current_repo_runtime(&cfg.repo_root, "`devql ingest`")?;
-                crate::host::devql::run_ingest(&cfg).await
-            }
-        }
-        DevqlCommand::Sync(args) => {
-            let (task, merged) = graphql::enqueue_sync_via_graphql(
-                &scope,
-                args.full,
-                args.paths,
-                args.repair,
-                args.validate,
-                "manual_cli",
-                args.require_daemon,
-            )
-            .await?;
-            if args.status {
-                if let Some(summary) =
-                    graphql::watch_sync_task_via_graphql(&scope, task.clone()).await?
-                {
-                    println!("{}", format_sync_completion_summary(&summary));
-                }
-            } else {
-                println!("{}", format_sync_queue_submission(&task, merged));
-            }
-            Ok(())
-        }
+        DevqlCommand::Tasks(args) => run_tasks_command(&scope, args).await,
         DevqlCommand::Projection(args) => match args.command {
             DevqlProjectionCommand::CheckpointFileSnapshots(backfill) => {
                 run_checkpoint_file_snapshot_backfill(
@@ -404,6 +370,123 @@ where
     }
 }
 
+async fn run_tasks_command(scope: &SlimCliRepoScope, args: DevqlTasksArgs) -> Result<()> {
+    match args.command {
+        DevqlTasksCommand::Enqueue(args) => run_task_enqueue(scope, args).await,
+        DevqlTasksCommand::Watch(args) => run_task_watch(scope, args).await,
+        DevqlTasksCommand::Status(_) => {
+            let status = graphql::task_queue_status_via_graphql(scope).await?;
+            print_task_queue_status(&status);
+            Ok(())
+        }
+        DevqlTasksCommand::List(args) => {
+            let tasks = graphql::list_tasks_via_graphql(
+                scope,
+                args.kind.as_ref().map(task_kind_arg_name),
+                args.status.as_ref().map(task_status_arg_name),
+                args.limit,
+            )
+            .await?;
+            print_task_list(&tasks);
+            Ok(())
+        }
+        DevqlTasksCommand::Pause(args) => {
+            let result =
+                graphql::pause_task_queue_via_graphql(scope, args.reason.as_deref()).await?;
+            println!("{}", format_task_queue_control_result(&result));
+            Ok(())
+        }
+        DevqlTasksCommand::Resume(_) => {
+            let result = graphql::resume_task_queue_via_graphql(scope).await?;
+            println!("{}", format_task_queue_control_result(&result));
+            Ok(())
+        }
+        DevqlTasksCommand::Cancel(args) => {
+            let task = graphql::cancel_task_via_graphql(scope, args.task_id.as_str()).await?;
+            println!("{}", format_task_brief(&task));
+            Ok(())
+        }
+    }
+}
+
+async fn run_task_enqueue(scope: &SlimCliRepoScope, args: DevqlTaskEnqueueArgs) -> Result<()> {
+    validate_task_enqueue_args(&args)?;
+    let (task, merged) = match args.kind {
+        DevqlTaskKindArg::Sync => {
+            graphql::enqueue_sync_task_via_graphql(
+                scope,
+                args.full,
+                args.paths,
+                args.repair,
+                args.validate,
+                "manual_cli",
+                args.require_daemon,
+            )
+            .await?
+        }
+        DevqlTaskKindArg::Ingest => {
+            graphql::enqueue_ingest_task_via_graphql(scope, args.backfill, args.require_daemon)
+                .await?
+        }
+    };
+
+    if args.status {
+        if let Some(task) = graphql::watch_task_via_graphql(scope, task.clone()).await? {
+            println!("{}", format_task_completion_summary(&task));
+        }
+    } else {
+        println!("{}", format_task_queue_submission(&task, merged));
+    }
+    Ok(())
+}
+
+async fn run_task_watch(scope: &SlimCliRepoScope, args: DevqlTaskWatchArgs) -> Result<()> {
+    if let Some(task) =
+        graphql::watch_task_id_via_graphql(scope, args.task_id.as_str(), args.require_daemon)
+            .await?
+    {
+        println!("{}", format_task_completion_summary(&task));
+    }
+    Ok(())
+}
+
+fn validate_task_enqueue_args(args: &DevqlTaskEnqueueArgs) -> Result<()> {
+    match args.kind {
+        DevqlTaskKindArg::Sync => {
+            if args.backfill.is_some() {
+                bail!(
+                    "`--backfill` is only supported for `bitloops devql tasks enqueue --kind ingest`"
+                );
+            }
+        }
+        DevqlTaskKindArg::Ingest => {
+            if args.full || args.paths.is_some() || args.repair || args.validate {
+                bail!(
+                    "sync mode flags are only supported for `bitloops devql tasks enqueue --kind sync`"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn task_kind_arg_name(kind: &DevqlTaskKindArg) -> &'static str {
+    match kind {
+        DevqlTaskKindArg::Sync => "sync",
+        DevqlTaskKindArg::Ingest => "ingest",
+    }
+}
+
+fn task_status_arg_name(status: &DevqlTaskStatusArg) -> &'static str {
+    match status {
+        DevqlTaskStatusArg::Queued => "queued",
+        DevqlTaskStatusArg::Running => "running",
+        DevqlTaskStatusArg::Completed => "completed",
+        DevqlTaskStatusArg::Failed => "failed",
+        DevqlTaskStatusArg::Cancelled => "cancelled",
+    }
+}
+
 pub async fn run(args: DevqlArgs) -> Result<()> {
     if matches!(args.command.as_ref(), Some(DevqlCommand::Schema(_))) {
         let stdout = std::io::stdout();
@@ -416,18 +499,109 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None)).await
 }
 
-pub(crate) fn format_sync_queue_submission(
-    task: &graphql::SyncTaskGraphqlRecord,
+pub(crate) fn format_task_queue_submission(
+    task: &graphql::TaskGraphqlRecord,
     merged: bool,
 ) -> String {
     let mut line = format!(
-        "sync queued: task={} repo={} mode={}",
-        task.task_id, task.repo_name, task.mode
+        "task queued: task={} repo={} kind={}",
+        task.task_id,
+        task.repo_name,
+        task.kind.to_ascii_lowercase()
     );
+    if let Some(sync_spec) = task.sync_spec.as_ref() {
+        line.push_str(&format!(" mode={}", sync_spec.mode));
+    }
+    if let Some(ingest_spec) = task.ingest_spec.as_ref()
+        && let Some(backfill) = ingest_spec.backfill
+    {
+        line.push_str(&format!(" backfill={backfill}"));
+    }
     if merged {
         line.push_str(" (merged into existing task)");
     }
     line
+}
+
+pub(crate) fn format_task_completion_summary(task: &graphql::TaskGraphqlRecord) -> String {
+    if let Some(summary) = task.sync_summary() {
+        return format_sync_completion_summary(&summary);
+    }
+    if let Some(summary) = task.ingest_result.as_ref() {
+        return crate::host::devql::format_ingestion_summary(summary);
+    }
+    format!(
+        "task complete: {} {}",
+        task.kind.to_ascii_lowercase(),
+        task.task_id
+    )
+}
+
+fn format_task_queue_control_result(result: &graphql::TaskQueueControlGraphqlRecord) -> String {
+    let mut line = result.message.clone();
+    line.push_str(&format!(
+        " (repo={}, paused={})",
+        result.repo_id,
+        if result.paused { "yes" } else { "no" }
+    ));
+    if let Some(reason) = result.paused_reason.as_ref() {
+        line.push_str(&format!(", reason={reason}"));
+    }
+    line
+}
+
+fn format_task_brief(task: &graphql::TaskGraphqlRecord) -> String {
+    format!(
+        "task {}: kind={} status={} repo={}",
+        task.task_id,
+        task.kind.to_ascii_lowercase(),
+        task.status.to_ascii_lowercase(),
+        task.repo_name
+    )
+}
+
+fn print_task_queue_status(status: &graphql::TaskQueueGraphqlRecord) {
+    println!("DevQL task queue");
+    println!(
+        "state: {}",
+        if status.paused { "paused" } else { "running" }
+    );
+    println!("queued: {}", status.queued_tasks);
+    println!("running: {}", status.running_tasks);
+    println!("failed: {}", status.failed_tasks);
+    println!("completed_recent: {}", status.completed_recent_tasks);
+    if let Some(reason) = status.paused_reason.as_ref() {
+        println!("pause_reason: {reason}");
+    }
+    if let Some(action) = status.last_action.as_ref() {
+        println!("last_action: {action}");
+    }
+    for counts in &status.by_kind {
+        println!(
+            "kind={} queued={} running={} failed={} completed_recent={}",
+            counts.kind.to_ascii_lowercase(),
+            counts.queued_tasks,
+            counts.running_tasks,
+            counts.failed_tasks,
+            counts.completed_recent_tasks
+        );
+    }
+    if !status.current_repo_tasks.is_empty() {
+        println!("current_repo_tasks:");
+        for task in &status.current_repo_tasks {
+            println!("{}", format_task_brief(task));
+        }
+    }
+}
+
+fn print_task_list(tasks: &[graphql::TaskGraphqlRecord]) {
+    if tasks.is_empty() {
+        println!("no tasks");
+        return;
+    }
+    for task in tasks {
+        println!("{}", format_task_brief(task));
+    }
 }
 
 pub(crate) fn format_sync_completion_summary(summary: &SyncSummary) -> String {

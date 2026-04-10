@@ -15,16 +15,13 @@ pub(crate) use context::DevqlGraphqlContext;
 pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
 pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode};
 pub(crate) use subscriptions::SubscriptionHub;
+pub(crate) use types::Checkpoint;
 pub(crate) use types::{ArtefactFilterInput, CanonicalKind};
 
 #[cfg(test)]
 pub(crate) use types::DateTimeScalar;
 #[cfg(test)]
 pub(crate) use types::artefact::LineRangeInput;
-#[cfg(test)]
-pub(crate) use types::ingestion::IngestionPhase;
-#[cfg(test)]
-pub(crate) use types::{Checkpoint, IngestionProgressEvent};
 
 use self::loaders::LoaderRegistryExtension;
 use self::mutation_root::MutationRoot;
@@ -565,9 +562,8 @@ fn extract_operation_name(query: &str) -> Option<&str> {
 
 fn graphql_operation_family(name: &str) -> Option<String> {
     match name {
-        "InitSchema" | "Ingest" | "EnqueueSync" | "SyncTask" | "SyncProgress" => {
-            Some(name.to_string())
-        }
+        "InitSchema" | "EnqueueTask" | "Task" | "Tasks" | "TaskQueue" | "PauseTaskQueue"
+        | "ResumeTaskQueue" | "CancelTask" | "TaskProgress" => Some(name.to_string()),
         _ => None,
     }
 }
@@ -715,12 +711,12 @@ mod analytics_signature_tests {
     #[test]
     fn graphql_request_signature_whitelists_known_operation_names() {
         let request = Request::new(
-            "mutation EnqueueSync($input: EnqueueSyncInput!) { enqueueSync(input: $input) { merged } }",
+            "mutation EnqueueTask($input: EnqueueTaskInput!) { enqueueTask(input: $input) { merged } }",
         );
         let signature = graphql_request_signature(&request);
 
         assert_eq!(signature.0, "mutation");
-        assert_eq!(signature.1, "EnqueueSync");
+        assert_eq!(signature.1, "EnqueueTask");
     }
 
     #[test]

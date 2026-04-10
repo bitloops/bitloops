@@ -30,8 +30,8 @@ pub(super) fn status_lines_with_log_path(
         if let Some(capability_events) = report.capability_events.as_ref() {
             append_capability_event_lines(&mut lines, capability_events);
         }
-        if let Some(sync) = report.sync.as_ref() {
-            append_sync_lines(&mut lines, sync);
+        if let Some(devql_tasks) = report.devql_tasks.as_ref() {
+            append_devql_task_lines(&mut lines, devql_tasks);
         }
         return lines;
     }
@@ -62,8 +62,8 @@ pub(super) fn status_lines_with_log_path(
         if let Some(capability_events) = report.capability_events.as_ref() {
             append_capability_event_lines(&mut lines, capability_events);
         }
-        if let Some(sync) = report.sync.as_ref() {
-            append_sync_lines(&mut lines, sync);
+        if let Some(devql_tasks) = report.devql_tasks.as_ref() {
+            append_devql_task_lines(&mut lines, devql_tasks);
         }
         return lines;
     }
@@ -77,8 +77,8 @@ pub(super) fn status_lines_with_log_path(
     if let Some(capability_events) = report.capability_events.as_ref() {
         append_capability_event_lines(&mut lines, capability_events);
     }
-    if let Some(sync) = report.sync.as_ref() {
-        append_sync_lines(&mut lines, sync);
+    if let Some(devql_tasks) = report.devql_tasks.as_ref() {
+        append_devql_task_lines(&mut lines, devql_tasks);
     }
     lines
 }
@@ -249,56 +249,79 @@ fn append_capability_event_lines(
     ));
 }
 
-fn append_sync_lines(lines: &mut Vec<String>, status: &daemon::SyncQueueStatus) {
+fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQueueStatus) {
+    lines.push("DevQL task queue: available".to_string());
+    lines.push(format!("DevQL queued tasks: {}", status.state.queued_tasks));
     lines.push(format!(
-        "Sync pending tasks: {}",
-        status.state.pending_tasks
-    ));
-    lines.push(format!(
-        "Sync running tasks: {}",
+        "DevQL running tasks: {}",
         status.state.running_tasks
     ));
-    lines.push(format!("Sync failed tasks: {}", status.state.failed_tasks));
+    lines.push(format!("DevQL failed tasks: {}", status.state.failed_tasks));
     lines.push(format!(
-        "Sync completed recent tasks: {}",
+        "DevQL completed recent tasks: {}",
         status.state.completed_recent_tasks
     ));
-    if let Some(action) = status.state.last_action.as_ref() {
-        lines.push(format!("Sync last action: {action}"));
+    for counts in &status.state.by_kind {
+        lines.push(format!(
+            "DevQL {} tasks: queued={}, running={}, failed={}, completed_recent={}",
+            counts.kind,
+            counts.queued_tasks,
+            counts.running_tasks,
+            counts.failed_tasks,
+            counts.completed_recent_tasks
+        ));
     }
-    if let Some(task) = status.current_repo_task.as_ref() {
+    if let Some(action) = status.state.last_action.as_ref() {
+        lines.push(format!("DevQL last action: {action}"));
+    }
+    if let Some(control) = status.current_repo_control.as_ref() {
         lines.push(format!(
-            "Current repo sync task: {} ({}, mode={}, source={})",
-            task.task_id, task.status, task.mode, task.source
+            "Current repo task queue: {}",
+            if control.paused { "paused" } else { "running" }
         ));
+        if let Some(reason) = control.paused_reason.as_ref() {
+            lines.push(format!("Current repo task pause reason: {reason}"));
+        }
+    }
+    for task in &status.current_repo_tasks {
         lines.push(format!(
-            "Current repo sync phase: {}",
-            task.progress.phase.as_str()
+            "Current repo task: {} ({}, kind={}, source={})",
+            task.task_id, task.status, task.kind, task.source
         ));
-        if task.progress.paths_total > 0 {
+        if let Some(progress) = task.sync_progress() {
             lines.push(format!(
-                "Current repo sync progress: {}/{} paths complete ({} remaining)",
-                task.progress.paths_completed,
-                task.progress.paths_total,
-                task.progress.paths_remaining
+                "Current repo sync phase: {}",
+                progress.phase.as_str()
             ));
+            if progress.paths_total > 0 {
+                lines.push(format!(
+                    "Current repo sync progress: {}/{} paths complete ({} remaining)",
+                    progress.paths_completed, progress.paths_total, progress.paths_remaining
+                ));
+            }
+            if let Some(path) = progress.current_path.as_ref() {
+                lines.push(format!("Current repo sync path: {path}"));
+            }
+        }
+        if let Some(progress) = task.ingest_progress() {
+            lines.push(format!("Current repo ingest phase: {:?}", progress.phase));
+            if let Some(commit_sha) = progress.current_commit_sha.as_ref() {
+                lines.push(format!("Current repo ingest commit: {commit_sha}"));
+            }
         }
         if let Some(position) = task.queue_position {
             lines.push(format!(
-                "Current repo sync queue position: {} ({} ahead)",
+                "Current repo task queue position: {} ({} ahead)",
                 position,
                 task.tasks_ahead.unwrap_or(position.saturating_sub(1))
             ));
         }
-        if let Some(path) = task.progress.current_path.as_ref() {
-            lines.push(format!("Current repo sync path: {path}"));
-        }
         if let Some(error) = task.error.as_ref() {
-            lines.push(format!("Current repo sync error: {error}"));
+            lines.push(format!("Current repo task error: {error}"));
         }
     }
     lines.push(format!(
-        "Sync persisted: {}",
+        "DevQL persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
 }

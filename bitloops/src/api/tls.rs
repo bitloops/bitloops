@@ -103,18 +103,20 @@ pub fn mkcert_on_path() -> bool {
     which::which("mkcert").is_ok()
 }
 
-fn ensure_rustls_crypto_provider() -> Result<()> {
-    static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
-    let init = INIT.get_or_init(|| {
-        if CryptoProvider::get_default().is_none() {
-            return rustls::crypto::aws_lc_rs::default_provider()
-                .install_default()
-                .map_err(|e| format!("install rustls aws_lc_rs crypto provider: {e:?}"));
+pub(crate) fn rustls_crypto_provider() -> Result<Arc<CryptoProvider>> {
+    static PROVIDER: OnceLock<std::result::Result<Arc<CryptoProvider>, String>> = OnceLock::new();
+    let provider = PROVIDER.get_or_init(|| {
+        if let Some(provider) = CryptoProvider::get_default() {
+            return Ok(Arc::clone(provider));
         }
-        Ok(())
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        CryptoProvider::get_default()
+            .cloned()
+            .ok_or_else(|| "install rustls aws_lc_rs crypto provider".to_string())
     });
-    match init {
-        Ok(()) => Ok(()),
+    match provider {
+        Ok(provider) => Ok(Arc::clone(provider)),
         Err(msg) => Err(anyhow!("{msg}")),
     }
 }
@@ -236,9 +238,10 @@ fn load_server_config(cert_path: &Path, key_path: &Path) -> Result<Arc<ServerCon
         .context("read private key PEM")?
         .ok_or_else(|| anyhow!("no private key found in {}", key_path.display()))?;
 
-    ensure_rustls_crypto_provider()?;
-
-    let config = ServerConfig::builder()
+    let provider = rustls_crypto_provider()?;
+    let config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("safe default TLS versions are valid")
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .context("build rustls ServerConfig (check key matches certificate)")?;

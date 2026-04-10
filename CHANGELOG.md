@@ -8,10 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Shared DevQL task orchestration for sync and ingest**: replaced the sync-only daemon queue with a generic persisted DevQL task subsystem that manages both sync and ingest work. The daemon now stores typed task records and repo control state, migrates legacy sync queue documents into the new task state on recovery, supports repo-scoped pause/resume plus queued-task cancellation, and schedules independent per-repo `sync` and `ingest` lanes so one sync and one ingest can run concurrently for the same repository. Ingest correctness remains owned by `commit_ingest_ledger` and branch watermarks rather than orchestration state.
 - **Repo-bound daemon config binding for safe capture**: added a local-only `[daemon].config_path` binding in `.bitloops.local.toml`, wired `bitloops init` to store the running daemon's canonicalised config path as the repo binding, and added the `x-bitloops-daemon-binding` request header so repo-scoped daemon requests carry a stable binding identifier derived from that config path.
 
 ### Changed
 
+- **DevQL GraphQL and CLI surfaces are now task-first**: removed the sync-only GraphQL task fields and the direct/local ingest execution path, and switched the public interface to generic tasks. GraphQL now exposes `enqueueTask`, `task`, `tasks`, `taskQueue`, `pauseTaskQueue`, `resumeTaskQueue`, `cancelTask`, and `taskProgress`, while the CLI now uses `bitloops devql tasks enqueue|watch|status|list|pause|resume|cancel`. `bitloops init`, `bitloops status`, `bitloops daemon status`, and existing sync producers now route through the shared task coordinator, and the checked-in SDL snapshots were refreshed for the new schema.
 - **Repo-scoped daemon-backed writes now resolve config strictly from the repo binding**: interaction spool opening, repo runtime-store access, repo-scoped DevQL GraphQL/SDL/WebSocket requests, and other daemon-backed write paths now use `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE` first and the repo's local daemon binding second. They no longer fall back to the nearest `config.toml` or the default global daemon config for capture, queue, spool, or turn-data writes.
 
 ### Fixed

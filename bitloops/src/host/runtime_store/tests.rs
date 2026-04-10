@@ -477,7 +477,7 @@ fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
         || {
             let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
 
-            let task = crate::daemon::SyncTaskRecord {
+            let task = crate::host::runtime_store::LegacySyncTaskRecord {
                 task_id: "sync-task-legacy".to_string(),
                 repo_id: "repo-1".to_string(),
                 repo_name: "bitloops".to_string(),
@@ -486,9 +486,9 @@ fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
                 repo_identity: "local/bitloops".to_string(),
                 daemon_config_root: PathBuf::from("/tmp/legacy-config"),
                 repo_root: PathBuf::from("/tmp/repo"),
-                source: crate::daemon::SyncTaskSource::ManualCli,
+                source: crate::daemon::DevqlTaskSource::ManualCli,
                 mode: crate::daemon::SyncTaskMode::Full,
-                status: crate::daemon::SyncTaskStatus::Queued,
+                status: crate::daemon::DevqlTaskStatus::Queued,
                 submitted_at_unix: 1,
                 started_at_unix: None,
                 updated_at_unix: 1,

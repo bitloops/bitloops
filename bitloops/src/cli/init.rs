@@ -229,18 +229,17 @@ async fn run_with_io_async_for_project_root(
         if should_sync {
             writeln!(out, "Starting initial DevQL sync...")?;
             out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
+            let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
                 &scope, false, None, false, false, "init", false,
             )
             .await?;
-            if let Some(summary) =
-                crate::cli::devql::graphql::watch_sync_task_via_graphql(&scope, task.clone())
-                    .await?
+            if let Some(task) =
+                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task.clone()).await?
             {
                 writeln!(
                     out,
                     "{}",
-                    crate::cli::devql::format_sync_completion_summary(&summary)
+                    crate::cli::devql::format_task_completion_summary(&task)
                 )?;
             }
         }
@@ -251,12 +250,21 @@ async fn run_with_io_async_for_project_root(
                 writeln!(out, "Starting initial DevQL ingest...")?;
             }
             out.flush()?;
-            crate::cli::devql::graphql::run_ingest_via_graphql(
+            let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
                 &scope,
                 Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
                 false,
             )
             .await?;
+            if let Some(task) =
+                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
+            {
+                writeln!(
+                    out,
+                    "{}",
+                    crate::cli::devql::format_task_completion_summary(&task)
+                )?;
+            }
         }
     }
     if defer_embeddings_install_until_after_sync {

@@ -14,7 +14,8 @@ use crate::storage::SqliteConnectionPool;
 use crate::utils::paths::default_global_runtime_db_path;
 
 use super::types::{
-    DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState, PersistedSyncQueueState,
+    DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState, PersistedDevqlTaskQueueState,
+    PersistedSyncQueueState,
 };
 
 const RUNTIME_DOCUMENTS_SCHEMA: &str = r#"
@@ -55,6 +56,10 @@ impl DaemonSqliteRuntimeStore {
 
     pub fn runtime_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_runtime_state())
+    }
+
+    pub fn devql_task_state_exists(&self) -> Result<bool> {
+        self.document_exists(document_key_devql_task_state())
     }
 
     pub fn sync_state_exists(&self) -> Result<bool> {
@@ -139,6 +144,46 @@ impl DaemonSqliteRuntimeStore {
             state.normalise_legacy_values();
         }
         Ok(state)
+    }
+
+    pub fn load_devql_task_queue_state(&self) -> Result<Option<PersistedDevqlTaskQueueState>> {
+        let mut state: Option<PersistedDevqlTaskQueueState> =
+            self.load_document(document_key_devql_task_state(), None)?;
+        if let Some(state) = state.as_mut() {
+            state.normalise_legacy_values();
+            return Ok(Some(state.clone()));
+        }
+
+        let Some(legacy_state) = self.load_sync_queue_state()? else {
+            return Ok(None);
+        };
+        let migrated = migrate_legacy_sync_queue_state(legacy_state);
+        self.save_document(document_key_devql_task_state(), &migrated)?;
+        Ok(Some(migrated))
+    }
+
+    pub fn mutate_devql_task_queue_state<T>(
+        &self,
+        mutate: impl FnOnce(&mut PersistedDevqlTaskQueueState) -> Result<T>,
+    ) -> Result<T> {
+        if !self.devql_task_state_exists()?
+            && let Some(legacy_state) = self.load_sync_queue_state()?
+        {
+            self.save_document(
+                document_key_devql_task_state(),
+                &migrate_legacy_sync_queue_state(legacy_state),
+            )?;
+        }
+
+        self.mutate_document(
+            document_key_devql_task_state(),
+            None,
+            PersistedDevqlTaskQueueState::default,
+            |state| {
+                state.normalise_legacy_values();
+                mutate(state)
+            },
+        )
     }
 
     pub fn mutate_sync_queue_state<T>(
@@ -348,6 +393,10 @@ fn document_key_sync_state() -> &'static str {
     "sync_queue_state"
 }
 
+fn document_key_devql_task_state() -> &'static str {
+    "devql_task_queue_state"
+}
+
 fn document_key_enrichment_state() -> &'static str {
     "enrichment_queue_state"
 }
@@ -364,6 +413,48 @@ fn daemon_state_root() -> PathBuf {
 
 fn sync_state_legacy_path() -> PathBuf {
     daemon_state_root().join(crate::daemon::SYNC_STATE_FILE_NAME)
+}
+
+fn migrate_legacy_sync_queue_state(
+    legacy: PersistedSyncQueueState,
+) -> PersistedDevqlTaskQueueState {
+    PersistedDevqlTaskQueueState {
+        version: legacy.version,
+        tasks: legacy
+            .tasks
+            .into_iter()
+            .map(|task| crate::daemon::DevqlTaskRecord {
+                task_id: task.task_id,
+                repo_id: task.repo_id,
+                repo_name: task.repo_name,
+                repo_provider: task.repo_provider,
+                repo_organisation: task.repo_organisation,
+                repo_identity: task.repo_identity,
+                daemon_config_root: task.daemon_config_root,
+                repo_root: task.repo_root,
+                kind: crate::daemon::DevqlTaskKind::Sync,
+                source: task.source,
+                spec: crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                    mode: task.mode,
+                }),
+                status: task.status,
+                submitted_at_unix: task.submitted_at_unix,
+                started_at_unix: task.started_at_unix,
+                updated_at_unix: task.updated_at_unix,
+                completed_at_unix: task.completed_at_unix,
+                queue_position: task.queue_position,
+                tasks_ahead: task.tasks_ahead,
+                progress: crate::daemon::DevqlTaskProgress::Sync(task.progress),
+                error: task.error,
+                result: task
+                    .summary
+                    .map(|summary| crate::daemon::DevqlTaskResult::Sync(Box::new(summary))),
+            })
+            .collect(),
+        repo_controls: Default::default(),
+        last_action: legacy.last_action,
+        updated_at_unix: legacy.updated_at_unix,
+    }
 }
 
 fn enrichment_state_legacy_path() -> PathBuf {

@@ -16,7 +16,8 @@ mod util;
 mod tests;
 
 pub use types::{
-    DaemonSqliteRuntimeStore, PersistedCapabilityEventQueueState, PersistedSyncQueueState,
-    RepoSqliteRuntimeStore, RepoWatcherRegistration, RuntimeMetadataBlobType, RuntimeStore,
-    SessionMetadataSnapshot, SqliteRuntimeStore, TaskCheckpointArtefact,
+    DaemonSqliteRuntimeStore, LegacySyncTaskRecord, PersistedCapabilityEventQueueState,
+    PersistedDevqlTaskQueueState, PersistedSyncQueueState, RepoSqliteRuntimeStore,
+    RepoWatcherRegistration, RuntimeMetadataBlobType, RuntimeStore, SessionMetadataSnapshot,
+    SqliteRuntimeStore, TaskCheckpointArtefact,
 };
