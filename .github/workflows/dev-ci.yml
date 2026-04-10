@@ -53,6 +53,8 @@ jobs:
     name: Clippy
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
+    env:
+      DUCKDB_DOWNLOAD_LIB: '0'
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
