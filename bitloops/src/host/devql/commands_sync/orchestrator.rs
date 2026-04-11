@@ -834,36 +834,6 @@ async fn project_materialized_items(
             )
             .await
             .with_context(|| format!("refreshing current semantic features for `{}`", item.desired.path))?;
-        for representation_kind in [
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-        ] {
-            current_projection
-                .invoke_ingester_with_relational(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
-                    serde_json::to_value(
-                        crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshPayload {
-                            scope: crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshScope::CurrentPath,
-                            path: Some(item.desired.path.clone()),
-                            content_id: Some(item.desired.effective_content_id.clone()),
-                            inputs: inputs.clone(),
-                            expected_input_hashes: Default::default(),
-                            representation_kind,
-                            mode: crate::capability_packs::semantic_clones::ingesters::EmbeddingRefreshMode::ConfiguredDegrade,
-                            manage_active_state: false,
-                        }
-                    )?,
-                    Some(relational),
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "refreshing current symbol embeddings for `{}` ({representation_kind})",
-                        item.desired.path
-                    )
-                })?;
-        }
     }
 
     Ok(())

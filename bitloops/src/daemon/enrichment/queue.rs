@@ -2,13 +2,29 @@ use super::super::types::{
     EnrichmentQueueMode, EnrichmentQueueState as ProjectedEnrichmentQueueState,
 };
 use super::{EnrichmentJobKind, EnrichmentJobStatus, EnrichmentQueueState};
+use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
-pub(super) fn next_pending_job_index(state: &EnrichmentQueueState) -> Option<usize> {
-    state
+pub(super) fn next_pending_job_index(
+    state: &EnrichmentQueueState,
+    runtime_store: &DaemonSqliteRuntimeStore,
+) -> anyhow::Result<Option<usize>> {
+    Ok(state
         .jobs
         .iter()
         .enumerate()
         .filter(|(_, job)| job.status == EnrichmentJobStatus::Pending)
+        .filter(|(_, job)| !job_is_paused(state, &job.job))
+        .filter(|(_, job)| {
+            !matches!(
+                job.job,
+                EnrichmentJobKind::SymbolEmbeddings { .. }
+                    | EnrichmentJobKind::CloneEdgesRebuild { .. }
+            ) || !crate::daemon::embeddings_bootstrap::embeddings_blocked_for_config_root(
+                runtime_store,
+                &job.config_root,
+            )
+            .unwrap_or(true)
+        })
         .min_by_key(|(_, job)| {
             let active_branch = state.active_branch_by_repo.get(&job.repo_id);
             let branch_rank = match active_branch {
@@ -22,7 +38,7 @@ pub(super) fn next_pending_job_index(state: &EnrichmentQueueState) -> Option<usi
                 job.created_at_unix,
             )
         })
-        .map(|(index, _)| index)
+        .map(|(index, _)| index))
 }
 
 pub(super) fn job_is_paused(state: &EnrichmentQueueState, job: &EnrichmentJobKind) -> bool {

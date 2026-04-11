@@ -494,6 +494,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
                 paused_reason: Some("maintenance".to_string()),
             },
             persisted: true,
+            embeddings_gate: None,
         }),
         devql_tasks: None,
     };

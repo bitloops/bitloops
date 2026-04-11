@@ -5,15 +5,23 @@ mod profiles;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use args::enqueue_embeddings_bootstrap_task;
 pub use args::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsDoctorArgs,
     EmbeddingsInstallArgs, EmbeddingsPullArgs, run,
 };
+#[allow(unused_imports)]
 pub(crate) use managed::{
-    install_or_bootstrap_embeddings, managed_embeddings_binary_dir, managed_embeddings_binary_path,
-    managed_embeddings_metadata_path,
+    ensure_managed_embeddings_runtime_with_progress, install_or_bootstrap_embeddings,
+    managed_embeddings_binary_dir, managed_embeddings_binary_path,
+    managed_embeddings_metadata_path, managed_runtime_command_is_eligible,
+    managed_runtime_version_for_command,
 };
-pub(crate) use profiles::{EmbeddingsInstallState, inspect_embeddings_install_state};
+pub(crate) use profiles::{
+    EmbeddingsInstallState, PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
+    inspect_embeddings_install_state, pull_profile_with_config_path_and_progress,
+    selected_inference_profile_name,
+};
 
 #[cfg(test)]
 pub(crate) use managed::{

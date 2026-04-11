@@ -22,5 +22,6 @@ pub(crate) use self::client::{
     watch_task_via_graphql,
 };
 pub(crate) use self::types::{
-    TaskGraphqlRecord, TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord,
+    EmbeddingsBootstrapResultGraphqlRecord, TaskGraphqlRecord, TaskQueueControlGraphqlRecord,
+    TaskQueueGraphqlRecord,
 };

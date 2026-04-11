@@ -36,6 +36,10 @@ pub(super) const ENQUEUE_TASK_MUTATION: &str = r#"
           ingestSpec {
             backfill
           }
+          embeddingsBootstrapSpec {
+            configPath
+            profileName
+          }
           syncProgress {
             phase
             currentPath
@@ -59,6 +63,14 @@ pub(super) const ENQUEUE_TASK_MUTATION: &str = r#"
             currentCommitSha
             eventsInserted
             artefactsUpserted
+          }
+          embeddingsBootstrapProgress {
+            phase
+            assetName
+            bytesDownloaded
+            bytesTotal
+            version
+            message
           }
           syncResult {
             success
@@ -111,6 +123,15 @@ pub(super) const ENQUEUE_TASK_MUTATION: &str = r#"
             symbolCloneEdgesUpserted
             symbolCloneSourcesScored
           }
+          embeddingsBootstrapResult {
+            version
+            binaryPath
+            cacheDir
+            runtimeName
+            modelName
+            freshlyInstalled
+            message
+          }
         }
       }
     }
@@ -140,6 +161,10 @@ pub(super) const TASK_QUERY: &str = r#"
         ingestSpec {
           backfill
         }
+        embeddingsBootstrapSpec {
+          configPath
+          profileName
+        }
         syncProgress {
           phase
           currentPath
@@ -163,6 +188,14 @@ pub(super) const TASK_QUERY: &str = r#"
           currentCommitSha
           eventsInserted
           artefactsUpserted
+        }
+        embeddingsBootstrapProgress {
+          phase
+          assetName
+          bytesDownloaded
+          bytesTotal
+          version
+          message
         }
         syncResult {
           success
@@ -215,6 +248,15 @@ pub(super) const TASK_QUERY: &str = r#"
           symbolCloneEdgesUpserted
           symbolCloneSourcesScored
         }
+        embeddingsBootstrapResult {
+          version
+          binaryPath
+          cacheDir
+          runtimeName
+          modelName
+          freshlyInstalled
+          message
+        }
       }
     }
 "#;
@@ -243,6 +285,10 @@ pub(super) const TASKS_QUERY: &str = r#"
         ingestSpec {
           backfill
         }
+        embeddingsBootstrapSpec {
+          configPath
+          profileName
+        }
         syncProgress {
           phase
           currentPath
@@ -266,6 +312,14 @@ pub(super) const TASKS_QUERY: &str = r#"
           currentCommitSha
           eventsInserted
           artefactsUpserted
+        }
+        embeddingsBootstrapProgress {
+          phase
+          assetName
+          bytesDownloaded
+          bytesTotal
+          version
+          message
         }
       }
     }
@@ -312,6 +366,10 @@ pub(super) const TASK_QUEUE_QUERY: &str = r#"
           ingestSpec {
             backfill
           }
+          embeddingsBootstrapSpec {
+            configPath
+            profileName
+          }
           syncProgress {
             phase
             currentPath
@@ -335,6 +393,14 @@ pub(super) const TASK_QUEUE_QUERY: &str = r#"
             currentCommitSha
             eventsInserted
             artefactsUpserted
+          }
+          embeddingsBootstrapProgress {
+            phase
+            assetName
+            bytesDownloaded
+            bytesTotal
+            version
+            message
           }
         }
       }
@@ -389,6 +455,10 @@ pub(super) const CANCEL_TASK_MUTATION: &str = r#"
         ingestSpec {
           backfill
         }
+        embeddingsBootstrapSpec {
+          configPath
+          profileName
+        }
         syncProgress {
           phase
           currentPath
@@ -413,6 +483,14 @@ pub(super) const CANCEL_TASK_MUTATION: &str = r#"
           eventsInserted
           artefactsUpserted
         }
+        embeddingsBootstrapProgress {
+          phase
+          assetName
+          bytesDownloaded
+          bytesTotal
+          version
+          message
+        }
         syncResult {
           success
           mode
@@ -422,6 +500,15 @@ pub(super) const CANCEL_TASK_MUTATION: &str = r#"
           commitsProcessed
           eventsInserted
           artefactsUpserted
+        }
+        embeddingsBootstrapResult {
+          version
+          binaryPath
+          cacheDir
+          runtimeName
+          modelName
+          freshlyInstalled
+          message
         }
       }
     }
@@ -452,6 +539,10 @@ pub(super) const TASK_PROGRESS_SUBSCRIPTION: &str = r#"
           ingestSpec {
             backfill
           }
+          embeddingsBootstrapSpec {
+            configPath
+            profileName
+          }
           syncProgress {
             phase
             currentPath
@@ -475,6 +566,14 @@ pub(super) const TASK_PROGRESS_SUBSCRIPTION: &str = r#"
             currentCommitSha
             eventsInserted
             artefactsUpserted
+          }
+          embeddingsBootstrapProgress {
+            phase
+            assetName
+            bytesDownloaded
+            bytesTotal
+            version
+            message
           }
           syncResult {
             success
@@ -526,6 +625,15 @@ pub(super) const TASK_PROGRESS_SUBSCRIPTION: &str = r#"
             symbolEmbeddingRowsSkipped
             symbolCloneEdgesUpserted
             symbolCloneSourcesScored
+          }
+          embeddingsBootstrapResult {
+            version
+            binaryPath
+            cacheDir
+            runtimeName
+            modelName
+            freshlyInstalled
+            message
           }
         }
       }

@@ -11,7 +11,7 @@ use crate::adapters::agents::AgentAdapterRegistry;
 #[cfg(test)]
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::cli::embeddings::{
-    EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
 };
 use crate::cli::telemetry_consent;
 #[cfg(test)]
@@ -196,12 +196,27 @@ pub(crate) async fn run_with_io(
     writeln!(out, "Updated project config: {}", target_path.display())?;
 
     if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
-        match install_or_bootstrap_embeddings(&cwd) {
-            Ok(lines) => {
-                for line in lines {
-                    writeln!(out, "{line}")?;
-                }
+        let (scope, queued) = enqueue_embeddings_bootstrap_task(
+            &cwd,
+            None,
+            crate::daemon::DevqlTaskSource::ManualCli,
+        )
+        .await?;
+        match crate::cli::devql::graphql::watch_task_id_via_graphql(
+            &scope,
+            &queued.task.task_id,
+            false,
+        )
+        .await
+        {
+            Ok(Some(task)) => {
+                writeln!(
+                    out,
+                    "{}",
+                    crate::cli::devql::format_task_completion_summary(&task)
+                )?;
             }
+            Ok(None) => {}
             Err(err) => {
                 bail!("Bitloops capture was enabled, but embeddings installation failed: {err:#}");
             }

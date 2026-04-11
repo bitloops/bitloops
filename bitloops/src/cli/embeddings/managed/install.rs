@@ -3,6 +3,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -49,6 +50,12 @@ pub(crate) struct ManagedEmbeddingsBinaryInstallOutcome {
     pub(crate) freshly_installed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedEmbeddingsRuntimeEnsureOutcome {
+    pub(crate) install: ManagedEmbeddingsBinaryInstallOutcome,
+    pub(crate) command_rewritten: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GitHubReleasePayload {
     tag_name: String,
@@ -78,26 +85,31 @@ thread_local! {
         RefCell::new(None);
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn ensure_managed_embeddings_runtime(
     repo_root: &Path,
     config_path: Option<&Path>,
 ) -> Result<Vec<String>> {
-    let outcome = install_managed_embeddings_binary(repo_root)?;
-    let mut lines = vec![if outcome.freshly_installed {
+    let outcome =
+        ensure_managed_embeddings_runtime_with_progress(repo_root, config_path, |_| Ok(()))?;
+    let mut lines = vec![if outcome.install.freshly_installed {
         format!(
             "Installed managed standalone `bitloops-embeddings` runtime {}.",
-            outcome.version
+            outcome.install.version
         )
     } else {
         format!(
             "Managed standalone `bitloops-embeddings` runtime {} already installed.",
-            outcome.version
+            outcome.install.version
         )
     }];
-    lines.push(format!("Binary path: {}", outcome.binary_path.display()));
+    lines.push(format!(
+        "Binary path: {}",
+        outcome.install.binary_path.display()
+    ));
 
     if let Some(config_path) = config_path
-        && rewrite_managed_runtime_command_if_eligible(config_path, &outcome.binary_path)?
+        && outcome.command_rewritten
     {
         lines.push(format!(
             "Updated embeddings runtime command and args in {}.",
@@ -108,6 +120,41 @@ pub(crate) fn ensure_managed_embeddings_runtime(
     Ok(lines)
 }
 
+pub(crate) fn ensure_managed_embeddings_runtime_with_progress<R>(
+    repo_root: &Path,
+    config_path: Option<&Path>,
+    mut report: R,
+) -> Result<ManagedEmbeddingsRuntimeEnsureOutcome>
+where
+    R: FnMut(crate::daemon::EmbeddingsBootstrapProgress) -> Result<()>,
+{
+    report(crate::daemon::EmbeddingsBootstrapProgress {
+        phase: crate::daemon::EmbeddingsBootstrapPhase::ResolvingRelease,
+        message: Some("Checking managed embeddings runtime".to_string()),
+        ..Default::default()
+    })?;
+    let install = install_managed_embeddings_binary_with_progress(repo_root, &mut report)?;
+    let mut command_rewritten = false;
+    if let Some(config_path) = config_path {
+        report(crate::daemon::EmbeddingsBootstrapProgress {
+            phase: crate::daemon::EmbeddingsBootstrapPhase::RewritingRuntime,
+            version: Some(install.version.clone()),
+            message: Some(format!(
+                "Updating runtime command in {}",
+                config_path.display()
+            )),
+            ..Default::default()
+        })?;
+        command_rewritten =
+            rewrite_managed_runtime_command_if_eligible(config_path, &install.binary_path)?;
+    }
+    Ok(ManagedEmbeddingsRuntimeEnsureOutcome {
+        install,
+        command_rewritten,
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<String>> {
     let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
     let plan = prepare_daemon_embeddings_install(&config_path)?;
@@ -157,9 +204,20 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
     }
 }
 
+#[allow(dead_code)]
 fn install_managed_embeddings_binary(
     repo_root: &Path,
 ) -> Result<ManagedEmbeddingsBinaryInstallOutcome> {
+    install_managed_embeddings_binary_with_progress(repo_root, &mut |_| Ok(()))
+}
+
+fn install_managed_embeddings_binary_with_progress<R>(
+    repo_root: &Path,
+    report: &mut R,
+) -> Result<ManagedEmbeddingsBinaryInstallOutcome>
+where
+    R: FnMut(crate::daemon::EmbeddingsBootstrapProgress) -> Result<()>,
+{
     #[cfg(test)]
     if let Some(hook) = MANAGED_EMBEDDINGS_INSTALL_HOOK.with(|cell| cell.borrow().clone()) {
         return hook(repo_root);
@@ -178,12 +236,18 @@ fn install_managed_embeddings_binary(
         &binary_path,
         required_version,
     ) {
+        report(crate::daemon::EmbeddingsBootstrapProgress {
+            phase: crate::daemon::EmbeddingsBootstrapPhase::RewritingRuntime,
+            version: Some(outcome.version.clone()),
+            message: Some("Managed embeddings runtime already installed".to_string()),
+            ..Default::default()
+        })?;
         return Ok(outcome);
     }
 
     let release = fetch_managed_embeddings_release(&release_request)?;
 
-    install_managed_embeddings_binary_from_release(&release)
+    install_managed_embeddings_binary_from_release(&release, report)
 }
 
 fn load_managed_embeddings_install_metadata_for_install()
@@ -326,9 +390,13 @@ fn installed_managed_embeddings_outcome(
     })
 }
 
-fn install_managed_embeddings_binary_from_release(
+fn install_managed_embeddings_binary_from_release<R>(
     release: &GitHubReleasePayload,
-) -> Result<ManagedEmbeddingsBinaryInstallOutcome> {
+    report: &mut R,
+) -> Result<ManagedEmbeddingsBinaryInstallOutcome>
+where
+    R: FnMut(crate::daemon::EmbeddingsBootstrapProgress) -> Result<()>,
+{
     let asset_spec = managed_embeddings_asset_spec(&release.tag_name)?;
     let asset = release
         .assets
@@ -342,7 +410,32 @@ fn install_managed_embeddings_binary_from_release(
             )
         })?;
     let expected_digest = parse_sha256_digest(asset.digest.as_deref())?;
-    let archive_bytes = download_managed_embeddings_asset(&asset.browser_download_url)?;
+    report(crate::daemon::EmbeddingsBootstrapProgress {
+        phase: crate::daemon::EmbeddingsBootstrapPhase::DownloadingRuntime,
+        asset_name: Some(asset.name.clone()),
+        version: Some(release.tag_name.clone()),
+        message: Some(format!("Downloading `{}`", asset.name)),
+        ..Default::default()
+    })?;
+    let archive_bytes =
+        download_managed_embeddings_asset(&asset.browser_download_url, |downloaded, total| {
+            report(crate::daemon::EmbeddingsBootstrapProgress {
+                phase: crate::daemon::EmbeddingsBootstrapPhase::DownloadingRuntime,
+                asset_name: Some(asset.name.clone()),
+                bytes_downloaded: downloaded,
+                bytes_total: total,
+                version: Some(release.tag_name.clone()),
+                message: Some(format!("Downloading `{}`", asset.name)),
+            })
+        })?;
+    report(crate::daemon::EmbeddingsBootstrapProgress {
+        phase: crate::daemon::EmbeddingsBootstrapPhase::ExtractingRuntime,
+        asset_name: Some(asset.name.clone()),
+        bytes_downloaded: archive_bytes.len() as u64,
+        bytes_total: Some(archive_bytes.len() as u64),
+        version: Some(release.tag_name.clone()),
+        message: Some(format!("Extracting `{}`", asset.name)),
+    })?;
 
     install_managed_embeddings_binary_from_release_bytes(
         &release.tag_name,
@@ -373,18 +466,35 @@ fn fetch_managed_embeddings_release(
         .context("parsing managed bitloops-embeddings release metadata")
 }
 
-fn download_managed_embeddings_asset(url: &str) -> Result<Vec<u8>> {
-    managed_embeddings_http_client()?
+fn download_managed_embeddings_asset(
+    url: &str,
+    mut progress: impl FnMut(u64, Option<u64>) -> Result<()>,
+) -> Result<Vec<u8>> {
+    let mut response = managed_embeddings_http_client()?
         .get(url)
         .header(ACCEPT, "application/octet-stream")
         .header(USER_AGENT, MANAGED_EMBEDDINGS_USER_AGENT)
         .send()
         .with_context(|| format!("downloading managed bitloops-embeddings asset from {url}"))?
         .error_for_status()
-        .with_context(|| format!("downloading managed bitloops-embeddings asset from {url}"))?
-        .bytes()
-        .context("reading managed bitloops-embeddings asset bytes")
-        .map(|bytes| bytes.to_vec())
+        .with_context(|| format!("downloading managed bitloops-embeddings asset from {url}"))?;
+    let total = response.content_length();
+    let mut bytes = Vec::new();
+    let mut downloaded = 0_u64;
+    let mut chunk = [0_u8; 64 * 1024];
+    progress(downloaded, total)?;
+    loop {
+        let read = response
+            .read(&mut chunk)
+            .context("reading managed bitloops-embeddings asset bytes")?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        downloaded = downloaded.saturating_add(read as u64);
+        progress(downloaded, total)?;
+    }
+    Ok(bytes)
 }
 
 fn managed_embeddings_http_client() -> Result<Client> {

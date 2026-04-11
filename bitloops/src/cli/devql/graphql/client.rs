@@ -433,7 +433,8 @@ async fn ensure_daemon_available_for_tasks(
     }
 
     let report = daemon::status().await?;
-    let daemon_config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)?;
+    let daemon_config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))?;
     let daemon_config = daemon::resolve_daemon_config(Some(daemon_config_path.as_path()))?;
     let config = DashboardServerConfig {
         host: None,

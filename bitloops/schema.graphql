@@ -336,6 +336,30 @@ enum EdgeKind {
 	EXPORTS
 }
 
+type EmbeddingsBootstrapProgress {
+	phase: String!
+	assetName: String
+	bytesDownloaded: Int!
+	bytesTotal: Int
+	version: String
+	message: String
+}
+
+type EmbeddingsBootstrapResult {
+	version: String
+	binaryPath: String
+	cacheDir: String
+	runtimeName: String
+	modelName: String
+	freshlyInstalled: Boolean!
+	message: String!
+}
+
+type EmbeddingsBootstrapTaskSpec {
+	configPath: String!
+	profileName: String!
+}
+
 input EnqueueIngestTaskInput {
 	backfill: Int = null
 }
@@ -756,15 +780,19 @@ type Task {
 	error: String
 	syncSpec: SyncTaskSpec
 	ingestSpec: IngestTaskSpec
+	embeddingsBootstrapSpec: EmbeddingsBootstrapTaskSpec
 	syncProgress: SyncTaskProgress
 	ingestProgress: IngestionProgressEvent
+	embeddingsBootstrapProgress: EmbeddingsBootstrapProgress
 	syncResult: SyncResult
 	ingestResult: IngestResult
+	embeddingsBootstrapResult: EmbeddingsBootstrapResult
 }
 
 enum TaskKind {
 	SYNC
 	INGEST
+	EMBEDDINGS_BOOTSTRAP
 }
 
 type TaskKindCounts {

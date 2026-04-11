@@ -28,6 +28,8 @@ use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/embeddings_bootstrap.rs"]
+mod embeddings_bootstrap;
 #[path = "daemon/enrichment.rs"]
 mod enrichment;
 #[path = "daemon/graphql_client.rs"]
@@ -66,16 +68,19 @@ pub use self::enrichment::EnrichmentJobTarget;
 pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
+pub(crate) use self::types::EmbeddingsBootstrapState as PersistedEmbeddingsBootstrapState;
 pub use self::types::{
     CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
     CapabilityEventRunStatus, DaemonHealthSummary, DaemonMode, DaemonProcessModeArg,
     DaemonRuntimeState, DaemonServiceMetadata, DaemonStatusReport, DevqlTaskControlResult,
     DevqlTaskKind, DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState,
     DevqlTaskQueueStatus, DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskSpec,
-    DevqlTaskStatus, EnrichmentQueueMode, EnrichmentQueueState, EnrichmentQueueStatus,
-    IngestTaskSpec, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, RepoTaskControlState,
-    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncTaskMode, SyncTaskSpec,
+    DevqlTaskStatus, EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus,
+    EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
+    EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, IngestTaskSpec, InternalDaemonProcessArgs,
+    InternalDaemonSupervisorArgs, RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind,
+    SupervisorRuntimeState, SupervisorServiceMetadata, SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -350,6 +355,22 @@ pub fn enqueue_ingest_for_config(
         cfg,
         source,
         DevqlTaskSpec::Ingest(IngestTaskSpec { backfill }),
+    )
+}
+
+pub fn enqueue_embeddings_bootstrap_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: DevqlTaskSource,
+    config_path: PathBuf,
+    profile_name: String,
+) -> Result<DevqlTaskEnqueueResult> {
+    enqueue_task_for_config(
+        cfg,
+        source,
+        DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path,
+            profile_name,
+        }),
     )
 }
 

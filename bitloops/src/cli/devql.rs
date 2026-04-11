@@ -530,11 +530,45 @@ pub(crate) fn format_task_completion_summary(task: &graphql::TaskGraphqlRecord) 
     if let Some(summary) = task.ingest_result.as_ref() {
         return crate::host::devql::format_ingestion_summary(summary);
     }
+    if let Some(result) = task.embeddings_bootstrap_result.as_ref() {
+        return format_embeddings_bootstrap_completion_summary(result);
+    }
     format!(
         "task complete: {} {}",
         task.kind.to_ascii_lowercase(),
         task.task_id
     )
+}
+
+fn format_embeddings_bootstrap_completion_summary(
+    result: &graphql::EmbeddingsBootstrapResultGraphqlRecord,
+) -> String {
+    let mut lines = Vec::new();
+
+    if let (Some(version), Some(binary_path)) =
+        (result.version.as_deref(), result.binary_path.as_deref())
+    {
+        let status_line = if result.freshly_installed {
+            format!("Installed managed standalone `bitloops-embeddings` runtime {version}.")
+        } else {
+            format!("Managed standalone `bitloops-embeddings` runtime {version} already installed.")
+        };
+        lines.push(status_line);
+        lines.push(format!("Binary path: {binary_path}"));
+    }
+
+    lines.push(result.message.clone());
+
+    if let Some(cache_dir) = result.cache_dir.as_deref() {
+        lines.push(format!("Cache directory: {cache_dir}"));
+    }
+    if let (Some(runtime_name), Some(model_name)) =
+        (result.runtime_name.as_deref(), result.model_name.as_deref())
+    {
+        lines.push(format!("Runtime: {runtime_name} {model_name}"));
+    }
+
+    lines.join("\n")
 }
 
 fn format_task_queue_control_result(result: &graphql::TaskQueueControlGraphqlRecord) -> String {

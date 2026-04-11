@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 pub(super) const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
@@ -297,6 +298,66 @@ impl Default for EnrichmentQueueState {
 pub struct EnrichmentQueueStatus {
     pub state: EnrichmentQueueState,
     pub persisted: bool,
+    pub embeddings_gate: Option<EmbeddingsBootstrapGateStatus>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingsBootstrapReadiness {
+    Pending,
+    Ready,
+    Failed,
+}
+
+impl fmt::Display for EmbeddingsBootstrapReadiness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Ready => write!(f, "ready"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapGateEntry {
+    pub config_path: PathBuf,
+    pub profile_name: String,
+    pub readiness: EmbeddingsBootstrapReadiness,
+    pub active_task_id: Option<String>,
+    pub last_error: Option<String>,
+    pub last_updated_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapState {
+    pub version: u8,
+    pub entries: BTreeMap<String, EmbeddingsBootstrapGateEntry>,
+    pub last_action: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+impl Default for EmbeddingsBootstrapState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            entries: BTreeMap::new(),
+            last_action: Some("initialized".to_string()),
+            updated_at_unix: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbeddingsBootstrapGateStatus {
+    pub blocked: bool,
+    pub readiness: Option<EmbeddingsBootstrapReadiness>,
+    pub reason: Option<String>,
+    pub active_task_id: Option<String>,
+    pub profile_name: Option<String>,
+    pub config_path: Option<PathBuf>,
+    pub last_error: Option<String>,
+    pub last_updated_unix: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -388,6 +449,7 @@ pub struct CapabilityEventQueueStatus {
 pub enum DevqlTaskKind {
     Sync,
     Ingest,
+    EmbeddingsBootstrap,
 }
 
 impl fmt::Display for DevqlTaskKind {
@@ -395,6 +457,7 @@ impl fmt::Display for DevqlTaskKind {
         match self {
             Self::Sync => write!(f, "sync"),
             Self::Ingest => write!(f, "ingest"),
+            Self::EmbeddingsBootstrap => write!(f, "embeddings_bootstrap"),
         }
     }
 }
@@ -478,10 +541,81 @@ pub struct IngestTaskSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapTaskSpec {
+    pub config_path: PathBuf,
+    pub profile_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum DevqlTaskSpec {
     Sync(SyncTaskSpec),
     Ingest(IngestTaskSpec),
+    EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingsBootstrapPhase {
+    Queued,
+    PreparingConfig,
+    ResolvingRelease,
+    DownloadingRuntime,
+    ExtractingRuntime,
+    RewritingRuntime,
+    WarmingProfile,
+    Complete,
+    Failed,
+}
+
+impl EmbeddingsBootstrapPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::PreparingConfig => "preparing_config",
+            Self::ResolvingRelease => "resolving_release",
+            Self::DownloadingRuntime => "downloading_runtime",
+            Self::ExtractingRuntime => "extracting_runtime",
+            Self::RewritingRuntime => "rewriting_runtime",
+            Self::WarmingProfile => "warming_profile",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapProgress {
+    pub phase: EmbeddingsBootstrapPhase,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: u64,
+    pub bytes_total: Option<u64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+impl Default for EmbeddingsBootstrapProgress {
+    fn default() -> Self {
+        Self {
+            phase: EmbeddingsBootstrapPhase::Queued,
+            asset_name: None,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            version: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapResult {
+    pub version: Option<String>,
+    pub binary_path: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
+    pub runtime_name: Option<String>,
+    pub model_name: Option<String>,
+    pub freshly_installed: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -489,6 +623,7 @@ pub enum DevqlTaskSpec {
 pub enum DevqlTaskProgress {
     Sync(crate::host::devql::SyncProgressUpdate),
     Ingest(crate::host::devql::IngestionProgressUpdate),
+    EmbeddingsBootstrap(EmbeddingsBootstrapProgress),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -496,6 +631,7 @@ pub enum DevqlTaskProgress {
 pub enum DevqlTaskResult {
     Sync(Box<crate::host::devql::SyncSummary>),
     Ingest(crate::host::devql::IngestionCounters),
+    EmbeddingsBootstrap(EmbeddingsBootstrapResult),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -534,7 +670,7 @@ impl DevqlTaskRecord {
     pub fn sync_spec(&self) -> Option<&SyncTaskSpec> {
         match &self.spec {
             DevqlTaskSpec::Sync(spec) => Some(spec),
-            DevqlTaskSpec::Ingest(_) => None,
+            DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
         }
     }
 
@@ -542,20 +678,35 @@ impl DevqlTaskRecord {
         match &self.spec {
             DevqlTaskSpec::Sync(_) => None,
             DevqlTaskSpec::Ingest(spec) => Some(spec),
+            DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        }
+    }
+
+    pub fn embeddings_bootstrap_spec(&self) -> Option<&EmbeddingsBootstrapTaskSpec> {
+        match &self.spec {
+            DevqlTaskSpec::EmbeddingsBootstrap(spec) => Some(spec),
+            DevqlTaskSpec::Sync(_) | DevqlTaskSpec::Ingest(_) => None,
         }
     }
 
     pub fn sync_progress(&self) -> Option<&crate::host::devql::SyncProgressUpdate> {
         match &self.progress {
             DevqlTaskProgress::Sync(progress) => Some(progress),
-            DevqlTaskProgress::Ingest(_) => None,
+            DevqlTaskProgress::Ingest(_) | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
         }
     }
 
     pub fn ingest_progress(&self) -> Option<&crate::host::devql::IngestionProgressUpdate> {
         match &self.progress {
-            DevqlTaskProgress::Sync(_) => None,
+            DevqlTaskProgress::Sync(_) | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
             DevqlTaskProgress::Ingest(progress) => Some(progress),
+        }
+    }
+
+    pub fn embeddings_bootstrap_progress(&self) -> Option<&EmbeddingsBootstrapProgress> {
+        match &self.progress {
+            DevqlTaskProgress::EmbeddingsBootstrap(progress) => Some(progress),
+            DevqlTaskProgress::Sync(_) | DevqlTaskProgress::Ingest(_) => None,
         }
     }
 
@@ -569,6 +720,13 @@ impl DevqlTaskRecord {
     pub fn ingest_result(&self) -> Option<&crate::host::devql::IngestionCounters> {
         match &self.result {
             Some(DevqlTaskResult::Ingest(result)) => Some(result),
+            _ => None,
+        }
+    }
+
+    pub fn embeddings_bootstrap_result(&self) -> Option<&EmbeddingsBootstrapResult> {
+        match &self.result {
+            Some(DevqlTaskResult::EmbeddingsBootstrap(result)) => Some(result),
             _ => None,
         }
     }

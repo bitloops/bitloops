@@ -584,7 +584,7 @@ async fn sync_removes_deleted_file() {
 }
 
 #[tokio::test]
-async fn sync_populates_current_semantic_and_embedding_tables() {
+async fn sync_populates_current_semantic_tables_without_inline_embeddings() {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
@@ -631,8 +631,8 @@ async fn sync_populates_current_semantic_and_embedding_tables() {
         feature_rows > 0,
         "current semantic features should be populated"
     );
-    assert!(
-        embedding_rows > 0,
-        "current code embeddings should be populated"
+    assert_eq!(
+        embedding_rows, 0,
+        "current code embeddings should no longer be populated inline during sync"
     );
 }

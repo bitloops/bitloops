@@ -1031,66 +1031,62 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                         }))
                     },
                     || {
-                        with_managed_embeddings_install_hook(
-                            move |repo_root| {
-                                Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                                    version: "v0.1.0".to_string(),
-                                    binary_path: fake_managed_runtime_path(repo_root),
-                                    freshly_installed: true,
-                                })
-                            },
-                            || {
-                                let mut out = Vec::new();
-                                let mut input = Cursor::new("");
-                                let runtime = test_runtime();
-                                runtime
-                                    .block_on(run_with_io_async_for_project_root(
-                                        InitArgs {
-                                            install_default_daemon: true,
-                                            force: false,
-                                            agent: None,
-                                            telemetry: Some(false),
-                                            no_telemetry: false,
-                                            skip_baseline: false,
-                                            sync: Some(false),
-                                            ingest: Some(false),
-                                            backfill: None,
-                                        },
-                                        repo.path(),
-                                        &mut out,
-                                        &mut input,
-                                        None,
-                                    ))
-                                    .expect("run init");
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    install_default_daemon: true,
+                                    force: false,
+                                    agent: None,
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
 
-                                let rendered = String::from_utf8(out).expect("utf8 output");
-                                assert!(rendered.contains("Preparing local embeddings setup..."));
-                                assert!(rendered.contains(
-                                    "This can take a moment if the managed runtime needs to be downloaded."
-                                ));
-                                assert!(rendered.contains("Installed managed standalone"));
-                                assert!(
-                                    rendered.contains("Pulled embedding profile `local_code`.")
-                                );
-                                let config = std::fs::read_to_string(
-                                    repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
-                                )
-                                .unwrap_or_else(|_| String::new());
-                                assert!(
-                                    config.is_empty(),
-                                    "init with default daemon should use the daemon config, not repo-local config:\n{config}"
-                                );
-                                let daemon_config = ensure_daemon_config_exists()
-                                    .expect("resolve daemon config after init");
-                                let daemon_config = std::fs::read_to_string(daemon_config)
-                                    .expect("read daemon config");
-                                assert!(daemon_config.contains("code_embeddings = \"local_code\""));
-                                assert!(daemon_config.contains("[inference.profiles.local_code]"));
-                                assert!(
-                                    daemon_config.contains("driver = \"bitloops_embeddings_ipc\"")
-                                );
-                            },
+                        let rendered = String::from_utf8(out).expect("utf8 output");
+                        assert!(
+                            rendered.contains("Queueing embeddings bootstrap in the daemon...")
                         );
+                        assert!(
+                            rendered
+                                .contains("Embeddings bootstrap task: embeddings_bootstrap-task-")
+                        );
+                        assert!(rendered.contains("Embeddings bootstrap phase: queued"));
+                        let config = std::fs::read_to_string(
+                            repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+                        )
+                        .unwrap_or_else(|_| String::new());
+                        assert!(
+                            config.is_empty(),
+                            "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                        );
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(daemon_config).expect("read daemon config");
+                        assert!(
+                            !daemon_config.contains("code_embeddings = \"local_code\""),
+                            "embeddings config should now be applied asynchronously by the daemon task:\n{daemon_config}"
+                        );
+                        let queued = crate::daemon::devql_tasks(
+                            None,
+                            Some(crate::daemon::DevqlTaskKind::EmbeddingsBootstrap),
+                            Some(crate::daemon::DevqlTaskStatus::Queued),
+                            None,
+                        )
+                        .expect("load queued bootstrap tasks");
+                        assert_eq!(queued.len(), 1);
                     },
                 );
             },
@@ -1099,7 +1095,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
 }
 
 #[test]
-fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_ingest() {
+fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest() {
     let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
@@ -1255,63 +1251,50 @@ fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_i
                                         }
                                     },
                                     || {
-                                        with_managed_embeddings_install_hook(
-                                            {
-                                                let events = std::rc::Rc::clone(&events);
-                                                move |repo_root| {
-                                                    events.borrow_mut().push("install");
-                                                    Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                                                        version: "v0.1.0".to_string(),
-                                                        binary_path: fake_managed_runtime_path(
-                                                            repo_root,
-                                                        ),
-                                                        freshly_installed: true,
-                                                    })
-                                                }
-                                            },
-                                            || {
-                                                let mut out = Vec::new();
-                                                let mut input = Cursor::new("");
-                                                let runtime = test_runtime();
-                                                runtime
-                                                    .block_on(run_with_io_async_for_project_root(
-                                                        InitArgs {
-                                                            install_default_daemon: true,
-                                                            force: false,
-                                                            agent: None,
-                                                            telemetry: Some(false),
-                                                            no_telemetry: false,
-                                                            skip_baseline: false,
-                                                            sync: Some(true),
-                                                            ingest: Some(true),
-                                                            backfill: None,
-                                                        },
-                                                        repo.path(),
-                                                        &mut out,
-                                                        &mut input,
-                                                        None,
-                                                    ))
-                                                    .expect("run init");
+                                        let mut out = Vec::new();
+                                        let mut input = Cursor::new("");
+                                        let runtime = test_runtime();
+                                        runtime
+                                            .block_on(run_with_io_async_for_project_root(
+                                                InitArgs {
+                                                    install_default_daemon: true,
+                                                    force: false,
+                                                    agent: None,
+                                                    telemetry: Some(false),
+                                                    no_telemetry: false,
+                                                    skip_baseline: false,
+                                                    sync: Some(true),
+                                                    ingest: Some(true),
+                                                    backfill: None,
+                                                },
+                                                repo.path(),
+                                                &mut out,
+                                                &mut input,
+                                                None,
+                                            ))
+                                            .expect("run init");
 
-                                                let rendered =
-                                                    String::from_utf8(out).expect("utf8 output");
-                                                let sync_index = rendered
-                                                    .find("Starting initial DevQL sync...")
-                                                    .expect("sync output");
-                                                let ingest_index = rendered
-                                                    .find("Starting initial DevQL ingest after sync...")
-                                                    .expect("ingest output");
-                                                let embeddings_index = rendered
-                                                    .find("Preparing local embeddings setup...")
-                                                    .expect("embeddings output");
-                                                assert!(sync_index < ingest_index);
-                                                assert!(ingest_index < embeddings_index);
-                                                assert_eq!(
-                                                    &*events.borrow(),
-                                                    &["sync", "ingest", "install"]
-                                                );
-                                            },
-                                        );
+                                        let rendered = String::from_utf8(out).expect("utf8 output");
+                                        let bootstrap_index = rendered
+                                            .find("Queueing embeddings bootstrap in the daemon...")
+                                            .expect("bootstrap output");
+                                        let sync_index = rendered
+                                            .find("Starting initial DevQL sync...")
+                                            .expect("sync output");
+                                        let ingest_index = rendered
+                                            .find("Starting initial DevQL ingest after sync...")
+                                            .expect("ingest output");
+                                        assert!(bootstrap_index < sync_index);
+                                        assert!(sync_index < ingest_index);
+                                        assert_eq!(&*events.borrow(), &["sync", "ingest"]);
+                                        let queued = crate::daemon::devql_tasks(
+                                            None,
+                                            Some(crate::daemon::DevqlTaskKind::EmbeddingsBootstrap),
+                                            Some(crate::daemon::DevqlTaskStatus::Queued),
+                                            None,
+                                        )
+                                        .expect("load queued bootstrap tasks");
+                                        assert_eq!(queued.len(), 1);
                                     },
                                 )
                             },

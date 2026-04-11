@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow, bail};
 use tokio::sync::Notify;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
@@ -20,6 +22,7 @@ use crate::utils::paths::default_global_runtime_db_path;
 use super::super::types::{
     DevqlTaskControlResult, DevqlTaskKind, DevqlTaskProgress, DevqlTaskQueueStatus,
     DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus,
+    EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapResult,
     RepoTaskControlState, SyncTaskMode, SyncTaskSpec, unix_timestamp_now,
 };
 use super::queue::{
@@ -451,6 +454,7 @@ impl DevqlTaskCoordinator {
         match task.kind {
             DevqlTaskKind::Sync => self.run_sync_task(task).await,
             DevqlTaskKind::Ingest => self.run_ingest_task(task).await,
+            DevqlTaskKind::EmbeddingsBootstrap => self.run_embeddings_bootstrap_task(task).await,
         }
     }
 
@@ -615,6 +619,74 @@ impl DevqlTaskCoordinator {
         Ok(())
     }
 
+    async fn run_embeddings_bootstrap_task(self: Arc<Self>, task: DevqlTaskRecord) -> Result<()> {
+        let spec = task
+            .embeddings_bootstrap_spec()
+            .cloned()
+            .ok_or_else(|| anyhow!("embeddings bootstrap task missing spec"))?;
+        let task_id = task.task_id.clone();
+        let runtime_store = self.runtime_store.clone();
+        let repo_root = task.repo_root.clone();
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+        let execution = tokio::task::spawn_blocking(move || {
+            crate::daemon::embeddings_bootstrap::execute_task_with_progress(
+                &runtime_store,
+                &repo_root,
+                &task_id,
+                &spec,
+                |progress| {
+                    progress_tx
+                        .send(progress)
+                        .map_err(|_| anyhow!("embeddings bootstrap progress receiver dropped"))?;
+                    Ok(())
+                },
+            )
+        });
+        let (result_tx, mut result_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = execution
+                .await
+                .map_err(|err| anyhow!("embeddings bootstrap worker join failed: {err:#}"))
+                .and_then(|result| result);
+            let _ = result_tx.send(result);
+        });
+
+        let mut final_result = None;
+        loop {
+            tokio::select! {
+                maybe_progress = progress_rx.recv() => {
+                    let Some(progress) = maybe_progress else {
+                        break;
+                    };
+                    self.update_task_progress(
+                        &task.task_id,
+                        DevqlTaskProgress::EmbeddingsBootstrap(progress),
+                    )?;
+                }
+                result = &mut result_rx, if final_result.is_none() => {
+                    final_result = Some(result.map_err(|_| anyhow!("embeddings bootstrap worker result channel dropped"))?);
+                    break;
+                }
+            }
+        }
+
+        while let Some(progress) = progress_rx.recv().await {
+            self.update_task_progress(
+                &task.task_id,
+                DevqlTaskProgress::EmbeddingsBootstrap(progress),
+            )?;
+        }
+
+        match final_result
+            .unwrap_or_else(|| Err(anyhow!("embeddings bootstrap task exited without a result")))
+        {
+            Ok(result) => self.finish_embeddings_bootstrap_task_completed(&task.task_id, result)?,
+            Err(err) => self.finish_task_failed(&task.task_id, err)?,
+        }
+
+        Ok(())
+    }
+
     fn update_sync_mode(&self, task_id: &str, mode: SyncTaskMode) -> Result<()> {
         let task_id = task_id.to_string();
         self.mutate_state(|state| {
@@ -700,6 +772,36 @@ impl DevqlTaskCoordinator {
             task.error = None;
             task.result = Some(DevqlTaskResult::Ingest(summary.clone()));
             task.progress = DevqlTaskProgress::Ingest(ingest_progress_from_summary(&summary));
+            state.last_action = Some("completed".to_string());
+            Ok(())
+        })
+        .map(|_: ()| ())
+    }
+
+    fn finish_embeddings_bootstrap_task_completed(
+        &self,
+        task_id: &str,
+        result: EmbeddingsBootstrapResult,
+    ) -> Result<()> {
+        let task_id = task_id.to_string();
+        self.mutate_state(|state| {
+            let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
+                return Ok(());
+            };
+            let now = unix_timestamp_now();
+            task.status = DevqlTaskStatus::Completed;
+            task.updated_at_unix = now;
+            task.completed_at_unix = Some(now);
+            task.error = None;
+            task.result = Some(DevqlTaskResult::EmbeddingsBootstrap(result.clone()));
+            task.progress = DevqlTaskProgress::EmbeddingsBootstrap(EmbeddingsBootstrapProgress {
+                phase: EmbeddingsBootstrapPhase::Complete,
+                asset_name: None,
+                bytes_downloaded: 0,
+                bytes_total: None,
+                version: result.version.clone(),
+                message: Some(result.message.clone()),
+            });
             state.last_action = Some("completed".to_string());
             Ok(())
         })
@@ -796,6 +898,7 @@ fn task_kind_from_spec(spec: &DevqlTaskSpec) -> DevqlTaskKind {
     match spec {
         DevqlTaskSpec::Sync(_) => DevqlTaskKind::Sync,
         DevqlTaskSpec::Ingest(_) => DevqlTaskKind::Ingest,
+        DevqlTaskSpec::EmbeddingsBootstrap(_) => DevqlTaskKind::EmbeddingsBootstrap,
     }
 }
 
@@ -809,6 +912,7 @@ fn progress_action(update: &DevqlTaskProgress) -> String {
             IngestionProgressPhase::Complete => "complete".to_string(),
             IngestionProgressPhase::Failed => "failed".to_string(),
         },
+        DevqlTaskProgress::EmbeddingsBootstrap(update) => update.phase.as_str().to_string(),
     }
 }
 
@@ -854,6 +958,6 @@ fn should_persist_progress<T: PartialEq>(
 fn sync_spec_from_task_spec_mut(spec: &mut DevqlTaskSpec) -> Option<&mut SyncTaskSpec> {
     match spec {
         DevqlTaskSpec::Sync(spec) => Some(spec),
-        DevqlTaskSpec::Ingest(_) => None,
+        DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
     }
 }

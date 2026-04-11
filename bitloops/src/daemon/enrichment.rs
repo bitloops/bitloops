@@ -23,7 +23,7 @@ mod queue;
 mod worker_count;
 
 use execution::execute_job;
-use queue::{job_is_paused, next_pending_job_index, project_status};
+use queue::{next_pending_job_index, project_status};
 use worker_count::configured_enrichment_worker_count;
 
 const MAX_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
@@ -409,12 +409,9 @@ impl EnrichmentCoordinator {
         let job = {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            let Some(index) = next_pending_job_index(&state) else {
+            let Some(index) = next_pending_job_index(&state, &self.runtime_store)? else {
                 return Ok(false);
             };
-            if job_is_paused(&state, &state.jobs[index].job) {
-                return Ok(false);
-            }
             let mut job = state.jobs[index].clone();
             job.status = EnrichmentJobStatus::Running;
             job.attempts += 1;
@@ -528,9 +525,14 @@ pub fn snapshot() -> Result<EnrichmentQueueStatus> {
     let state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
+    let gate = crate::daemon::embeddings_bootstrap::gate_status_for_enrichment_queue(
+        &runtime_store,
+        state.jobs.iter().map(|job| job.config_root.clone()),
+    )?;
     Ok(EnrichmentQueueStatus {
         state: project_status(&state),
         persisted: runtime_store.enrichment_state_exists()?,
+        embeddings_gate: gate,
     })
 }
 
