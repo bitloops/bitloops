@@ -6,6 +6,7 @@ pub mod sqlite_relational;
 use anyhow::Result;
 use regex::Regex;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use crate::adapters::connectors::{
@@ -69,6 +70,54 @@ pub trait HostServicesGateway: Send + Sync {
         edge_kind: &str,
         to_symbol_id_or_ref: &str,
     ) -> String;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityWorkplaneJob {
+    pub mailbox_name: String,
+    pub dedupe_key: Option<String>,
+    pub payload: Value,
+}
+
+impl CapabilityWorkplaneJob {
+    pub fn new(
+        mailbox_name: impl Into<String>,
+        dedupe_key: Option<String>,
+        payload: Value,
+    ) -> Self {
+        Self {
+            mailbox_name: mailbox_name.into(),
+            dedupe_key,
+            payload,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilityWorkplaneEnqueueResult {
+    pub inserted_jobs: u64,
+    pub updated_jobs: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilityMailboxStatus {
+    pub pending_jobs: u64,
+    pub running_jobs: u64,
+    pub failed_jobs: u64,
+    pub completed_recent_jobs: u64,
+    pub pending_cursor_runs: u64,
+    pub running_cursor_runs: u64,
+    pub failed_cursor_runs: u64,
+    pub completed_recent_cursor_runs: u64,
+}
+
+pub trait CapabilityWorkplaneGateway: Send + Sync {
+    fn enqueue_jobs(
+        &self,
+        jobs: Vec<CapabilityWorkplaneJob>,
+    ) -> Result<CapabilityWorkplaneEnqueueResult>;
+
+    fn mailbox_status(&self) -> Result<BTreeMap<String, CapabilityMailboxStatus>>;
 }
 
 pub struct DefaultHostServicesGateway {

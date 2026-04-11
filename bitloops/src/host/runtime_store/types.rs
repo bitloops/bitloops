@@ -20,6 +20,7 @@ pub struct SqliteRuntimeStore;
 
 #[derive(Debug, Clone)]
 pub struct RepoSqliteRuntimeStore {
+    pub(crate) config_root: PathBuf,
     pub(crate) repo_root: PathBuf,
     pub(crate) repo_id: String,
     pub(crate) db_path: PathBuf,

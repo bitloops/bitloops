@@ -101,7 +101,7 @@ fn insert_file_change_row(
     content_id: Option<&str>,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO pack_reconcile_file_changes (repo_id, generation_seq, path, change_kind, language, content_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO capability_workplane_cursor_file_changes (repo_id, generation_seq, path, change_kind, language, content_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             repo_id,
             sql_i64(generation_seq)?,
@@ -129,7 +129,7 @@ pub(super) fn insert_artefact_changes(
     }
     for artefact in &diff.removed {
         conn.execute(
-            "INSERT INTO pack_reconcile_artefact_changes (repo_id, generation_seq, symbol_id, change_kind, artefact_id, path, canonical_kind, name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            "INSERT INTO capability_workplane_cursor_artefact_changes (repo_id, generation_seq, symbol_id, change_kind, artefact_id, path, canonical_kind, name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             params![
                 repo_id,
                 sql_i64(generation_seq)?,
@@ -158,7 +158,7 @@ fn insert_artefact_change_row(
     change_kind: &str,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO pack_reconcile_artefact_changes (repo_id, generation_seq, symbol_id, change_kind, artefact_id, path, canonical_kind, name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO capability_workplane_cursor_artefact_changes (repo_id, generation_seq, symbol_id, change_kind, artefact_id, path, canonical_kind, name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             repo_id,
             sql_i64(generation_seq)?,
@@ -181,7 +181,7 @@ fn insert_artefact_change_row(
 
 pub(super) fn next_generation_seq(conn: &rusqlite::Connection, repo_id: &str) -> Result<u64> {
     conn.query_row(
-        "SELECT COALESCE(MAX(generation_seq), 0) + 1 FROM pack_reconcile_generations WHERE repo_id = ?1",
+        "SELECT COALESCE(MAX(generation_seq), 0) + 1 FROM capability_workplane_cursor_generations WHERE repo_id = ?1",
         params![repo_id],
         |row| row.get::<_, i64>(0),
     )
@@ -193,17 +193,17 @@ pub(super) fn upsert_consumer_row(
     conn: &rusqlite::Connection,
     repo_id: &str,
     capability_id: &str,
-    consumer_id: &str,
+    mailbox_name: &str,
     now: u64,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO pack_reconcile_consumers (repo_id, consumer_id, capability_id, last_applied_generation_seq, last_error, updated_at_unix) VALUES (?1, ?2, ?3, NULL, NULL, ?4) \
-         ON CONFLICT (repo_id, consumer_id) DO UPDATE SET capability_id = excluded.capability_id, updated_at_unix = excluded.updated_at_unix",
-        params![repo_id, consumer_id, capability_id, sql_i64(now)?],
+        "INSERT INTO capability_workplane_cursor_mailboxes (repo_id, capability_id, mailbox_name, last_applied_generation_seq, last_error, updated_at_unix) VALUES (?1, ?2, ?3, NULL, NULL, ?4) \
+         ON CONFLICT (repo_id, capability_id, mailbox_name) DO UPDATE SET updated_at_unix = excluded.updated_at_unix",
+        params![repo_id, capability_id, mailbox_name, sql_i64(now)?],
     )
     .with_context(|| {
         format!(
-            "upserting current-state consumer `{consumer_id}` for repo `{repo_id}`"
+            "upserting cursor mailbox `{mailbox_name}` for repo `{repo_id}`"
         )
     })?;
     Ok(())
@@ -214,7 +214,8 @@ pub(super) fn ensure_consumer_run(
     repo_id: &str,
     repo_root: &Path,
     capability_id: &str,
-    consumer_id: &str,
+    mailbox_name: &str,
+    handler_id: &str,
     now: u64,
 ) -> Result<Option<StoredRunRecord>> {
     let latest_generation = latest_generation_seq(conn, repo_id)?;
@@ -222,18 +223,18 @@ pub(super) fn ensure_consumer_run(
         return Ok(None);
     };
 
-    let last_applied_generation = load_consumer_cursor(conn, repo_id, consumer_id)?
+    let last_applied_generation = load_consumer_cursor(conn, repo_id, capability_id, mailbox_name)?
         .and_then(|cursor| cursor.last_applied_generation_seq)
         .unwrap_or(0);
     if latest_generation <= last_applied_generation {
         return Ok(None);
     }
 
-    if let Some(run) = load_active_run_for_lane(conn, repo_id, consumer_id)? {
+    if let Some(run) = load_active_run_for_lane(conn, repo_id, capability_id, mailbox_name)? {
         if run.record.status == CapabilityEventRunStatus::Queued {
             let run_id = run.record.run_id.clone();
             conn.execute(
-                "UPDATE pack_reconcile_runs SET from_generation_seq = ?1, to_generation_seq = ?2, updated_at_unix = ?3 WHERE run_id = ?4",
+                "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, updated_at_unix = ?3 WHERE run_id = ?4",
                 params![
                     sql_i64(last_applied_generation)?,
                     sql_i64(latest_generation)?,
@@ -264,13 +265,13 @@ pub(super) fn ensure_consumer_run(
         run_id: run_id.clone(),
         repo_id: repo_id.to_string(),
         capability_id: capability_id.to_string(),
-        consumer_id: consumer_id.to_string(),
-        handler_id: consumer_id.to_string(),
+        consumer_id: mailbox_name.to_string(),
+        handler_id: handler_id.to_string(),
         from_generation_seq: last_applied_generation,
         to_generation_seq: latest_generation,
         reconcile_mode: "merged_delta".to_string(),
         event_kind: "current_state_consumer".to_string(),
-        lane_key: build_lane_key(repo_id, consumer_id),
+        lane_key: build_lane_key(repo_id, mailbox_name),
         event_payload_json: String::new(),
         status: CapabilityEventRunStatus::Queued,
         attempts: 0,
@@ -281,13 +282,13 @@ pub(super) fn ensure_consumer_run(
         error: None,
     };
     conn.execute(
-        "INSERT INTO pack_reconcile_runs (run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, NULL)",
+        "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, capability_id, mailbox_name, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, NULL)",
         params![
             &record.run_id,
             &record.repo_id,
             repo_root.to_string_lossy().to_string(),
-            &record.consumer_id,
             &record.capability_id,
+            &record.consumer_id,
             sql_i64(record.from_generation_seq)?,
             sql_i64(record.to_generation_seq)?,
             &record.reconcile_mode,
@@ -310,7 +311,7 @@ pub(super) fn latest_generation_seq(
     repo_id: &str,
 ) -> Result<Option<u64>> {
     conn.query_row(
-        "SELECT MAX(generation_seq) FROM pack_reconcile_generations WHERE repo_id = ?1",
+        "SELECT MAX(generation_seq) FROM capability_workplane_cursor_generations WHERE repo_id = ?1",
         params![repo_id],
         |row| row.get::<_, Option<i64>>(0),
     )
@@ -321,11 +322,12 @@ pub(super) fn latest_generation_seq(
 pub(super) fn load_consumer_cursor(
     conn: &rusqlite::Connection,
     repo_id: &str,
-    consumer_id: &str,
+    capability_id: &str,
+    mailbox_name: &str,
 ) -> Result<Option<ConsumerCursorRow>> {
     conn.query_row(
-        "SELECT last_applied_generation_seq FROM pack_reconcile_consumers WHERE repo_id = ?1 AND consumer_id = ?2",
-        params![repo_id, consumer_id],
+        "SELECT last_applied_generation_seq FROM capability_workplane_cursor_mailboxes WHERE repo_id = ?1 AND capability_id = ?2 AND mailbox_name = ?3",
+        params![repo_id, capability_id, mailbox_name],
         |row| {
             Ok(ConsumerCursorRow {
                 last_applied_generation_seq: row
@@ -341,14 +343,16 @@ pub(super) fn load_consumer_cursor(
 fn load_active_run_for_lane(
     conn: &rusqlite::Connection,
     repo_id: &str,
-    consumer_id: &str,
+    capability_id: &str,
+    mailbox_name: &str,
 ) -> Result<Option<StoredRunRecord>> {
     load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE repo_id = ?1 AND consumer_id = ?2 AND status IN (?3, ?4) ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, submitted_at_unix ASC LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND capability_id = ?2 AND mailbox_name = ?3 AND status IN (?4, ?5) ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, submitted_at_unix ASC LIMIT 1",
         params![
             repo_id,
-            consumer_id,
+            capability_id,
+            mailbox_name,
             CapabilityEventRunStatus::Running.to_string(),
             CapabilityEventRunStatus::Queued.to_string(),
         ],
@@ -363,7 +367,7 @@ pub(super) fn load_generations(
     to_generation_seq: u64,
 ) -> Result<Vec<GenerationRow>> {
     let mut stmt = conn.prepare(
-        "SELECT generation_seq, active_branch, head_commit_sha, requires_full_reconcile FROM pack_reconcile_generations WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3 ORDER BY generation_seq ASC",
+        "SELECT generation_seq, active_branch, head_commit_sha, requires_full_reconcile FROM capability_workplane_cursor_generations WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3 ORDER BY generation_seq ASC",
     )?;
     let rows = stmt
         .query_map(
@@ -392,7 +396,7 @@ pub(super) fn load_file_changes(
     to_generation_seq: u64,
 ) -> Result<Vec<FileChangeRow>> {
     let mut stmt = conn.prepare(
-        "SELECT generation_seq, path, change_kind, language, content_id FROM pack_reconcile_file_changes WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3 ORDER BY generation_seq ASC, rowid ASC",
+        "SELECT generation_seq, path, change_kind, language, content_id FROM capability_workplane_cursor_file_changes WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3 ORDER BY generation_seq ASC, rowid ASC",
     )?;
     let rows = stmt
         .query_map(
@@ -422,7 +426,7 @@ pub(super) fn load_artefact_changes(
     to_generation_seq: u64,
 ) -> Result<Vec<ArtefactChangeRow>> {
     let mut stmt = conn.prepare(
-        "SELECT generation_seq, symbol_id, change_kind, artefact_id, path, canonical_kind, name FROM pack_reconcile_artefact_changes WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3 ORDER BY generation_seq ASC, rowid ASC",
+        "SELECT generation_seq, symbol_id, change_kind, artefact_id, path, canonical_kind, name FROM capability_workplane_cursor_artefact_changes WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3 ORDER BY generation_seq ASC, rowid ASC",
     )?;
     let rows = stmt
         .query_map(
@@ -454,7 +458,7 @@ pub(super) fn load_run_by_id(
 ) -> Result<Option<StoredRunRecord>> {
     load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE run_id = ?1 LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE run_id = ?1 LIMIT 1",
         params![run_id],
     )
     .map(|mut runs| runs.pop())
@@ -519,8 +523,8 @@ fn parse_run_status(value: &str) -> CapabilityEventRunStatus {
 
 pub(super) fn prune_terminal_runs(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute(
-        "DELETE FROM pack_reconcile_runs WHERE run_id IN (
-            SELECT run_id FROM pack_reconcile_runs
+        "DELETE FROM capability_workplane_cursor_runs WHERE run_id IN (
+            SELECT run_id FROM capability_workplane_cursor_runs
             WHERE status IN (?1, ?2, ?3)
             ORDER BY COALESCE(completed_at_unix, updated_at_unix) DESC
             LIMIT -1 OFFSET 100

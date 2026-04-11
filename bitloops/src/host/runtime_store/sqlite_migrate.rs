@@ -10,5 +10,8 @@ pub(crate) fn initialise_repo_runtime_schema(sqlite: &SqliteConnectionPool) -> R
     let spool = SqliteInteractionSpool::new(sqlite.clone(), "__runtime-bootstrap__".to_string())
         .context("initialising interaction spool schema in runtime db")?;
     drop(spool);
+    sqlite
+        .execute_batch(super::repo_workplane::REPO_WORKPLANE_SCHEMA)
+        .context("initialising capability workplane schema in runtime db")?;
     Ok(())
 }

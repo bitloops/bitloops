@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -7,27 +7,35 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, sleep};
-use uuid::Uuid;
 
-use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::features as semantic_features;
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+};
+use crate::capability_packs::semantic_clones::{
+    SEMANTIC_CLONES_CAPABILITY_ID, embeddings::EmbeddingRepresentationKind,
+};
+use crate::config::resolve_repo_runtime_db_path_for_config_root;
 use crate::host::devql::RepoIdentity;
-use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+use crate::host::runtime_store::{
+    DaemonSqliteRuntimeStore, RepoSqliteRuntimeStore, WorkplaneJobRecord, WorkplaneJobStatus,
+};
+use rusqlite::{OptionalExtension, params};
 
-use super::types::{EnrichmentQueueMode, EnrichmentQueueStatus, unix_timestamp_now};
+use super::types::{
+    EnrichmentQueueMode, EnrichmentQueueStatus, FailedEmbeddingJobSummary, unix_timestamp_now,
+};
 
 #[path = "enrichment/execution.rs"]
 mod execution;
-#[path = "enrichment/queue.rs"]
-mod queue;
 #[path = "enrichment/worker_count.rs"]
 mod worker_count;
 
-use execution::execute_job;
-use queue::{next_pending_job_index, project_status};
 use worker_count::configured_enrichment_worker_count;
 
-const MAX_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
+#[cfg(test)]
+const MAX_SEMANTIC_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,26 +104,13 @@ pub struct EnrichmentControlResult {
 pub struct EnrichmentJobTarget {
     config_root: PathBuf,
     repo_root: PathBuf,
-    repo_id: String,
-    branch: String,
 }
 
 impl EnrichmentJobTarget {
-    pub fn new(config_root: PathBuf, repo_root: PathBuf, repo_id: String, branch: String) -> Self {
+    pub fn new(config_root: PathBuf, repo_root: PathBuf) -> Self {
         Self {
             config_root,
             repo_root,
-            repo_id,
-            branch,
-        }
-    }
-
-    pub(super) fn from_job(job: &EnrichmentJob) -> Self {
-        Self {
-            config_root: job.config_root.clone(),
-            repo_root: job.repo_root.clone(),
-            repo_id: job.repo_id.clone(),
-            branch: job.branch.clone(),
         }
     }
 }
@@ -123,6 +118,7 @@ impl EnrichmentJobTarget {
 #[derive(Debug)]
 pub struct EnrichmentCoordinator {
     runtime_store: DaemonSqliteRuntimeStore,
+    workplane_store: DaemonSqliteRuntimeStore,
     lock: Mutex<()>,
     notify: Notify,
     state_initialised: AtomicBool,
@@ -191,9 +187,15 @@ impl EnrichmentCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
         static INSTANCE: OnceLock<Arc<EnrichmentCoordinator>> = OnceLock::new();
         let coordinator = Arc::clone(INSTANCE.get_or_init(|| {
+            let daemon_config =
+                crate::daemon::resolve_daemon_config(None).expect("resolving daemon config");
             Arc::new(Self {
                 runtime_store: DaemonSqliteRuntimeStore::open()
-                    .expect("opening daemon runtime store for enrichment queue"),
+                    .expect("opening daemon runtime store for enrichment controls"),
+                workplane_store: DaemonSqliteRuntimeStore::open_at(
+                    resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
+                )
+                .expect("opening repo runtime workplane store for enrichment queue"),
                 lock: Mutex::new(()),
                 notify: Notify::new(),
                 state_initialised: AtomicBool::new(false),
@@ -238,23 +240,13 @@ impl EnrichmentCoordinator {
         inputs: Vec<semantic_features::SemanticFeatureInput>,
         input_hashes: BTreeMap<String, String>,
     ) -> Result<()> {
-        if inputs.is_empty() {
-            return Ok(());
-        }
-
+        let _ = input_hashes;
+        enqueue_workplane_summary_jobs(
+            &target,
+            inputs.into_iter().map(|input| input.artefact_id).collect(),
+        )?;
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
-        state
-            .active_branch_by_repo
-            .insert(target.repo_id.clone(), target.branch.clone());
-        for chunk in inputs.chunks(MAX_ENRICHMENT_JOB_ARTEFACTS) {
-            let artefact_ids = chunk
-                .iter()
-                .map(|input| input.artefact_id.clone())
-                .collect::<Vec<_>>();
-            let input_hashes = select_input_hashes_for_artefact_ids(&input_hashes, &artefact_ids);
-            upsert_pending_semantic_job(&mut state, &target, artefact_ids, input_hashes);
-        }
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
         self.notify.notify_waiters();
@@ -268,29 +260,14 @@ impl EnrichmentCoordinator {
         input_hashes: BTreeMap<String, String>,
         representation_kind: EmbeddingRepresentationKind,
     ) -> Result<()> {
-        if inputs.is_empty() {
-            return Ok(());
-        }
-
+        let _ = input_hashes;
+        enqueue_workplane_embedding_jobs(
+            &target,
+            inputs.into_iter().map(|input| input.artefact_id).collect(),
+            representation_kind,
+        )?;
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
-        state
-            .active_branch_by_repo
-            .insert(target.repo_id.clone(), target.branch.clone());
-        for chunk in inputs.chunks(MAX_ENRICHMENT_JOB_ARTEFACTS) {
-            let artefact_ids = chunk
-                .iter()
-                .map(|input| input.artefact_id.clone())
-                .collect::<Vec<_>>();
-            let input_hashes = select_input_hashes_for_artefact_ids(&input_hashes, &artefact_ids);
-            upsert_pending_embedding_job(
-                &mut state,
-                &target,
-                artefact_ids,
-                input_hashes,
-                representation_kind,
-            );
-        }
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
         self.notify.notify_waiters();
@@ -298,73 +275,13 @@ impl EnrichmentCoordinator {
     }
 
     pub async fn enqueue_clone_edges_rebuild(&self, target: EnrichmentJobTarget) -> Result<()> {
+        enqueue_workplane_clone_rebuild(&target)?;
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
-        state
-            .active_branch_by_repo
-            .insert(target.repo_id.clone(), target.branch.clone());
-        if Self::has_pending_or_running_semantic_jobs(&state, &target.repo_id)
-            || Self::has_pending_or_running_embedding_jobs(&state, &target.repo_id)
-        {
-            state.last_action = Some("defer_clone_edges_rebuild".to_string());
-            self.save_state(&mut state)?;
-            return Ok(());
-        }
-        let has_existing = state.jobs.iter().any(|job| {
-            job.repo_id == target.repo_id
-                && matches!(
-                    (&job.status, &job.job),
-                    (
-                        EnrichmentJobStatus::Pending | EnrichmentJobStatus::Running,
-                        EnrichmentJobKind::CloneEdgesRebuild { .. }
-                    )
-                )
-        });
-        if !has_existing {
-            state.jobs.push(EnrichmentJob {
-                id: format!("clone-edges-rebuild-{}", Uuid::new_v4()),
-                repo_id: target.repo_id,
-                repo_root: target.repo_root,
-                config_root: target.config_root,
-                branch: target.branch,
-                status: EnrichmentJobStatus::Pending,
-                attempts: 0,
-                error: None,
-                created_at_unix: unix_timestamp_now(),
-                updated_at_unix: unix_timestamp_now(),
-                job: EnrichmentJobKind::CloneEdgesRebuild {},
-            });
-            state.last_action = Some("enqueue_clone_edges_rebuild".to_string());
-            self.save_state(&mut state)?;
-            self.notify.notify_waiters();
-        }
+        state.last_action = Some("enqueue_clone_edges_rebuild".to_string());
+        self.save_state(&mut state)?;
+        self.notify.notify_waiters();
         Ok(())
-    }
-
-    fn has_pending_or_running_semantic_jobs(state: &EnrichmentQueueState, repo_id: &str) -> bool {
-        state.jobs.iter().any(|job| {
-            job.repo_id == repo_id
-                && matches!(
-                    (&job.status, &job.job),
-                    (
-                        EnrichmentJobStatus::Pending | EnrichmentJobStatus::Running,
-                        EnrichmentJobKind::SemanticSummaries { .. }
-                    )
-                )
-        })
-    }
-
-    fn has_pending_or_running_embedding_jobs(state: &EnrichmentQueueState, repo_id: &str) -> bool {
-        state.jobs.iter().any(|job| {
-            job.repo_id == repo_id
-                && matches!(
-                    (&job.status, &job.job),
-                    (
-                        EnrichmentJobStatus::Pending | EnrichmentJobStatus::Running,
-                        EnrichmentJobKind::SymbolEmbeddings { .. }
-                    )
-                )
-        })
     }
 
     fn ensure_state_file(&self) {
@@ -380,28 +297,32 @@ impl EnrichmentCoordinator {
     }
 
     fn requeue_running_jobs(&self) {
-        let Ok(Some(mut state)) = self.runtime_store.load_enrichment_queue_state() else {
-            return;
-        };
-
-        let mut recovered = 0usize;
-        for job in &mut state.jobs {
-            if job.status == EnrichmentJobStatus::Running {
-                job.status = EnrichmentJobStatus::Pending;
-                job.updated_at_unix = unix_timestamp_now();
-                recovered += 1;
-            }
-        }
-
+        let recovered = self
+            .workplane_store
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE capability_workplane_jobs
+                     SET status = ?1,
+                         started_at_unix = NULL,
+                         updated_at_unix = ?2,
+                         lease_owner = NULL,
+                         lease_expires_at_unix = NULL
+                     WHERE status = ?3",
+                    params![
+                        WorkplaneJobStatus::Pending.as_str(),
+                        sql_i64(unix_timestamp_now())?,
+                        WorkplaneJobStatus::Running.as_str(),
+                    ],
+                )
+                .map_err(anyhow::Error::from)
+            })
+            .unwrap_or_default();
         if recovered == 0 {
             return;
         }
-
+        let mut state = self.load_state().unwrap_or_else(|_| default_state());
         state.last_action = Some("requeue_running".to_string());
-        if let Err(err) = self.runtime_store.save_enrichment_queue_state(&state) {
-            log::warn!("failed to requeue stale running enrichment jobs: {err:#}");
-            return;
-        }
+        let _ = self.save_state(&mut state);
         log::warn!("requeued {recovered} stale running enrichment jobs on daemon startup");
     }
 
@@ -425,34 +346,22 @@ impl EnrichmentCoordinator {
         let job = {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            let Some(index) = next_pending_job_index(&state, &self.runtime_store)? else {
+            let Some(job) =
+                claim_next_workplane_job(&self.workplane_store, &self.runtime_store, &state)?
+            else {
                 return Ok(false);
             };
-            let mut job = state.jobs[index].clone();
-            job.status = EnrichmentJobStatus::Running;
-            job.attempts += 1;
-            job.updated_at_unix = unix_timestamp_now();
-            state.jobs[index] = job.clone();
             state.last_action = Some("running".to_string());
             self.save_state(&mut state)?;
             job
         };
 
-        let outcome = execute_job(&job).await;
+        let outcome = execution::execute_workplane_job(&job).await;
 
         {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            if let Some(current) = state.jobs.iter_mut().find(|queued| queued.id == job.id) {
-                current.updated_at_unix = unix_timestamp_now();
-                if let Some(error) = outcome.error.as_ref() {
-                    current.status = EnrichmentJobStatus::Failed;
-                    current.error = Some(error.clone());
-                } else {
-                    current.status = EnrichmentJobStatus::Completed;
-                    current.error = None;
-                }
-            }
+            persist_workplane_job_completion(&self.workplane_store, &job, &outcome)?;
             state.last_action = Some(match outcome.error {
                 Some(_) => "failed".to_string(),
                 None => "completed".to_string(),
@@ -498,6 +407,8 @@ impl EnrichmentCoordinator {
 
     fn save_state(&self, state: &mut EnrichmentQueueState) -> Result<()> {
         state.version = 1;
+        state.jobs.clear();
+        state.active_branch_by_repo.clear();
         state.updated_at_unix = unix_timestamp_now();
         self.runtime_store.save_enrichment_queue_state(state)
     }
@@ -509,26 +420,9 @@ impl EnrichmentCoordinator {
         input_hashes: BTreeMap<String, String>,
         representation_kind: EmbeddingRepresentationKind,
     ) -> Result<()> {
-        if artefact_ids.is_empty() {
-            return Ok(());
-        }
-
-        let _guard = self.lock.lock().await;
+        let _ = input_hashes;
+        enqueue_workplane_embedding_jobs(&target, artefact_ids, representation_kind)?;
         let mut state = self.load_state()?;
-        state
-            .active_branch_by_repo
-            .insert(target.repo_id.clone(), target.branch.clone());
-        for chunk in artefact_ids.chunks(MAX_ENRICHMENT_JOB_ARTEFACTS) {
-            let artefact_ids = chunk.to_vec();
-            let input_hashes = select_input_hashes_for_artefact_ids(&input_hashes, &artefact_ids);
-            upsert_pending_embedding_job(
-                &mut state,
-                &target,
-                artefact_ids,
-                input_hashes,
-                representation_kind,
-            );
-        }
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
         self.notify.notify_waiters();
@@ -538,22 +432,32 @@ impl EnrichmentCoordinator {
 
 pub fn snapshot() -> Result<EnrichmentQueueStatus> {
     let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let daemon_config = crate::daemon::resolve_daemon_config(None)?;
+    let workplane_store = DaemonSqliteRuntimeStore::open_at(
+        resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
+    )?;
     let state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
+    let projected = project_workplane_status(&workplane_store, &state)?;
     let gate = crate::daemon::embeddings_bootstrap::gate_status_for_enrichment_queue(
         &runtime_store,
-        state.jobs.iter().map(|job| job.config_root.clone()),
+        iter_workplane_job_config_roots(&workplane_store)?,
     )?;
     Ok(EnrichmentQueueStatus {
-        state: project_status(&state),
+        state: projected,
         persisted: runtime_store.enrichment_state_exists()?,
         embeddings_gate: gate,
+        last_failed_embedding: last_failed_embedding_job_from_workplane(&workplane_store)?,
     })
 }
 
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let daemon_config = crate::daemon::resolve_daemon_config(None)?;
+    let workplane_store = DaemonSqliteRuntimeStore::open_at(
+        resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
+    )?;
     let mut state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
@@ -562,7 +466,7 @@ pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResu
     state.paused_reason = reason.clone();
     state.last_action = Some("paused".to_string());
     runtime_store.save_enrichment_queue_state(&state)?;
-    let mut projected = project_status(&state);
+    let mut projected = project_workplane_status(&workplane_store, &state)?;
     projected.mode = EnrichmentQueueMode::Paused;
     projected.last_action = Some("paused".to_string());
     projected.paused_reason = reason.clone();
@@ -584,30 +488,30 @@ pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
     state.paused_reason = None;
     state.last_action = Some("resumed".to_string());
     runtime_store.save_enrichment_queue_state(&state)?;
+    let daemon_config = crate::daemon::resolve_daemon_config(None)?;
+    let workplane_store = DaemonSqliteRuntimeStore::open_at(
+        resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
+    )?;
     Ok(EnrichmentControlResult {
         message: "Enrichment queue resumed.".to_string(),
-        state: project_status(&state),
+        state: project_workplane_status(&workplane_store, &state)?,
     })
 }
 
 pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
     let runtime_store = DaemonSqliteRuntimeStore::open()?;
+    let daemon_config = crate::daemon::resolve_daemon_config(None)?;
+    let workplane_store = DaemonSqliteRuntimeStore::open_at(
+        resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
+    )?;
     let mut state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
-    let mut retried = 0u64;
-    for job in &mut state.jobs {
-        if job.status == EnrichmentJobStatus::Failed {
-            job.status = EnrichmentJobStatus::Pending;
-            job.error = None;
-            job.updated_at_unix = unix_timestamp_now();
-            retried += 1;
-        }
-    }
+    let retried = retry_failed_workplane_jobs(&workplane_store)?;
     state.retried_failed_jobs += retried;
     state.last_action = Some("retry_failed".to_string());
     runtime_store.save_enrichment_queue_state(&state)?;
-    let mut projected = project_status(&state);
+    let mut projected = project_workplane_status(&workplane_store, &state)?;
     projected.retried_failed_jobs = state.retried_failed_jobs;
     projected.last_action = Some("retry_failed".to_string());
     Ok(EnrichmentControlResult {
@@ -624,6 +528,425 @@ fn default_state() -> EnrichmentQueueState {
     }
 }
 
+fn enqueue_workplane_summary_jobs(
+    target: &EnrichmentJobTarget,
+    artefact_ids: Vec<String>,
+) -> Result<()> {
+    if artefact_ids.is_empty() {
+        return Ok(());
+    }
+    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let _ = store.enqueue_capability_workplane_jobs(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        artefact_ids
+            .into_iter()
+            .map(|artefact_id| {
+                crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                    Some(format!(
+                        "{}:{artefact_id}",
+                        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+                    )),
+                    serde_json::json!({ "artefact_id": artefact_id }),
+                )
+            })
+            .collect(),
+    )?;
+    Ok(())
+}
+
+fn enqueue_workplane_embedding_jobs(
+    target: &EnrichmentJobTarget,
+    artefact_ids: Vec<String>,
+    representation_kind: EmbeddingRepresentationKind,
+) -> Result<()> {
+    if artefact_ids.is_empty() {
+        return Ok(());
+    }
+    let mailbox_name = match representation_kind {
+        EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    };
+    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let _ = store.enqueue_capability_workplane_jobs(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        artefact_ids
+            .into_iter()
+            .map(|artefact_id| {
+                crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                    mailbox_name,
+                    Some(format!("{mailbox_name}:{artefact_id}")),
+                    serde_json::json!({ "artefact_id": artefact_id }),
+                )
+            })
+            .collect(),
+    )?;
+    Ok(())
+}
+
+fn enqueue_workplane_clone_rebuild(target: &EnrichmentJobTarget) -> Result<()> {
+    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let _ = store.enqueue_capability_workplane_jobs(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        vec![
+            crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+                Some(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX.to_string()),
+                serde_json::json!({}),
+            ),
+        ],
+    )?;
+    Ok(())
+}
+
+fn claim_next_workplane_job(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    runtime_store: &DaemonSqliteRuntimeStore,
+    control_state: &EnrichmentQueueState,
+) -> Result<Option<WorkplaneJobRecord>> {
+    workplane_store.with_connection(|conn| {
+        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+            .context("starting capability workplane job claim transaction")?;
+        let result = (|| {
+            let now = unix_timestamp_now();
+            let jobs = load_workplane_jobs_by_status(conn, WorkplaneJobStatus::Pending)?;
+            for mut job in jobs {
+                if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
+                    continue;
+                }
+                if mailbox_blocked_by_embeddings_gate(runtime_store, &job)? {
+                    continue;
+                }
+                if job.available_at_unix > now {
+                    continue;
+                }
+                conn.execute(
+                    "UPDATE capability_workplane_jobs
+                     SET status = ?1,
+                         attempts = ?2,
+                         started_at_unix = COALESCE(started_at_unix, ?3),
+                         updated_at_unix = ?4
+                     WHERE job_id = ?5",
+                    params![
+                        WorkplaneJobStatus::Running.as_str(),
+                        job.attempts + 1,
+                        sql_i64(now)?,
+                        sql_i64(now)?,
+                        &job.job_id,
+                    ],
+                )
+                .with_context(|| format!("claiming capability workplane job `{}`", job.job_id))?;
+                job.status = WorkplaneJobStatus::Running;
+                job.attempts += 1;
+                job.started_at_unix = Some(job.started_at_unix.unwrap_or(now));
+                job.updated_at_unix = now;
+                return Ok(Some(job));
+            }
+            Ok(None)
+        })();
+
+        match result {
+            Ok(job) => {
+                conn.execute_batch("COMMIT;")
+                    .context("committing capability workplane job claim transaction")?;
+                Ok(job)
+            }
+            Err(err) => {
+                let _ = conn.execute_batch("ROLLBACK;");
+                Err(err)
+            }
+        }
+    })
+}
+
+fn persist_workplane_job_completion(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    job: &WorkplaneJobRecord,
+    outcome: &JobExecutionOutcome,
+) -> Result<()> {
+    let now = unix_timestamp_now();
+    workplane_store.with_connection(|conn| {
+        conn.execute(
+            "UPDATE capability_workplane_jobs
+             SET status = ?1,
+                 updated_at_unix = ?2,
+                 completed_at_unix = ?3,
+                 last_error = ?4,
+                 lease_owner = NULL,
+                 lease_expires_at_unix = NULL
+             WHERE job_id = ?5",
+            params![
+                if outcome.error.is_some() {
+                    WorkplaneJobStatus::Failed.as_str()
+                } else {
+                    WorkplaneJobStatus::Completed.as_str()
+                },
+                sql_i64(now)?,
+                sql_i64(now)?,
+                outcome.error.as_deref(),
+                &job.job_id,
+            ],
+        )
+        .with_context(|| {
+            format!(
+                "persisting completion for capability workplane job `{}`",
+                job.job_id
+            )
+        })?;
+        Ok(())
+    })?;
+    if let Some(error) = outcome.error.as_ref() {
+        log_workplane_job_failure(job, error);
+    }
+    Ok(())
+}
+
+fn project_workplane_status(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    control_state: &EnrichmentQueueState,
+) -> Result<super::types::EnrichmentQueueState> {
+    let (pending_summary, pending_embeddings, pending_rebuilds) =
+        count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Pending)?;
+    let (running_summary, running_embeddings, running_rebuilds) =
+        count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Running)?;
+    let (failed_summary, failed_embeddings, failed_rebuilds) =
+        count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Failed)?;
+
+    Ok(super::types::EnrichmentQueueState {
+        version: 1,
+        mode: if control_state.paused_embeddings || control_state.paused_semantic {
+            EnrichmentQueueMode::Paused
+        } else {
+            EnrichmentQueueMode::Running
+        },
+        pending_jobs: pending_summary + pending_embeddings + pending_rebuilds,
+        pending_semantic_jobs: pending_summary,
+        pending_embedding_jobs: pending_embeddings,
+        pending_clone_edges_rebuild_jobs: pending_rebuilds,
+        running_jobs: running_summary + running_embeddings + running_rebuilds,
+        running_semantic_jobs: running_summary,
+        running_embedding_jobs: running_embeddings,
+        running_clone_edges_rebuild_jobs: running_rebuilds,
+        failed_jobs: failed_summary + failed_embeddings + failed_rebuilds,
+        failed_semantic_jobs: failed_summary,
+        failed_embedding_jobs: failed_embeddings,
+        failed_clone_edges_rebuild_jobs: failed_rebuilds,
+        retried_failed_jobs: control_state.retried_failed_jobs,
+        last_action: control_state.last_action.clone(),
+        last_updated_unix: control_state.updated_at_unix,
+        paused_reason: control_state.paused_reason.clone(),
+    })
+}
+
+fn iter_workplane_job_config_roots(
+    workplane_store: &DaemonSqliteRuntimeStore,
+) -> Result<Vec<PathBuf>> {
+    workplane_store.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT config_root
+             FROM capability_workplane_jobs
+             WHERE status IN (?1, ?2)",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                WorkplaneJobStatus::Pending.as_str(),
+                WorkplaneJobStatus::Running.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut values = Vec::new();
+        for row in rows {
+            values.push(PathBuf::from(row?));
+        }
+        Ok(values)
+    })
+}
+
+fn retry_failed_workplane_jobs(workplane_store: &DaemonSqliteRuntimeStore) -> Result<u64> {
+    workplane_store.with_connection(|conn| {
+        conn.execute(
+            "UPDATE capability_workplane_jobs
+                 SET status = ?1,
+                     updated_at_unix = ?2,
+                     completed_at_unix = NULL,
+                     last_error = NULL
+                 WHERE status = ?3",
+            params![
+                WorkplaneJobStatus::Pending.as_str(),
+                sql_i64(unix_timestamp_now())?,
+                WorkplaneJobStatus::Failed.as_str(),
+            ],
+        )
+        .map(|count| u64::try_from(count).unwrap_or_default())
+        .map_err(anyhow::Error::from)
+    })
+}
+
+fn last_failed_embedding_job_from_workplane(
+    workplane_store: &DaemonSqliteRuntimeStore,
+) -> Result<Option<FailedEmbeddingJobSummary>> {
+    workplane_store.with_connection(|conn| {
+        conn.query_row(
+            "SELECT job_id, repo_id, mailbox_name, attempts, last_error, updated_at_unix
+             FROM capability_workplane_jobs
+             WHERE status = ?1
+               AND mailbox_name IN (?2, ?3)
+             ORDER BY updated_at_unix DESC
+             LIMIT 1",
+            params![
+                WorkplaneJobStatus::Failed.as_str(),
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            ],
+            |row| {
+                let mailbox_name = row.get::<_, String>(2)?;
+                Ok(FailedEmbeddingJobSummary {
+                    job_id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    branch: "unknown".to_string(),
+                    representation_kind: if mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX {
+                        "code".to_string()
+                    } else {
+                        "summary".to_string()
+                    },
+                    artefact_count: 1,
+                    attempts: row.get(3)?,
+                    error: row.get(4)?,
+                    updated_at_unix: u64::try_from(row.get::<_, i64>(5)?).unwrap_or_default(),
+                })
+            },
+        )
+        .optional()
+        .map_err(anyhow::Error::from)
+    })
+}
+
+fn count_workplane_job_buckets(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    status: WorkplaneJobStatus,
+) -> Result<(u64, u64, u64)> {
+    workplane_store.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT mailbox_name, COUNT(*)
+             FROM capability_workplane_jobs
+             WHERE status = ?1
+             GROUP BY mailbox_name",
+        )?;
+        let rows = stmt.query_map(params![status.as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut summary = 0u64;
+        let mut embeddings = 0u64;
+        let mut rebuilds = 0u64;
+        for row in rows {
+            let (mailbox_name, count) = row?;
+            let count = u64::try_from(count).unwrap_or_default();
+            match mailbox_name.as_str() {
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => summary += count,
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => embeddings += count,
+                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => rebuilds += count,
+                _ => {}
+            }
+        }
+        Ok((summary, embeddings, rebuilds))
+    })
+}
+
+fn load_workplane_jobs_by_status(
+    conn: &rusqlite::Connection,
+    status: WorkplaneJobStatus,
+) -> Result<Vec<WorkplaneJobRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                lease_expires_at_unix, last_error
+         FROM capability_workplane_jobs
+         WHERE status = ?1
+         ORDER BY available_at_unix ASC, submitted_at_unix ASC",
+    )?;
+    let rows = stmt.query_map(params![status.as_str()], map_workplane_job_row)?;
+    let mut values = Vec::new();
+    for row in rows {
+        values.push(row?);
+    }
+    Ok(values)
+}
+
+fn map_workplane_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkplaneJobRecord> {
+    let payload_raw = row.get::<_, String>(7)?;
+    Ok(WorkplaneJobRecord {
+        job_id: row.get(0)?,
+        repo_id: row.get(1)?,
+        repo_root: PathBuf::from(row.get::<_, String>(2)?),
+        config_root: PathBuf::from(row.get::<_, String>(3)?),
+        capability_id: row.get(4)?,
+        mailbox_name: row.get(5)?,
+        dedupe_key: row.get(6)?,
+        payload: serde_json::from_str(&payload_raw).unwrap_or(serde_json::Value::Null),
+        status: WorkplaneJobStatus::parse(&row.get::<_, String>(8)?),
+        attempts: row.get(9)?,
+        available_at_unix: u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default(),
+        submitted_at_unix: u64::try_from(row.get::<_, i64>(11)?).unwrap_or_default(),
+        started_at_unix: row
+            .get::<_, Option<i64>>(12)?
+            .and_then(|value| u64::try_from(value).ok()),
+        updated_at_unix: u64::try_from(row.get::<_, i64>(13)?).unwrap_or_default(),
+        completed_at_unix: row
+            .get::<_, Option<i64>>(14)?
+            .and_then(|value| u64::try_from(value).ok()),
+        lease_owner: row.get(15)?,
+        lease_expires_at_unix: row
+            .get::<_, Option<i64>>(16)?
+            .and_then(|value| u64::try_from(value).ok()),
+        last_error: row.get(17)?,
+    })
+}
+
+fn mailbox_blocked_by_embeddings_gate(
+    runtime_store: &DaemonSqliteRuntimeStore,
+    job: &WorkplaneJobRecord,
+) -> Result<bool> {
+    if matches!(
+        job.mailbox_name.as_str(),
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+            | SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+    ) {
+        return crate::daemon::embeddings_bootstrap::embeddings_blocked_for_config_root(
+            runtime_store,
+            &job.config_root,
+        );
+    }
+    Ok(false)
+}
+
+fn job_is_paused_for_mailbox(state: &EnrichmentQueueState, mailbox_name: &str) -> bool {
+    match mailbox_name {
+        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => state.paused_semantic,
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => state.paused_embeddings,
+        _ => false,
+    }
+}
+
+fn log_workplane_job_failure(job: &WorkplaneJobRecord, error: &str) {
+    log::warn!(
+        "capability workplane job failed: id={} repo={} mailbox={} attempts={} error={}",
+        job.job_id,
+        job.repo_id,
+        job.mailbox_name,
+        job.attempts,
+        error,
+    );
+}
+
+fn sql_i64(value: u64) -> Result<i64> {
+    i64::try_from(value).context("converting enrichment runtime value to SQLite integer")
+}
+
 fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIdentity {
     let name = repo_root
         .file_name()
@@ -637,129 +960,6 @@ fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIdentity {
         identity: format!("git/local/{name}"),
         repo_id: repo_id.to_string(),
     }
-}
-
-fn build_batch_key(artefact_ids: &[String]) -> String {
-    artefact_ids.join("|")
-}
-
-fn select_input_hashes_for_artefact_ids(
-    input_hashes: &BTreeMap<String, String>,
-    artefact_ids: &[String],
-) -> BTreeMap<String, String> {
-    artefact_ids
-        .iter()
-        .filter_map(|artefact_id| {
-            input_hashes
-                .get(artefact_id)
-                .map(|hash| (artefact_id.clone(), hash.clone()))
-        })
-        .collect()
-}
-
-fn upsert_pending_semantic_job(
-    state: &mut EnrichmentQueueState,
-    target: &EnrichmentJobTarget,
-    artefact_ids: Vec<String>,
-    input_hashes: BTreeMap<String, String>,
-) {
-    let batch_key = build_batch_key(&artefact_ids);
-    if let Some(existing) = state.jobs.iter_mut().find(|job| {
-        job.repo_id == target.repo_id
-            && job.branch == target.branch
-            && matches!(
-                (&job.status, &job.job),
-                (
-                    EnrichmentJobStatus::Pending,
-                    EnrichmentJobKind::SemanticSummaries {
-                        batch_key: existing_key,
-                        ..
-                    },
-                ) if existing_key == &batch_key
-            )
-    }) {
-        existing.updated_at_unix = unix_timestamp_now();
-        existing.error = None;
-        existing.job = EnrichmentJobKind::SemanticSummaries {
-            artefact_ids,
-            input_hashes,
-            batch_key,
-        };
-        return;
-    }
-
-    state.jobs.push(EnrichmentJob {
-        id: format!("semantic-job-{}", Uuid::new_v4()),
-        repo_id: target.repo_id.clone(),
-        repo_root: target.repo_root.clone(),
-        config_root: target.config_root.clone(),
-        branch: target.branch.clone(),
-        status: EnrichmentJobStatus::Pending,
-        attempts: 0,
-        error: None,
-        created_at_unix: unix_timestamp_now(),
-        updated_at_unix: unix_timestamp_now(),
-        job: EnrichmentJobKind::SemanticSummaries {
-            artefact_ids,
-            input_hashes,
-            batch_key,
-        },
-    });
-}
-
-fn upsert_pending_embedding_job(
-    state: &mut EnrichmentQueueState,
-    target: &EnrichmentJobTarget,
-    artefact_ids: Vec<String>,
-    input_hashes: BTreeMap<String, String>,
-    representation_kind: EmbeddingRepresentationKind,
-) {
-    let batch_key = build_batch_key(&artefact_ids);
-    if let Some(existing) = state.jobs.iter_mut().find(|job| {
-        job.repo_id == target.repo_id
-            && job.branch == target.branch
-            && matches!(
-                (&job.status, &job.job),
-                (
-                    EnrichmentJobStatus::Pending,
-                    EnrichmentJobKind::SymbolEmbeddings {
-                        batch_key: existing_key,
-                        representation_kind: existing_representation_kind,
-                        ..
-                    },
-                ) if existing_key == &batch_key
-                    && existing_representation_kind == &representation_kind
-            )
-    }) {
-        existing.updated_at_unix = unix_timestamp_now();
-        existing.error = None;
-        existing.job = EnrichmentJobKind::SymbolEmbeddings {
-            artefact_ids,
-            input_hashes,
-            batch_key,
-            representation_kind,
-        };
-        return;
-    }
-
-    state.jobs.push(EnrichmentJob {
-        id: format!("embedding-job-{}", Uuid::new_v4()),
-        repo_id: target.repo_id.clone(),
-        repo_root: target.repo_root.clone(),
-        config_root: target.config_root.clone(),
-        branch: target.branch.clone(),
-        status: EnrichmentJobStatus::Pending,
-        attempts: 0,
-        error: None,
-        created_at_unix: unix_timestamp_now(),
-        updated_at_unix: unix_timestamp_now(),
-        job: EnrichmentJobKind::SymbolEmbeddings {
-            artefact_ids,
-            input_hashes,
-            batch_key,
-            representation_kind,
-        },
-    });
 }
 
 #[cfg(test)]

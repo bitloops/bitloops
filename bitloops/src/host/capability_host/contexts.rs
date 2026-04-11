@@ -11,8 +11,9 @@ use crate::host::inference::{EmptyInferenceGateway, InferenceGateway};
 
 use super::config_view::CapabilityConfigView;
 use super::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, ConnectorRegistry, EmptyLanguageServicesGateway,
-    LanguageServicesGateway, ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
+    BlobPayloadGateway, CanonicalGraphGateway, CapabilityWorkplaneGateway, ConnectorRegistry,
+    EmptyLanguageServicesGateway, LanguageServicesGateway, ProvenanceBuilder, RelationalGateway,
+    StoreHealthGateway,
 };
 
 pub trait CapabilityExecutionContext: Send {
@@ -66,6 +67,10 @@ pub trait CapabilityIngestContext: Send {
     }
 
     fn devql_relational(&self) -> Option<&crate::host::devql::RelationalStorage> {
+        None
+    }
+
+    fn workplane(&self) -> Option<&dyn CapabilityWorkplaneGateway> {
         None
     }
 

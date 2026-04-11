@@ -110,6 +110,9 @@ fn initialise_runtime_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
     sqlite
         .execute_batch(PACK_RECONCILE_SCHEMA)
         .context("initialising current-state consumer runtime schema")?;
+    sqlite
+        .execute_batch(super::repo_workplane::REPO_WORKPLANE_SCHEMA)
+        .context("initialising capability workplane schema in daemon runtime db")?;
     Ok(())
 }
 

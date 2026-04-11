@@ -11,6 +11,7 @@ use rusqlite::{OptionalExtension, params};
 use tokio::sync::Notify;
 use tokio::time::{Duration, sleep};
 
+use crate::config::resolve_repo_runtime_db_path_for_config_root;
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
 use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
@@ -83,9 +84,13 @@ pub(crate) fn test_shared_instance_at(db_path: PathBuf) -> Arc<CapabilityEventCo
 }
 
 impl CapabilityEventCoordinator {
-    pub(crate) fn shared() -> Arc<Self> {
-        let runtime_store = DaemonSqliteRuntimeStore::open()
-            .expect("opening daemon runtime store for current-state consumers");
+    pub(crate) fn try_shared() -> Result<Arc<Self>> {
+        let daemon_config =
+            crate::daemon::resolve_daemon_config(None).context("resolving daemon config")?;
+        let runtime_store = DaemonSqliteRuntimeStore::open_at(
+            resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
+        )
+        .context("opening repo runtime workplane store for current-state consumers")?;
         static INSTANCE: OnceLock<Mutex<Arc<CapabilityEventCoordinator>>> = OnceLock::new();
         let slot =
             INSTANCE.get_or_init(|| Mutex::new(Self::new_shared_instance(runtime_store.clone())));
@@ -99,7 +104,11 @@ impl CapabilityEventCoordinator {
             *coordinator = Self::new_shared_instance(runtime_store);
         }
 
-        Arc::clone(&coordinator)
+        Ok(Arc::clone(&coordinator))
+    }
+
+    pub(crate) fn shared() -> Arc<Self> {
+        Self::try_shared().expect("building current-state consumer coordinator")
     }
 
     fn new_shared_instance(runtime_store: DaemonSqliteRuntimeStore) -> Arc<Self> {
@@ -147,7 +156,14 @@ impl CapabilityEventCoordinator {
             return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
         }
 
-        let registrations = host.current_state_consumers().to_vec();
+        let registrations = host
+            .workplane_mailboxes()
+            .iter()
+            .copied()
+            .filter(|registration| {
+                registration.policy == crate::host::capability_host::CapabilityMailboxPolicy::Cursor
+            })
+            .collect::<Vec<_>>();
         let now = unix_timestamp_now();
         let repo_id = cfg.repo.repo_id.clone();
         let repo_root = cfg.repo_root.clone();
@@ -164,7 +180,7 @@ impl CapabilityEventCoordinator {
             let result = (|| {
                 let generation_seq = next_generation_seq(conn, &repo_id)?;
                 conn.execute(
-                    "INSERT INTO pack_reconcile_generations (repo_id, generation_seq, source_task_id, sync_mode, active_branch, head_commit_sha, requires_full_reconcile, created_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    "INSERT INTO capability_workplane_cursor_generations (repo_id, generation_seq, source_task_id, sync_mode, active_branch, head_commit_sha, requires_full_reconcile, created_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         &repo_id,
                         sql_i64(generation_seq)?,
@@ -182,11 +198,17 @@ impl CapabilityEventCoordinator {
 
                 let mut scheduled_runs = Vec::new();
                 for registration in &registrations {
+                    let crate::host::capability_host::CapabilityMailboxHandler::CurrentStateConsumer(
+                        handler_id,
+                    ) = registration.handler
+                    else {
+                        continue;
+                    };
                     upsert_consumer_row(
                         conn,
                         &repo_id,
                         registration.capability_id,
-                        registration.consumer_id,
+                        registration.mailbox_name,
                         now,
                     )?;
                     if let Some(run) = ensure_consumer_run(
@@ -194,7 +216,8 @@ impl CapabilityEventCoordinator {
                         &repo_id,
                         &repo_root,
                         registration.capability_id,
-                        registration.consumer_id,
+                        registration.mailbox_name,
+                        handler_id,
                         now,
                     )? {
                         scheduled_runs.push(run.record);
@@ -287,7 +310,7 @@ impl CapabilityEventCoordinator {
                 let now = unix_timestamp_now();
                 for run in candidates {
                     conn.execute(
-                        "UPDATE pack_reconcile_runs SET status = ?1, attempts = ?2, started_at_unix = ?3, updated_at_unix = ?4 WHERE run_id = ?5",
+                        "UPDATE capability_workplane_cursor_runs SET status = ?1, attempts = ?2, started_at_unix = ?3, updated_at_unix = ?4 WHERE run_id = ?5",
                         params![
                             CapabilityEventRunStatus::Running.to_string(),
                             run.record.attempts + 1,
@@ -378,7 +401,7 @@ impl CapabilityEventCoordinator {
                 ),
             );
         };
-        let context = match host.build_current_state_consumer_context() {
+        let context = match host.build_current_state_consumer_context(&plan.record.capability_id) {
             Ok(context) => context,
             Err(err) => {
                 return terminal_or_retry(
@@ -417,8 +440,8 @@ impl CapabilityEventCoordinator {
                 match completion {
                     RunCompletion::NoopCompleted { run } => {
                         conn.execute(
-                            "UPDATE pack_reconcile_consumers SET last_error = NULL, updated_at_unix = ?1 WHERE repo_id = ?2 AND consumer_id = ?3",
-                            params![sql_i64(now)?, run.repo_id, run.consumer_id],
+                            "UPDATE capability_workplane_cursor_mailboxes SET last_error = NULL, updated_at_unix = ?1 WHERE repo_id = ?2 AND capability_id = ?3 AND mailbox_name = ?4",
+                            params![sql_i64(now)?, run.repo_id, run.capability_id, run.consumer_id],
                         )
                         .with_context(|| {
                             format!(
@@ -427,7 +450,7 @@ impl CapabilityEventCoordinator {
                             )
                         })?;
                         conn.execute(
-                            "UPDATE pack_reconcile_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
+                            "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
                             params![
                                 sql_i64(run.from_generation_seq)?,
                                 sql_i64(run.to_generation_seq)?,
@@ -450,11 +473,12 @@ impl CapabilityEventCoordinator {
                         applied_to_generation_seq,
                     } => {
                         conn.execute(
-                            "UPDATE pack_reconcile_consumers SET last_applied_generation_seq = ?1, last_error = NULL, updated_at_unix = ?2 WHERE repo_id = ?3 AND consumer_id = ?4",
+                            "UPDATE capability_workplane_cursor_mailboxes SET last_applied_generation_seq = ?1, last_error = NULL, updated_at_unix = ?2 WHERE repo_id = ?3 AND capability_id = ?4 AND mailbox_name = ?5",
                             params![
                                 sql_i64(applied_to_generation_seq)?,
                                 sql_i64(now)?,
                                 run.repo_id,
+                                run.capability_id,
                                 run.consumer_id,
                             ],
                         )
@@ -465,7 +489,7 @@ impl CapabilityEventCoordinator {
                             )
                         })?;
                         conn.execute(
-                            "UPDATE pack_reconcile_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
+                            "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
                             params![
                                 sql_i64(run.from_generation_seq)?,
                                 sql_i64(run.to_generation_seq)?,
@@ -482,8 +506,8 @@ impl CapabilityEventCoordinator {
                     }
                     RunCompletion::RetryableFailure { run, error } => {
                         conn.execute(
-                            "UPDATE pack_reconcile_consumers SET last_error = ?1, updated_at_unix = ?2 WHERE repo_id = ?3 AND consumer_id = ?4",
-                            params![error, sql_i64(now)?, run.repo_id, run.consumer_id],
+                            "UPDATE capability_workplane_cursor_mailboxes SET last_error = ?1, updated_at_unix = ?2 WHERE repo_id = ?3 AND capability_id = ?4 AND mailbox_name = ?5",
+                            params![error, sql_i64(now)?, run.repo_id, run.capability_id, run.consumer_id],
                         )
                         .with_context(|| {
                             format!(
@@ -492,7 +516,7 @@ impl CapabilityEventCoordinator {
                             )
                         })?;
                         conn.execute(
-                            "UPDATE pack_reconcile_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2, completed_at_unix = NULL, error = ?3 WHERE run_id = ?4",
+                            "UPDATE capability_workplane_cursor_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2, completed_at_unix = NULL, error = ?3 WHERE run_id = ?4",
                             params![
                                 CapabilityEventRunStatus::Queued.to_string(),
                                 sql_i64(now)?,
@@ -509,14 +533,14 @@ impl CapabilityEventCoordinator {
                     }
                     RunCompletion::Failed { run, error } => {
                         conn.execute(
-                            "UPDATE pack_reconcile_consumers SET last_error = ?1, updated_at_unix = ?2 WHERE repo_id = ?3 AND consumer_id = ?4",
-                            params![error, sql_i64(now)?, run.repo_id, run.consumer_id],
+                            "UPDATE capability_workplane_cursor_mailboxes SET last_error = ?1, updated_at_unix = ?2 WHERE repo_id = ?3 AND capability_id = ?4 AND mailbox_name = ?5",
+                            params![error, sql_i64(now)?, run.repo_id, run.capability_id, run.consumer_id],
                         )
                         .with_context(|| {
                             format!("persisting terminal current-state consumer error for `{}`", run.run_id)
                         })?;
                         conn.execute(
-                            "UPDATE pack_reconcile_runs SET status = ?1, updated_at_unix = ?2, completed_at_unix = ?3, error = ?4 WHERE run_id = ?5",
+                            "UPDATE capability_workplane_cursor_runs SET status = ?1, updated_at_unix = ?2, completed_at_unix = ?3, error = ?4 WHERE run_id = ?5",
                             params![
                                 CapabilityEventRunStatus::Failed.to_string(),
                                 sql_i64(now)?,
@@ -551,7 +575,7 @@ impl CapabilityEventCoordinator {
     fn recover_running_runs(&self) -> Result<()> {
         self.runtime_store.with_connection(|conn| {
             conn.execute(
-                "UPDATE pack_reconcile_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2 WHERE status = ?3",
+                "UPDATE capability_workplane_cursor_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2 WHERE status = ?3",
                 params![
                     CapabilityEventRunStatus::Queued.to_string(),
                     sql_i64(unix_timestamp_now())?,
@@ -568,13 +592,13 @@ fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecor
     let now = unix_timestamp_now();
     let candidates = load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE status = ?1 ORDER BY submitted_at_unix ASC",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1 ORDER BY submitted_at_unix ASC",
         params![CapabilityEventRunStatus::Queued.to_string()],
     )?;
     let mut running_lanes = BTreeMap::<String, ()>::new();
     for run in load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE status = ?1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1",
         params![CapabilityEventRunStatus::Running.to_string()],
     )? {
         running_lanes.insert(run.record.lane_key.clone(), ());
@@ -599,7 +623,7 @@ fn count_runs_with_status(
     status: CapabilityEventRunStatus,
 ) -> Result<u64> {
     conn.query_row(
-        "SELECT COUNT(*) FROM pack_reconcile_runs WHERE status = ?1",
+        "SELECT COUNT(*) FROM capability_workplane_cursor_runs WHERE status = ?1",
         params![status.to_string()],
         |row| row.get::<_, i64>(0),
     )
@@ -615,7 +639,7 @@ struct QueueActivity {
 
 fn load_queue_activity(conn: &rusqlite::Connection) -> Result<QueueActivity> {
     conn.query_row(
-        "SELECT status, updated_at_unix FROM pack_reconcile_runs ORDER BY updated_at_unix DESC, submitted_at_unix DESC LIMIT 1",
+        "SELECT status, updated_at_unix FROM capability_workplane_cursor_runs ORDER BY updated_at_unix DESC, submitted_at_unix DESC LIMIT 1",
         [],
         |row| {
             Ok(QueueActivity {
@@ -640,7 +664,7 @@ fn load_current_repo_run(
 ) -> Result<Option<CapabilityEventRunRecord>> {
     if let Some(run) = load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
         params![repo_id, CapabilityEventRunStatus::Running.to_string()],
     )?
     .into_iter()
@@ -651,7 +675,7 @@ fn load_current_repo_run(
 
     Ok(load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM pack_reconcile_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
         params![repo_id, CapabilityEventRunStatus::Queued.to_string()],
     )?
     .into_iter()
@@ -732,11 +756,11 @@ mod tests {
         store
             .with_connection(|conn| {
                 conn.execute(
-                    "INSERT INTO pack_reconcile_consumers (repo_id, consumer_id, capability_id, last_applied_generation_seq, last_error, updated_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO capability_workplane_cursor_mailboxes (repo_id, capability_id, mailbox_name, last_applied_generation_seq, last_error, updated_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         repo_id,
-                        consumer_id,
                         capability_id,
+                        consumer_id,
                         last_applied_generation_seq.map(sql_i64).transpose()?,
                         last_error,
                         sql_i64(updated_at_unix)?,
@@ -751,7 +775,7 @@ mod tests {
         store
             .with_connection(|conn| {
                 conn.execute(
-                    "INSERT INTO pack_reconcile_runs (run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     params![
                         run.run_id,
                         run.repo_id,
@@ -793,6 +817,13 @@ mod tests {
             .expect("build capability host");
         let coordinator =
             CapabilityEventCoordinator::new_shared_instance(test_runtime_store(&temp));
+        let cursor_mailbox_count = host
+            .workplane_mailboxes()
+            .iter()
+            .filter(|registration| {
+                registration.policy == crate::host::capability_host::CapabilityMailboxPolicy::Cursor
+            })
+            .count();
 
         let outcome = coordinator
             .record_sync_generation(
@@ -812,18 +843,15 @@ mod tests {
             .expect("record empty sync generation");
 
         assert!(
-            !host.current_state_consumers().is_empty(),
-            "expected built-in current-state consumers to be registered"
+            cursor_mailbox_count > 0,
+            "expected built-in cursor mailboxes to be registered"
         );
-        assert_eq!(outcome.runs.len(), host.current_state_consumers().len());
+        assert_eq!(outcome.runs.len(), cursor_mailbox_count);
 
         let snapshot = coordinator
             .snapshot(Some(&cfg.repo.repo_id))
             .expect("snapshot capability event queue");
-        assert_eq!(
-            snapshot.state.pending_runs as usize,
-            host.current_state_consumers().len()
-        );
+        assert_eq!(snapshot.state.pending_runs as usize, cursor_mailbox_count);
     }
 
     #[test]
@@ -850,7 +878,9 @@ mod tests {
         store
             .with_connection(|conn| {
                 let cursor = conn.query_row(
-                    "SELECT last_applied_generation_seq, last_error FROM pack_reconcile_consumers WHERE repo_id = ?1 AND consumer_id = ?2",
+                    "SELECT last_applied_generation_seq, last_error
+                     FROM capability_workplane_cursor_mailboxes
+                     WHERE repo_id = ?1 AND mailbox_name = ?2",
                     params![&run.repo_id, &run.consumer_id],
                     |row| {
                         Ok((

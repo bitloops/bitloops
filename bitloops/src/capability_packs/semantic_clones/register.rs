@@ -1,7 +1,10 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::host::capability_host::CapabilityRegistrar;
+use crate::host::capability_host::{
+    CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxRegistration,
+    CapabilityRegistrar,
+};
 
 use super::current_state::SemanticClonesCurrentStateConsumer;
 use super::ingesters::{
@@ -16,6 +19,55 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
     registrar.register_ingester(build_semantic_features_refresh_ingester())?;
     registrar.register_ingester(build_symbol_embeddings_refresh_ingester())?;
     registrar.register_ingester(build_symbol_clone_edges_rebuild_ingester())?;
+    registrar.register_mailbox(CapabilityMailboxRegistration::new(
+        super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+        super::types::SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
+        CapabilityMailboxPolicy::Cursor,
+        CapabilityMailboxHandler::CurrentStateConsumer(
+            super::types::SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
+        ),
+    ))?;
+    registrar.register_mailbox(CapabilityMailboxRegistration::new(
+        super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+        super::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+        CapabilityMailboxPolicy::Job,
+        CapabilityMailboxHandler::Ingester(
+            super::types::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
+        ),
+    ))?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(
+                super::types::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+            ),
+        )
+        .blocked_by_embeddings_bootstrap(),
+    )?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(
+                super::types::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+            ),
+        )
+        .blocked_by_embeddings_bootstrap(),
+    )?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(
+                super::types::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+            ),
+        )
+        .blocked_by_embeddings_bootstrap(),
+    )?;
     registrar.register_current_state_consumer(
         crate::host::capability_host::CurrentStateConsumerRegistration::new(
             super::types::SEMANTIC_CLONES_CAPABILITY_ID,
@@ -34,13 +86,15 @@ mod tests {
     use super::*;
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-        SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
-        SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, SEMANTIC_CLONES_SUMMARY_STAGE_ID,
-        SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID, SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
+        SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+        SEMANTIC_CLONES_SUMMARY_STAGE_ID, SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
     };
     use crate::host::capability_host::{
-        CurrentStateConsumerRegistration, IngesterRegistration, QueryExample, SchemaModule,
-        StageRegistration,
+        CapabilityMailboxRegistration, CurrentStateConsumerRegistration, IngesterRegistration,
+        QueryExample, SchemaModule, StageRegistration,
     };
 
     #[derive(Default)]
@@ -48,6 +102,7 @@ mod tests {
         stages: Vec<(&'static str, &'static str)>,
         ingesters: Vec<(&'static str, &'static str)>,
         current_state_consumers: Vec<(&'static str, &'static str)>,
+        mailboxes: Vec<(&'static str, &'static str)>,
         schema_modules: Vec<SchemaModule>,
         query_examples: Vec<QueryExample>,
     }
@@ -70,6 +125,12 @@ mod tests {
         ) -> Result<()> {
             self.current_state_consumers
                 .push((registration.capability_id, registration.consumer_id));
+            Ok(())
+        }
+
+        fn register_mailbox(&mut self, registration: CapabilityMailboxRegistration) -> Result<()> {
+            self.mailboxes
+                .push((registration.capability_id, registration.mailbox_name));
             Ok(())
         }
 
@@ -109,6 +170,31 @@ mod tests {
                 (
                     SEMANTIC_CLONES_CAPABILITY_ID,
                     SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID
+                )
+            ]
+        );
+        assert_eq!(
+            registrar.mailboxes,
+            vec![
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
                 )
             ]
         );
