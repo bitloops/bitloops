@@ -64,6 +64,7 @@ pub(super) async fn run_server(
             .context("building DevQL config for daemon startup")?;
     let _ = crate::host::devql::ensure_devql_storage_current(&devql_cfg, "Bitloops daemon startup")
         .await?;
+    let _ = crate::daemon::shared_enrichment_coordinator();
 
     let config_root = daemon_config
         .config_root
