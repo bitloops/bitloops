@@ -36,6 +36,10 @@ pub trait CapabilityRegistrar {
 
     fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()>;
 
+    fn register_mailbox(&mut self, _registration: CapabilityMailboxRegistration) -> Result<()> {
+        Ok(())
+    }
+
     fn register_knowledge_stage(&mut self, _stage: KnowledgeStageRegistration) -> Result<()> {
         bail!("knowledge stage registration is not supported by this registrar")
     }
@@ -310,6 +314,49 @@ impl CurrentStateConsumerRegistration {
             consumer_id,
             handler,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxPolicy {
+    Cursor,
+    Job,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxHandler {
+    CurrentStateConsumer(&'static str),
+    Ingester(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityMailboxRegistration {
+    pub capability_id: &'static str,
+    pub mailbox_name: &'static str,
+    pub policy: CapabilityMailboxPolicy,
+    pub handler: CapabilityMailboxHandler,
+    pub blocked_by_embeddings_bootstrap: bool,
+}
+
+impl CapabilityMailboxRegistration {
+    pub const fn new(
+        capability_id: &'static str,
+        mailbox_name: &'static str,
+        policy: CapabilityMailboxPolicy,
+        handler: CapabilityMailboxHandler,
+    ) -> Self {
+        Self {
+            capability_id,
+            mailbox_name,
+            policy,
+            handler,
+            blocked_by_embeddings_bootstrap: false,
+        }
+    }
+
+    pub const fn blocked_by_embeddings_bootstrap(mut self) -> Self {
+        self.blocked_by_embeddings_bootstrap = true;
+        self
     }
 }
 

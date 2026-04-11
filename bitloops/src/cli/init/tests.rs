@@ -350,7 +350,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Some(DEFAULT_AGENT.to_string()),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,

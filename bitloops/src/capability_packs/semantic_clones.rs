@@ -15,6 +15,7 @@ pub mod schema_module;
 pub mod scoring;
 pub mod stages;
 pub mod types;
+pub(crate) mod workplane;
 
 mod stage_embeddings;
 mod stage_semantic_features;

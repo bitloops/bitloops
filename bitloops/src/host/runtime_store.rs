@@ -8,6 +8,7 @@ mod repo_open;
 mod repo_session_metadata;
 mod repo_task_checkpoints;
 mod repo_watcher;
+mod repo_workplane;
 mod sqlite_migrate;
 mod types;
 mod util;
@@ -15,6 +16,11 @@ mod util;
 #[cfg(test)]
 mod tests;
 
+pub use repo_workplane::{
+    CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneJobInsert,
+    CapabilityWorkplaneMailboxStatus, WorkplaneCursorRunRecord, WorkplaneCursorRunStatus,
+    WorkplaneJobRecord, WorkplaneJobStatus,
+};
 pub use types::{
     DaemonSqliteRuntimeStore, LegacySyncTaskRecord, PersistedCapabilityEventQueueState,
     PersistedDevqlTaskQueueState, PersistedSyncQueueState, RepoSqliteRuntimeStore,

@@ -40,7 +40,9 @@ pub(super) fn build_execution_plan(
     run: &CapabilityEventRunRecord,
     repo_root: &Path,
 ) -> Result<Option<ExecutionPlan>> {
-    let Some(cursor) = load_consumer_cursor(conn, &run.repo_id, &run.consumer_id)? else {
+    let Some(cursor) =
+        load_consumer_cursor(conn, &run.repo_id, &run.capability_id, &run.consumer_id)?
+    else {
         return Ok(None);
     };
     let Some(latest_generation_seq) = latest_generation_seq(conn, &run.repo_id)? else {
@@ -95,7 +97,7 @@ pub(super) fn build_execution_plan(
     let reconcile_mode_label = record.reconcile_mode.clone();
 
     conn.execute(
-        "UPDATE pack_reconcile_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, updated_at_unix = ?4 WHERE run_id = ?5",
+        "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, updated_at_unix = ?4 WHERE run_id = ?5",
         params![
             sql_i64(record.from_generation_seq)?,
             sql_i64(record.to_generation_seq)?,
@@ -257,11 +259,17 @@ pub(super) fn find_current_state_consumer<'a>(
     host: &'a DevqlCapabilityHost,
     run: &CapabilityEventRunRecord,
 ) -> Option<&'a Arc<dyn CurrentStateConsumer>> {
+    let mailbox = host.mailbox_registration(&run.capability_id, &run.consumer_id)?;
+    let crate::host::capability_host::CapabilityMailboxHandler::CurrentStateConsumer(handler_id) =
+        mailbox.handler
+    else {
+        return None;
+    };
     host.current_state_consumers()
         .iter()
         .find(|registration| {
             registration.capability_id == run.capability_id
-                && registration.consumer_id == run.consumer_id
+                && registration.consumer_id == handler_id
         })
         .map(|registration| &registration.handler)
 }

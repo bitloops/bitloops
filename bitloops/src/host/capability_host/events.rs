@@ -7,7 +7,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::gateways::{HostServicesGateway, LanguageServicesGateway, RelationalGateway};
+use super::gateways::{
+    CapabilityWorkplaneGateway, HostServicesGateway, LanguageServicesGateway, RelationalGateway,
+};
 use crate::host::devql::RelationalStorage;
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,7 @@ pub struct CurrentStateConsumerContext {
     pub relational: Arc<dyn RelationalGateway>,
     pub language_services: Arc<dyn LanguageServicesGateway>,
     pub host_services: Arc<dyn HostServicesGateway>,
+    pub workplane: Arc<dyn CapabilityWorkplaneGateway>,
 }
 
 pub type EventHandlerContext = CurrentStateConsumerContext;

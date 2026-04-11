@@ -5,8 +5,8 @@ use crate::daemon::{
     CapabilityEventRunStatus, DaemonServiceMetadata, DaemonStatusReport, DevqlTaskKind,
     DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState, DevqlTaskQueueStatus,
     DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, RepoTaskControlState, ServiceManagerKind,
-    SyncTaskMode, SyncTaskSpec,
+    EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, RepoTaskControlState,
+    ServiceManagerKind, SyncTaskMode, SyncTaskSpec,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
 use clap::Parser;
@@ -495,6 +495,19 @@ fn status_lines_show_global_supervisor_install_and_state() {
             },
             persisted: true,
             embeddings_gate: None,
+            last_failed_embedding: Some(FailedEmbeddingJobSummary {
+                job_id: "embedding-job-1".to_string(),
+                repo_id: "repo-1".to_string(),
+                branch: "main".to_string(),
+                representation_kind: "code".to_string(),
+                artefact_count: 1,
+                attempts: 3,
+                error: Some(
+                    "[capability_host:timeout] capability ingester timed out after 300s"
+                        .to_string(),
+                ),
+                updated_at_unix: 123,
+            }),
         }),
         devql_tasks: None,
     };
@@ -525,6 +538,8 @@ fn status_lines_show_global_supervisor_install_and_state() {
             "Enrichment retried failed jobs: 4".to_string(),
             "Enrichment last action: paused".to_string(),
             "Enrichment pause reason: maintenance".to_string(),
+            "Last failed embedding job: embedding-job-1 (repo=repo-1, branch=main, kind=code, artefacts=1, attempts=3)".to_string(),
+            "Last failed embedding error: [capability_host:timeout] capability ingester timed out after 300s".to_string(),
             "Enrichment persisted: yes".to_string(),
         ]
     );

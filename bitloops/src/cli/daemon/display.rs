@@ -237,6 +237,20 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
             lines.push(format!("Embeddings gate last error: {last_error}"));
         }
     }
+    if let Some(failed) = status.last_failed_embedding.as_ref() {
+        lines.push(format!(
+            "Last failed embedding job: {} (repo={}, branch={}, kind={}, artefacts={}, attempts={})",
+            failed.job_id,
+            failed.repo_id,
+            failed.branch,
+            failed.representation_kind,
+            failed.artefact_count,
+            failed.attempts,
+        ));
+        if let Some(error) = failed.error.as_ref() {
+            lines.push(format!("Last failed embedding error: {error}"));
+        }
+    }
     lines.push(format!(
         "Enrichment persisted: {}",
         if status.persisted { "yes" } else { "no" }

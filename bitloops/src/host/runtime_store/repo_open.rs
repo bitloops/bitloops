@@ -27,6 +27,7 @@ impl RepoSqliteRuntimeStore {
             .with_context(|| format!("opening repo runtime database {}", db_path.display()))?;
         initialise_repo_runtime_schema(&sqlite)?;
         Ok(Self {
+            config_root: daemon_config_root.to_path_buf(),
             repo_root: repo_root.to_path_buf(),
             repo_id: repo.repo_id,
             db_path,

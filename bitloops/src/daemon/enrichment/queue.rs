@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use super::super::types::{
     EnrichmentQueueMode, EnrichmentQueueState as ProjectedEnrichmentQueueState,
+    FailedEmbeddingJobSummary,
 };
 use super::{EnrichmentJobKind, EnrichmentJobStatus, EnrichmentQueueState};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
@@ -140,6 +141,43 @@ pub(super) fn project_status(state: &EnrichmentQueueState) -> ProjectedEnrichmen
         last_updated_unix: state.updated_at_unix,
         paused_reason: state.paused_reason.clone(),
     }
+}
+
+pub(super) fn last_failed_embedding_job(
+    state: &EnrichmentQueueState,
+) -> Option<FailedEmbeddingJobSummary> {
+    state
+        .jobs
+        .iter()
+        .filter(|job| {
+            job.status == EnrichmentJobStatus::Failed
+                && matches!(job.job, EnrichmentJobKind::SymbolEmbeddings { .. })
+        })
+        .max_by_key(|job| job.updated_at_unix)
+        .map(|job| {
+            let (representation_kind, artefact_count) = match &job.job {
+                EnrichmentJobKind::SymbolEmbeddings {
+                    artefact_ids,
+                    representation_kind,
+                    ..
+                } => (
+                    representation_kind.to_string(),
+                    u64::try_from(artefact_ids.len()).unwrap_or(u64::MAX),
+                ),
+                _ => unreachable!("filtered to symbol embedding jobs"),
+            };
+
+            FailedEmbeddingJobSummary {
+                job_id: job.id.clone(),
+                repo_id: job.repo_id.clone(),
+                branch: job.branch.clone(),
+                representation_kind,
+                artefact_count,
+                attempts: job.attempts,
+                error: job.error.clone(),
+                updated_at_unix: job.updated_at_unix,
+            }
+        })
 }
 
 fn count_jobs(

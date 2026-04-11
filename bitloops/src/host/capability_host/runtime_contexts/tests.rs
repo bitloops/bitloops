@@ -385,6 +385,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
         None,
         None,
         None,
+        None,
     );
 
     assert_eq!(
@@ -437,6 +438,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
         None,
         None,
         None,
+        None,
     );
 
     let sqlite_path = repo_root.join(".bitloops/devql.sqlite");
@@ -485,6 +487,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
         &inference,
         None,
         languages,
+        None,
         None,
         None,
         None,
@@ -566,6 +569,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
         None,
         None,
         None,
+        None,
     );
 
     let err = CapabilityIngestContext::clone_edges_rebuild_relational(&runtime)
@@ -615,6 +619,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
         None,
         Some("cap:knowledge"),
         Some("ingest:clone"),
+        None,
     );
 
     assert_eq!(
@@ -665,6 +670,7 @@ fn health_context_config_view_reads_capability_slice() {
         None,
         None,
         None,
+        None,
     );
 
     let view = CapabilityHealthContext::config_view(&runtime, "health-cap").expect("view");
@@ -707,6 +713,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
         &inference,
         None,
         languages,
+        None,
         None,
         None,
         None,

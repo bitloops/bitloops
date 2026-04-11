@@ -3,7 +3,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -16,6 +19,8 @@ use crate::config::{
 pub const BITLOOPS_EMBEDDINGS_IPC_DRIVER: &str = "bitloops_embeddings_ipc";
 pub const BITLOOPS_EMBEDDINGS_RUNTIME_ID: &str = "bitloops_embeddings";
 const PYTHON_EMBEDDINGS_DIMENSION_PROBE_TEXT: &str = "bitloops python embedding dimension probe";
+const SHARED_EMBEDDINGS_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const SHARED_EMBEDDINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {
@@ -359,8 +364,7 @@ struct BitloopsEmbeddingsIpcService {
     model_name: String,
     output_dimension: usize,
     cache_key: String,
-    session_config: PythonEmbeddingsSessionConfig,
-    session: Mutex<PythonEmbeddingsSession>,
+    shared_session: Arc<SharedBitloopsEmbeddingsSession>,
 }
 
 impl BitloopsEmbeddingsIpcService {
@@ -378,8 +382,9 @@ impl BitloopsEmbeddingsIpcService {
             model: model.to_string(),
             cache_dir: cache_dir.map(Path::to_path_buf),
         };
-        let mut session = PythonEmbeddingsSession::start(&session_config)?;
-        let output_dimension = session.probe_dimension()?;
+        let shared_session = shared_bitloops_embeddings_session_registry()
+            .get_or_create(&session_config)?;
+        let output_dimension = shared_session.output_dimension()?;
         let cache_key = format!(
             "profile={profile_name}::driver={BITLOOPS_EMBEDDINGS_IPC_DRIVER}::model={model}::dimension={output_dimension}"
         );
@@ -389,8 +394,7 @@ impl BitloopsEmbeddingsIpcService {
             model_name: model.to_string(),
             output_dimension,
             cache_key,
-            session_config,
-            session: Mutex::new(session),
+            shared_session,
         })
     }
 }
@@ -419,56 +423,31 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
         }
 
         let texts = vec![input.to_string()];
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|_| anyhow!("standalone embeddings runtime session mutex was poisoned"))?;
-        match session.embed(&texts) {
-            Ok(mut vectors) => {
-                let vector = vectors
-                    .drain(..)
-                    .next()
-                    .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))?;
-                if vector.is_empty() {
-                    bail!("standalone embeddings runtime returned an empty vector");
-                }
-                Ok(vector)
-            }
-            Err(first_err) => {
-                *session =
-                    PythonEmbeddingsSession::start(&self.session_config).with_context(|| {
-                        format!(
-                            "restarting standalone `bitloops-embeddings` runtime for profile `{}` after failure",
-                            self.profile_name
-                        )
-                    })?;
-                let mut vectors = session.embed(&texts).with_context(|| {
-                    format!(
-                        "retrying standalone `bitloops-embeddings` runtime request for profile `{}`",
-                        self.profile_name
-                    )
-                })?;
-                let vector = vectors
-                    .drain(..)
-                    .next()
-                    .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))?;
-                if vector.is_empty() {
-                    bail!("standalone embeddings runtime returned an empty vector");
-                }
-                if vector.len() != self.output_dimension {
-                    bail!(
-                        "standalone embeddings runtime returned dimension {} but expected {} after restart; initial failure: {first_err:#}",
-                        vector.len(),
-                        self.output_dimension
-                    );
-                }
-                Ok(vector)
-            }
+        let mut vectors = self.shared_session.embed(&texts).with_context(|| {
+            format!(
+                "requesting standalone `bitloops-embeddings` runtime for profile `{}`",
+                self.profile_name
+            )
+        })?;
+        let vector = vectors
+            .drain(..)
+            .next()
+            .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))?;
+        if vector.is_empty() {
+            bail!("standalone embeddings runtime returned an empty vector");
         }
+        if vector.len() != self.output_dimension {
+            bail!(
+                "standalone embeddings runtime returned dimension {} but expected {}",
+                vector.len(),
+                self.output_dimension
+            );
+        }
+        Ok(vector)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PythonEmbeddingsSessionConfig {
     command: String,
     args: Vec<String>,
@@ -482,7 +461,169 @@ struct PythonEmbeddingsSession {
     config: PythonEmbeddingsSessionConfig,
     child: Child,
     stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
+    response_rx: Receiver<PythonEmbeddingsSessionOutput>,
+}
+
+enum PythonEmbeddingsSessionOutput {
+    Json(Value),
+    ReadError(String),
+    Closed,
+}
+
+struct SharedBitloopsEmbeddingsSessionRegistry {
+    sessions: Mutex<HashMap<PythonEmbeddingsSessionConfig, Arc<SharedBitloopsEmbeddingsSession>>>,
+}
+
+struct SharedBitloopsEmbeddingsSession {
+    config: PythonEmbeddingsSessionConfig,
+    state: Mutex<SharedBitloopsEmbeddingsSessionState>,
+}
+
+struct SharedBitloopsEmbeddingsSessionState {
+    session: Option<PythonEmbeddingsSession>,
+    output_dimension: Option<usize>,
+    last_used_at: Instant,
+}
+
+impl SharedBitloopsEmbeddingsSessionRegistry {
+    fn get_or_create(
+        &self,
+        config: &PythonEmbeddingsSessionConfig,
+    ) -> Result<Arc<SharedBitloopsEmbeddingsSession>> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| anyhow!("shared embeddings session registry mutex was poisoned"))?;
+        Ok(sessions
+            .entry(config.clone())
+            .or_insert_with(|| Arc::new(SharedBitloopsEmbeddingsSession::new(config.clone())))
+            .clone())
+    }
+
+    fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
+        let sessions = match self.sessions.lock() {
+            Ok(sessions) => sessions.values().cloned().collect::<Vec<_>>(),
+            Err(_) => return,
+        };
+        for session in sessions {
+            session.shutdown_if_idle(idle_timeout);
+        }
+    }
+}
+
+impl SharedBitloopsEmbeddingsSession {
+    fn new(config: PythonEmbeddingsSessionConfig) -> Self {
+        Self {
+            config,
+            state: Mutex::new(SharedBitloopsEmbeddingsSessionState {
+                session: None,
+                output_dimension: None,
+                last_used_at: Instant::now(),
+            }),
+        }
+    }
+
+    fn output_dimension(&self) -> Result<usize> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("shared embeddings runtime session mutex was poisoned"))?;
+        if let Some(output_dimension) = state.output_dimension {
+            return Ok(output_dimension);
+        }
+        let session = self.ensure_session_started(&mut state)?;
+        let output_dimension = session.probe_dimension()?;
+        state.output_dimension = Some(output_dimension);
+        state.last_used_at = Instant::now();
+        Ok(output_dimension)
+    }
+
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("shared embeddings runtime session mutex was poisoned"))?;
+        match self.ensure_session_started(&mut state)?.embed(texts) {
+            Ok(vectors) => {
+                state.last_used_at = Instant::now();
+                Ok(vectors)
+            }
+            Err(first_err) => {
+                state.session = None;
+                let restarted = PythonEmbeddingsSession::start(&self.config).context(
+                    "restarting standalone `bitloops-embeddings` runtime after failure",
+                )?;
+                state.session = Some(restarted);
+                let retry = state
+                    .session
+                    .as_mut()
+                    .expect("session replaced above")
+                    .embed(texts)
+                    .with_context(|| {
+                        format!(
+                            "retrying standalone `bitloops-embeddings` runtime request after failure: {first_err:#}"
+                        )
+                    });
+                match retry {
+                    Ok(vectors) => {
+                        state.last_used_at = Instant::now();
+                        Ok(vectors)
+                    }
+                    Err(err) => {
+                        state.session = None;
+                        Err(err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn shutdown_if_idle(&self, idle_timeout: Duration) {
+        let session = {
+            let mut state = match self.state.try_lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            if state.session.is_none() || state.last_used_at.elapsed() < idle_timeout {
+                return;
+            }
+            state.session.take()
+        };
+        drop(session);
+    }
+
+    fn ensure_session_started<'a>(
+        &self,
+        state: &'a mut SharedBitloopsEmbeddingsSessionState,
+    ) -> Result<&'a mut PythonEmbeddingsSession> {
+        if state.session.is_none() {
+            state.session = Some(PythonEmbeddingsSession::start(&self.config)?);
+        }
+        Ok(state.session.as_mut().expect("session ensured above"))
+    }
+}
+
+fn shared_bitloops_embeddings_session_registry() -> &'static Arc<SharedBitloopsEmbeddingsSessionRegistry>
+{
+    static REGISTRY: OnceLock<Arc<SharedBitloopsEmbeddingsSessionRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let registry = Arc::new(SharedBitloopsEmbeddingsSessionRegistry {
+            sessions: Mutex::new(HashMap::new()),
+        });
+        let sweeper_registry = Arc::clone(&registry);
+        let _ = thread::Builder::new()
+            .name("bitloops-embeddings-ipc-sweeper".to_string())
+            .spawn(move || loop {
+                thread::sleep(SHARED_EMBEDDINGS_SWEEP_INTERVAL);
+                sweeper_registry.shutdown_idle_sessions(SHARED_EMBEDDINGS_IDLE_TIMEOUT);
+            });
+        registry
+    })
+}
+
+#[cfg(test)]
+fn evict_idle_embeddings_sessions_for_tests(idle_timeout: Duration) {
+    shared_bitloops_embeddings_session_registry().shutdown_idle_sessions(idle_timeout);
 }
 
 impl PythonEmbeddingsSession {
@@ -516,16 +657,18 @@ impl PythonEmbeddingsSession {
             config: config.clone(),
             child,
             stdin,
-            reader: BufReader::new(stdout),
+            response_rx: Self::spawn_stdout_reader(stdout),
         };
         session.wait_for_ready()?;
         Ok(session)
     }
 
     fn wait_for_ready(&mut self) -> Result<()> {
-        let _timeout = self.config.startup_timeout_secs;
         loop {
-            let value = self.read_json_line()?;
+            let value = self.read_json_response(
+                self.config.startup_timeout_secs,
+                "waiting for standalone embeddings runtime readiness",
+            )?;
             if value.get("event").and_then(Value::as_str) == Some("ready") {
                 return Ok(());
             }
@@ -553,12 +696,16 @@ impl PythonEmbeddingsSession {
             "texts": texts,
         });
         self.write_json_line(&request)?;
-        let _timeout = self.config.request_timeout_secs;
-        let value = self.read_json_line()?;
+        let value = self.read_json_response(
+            self.config.request_timeout_secs,
+            "waiting for standalone embeddings runtime response",
+        )?;
         if value.get("id").and_then(Value::as_str) != Some(request_id.as_str()) {
+            self.terminate_child();
             bail!("standalone embeddings runtime returned mismatched request id");
         }
         if value.get("ok").and_then(Value::as_bool) != Some(true) {
+            self.terminate_child();
             let message = value
                 .pointer("/error/message")
                 .and_then(Value::as_str)
@@ -599,7 +746,8 @@ impl PythonEmbeddingsSession {
             "model": self.config.model,
         });
         self.write_json_line(&request)?;
-        let _ = self.read_json_line();
+        let _ = self.read_json_response(1, "waiting for standalone embeddings runtime shutdown");
+        self.terminate_child();
         Ok(())
     }
 
@@ -612,17 +760,93 @@ impl PythonEmbeddingsSession {
             .context("flushing standalone embeddings runtime request")
     }
 
-    fn read_json_line(&mut self) -> Result<Value> {
-        let mut line = String::new();
-        let bytes = self
-            .reader
-            .read_line(&mut line)
-            .context("reading standalone embeddings runtime response")?;
-        if bytes == 0 {
-            bail!("standalone embeddings runtime exited before replying");
+    fn spawn_stdout_reader(stdout: ChildStdout) -> Receiver<PythonEmbeddingsSessionOutput> {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = tx.send(PythonEmbeddingsSessionOutput::Closed);
+                        break;
+                    }
+                    Ok(_) => {
+                        let trimmed = line.trim_end();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str(trimmed) {
+                            Ok(value) => {
+                                if tx
+                                    .send(PythonEmbeddingsSessionOutput::Json(value))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                let _ = tx.send(PythonEmbeddingsSessionOutput::ReadError(
+                                    anyhow!(
+                                        "parsing standalone embeddings runtime response `{trimmed}`: {err}"
+                                    )
+                                    .to_string(),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let _ = tx.send(PythonEmbeddingsSessionOutput::ReadError(
+                            anyhow!(err)
+                                .context("reading standalone embeddings runtime response")
+                                .to_string(),
+                        ));
+                        break;
+                    }
+                }
+            }
+        });
+        rx
+    }
+
+    fn read_json_response(&mut self, timeout_secs: u64, operation: &str) -> Result<Value> {
+        let next = if timeout_secs == 0 {
+            self.response_rx.recv().map_err(|_| {
+                anyhow!("standalone embeddings runtime exited before replying")
+            })
+        } else {
+            self.response_rx
+                .recv_timeout(Duration::from_secs(timeout_secs))
+                .map_err(|err| match err {
+                    RecvTimeoutError::Timeout => anyhow!(
+                        "{operation} timed out after {timeout_secs}s"
+                    ),
+                    RecvTimeoutError::Disconnected => {
+                        anyhow!("standalone embeddings runtime exited before replying")
+                    }
+                })
+        };
+        match next {
+            Ok(PythonEmbeddingsSessionOutput::Json(value)) => Ok(value),
+            Ok(PythonEmbeddingsSessionOutput::ReadError(message)) => {
+                self.terminate_child();
+                Err(anyhow!(message))
+            }
+            Ok(PythonEmbeddingsSessionOutput::Closed) => {
+                self.terminate_child();
+                Err(anyhow!("standalone embeddings runtime exited before replying"))
+            }
+            Err(err) => {
+                self.terminate_child();
+                Err(err)
+            }
         }
-        serde_json::from_str(line.trim_end())
-            .context("parsing standalone embeddings runtime response")
+    }
+
+    fn terminate_child(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -645,6 +869,69 @@ fn next_request_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    fn write_fake_runtime_script(script_path: &Path, timeout_marker: Option<&Path>) {
+        let timeout_branch = timeout_marker
+            .map(|path| {
+                format!(
+                    r#"
+          if [ ! -f "{path}" ]; then
+            : > "{path}"
+            sleep 2
+          fi
+"#,
+                    path = path.display()
+                )
+            })
+            .unwrap_or_default();
+        fs::write(
+            script_path,
+            format!(
+                r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+printf '%s\n' '{{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}}'
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"shutdown"'*)
+      printf '{{"id":"%s","ok":true}}\n' "$request_id"
+      exit 0
+      ;;
+    *'"cmd":"embed"'*)
+      case "$line" in
+        *'bitloops python embedding dimension probe'*)
+          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
+          ;;
+        *)
+{timeout_branch}          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+                timeout_branch = timeout_branch,
+            ),
+        )
+        .expect("write fake runtime script");
+    }
+
+    fn fake_runtime_config(script_path: &Path, launch_log: &Path) -> InferenceRuntimeConfig {
+        InferenceRuntimeConfig {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                script_path.to_string_lossy().into_owned(),
+                launch_log.to_string_lossy().into_owned(),
+            ],
+            startup_timeout_secs: 1,
+            request_timeout_secs: 1,
+        }
+    }
 
     #[test]
     fn empty_gateway_rejects_unknown_slots() {
@@ -678,5 +965,101 @@ mod tests {
             .describe("code_embeddings")
             .expect("slot description");
         assert_eq!(description.profile_name, "local");
+    }
+
+    #[test]
+    fn ipc_service_restarts_after_request_timeout() {
+        let temp = TempDir::new().expect("temp dir");
+        let script_path = temp.path().join("fake_embeddings_runtime.sh");
+        let launch_log = temp.path().join("launches.log");
+        let timeout_marker = temp.path().join("first-request-timed-out");
+        write_fake_runtime_script(&script_path, Some(&timeout_marker));
+
+        let runtime = fake_runtime_config(&script_path, &launch_log);
+        let service =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+                .expect("build ipc service");
+
+        let vector = service
+            .embed("hello world", EmbeddingInputType::Document)
+            .expect("embedding request should recover after timeout");
+
+        assert_eq!(vector, vec![1.0, 2.0]);
+        assert!(timeout_marker.exists(), "first request should have timed out");
+    }
+
+    #[test]
+    fn ipc_service_reuses_hot_runtime_across_service_instances() {
+        let temp = TempDir::new().expect("temp dir");
+        let script_path = temp.path().join("fake_embeddings_runtime.sh");
+        let launch_log = temp.path().join("launches.log");
+        write_fake_runtime_script(&script_path, None);
+
+        let runtime = fake_runtime_config(&script_path, &launch_log);
+        let first =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+                .expect("build first ipc service");
+        assert_eq!(
+            first
+                .embed("hello world", EmbeddingInputType::Document)
+                .expect("first embed"),
+            vec![1.0, 2.0]
+        );
+        drop(first);
+
+        let second =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+                .expect("build second ipc service");
+        assert_eq!(
+            second
+                .embed("goodbye world", EmbeddingInputType::Document)
+                .expect("second embed"),
+            vec![1.0, 2.0]
+        );
+
+        let launches = fs::read_to_string(&launch_log).expect("read launch log");
+        assert_eq!(
+            launches.lines().count(),
+            1,
+            "expected one shared runtime launch, got: {launches}"
+        );
+    }
+
+    #[test]
+    fn ipc_service_shuts_down_after_idle_eviction() {
+        let temp = TempDir::new().expect("temp dir");
+        let script_path = temp.path().join("fake_embeddings_runtime.sh");
+        let launch_log = temp.path().join("launches.log");
+        write_fake_runtime_script(&script_path, None);
+
+        let runtime = fake_runtime_config(&script_path, &launch_log);
+        let first =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+                .expect("build first ipc service");
+        assert_eq!(
+            first
+                .embed("hello world", EmbeddingInputType::Document)
+                .expect("first embed"),
+            vec![1.0, 2.0]
+        );
+
+        evict_idle_embeddings_sessions_for_tests(Duration::ZERO);
+
+        let second =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+                .expect("build second ipc service");
+        assert_eq!(
+            second
+                .embed("goodbye world", EmbeddingInputType::Document)
+                .expect("second embed"),
+            vec![1.0, 2.0]
+        );
+
+        let launches = fs::read_to_string(&launch_log).expect("read launch log");
+        assert_eq!(
+            launches.lines().count(),
+            2,
+            "expected idle eviction to force a second runtime launch, got: {launches}"
+        );
     }
 }

@@ -15,18 +15,19 @@ use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;
 use super::events::{CurrentStateConsumerContext, HostEventHandler};
 use super::gateways::{
-    DefaultHostServicesGateway, HostServicesGateway, LanguageServicesGateway,
-    SqliteRelationalGateway,
+    CapabilityWorkplaneGateway, DefaultHostServicesGateway, HostServicesGateway,
+    LanguageServicesGateway, SqliteRelationalGateway,
 };
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::lifecycle;
 use super::migrations::CapabilityMigration;
 use super::policy::{CrossPackAccessPolicy, HostInvocationPolicy, with_timeout};
 use super::registrar::{
-    CapabilityPack, CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest,
-    IngestResult, IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler,
-    KnowledgeIngesterRegistration, KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample,
-    SchemaModule, StageHandler, StageRegistration, StageRequest, StageResponse,
+    CapabilityMailboxRegistration, CapabilityPack, CapabilityRegistrar,
+    CurrentStateConsumerRegistration, IngestRequest, IngestResult, IngesterHandler,
+    IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
+    KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
+    StageRegistration, StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
 use crate::host::inference::{InferenceGateway, ScopedInferenceGateway};
@@ -66,6 +67,7 @@ pub struct DevqlCapabilityHost {
     stages: HashMap<(String, String), RegisteredStage>,
     ingesters: HashMap<(String, String), RegisteredIngester>,
     current_state_consumers: Vec<CurrentStateConsumerRegistration>,
+    mailboxes: Vec<CapabilityMailboxRegistration>,
     event_handlers: Vec<Arc<dyn HostEventHandler>>,
     schema_modules: Vec<SchemaModule>,
     query_examples: Vec<&'static [QueryExample]>,
@@ -88,6 +90,7 @@ impl DevqlCapabilityHost {
             stages: HashMap::new(),
             ingesters: HashMap::new(),
             current_state_consumers: Vec::new(),
+            mailboxes: Vec::new(),
             event_handlers: Vec::new(),
             schema_modules: Vec::new(),
             query_examples: Vec::new(),
@@ -182,7 +185,45 @@ impl DevqlCapabilityHost {
         self.current_state_consumers.as_slice()
     }
 
-    pub fn build_current_state_consumer_context(&self) -> Result<CurrentStateConsumerContext> {
+    pub fn workplane_mailboxes(&self) -> &[CapabilityMailboxRegistration] {
+        self.mailboxes.as_slice()
+    }
+
+    pub fn declared_mailboxes_for_capability(
+        &self,
+        capability_id: &str,
+    ) -> Vec<CapabilityMailboxRegistration> {
+        self.mailboxes
+            .iter()
+            .copied()
+            .filter(|registration| registration.capability_id == capability_id)
+            .collect()
+    }
+
+    pub fn mailbox_registration(
+        &self,
+        capability_id: &str,
+        mailbox_name: &str,
+    ) -> Option<CapabilityMailboxRegistration> {
+        self.mailboxes.iter().copied().find(|registration| {
+            registration.capability_id == capability_id && registration.mailbox_name == mailbox_name
+        })
+    }
+
+    pub fn build_workplane_gateway(
+        &self,
+        capability_id: &str,
+    ) -> Result<Arc<dyn CapabilityWorkplaneGateway>> {
+        Ok(Arc::new(self.runtime.workplane_gateway_for_capability(
+            capability_id,
+            &self.declared_mailboxes_for_capability(capability_id),
+        )?))
+    }
+
+    pub fn build_current_state_consumer_context(
+        &self,
+        capability_id: &str,
+    ) -> Result<CurrentStateConsumerContext> {
         let relational_store = DefaultRelationalStore::open_local_for_backend_config(
             self.repo_root(),
             &self.runtime.backends.relational,
@@ -197,6 +238,10 @@ impl DevqlCapabilityHost {
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
         );
+        let workplane = Arc::new(self.runtime.workplane_gateway_for_capability(
+            capability_id,
+            &self.declared_mailboxes_for_capability(capability_id),
+        )?);
 
         Ok(CurrentStateConsumerContext {
             config_root: self.runtime.config_root.clone(),
@@ -204,11 +249,12 @@ impl DevqlCapabilityHost {
             relational,
             language_services,
             host_services,
+            workplane,
         })
     }
 
     pub fn build_event_handler_context(&self) -> Result<CurrentStateConsumerContext> {
-        self.build_current_state_consumer_context()
+        self.build_current_state_consumer_context("<event_handler>")
     }
 
     /// Snapshot of registered packs, migrations, invocation policy, and cross-pack grants.
@@ -371,10 +417,12 @@ impl DevqlCapabilityHost {
         };
 
         let request = IngestRequest::new(payload);
+        let declared_mailboxes = self.declared_mailboxes_for_capability(capability_id);
         let mut runtime = self.runtime.runtime_with_relational(
             devql_relational,
             Some(capability_id),
             Some(ingester_name),
+            declared_mailboxes.as_slice(),
         );
         let limit = self.invocation_policy.ingester_timeout;
         match handler {
@@ -414,7 +462,10 @@ impl DevqlCapabilityHost {
         };
 
         let request = StageRequest::new(payload);
-        let mut runtime = self.runtime.runtime_for_capability(capability_id);
+        let declared_mailboxes = self.declared_mailboxes_for_capability(capability_id);
+        let mut runtime = self
+            .runtime
+            .runtime_for_capability(capability_id, declared_mailboxes.as_slice());
         let limit = self.invocation_policy.stage_timeout;
         match handler {
             RegisteredStage::Core(h) => {
@@ -432,7 +483,10 @@ impl DevqlCapabilityHost {
             .get(capability_id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let runtime = self.runtime.runtime_for_capability(capability_id);
+        let declared_mailboxes = self.declared_mailboxes_for_capability(capability_id);
+        let runtime = self
+            .runtime
+            .runtime_for_capability(capability_id, declared_mailboxes.as_slice());
         lifecycle::run_health_checks(capability_id, checks, &runtime)
     }
 
@@ -496,6 +550,22 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         }
         self.ingesters
             .insert(key, RegisteredIngester::Core(ingester.handler));
+        Ok(())
+    }
+
+    fn register_mailbox(&mut self, registration: CapabilityMailboxRegistration) -> Result<()> {
+        let duplicate = self.mailboxes.iter().any(|existing| {
+            existing.capability_id == registration.capability_id
+                && existing.mailbox_name == registration.mailbox_name
+        });
+        if duplicate {
+            bail!(
+                "[capability_pack:{}] [mailbox:{}] duplicate registration",
+                registration.capability_id,
+                registration.mailbox_name
+            );
+        }
+        self.mailboxes.push(registration);
         Ok(())
     }
 

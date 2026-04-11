@@ -6,10 +6,9 @@ use crate::host::capability_host::{
 
 use super::runtime_config::{embeddings_enabled, resolve_semantic_clones_config};
 use super::types::{SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID};
-use crate::capability_packs::semantic_clones::features as semantic_features;
-use crate::config::resolve_bound_daemon_config_root_for_repo;
-use std::collections::BTreeMap;
-
+use super::workplane::{
+    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, summary_refresh_required,
+};
 pub struct SemanticClonesCurrentStateConsumer;
 
 impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
@@ -72,55 +71,21 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 ));
             }
 
-            let input_hashes = build_input_hashes(&inputs);
-            let config_root =
-                resolve_bound_daemon_config_root_for_repo(request.repo_root.as_path())?;
-            let target = crate::daemon::EnrichmentJobTarget::new(
-                config_root,
-                request.repo_root.clone(),
-                request.repo_id.clone(),
-                request
-                    .active_branch
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-            );
-            let enrichment = crate::daemon::shared_enrichment_coordinator();
-            enrichment
-                .enqueue_symbol_embeddings(
-                    target.clone(),
-                    inputs.clone(),
-                    input_hashes.clone(),
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                )
-                .await?;
-            enrichment
-                .enqueue_symbol_embeddings(
-                    target,
-                    inputs,
-                    input_hashes,
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-                )
-                .await?;
+            let summary_refresh_required = summary_refresh_required(&config);
+            if summary_refresh_required {
+                enqueue_summary_refresh_jobs(context.workplane.as_ref(), &inputs)?;
+            }
+            if embeddings_enabled(&config) {
+                enqueue_embedding_jobs(
+                    context.workplane.as_ref(),
+                    &config,
+                    &inputs,
+                    summary_refresh_required,
+                )?;
+            }
             Ok(CurrentStateConsumerResult::applied(
                 request.to_generation_seq_inclusive,
             ))
         })
     }
-}
-
-fn build_input_hashes(
-    inputs: &[semantic_features::SemanticFeatureInput],
-) -> BTreeMap<String, String> {
-    inputs
-        .iter()
-        .map(|input| {
-            (
-                input.artefact_id.clone(),
-                semantic_features::build_semantic_feature_input_hash(
-                    input,
-                    &semantic_features::NoopSemanticSummaryProvider,
-                ),
-            )
-        })
-        .collect()
 }

@@ -10,6 +10,7 @@ use crate::host::devql::{
     RelationalStorage, build_capability_host, execute_ingest_with_observer, execute_sync,
     resolve_repo_identity,
 };
+use crate::host::runtime_store::{WorkplaneJobRecord, WorkplaneJobStatus};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -806,4 +807,58 @@ async fn daemon_embedding_job_keeps_incremental_behavior_when_setup_is_unchanged
         )]
     );
     assert_eq!(before_hashes, after_hashes);
+}
+
+#[tokio::test]
+async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_management() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "mailbox-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let selected = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice artefact input");
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(selected.artefact_id.clone()),
+        payload: serde_json::json!({ "artefact_id": selected.artefact_id }),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+    let rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.follow_ups.len(), 1);
+    assert!(matches!(
+        outcome.follow_ups.first(),
+        Some(FollowUpJob::CloneEdgesRebuild { .. })
+    ));
+    assert_eq!(rows.len(), 1, "workplane job should only embed the selected artefact");
+    assert_eq!(rows[0].path, "src/invoice.ts");
+    assert_eq!(rows[0].model, "mailbox-model");
+    assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
 }

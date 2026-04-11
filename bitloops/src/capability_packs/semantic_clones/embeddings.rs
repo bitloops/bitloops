@@ -147,10 +147,10 @@ pub fn build_symbol_embedding_inputs(
         })
         .filter_map(|input| {
             let summary = summary_by_artefact_id
-                .get(&input.artefact_id)?
-                .trim()
-                .to_string();
-            if summary.is_empty() {
+                .get(&input.artefact_id)
+                .map(|summary| summary.trim().to_string())
+                .unwrap_or_default();
+            if representation_kind == EmbeddingRepresentationKind::Summary && summary.is_empty() {
                 return None;
             }
 
@@ -198,7 +198,6 @@ pub fn build_symbol_embedding_input_hash(
         "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
         "language_kind": input.language_kind.to_ascii_lowercase(),
         "name": &input.name,
-        "summary": normalize_whitespace(&input.summary),
         "content_hash": &input.content_hash,
     });
     if let Some(map) = value.as_object_mut() {
@@ -220,7 +219,12 @@ pub fn build_symbol_embedding_input_hash(
                     )),
                 );
             }
-            EmbeddingRepresentationKind::Summary => {}
+            EmbeddingRepresentationKind::Summary => {
+                map.insert(
+                    "summary".to_string(),
+                    json!(normalize_whitespace(&input.summary)),
+                );
+            }
         }
     }
     sha256_hex(&value.to_string())
@@ -295,14 +299,12 @@ fn build_code_embedding_text(input: &SymbolEmbeddingInput) -> String {
         .unwrap_or_default();
     let dependencies = render_dependency_context(&input.dependency_signals);
 
-    // Keep the code representation anchored in implementation details plus the best summary.
     format!(
         "kind: {kind}\n\
 language: {language}\n\
 language_kind: {language_kind}\n\
 name: {name}\n\
 signature: {signature}\n\
-summary: {summary}\n\
 dependencies: {dependencies}\n\
 body:\n{body}",
         kind = input.canonical_kind,
@@ -310,7 +312,6 @@ body:\n{body}",
         language_kind = input.language_kind,
         name = input.name,
         signature = signature,
-        summary = normalize_whitespace(&input.summary),
         dependencies = dependencies,
         body = body,
     )
@@ -550,10 +551,19 @@ mod tests {
             ("function-2".to_string(), "   ".to_string()),
         ]);
 
-        let rows =
+        let code_rows =
             build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].artefact_id, "function-1");
+        assert_eq!(code_rows.len(), 2);
+        assert_eq!(code_rows[0].artefact_id, "function-1");
+        assert_eq!(code_rows[1].artefact_id, "function-2");
+
+        let summary_rows = build_symbol_embedding_inputs(
+            &inputs,
+            EmbeddingRepresentationKind::Summary,
+            &summaries,
+        );
+        assert_eq!(summary_rows.len(), 1);
+        assert_eq!(summary_rows[0].artefact_id, "function-1");
     }
 
     #[test]
@@ -563,9 +573,19 @@ mod tests {
         let mut changed = base.clone();
         changed.summary = "Function normalize email. Normalizes email for storage.".to_string();
 
-        assert_ne!(
+        assert_eq!(
             build_symbol_embedding_input_hash(&base, &provider),
             build_symbol_embedding_input_hash(&changed, &provider)
+        );
+
+        let mut summary_base = base.clone();
+        summary_base.representation_kind = EmbeddingRepresentationKind::Summary;
+        let mut summary_changed = changed.clone();
+        summary_changed.representation_kind = EmbeddingRepresentationKind::Summary;
+
+        assert_ne!(
+            build_symbol_embedding_input_hash(&summary_base, &provider),
+            build_symbol_embedding_input_hash(&summary_changed, &provider)
         );
     }
 
@@ -583,10 +603,10 @@ mod tests {
     #[test]
     fn symbol_embedding_text_includes_summary_and_body() {
         let text = build_symbol_embedding_text(&sample_input());
-        assert!(text.contains("summary: Function normalize email."));
         assert!(text.contains("dependencies: calls:user repo::find by id"));
         assert!(text.contains("body:"));
         assert!(text.contains("return email.trim().toLowerCase();"));
+        assert!(!text.contains("summary:"));
         assert!(!text.contains("path:"));
         assert!(!text.contains("symbol_fqn:"));
         assert!(!text.contains("parent_kind:"));
