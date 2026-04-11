@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::FutureExt;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use tokio::sync::Notify;
 use tokio::time::{Duration, sleep};
 
@@ -56,6 +56,9 @@ impl Drop for WorkerStartedGuard {
 
 #[derive(Debug)]
 enum RunCompletion {
+    NoopCompleted {
+        run: CapabilityEventRunRecord,
+    },
     Completed {
         run: CapabilityEventRunRecord,
         applied_to_generation_seq: u64,
@@ -144,16 +147,6 @@ impl CapabilityEventCoordinator {
             return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
         }
 
-        let has_changes = !file_diff.added.is_empty()
-            || !file_diff.changed.is_empty()
-            || !file_diff.removed.is_empty()
-            || !artefact_diff.added.is_empty()
-            || !artefact_diff.changed.is_empty()
-            || !artefact_diff.removed.is_empty();
-        if !has_changes {
-            return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
-        }
-
         let registrations = host.current_state_consumers().to_vec();
         let now = unix_timestamp_now();
         let repo_id = cfg.repo.repo_id.clone();
@@ -239,6 +232,7 @@ impl CapabilityEventCoordinator {
             let failed_runs = count_runs_with_status(conn, CapabilityEventRunStatus::Failed)?;
             let completed_recent_runs =
                 count_runs_with_status(conn, CapabilityEventRunStatus::Completed)?;
+            let queue_activity = load_queue_activity(conn)?;
             let current_repo_run = repo_id
                 .map(|repo_id| load_current_repo_run(conn, repo_id))
                 .transpose()?
@@ -251,8 +245,8 @@ impl CapabilityEventCoordinator {
                     running_runs,
                     failed_runs,
                     completed_recent_runs,
-                    last_action: Some("current_state_consumers_available".to_string()),
-                    last_updated_unix: unix_timestamp_now(),
+                    last_action: queue_activity.last_action,
+                    last_updated_unix: queue_activity.last_updated_unix,
                 },
                 persisted: true,
                 current_repo_run,
@@ -354,13 +348,7 @@ impl CapabilityEventCoordinator {
             .with_connection(|conn| build_execution_plan(conn, &run.record, &run.repo_root))
         {
             Ok(Some(plan)) => plan,
-            Ok(None) => {
-                let applied_to_generation_seq = run.record.to_generation_seq;
-                return RunCompletion::Completed {
-                    run: run.record,
-                    applied_to_generation_seq,
-                };
-            }
+            Ok(None) => return RunCompletion::NoopCompleted { run: run.record },
             Err(err) => {
                 return terminal_or_retry(run.record, err);
             }
@@ -427,6 +415,36 @@ impl CapabilityEventCoordinator {
             let result = (|| {
                 let now = unix_timestamp_now();
                 match completion {
+                    RunCompletion::NoopCompleted { run } => {
+                        conn.execute(
+                            "UPDATE pack_reconcile_consumers SET last_error = NULL, updated_at_unix = ?1 WHERE repo_id = ?2 AND consumer_id = ?3",
+                            params![sql_i64(now)?, run.repo_id, run.consumer_id],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "clearing current-state consumer error for noop run `{}`",
+                                run.run_id
+                            )
+                        })?;
+                        conn.execute(
+                            "UPDATE pack_reconcile_runs SET from_generation_seq = ?1, to_generation_seq = ?2, reconcile_mode = ?3, status = ?4, updated_at_unix = ?5, completed_at_unix = ?6, error = NULL WHERE run_id = ?7",
+                            params![
+                                sql_i64(run.from_generation_seq)?,
+                                sql_i64(run.to_generation_seq)?,
+                                run.reconcile_mode,
+                                CapabilityEventRunStatus::Completed.to_string(),
+                                sql_i64(now)?,
+                                sql_i64(now)?,
+                                run.run_id,
+                            ],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "marking noop current-state consumer run `{}` complete",
+                                run.run_id
+                            )
+                        })?;
+                    }
                     RunCompletion::Completed {
                         run,
                         applied_to_generation_seq,
@@ -474,7 +492,7 @@ impl CapabilityEventCoordinator {
                             )
                         })?;
                         conn.execute(
-                            "UPDATE pack_reconcile_runs SET status = ?1, updated_at_unix = ?2, completed_at_unix = NULL, error = ?3 WHERE run_id = ?4",
+                            "UPDATE pack_reconcile_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2, completed_at_unix = NULL, error = ?3 WHERE run_id = ?4",
                             params![
                                 CapabilityEventRunStatus::Queued.to_string(),
                                 sql_i64(now)?,
@@ -533,7 +551,7 @@ impl CapabilityEventCoordinator {
     fn recover_running_runs(&self) -> Result<()> {
         self.runtime_store.with_connection(|conn| {
             conn.execute(
-                "UPDATE pack_reconcile_runs SET status = ?1, updated_at_unix = ?2 WHERE status = ?3",
+                "UPDATE pack_reconcile_runs SET status = ?1, started_at_unix = NULL, updated_at_unix = ?2 WHERE status = ?3",
                 params![
                     CapabilityEventRunStatus::Queued.to_string(),
                     sql_i64(unix_timestamp_now())?,
@@ -589,6 +607,33 @@ fn count_runs_with_status(
     .map_err(anyhow::Error::from)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueueActivity {
+    last_action: Option<String>,
+    last_updated_unix: u64,
+}
+
+fn load_queue_activity(conn: &rusqlite::Connection) -> Result<QueueActivity> {
+    conn.query_row(
+        "SELECT status, updated_at_unix FROM pack_reconcile_runs ORDER BY updated_at_unix DESC, submitted_at_unix DESC LIMIT 1",
+        [],
+        |row| {
+            Ok(QueueActivity {
+                last_action: Some(row.get(0)?),
+                last_updated_unix: u64::try_from(row.get::<_, i64>(1)?).unwrap_or_default(),
+            })
+        },
+    )
+    .optional()
+    .map(|row| {
+        row.unwrap_or(QueueActivity {
+            last_action: None,
+            last_updated_unix: 0,
+        })
+    })
+    .map_err(anyhow::Error::from)
+}
+
 fn load_current_repo_run(
     conn: &rusqlite::Connection,
     repo_id: &str,
@@ -633,5 +678,253 @@ fn retry_backoff_seconds(attempts: u32) -> u64 {
         3 => 15,
         4 => 30,
         _ => 60,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::host::capability_host::{SyncArtefactDiff, SyncFileDiff};
+    use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
+    use crate::test_support::git_fixtures::{init_test_repo, write_test_daemon_config};
+
+    fn test_runtime_store(dir: &TempDir) -> DaemonSqliteRuntimeStore {
+        DaemonSqliteRuntimeStore::open_at(dir.path().join("runtime.sqlite"))
+            .expect("open test runtime store")
+    }
+
+    fn sample_run(status: CapabilityEventRunStatus) -> CapabilityEventRunRecord {
+        CapabilityEventRunRecord {
+            run_id: "run-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            capability_id: "test_harness".to_string(),
+            consumer_id: "test_harness.current_state".to_string(),
+            handler_id: "test_harness.current_state".to_string(),
+            from_generation_seq: 2,
+            to_generation_seq: 5,
+            reconcile_mode: "merged_delta".to_string(),
+            event_kind: "current_state_consumer".to_string(),
+            lane_key: "repo-1:test_harness.current_state".to_string(),
+            event_payload_json: String::new(),
+            status,
+            attempts: 1,
+            submitted_at_unix: 10,
+            started_at_unix: Some(20),
+            updated_at_unix: 30,
+            completed_at_unix: None,
+            error: Some("stale error".to_string()),
+        }
+    }
+
+    fn insert_consumer_row(
+        store: &DaemonSqliteRuntimeStore,
+        repo_id: &str,
+        capability_id: &str,
+        consumer_id: &str,
+        last_applied_generation_seq: Option<u64>,
+        last_error: Option<&str>,
+        updated_at_unix: u64,
+    ) {
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO pack_reconcile_consumers (repo_id, consumer_id, capability_id, last_applied_generation_seq, last_error, updated_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        repo_id,
+                        consumer_id,
+                        capability_id,
+                        last_applied_generation_seq.map(sql_i64).transpose()?,
+                        last_error,
+                        sql_i64(updated_at_unix)?,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("insert consumer row");
+    }
+
+    fn insert_run_row(store: &DaemonSqliteRuntimeStore, run: &CapabilityEventRunRecord) {
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO pack_reconcile_runs (run_id, repo_id, repo_root, consumer_id, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                    params![
+                        run.run_id,
+                        run.repo_id,
+                        "/tmp/repo",
+                        run.consumer_id,
+                        run.capability_id,
+                        sql_i64(run.from_generation_seq)?,
+                        sql_i64(run.to_generation_seq)?,
+                        run.reconcile_mode,
+                        run.status.to_string(),
+                        run.attempts,
+                        sql_i64(run.submitted_at_unix)?,
+                        run.started_at_unix.map(sql_i64).transpose()?,
+                        sql_i64(run.updated_at_unix)?,
+                        run.completed_at_unix.map(sql_i64).transpose()?,
+                        run.error,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("insert run row");
+    }
+
+    fn test_cfg(repo_root: &std::path::Path) -> DevqlConfig {
+        let repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
+        DevqlConfig::from_env(repo_root.to_path_buf(), repo).expect("build devql config")
+    }
+
+    #[test]
+    fn record_sync_generation_schedules_consumers_for_successful_empty_sync() {
+        let temp = TempDir::new().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo root");
+        init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+        write_test_daemon_config(&repo_root);
+
+        let cfg = test_cfg(&repo_root);
+        let host = DevqlCapabilityHost::builtin(repo_root.clone(), cfg.repo.clone())
+            .expect("build capability host");
+        let coordinator =
+            CapabilityEventCoordinator::new_shared_instance(test_runtime_store(&temp));
+
+        let outcome = coordinator
+            .record_sync_generation(
+                &host,
+                &cfg,
+                &SyncSummary {
+                    success: true,
+                    mode: "auto".to_string(),
+                    active_branch: Some("main".to_string()),
+                    head_commit_sha: Some("abc123".to_string()),
+                    ..SyncSummary::default()
+                },
+                SyncFileDiff::default(),
+                SyncArtefactDiff::default(),
+                None,
+            )
+            .expect("record empty sync generation");
+
+        assert!(
+            !host.current_state_consumers().is_empty(),
+            "expected built-in current-state consumers to be registered"
+        );
+        assert_eq!(outcome.runs.len(), host.current_state_consumers().len());
+
+        let snapshot = coordinator
+            .snapshot(Some(&cfg.repo.repo_id))
+            .expect("snapshot capability event queue");
+        assert_eq!(
+            snapshot.state.pending_runs as usize,
+            host.current_state_consumers().len()
+        );
+    }
+
+    #[test]
+    fn apply_completion_noop_keeps_existing_cursor_and_clears_error() {
+        let temp = TempDir::new().expect("tempdir");
+        let store = test_runtime_store(&temp);
+        let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+        let run = sample_run(CapabilityEventRunStatus::Running);
+        insert_consumer_row(
+            &store,
+            &run.repo_id,
+            &run.capability_id,
+            &run.consumer_id,
+            Some(7),
+            Some("previous failure"),
+            29,
+        );
+        insert_run_row(&store, &run);
+
+        coordinator
+            .apply_completion(RunCompletion::NoopCompleted { run: run.clone() })
+            .expect("apply noop completion");
+
+        store
+            .with_connection(|conn| {
+                let cursor = conn.query_row(
+                    "SELECT last_applied_generation_seq, last_error FROM pack_reconcile_consumers WHERE repo_id = ?1 AND consumer_id = ?2",
+                    params![&run.repo_id, &run.consumer_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<i64>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                        ))
+                    },
+                )?;
+                assert_eq!(cursor.0, Some(7));
+                assert_eq!(cursor.1, None);
+                Ok(())
+            })
+            .expect("load consumer cursor");
+
+        let persisted = coordinator
+            .run(&run.run_id)
+            .expect("load run")
+            .expect("persisted run");
+        assert_eq!(persisted.status, CapabilityEventRunStatus::Completed);
+        assert_eq!(persisted.error, None);
+    }
+
+    #[test]
+    fn apply_completion_retryable_failure_clears_started_at_when_requeued() {
+        let temp = TempDir::new().expect("tempdir");
+        let store = test_runtime_store(&temp);
+        let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+        let run = sample_run(CapabilityEventRunStatus::Running);
+        insert_consumer_row(
+            &store,
+            &run.repo_id,
+            &run.capability_id,
+            &run.consumer_id,
+            Some(2),
+            None,
+            29,
+        );
+        insert_run_row(&store, &run);
+
+        coordinator
+            .apply_completion(RunCompletion::RetryableFailure {
+                run: run.clone(),
+                error: "temporary failure".to_string(),
+            })
+            .expect("apply retryable failure");
+
+        let persisted = coordinator
+            .run(&run.run_id)
+            .expect("load run")
+            .expect("persisted run");
+        assert_eq!(persisted.status, CapabilityEventRunStatus::Queued);
+        assert_eq!(persisted.started_at_unix, None);
+        assert_eq!(persisted.completed_at_unix, None);
+        assert_eq!(persisted.error.as_deref(), Some("temporary failure"));
+    }
+
+    #[test]
+    fn snapshot_uses_latest_run_status_and_timestamp() {
+        let temp = TempDir::new().expect("tempdir");
+        let store = test_runtime_store(&temp);
+        let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+        let mut older = sample_run(CapabilityEventRunStatus::Running);
+        older.run_id = "run-older".to_string();
+        older.updated_at_unix = 11;
+        older.submitted_at_unix = 9;
+        let mut newer = sample_run(CapabilityEventRunStatus::Failed);
+        newer.run_id = "run-newer".to_string();
+        newer.updated_at_unix = 42;
+        newer.submitted_at_unix = 41;
+        insert_run_row(&store, &older);
+        insert_run_row(&store, &newer);
+
+        let snapshot = coordinator.snapshot(None).expect("snapshot queue");
+        assert_eq!(snapshot.state.last_action.as_deref(), Some("failed"));
+        assert_eq!(snapshot.state.last_updated_unix, 42);
     }
 }

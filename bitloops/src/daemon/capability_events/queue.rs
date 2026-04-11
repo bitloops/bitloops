@@ -8,6 +8,8 @@ use crate::host::capability_host::{ChangedArtefact, SyncArtefactDiff, SyncFileDi
 
 use super::super::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 
+const REMOVED_ARTEFACT_PLACEHOLDER_NAME: &str = "<removed>";
+
 #[derive(Debug, Clone)]
 pub(super) struct StoredRunRecord {
     pub(super) record: CapabilityEventRunRecord,
@@ -135,7 +137,7 @@ pub(super) fn insert_artefact_changes(
                 "removed",
                 artefact.artefact_id,
                 artefact.path,
-                artefact.path,
+                REMOVED_ARTEFACT_PLACEHOLDER_NAME,
             ],
         )
         .with_context(|| {

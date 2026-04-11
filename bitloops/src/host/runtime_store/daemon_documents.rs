@@ -103,6 +103,16 @@ CREATE INDEX IF NOT EXISTS idx_pack_reconcile_runs_repo_consumer_status
 ON pack_reconcile_runs (repo_id, consumer_id, status, submitted_at_unix);
 "#;
 
+fn initialise_runtime_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
+    sqlite
+        .execute_batch(RUNTIME_DOCUMENTS_SCHEMA)
+        .context("initialising daemon runtime documents schema")?;
+    sqlite
+        .execute_batch(PACK_RECONCILE_SCHEMA)
+        .context("initialising current-state consumer runtime schema")?;
+    Ok(())
+}
+
 impl DaemonSqliteRuntimeStore {
     pub fn open() -> Result<Self> {
         Self::open_at(default_global_runtime_db_path())
@@ -111,11 +121,7 @@ impl DaemonSqliteRuntimeStore {
     pub fn open_at(db_path: PathBuf) -> Result<Self> {
         let sqlite = SqliteConnectionPool::connect(db_path.clone())
             .with_context(|| format!("opening daemon runtime database {}", db_path.display()))?;
-        sqlite
-            .execute_batch(&format!(
-                "{RUNTIME_DOCUMENTS_SCHEMA}\n{PACK_RECONCILE_SCHEMA}"
-            ))
-            .context("initialising daemon runtime documents schema")?;
+        initialise_runtime_schema(&sqlite)?;
         Ok(Self { db_path })
     }
 
@@ -127,11 +133,7 @@ impl DaemonSqliteRuntimeStore {
         let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
             format!("opening daemon runtime database {}", self.db_path.display())
         })?;
-        sqlite
-            .execute_batch(&format!(
-                "{RUNTIME_DOCUMENTS_SCHEMA}\n{PACK_RECONCILE_SCHEMA}"
-            ))
-            .context("initialising daemon runtime documents schema")?;
+        initialise_runtime_schema(&sqlite)?;
         Ok(sqlite)
     }
 

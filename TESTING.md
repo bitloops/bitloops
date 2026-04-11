@@ -47,6 +47,7 @@ CI uses the `ci` `nextest` profile, pinned to `6` test threads.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
 `cargo qat` runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite.
+`cargo qat` forces `--no-capture` so the bundled ignored QAT journey streams progress reliably during long daemon-backed runs.
 `cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
 `cargo qat-devql-sync` is the focused DevQL sync alias.
 

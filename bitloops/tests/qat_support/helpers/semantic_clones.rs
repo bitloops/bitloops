@@ -271,22 +271,25 @@ pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) 
     run_devql_sync_for_repo(world, repo_name)?;
     let output = run_command_capture(
         world,
-        "bitloops devql ingest",
-        build_bitloops_command(world, &["devql", "ingest"])?,
+        "bitloops devql tasks enqueue --kind ingest --status",
+        build_bitloops_command(
+            world,
+            &["devql", "tasks", "enqueue", "--kind", "ingest", "--status"],
+        )?,
     )?;
-    ensure_success(&output, "bitloops devql ingest")?;
+    ensure_success(&output, "bitloops devql tasks enqueue --kind ingest --status")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let semantic_rows = extract_ingest_metric(&stdout, "semantic_feature_rows_upserted=")
         .ok_or_else(|| {
             anyhow!(
-                "bitloops devql ingest completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
+                "bitloops devql tasks enqueue --kind ingest --status completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
             )
         })?;
     let clone_edges = extract_ingest_metric(&stdout, "symbol_clone_edges_upserted=");
     let store_snapshot = wait_for_semantic_clone_store_snapshot(world).with_context(|| {
         format!(
-            "bitloops devql ingest reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
+            "bitloops devql tasks enqueue --kind ingest --status reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
         )
     })?;
     let store_evidence = store_snapshot.evidence;
@@ -317,7 +320,7 @@ pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) 
     }
     ensure!(
         semantic_clone_store_evidence_proves_rebuild(clone_edges, store_evidence),
-        "bitloops devql semantic clones rebuild succeeded but did not leave persisted semantic clone evidence in {} (semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}, current_artefacts={}, symbol_embeddings={}, symbol_clone_edges={}). Re-run `bitloops devql sync --status` and `bitloops devql ingest` and inspect the semantic provider output.",
+        "bitloops devql semantic clones rebuild succeeded but did not leave persisted semantic clone evidence in {} (semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}, current_artefacts={}, symbol_embeddings={}, symbol_clone_edges={}). Re-run `bitloops devql tasks enqueue --kind sync --status` and `bitloops devql tasks enqueue --kind ingest --status` and inspect the semantic provider output.",
         store_snapshot.path.display(),
         store_evidence.current_artefacts,
         store_evidence.embeddings,
