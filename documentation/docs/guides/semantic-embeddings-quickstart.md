@@ -175,7 +175,7 @@ If embeddings are disabled, health should report that explicitly instead of fail
 Run:
 
 ```bash
-bitloops devql ingest
+bitloops devql tasks enqueue --kind ingest
 ```
 
 Then inspect the shared enrichment queue:

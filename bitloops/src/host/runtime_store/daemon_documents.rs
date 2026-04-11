@@ -26,6 +26,93 @@ CREATE TABLE IF NOT EXISTS runtime_documents (
 );
 "#;
 
+const PACK_RECONCILE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS pack_reconcile_generations (
+    repo_id TEXT NOT NULL,
+    generation_seq INTEGER NOT NULL,
+    source_task_id TEXT,
+    sync_mode TEXT NOT NULL,
+    active_branch TEXT,
+    head_commit_sha TEXT,
+    requires_full_reconcile INTEGER NOT NULL DEFAULT 0,
+    created_at_unix INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, generation_seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_reconcile_generations_repo_created
+ON pack_reconcile_generations (repo_id, created_at_unix DESC);
+
+CREATE TABLE IF NOT EXISTS pack_reconcile_file_changes (
+    repo_id TEXT NOT NULL,
+    generation_seq INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    language TEXT,
+    content_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_reconcile_file_changes_repo_generation
+ON pack_reconcile_file_changes (repo_id, generation_seq, path);
+
+CREATE TABLE IF NOT EXISTS pack_reconcile_artefact_changes (
+    repo_id TEXT NOT NULL,
+    generation_seq INTEGER NOT NULL,
+    symbol_id TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    canonical_kind TEXT,
+    name TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_reconcile_artefact_changes_repo_generation
+ON pack_reconcile_artefact_changes (repo_id, generation_seq, symbol_id);
+
+CREATE TABLE IF NOT EXISTS pack_reconcile_consumers (
+    repo_id TEXT NOT NULL,
+    consumer_id TEXT NOT NULL,
+    capability_id TEXT NOT NULL,
+    last_applied_generation_seq INTEGER,
+    last_error TEXT,
+    updated_at_unix INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, consumer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_reconcile_consumers_repo_capability
+ON pack_reconcile_consumers (repo_id, capability_id);
+
+CREATE TABLE IF NOT EXISTS pack_reconcile_runs (
+    run_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    consumer_id TEXT NOT NULL,
+    capability_id TEXT NOT NULL,
+    from_generation_seq INTEGER NOT NULL,
+    to_generation_seq INTEGER NOT NULL,
+    reconcile_mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    submitted_at_unix INTEGER NOT NULL,
+    started_at_unix INTEGER,
+    updated_at_unix INTEGER NOT NULL,
+    completed_at_unix INTEGER,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_reconcile_runs_repo_consumer_status
+ON pack_reconcile_runs (repo_id, consumer_id, status, submitted_at_unix);
+"#;
+
+fn initialise_runtime_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
+    sqlite
+        .execute_batch(RUNTIME_DOCUMENTS_SCHEMA)
+        .context("initialising daemon runtime documents schema")?;
+    sqlite
+        .execute_batch(PACK_RECONCILE_SCHEMA)
+        .context("initialising current-state consumer runtime schema")?;
+    Ok(())
+}
+
 impl DaemonSqliteRuntimeStore {
     pub fn open() -> Result<Self> {
         Self::open_at(default_global_runtime_db_path())
@@ -34,9 +121,7 @@ impl DaemonSqliteRuntimeStore {
     pub fn open_at(db_path: PathBuf) -> Result<Self> {
         let sqlite = SqliteConnectionPool::connect(db_path.clone())
             .with_context(|| format!("opening daemon runtime database {}", db_path.display()))?;
-        sqlite
-            .execute_batch(RUNTIME_DOCUMENTS_SCHEMA)
-            .context("initialising daemon runtime documents schema")?;
+        initialise_runtime_schema(&sqlite)?;
         Ok(Self { db_path })
     }
 
@@ -48,10 +133,16 @@ impl DaemonSqliteRuntimeStore {
         let sqlite = SqliteConnectionPool::connect(self.db_path.clone()).with_context(|| {
             format!("opening daemon runtime database {}", self.db_path.display())
         })?;
-        sqlite
-            .execute_batch(RUNTIME_DOCUMENTS_SCHEMA)
-            .context("initialising daemon runtime documents schema")?;
+        initialise_runtime_schema(&sqlite)?;
         Ok(sqlite)
+    }
+
+    pub fn with_connection<T>(
+        &self,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+    ) -> Result<T> {
+        let sqlite = self.open_sqlite_with_runtime_schema()?;
+        sqlite.with_connection(operation)
     }
 
     pub fn runtime_state_exists(&self) -> Result<bool> {

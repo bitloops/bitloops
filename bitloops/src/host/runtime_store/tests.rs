@@ -364,20 +364,14 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
                         run_id: "event-run-1".to_string(),
                         repo_id: "repo-1".to_string(),
                         capability_id: "test_harness".to_string(),
-                        handler_id: "sync_completed".to_string(),
-                        event_kind: "sync_completed".to_string(),
-                        lane_key: "repo-1:test_harness:sync_completed".to_string(),
-                        event_payload_json: serde_json::json!({
-                            "repo_id": "repo-1",
-                            "repo_root": "/tmp/repo",
-                            "active_branch": "main",
-                            "head_commit_sha": "abc123",
-                            "sync_mode": "full",
-                            "sync_completed_at": "2026-04-06T00:00:00Z",
-                            "files": {},
-                            "artefacts": {},
-                        })
-                        .to_string(),
+                        consumer_id: "test_harness.current_state".to_string(),
+                        handler_id: "test_harness.current_state".to_string(),
+                        from_generation_seq: 0,
+                        to_generation_seq: 1,
+                        reconcile_mode: "merged_delta".to_string(),
+                        event_kind: "current_state_consumer".to_string(),
+                        lane_key: "repo-1:test_harness.current_state".to_string(),
+                        event_payload_json: String::new(),
                         status: crate::daemon::CapabilityEventRunStatus::Queued,
                         attempts: 0,
                         submitted_at_unix: 1,
@@ -405,10 +399,7 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
             assert_eq!(loaded.last_action.as_deref(), Some("enqueue"));
             assert_eq!(loaded.runs.len(), 1);
             assert_eq!(loaded.runs[0].run_id, "event-run-1");
-            assert_eq!(
-                loaded.runs[0].lane_key,
-                "repo-1:test_harness:sync_completed"
-            );
+            assert_eq!(loaded.runs[0].lane_key, "repo-1:test_harness.current_state");
         },
     );
 }

@@ -1,7 +1,9 @@
 use anyhow::Result;
+use std::sync::Arc;
 
 use crate::host::capability_host::CapabilityRegistrar;
 
+use super::current_state::SemanticClonesCurrentStateConsumer;
 use super::ingesters::{
     build_semantic_features_refresh_ingester, build_symbol_clone_edges_rebuild_ingester,
     build_symbol_embeddings_refresh_ingester,
@@ -14,6 +16,13 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
     registrar.register_ingester(build_semantic_features_refresh_ingester())?;
     registrar.register_ingester(build_symbol_embeddings_refresh_ingester())?;
     registrar.register_ingester(build_symbol_clone_edges_rebuild_ingester())?;
+    registrar.register_current_state_consumer(
+        crate::host::capability_host::CurrentStateConsumerRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
+            Arc::new(SemanticClonesCurrentStateConsumer),
+        ),
+    )?;
     registrar.register_stage(build_summary_stage())?;
     registrar.register_schema_module(SEMANTIC_CLONES_SCHEMA_MODULE)?;
     registrar.register_query_examples(SEMANTIC_CLONES_QUERY_EXAMPLES)?;
@@ -25,17 +34,20 @@ mod tests {
     use super::*;
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+        SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
         SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, SEMANTIC_CLONES_SUMMARY_STAGE_ID,
         SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
     };
     use crate::host::capability_host::{
-        IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
+        CurrentStateConsumerRegistration, IngesterRegistration, QueryExample, SchemaModule,
+        StageRegistration,
     };
 
     #[derive(Default)]
     struct CollectingRegistrar {
         stages: Vec<(&'static str, &'static str)>,
         ingesters: Vec<(&'static str, &'static str)>,
+        current_state_consumers: Vec<(&'static str, &'static str)>,
         schema_modules: Vec<SchemaModule>,
         query_examples: Vec<QueryExample>,
     }
@@ -49,6 +61,15 @@ mod tests {
         fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
             self.ingesters
                 .push((ingester.capability_id, ingester.ingester_name));
+            Ok(())
+        }
+
+        fn register_current_state_consumer(
+            &mut self,
+            registration: CurrentStateConsumerRegistration,
+        ) -> Result<()> {
+            self.current_state_consumers
+                .push((registration.capability_id, registration.consumer_id));
             Ok(())
         }
 
@@ -90,6 +111,13 @@ mod tests {
                     SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID
                 )
             ]
+        );
+        assert_eq!(
+            registrar.current_state_consumers,
+            vec![(
+                SEMANTIC_CLONES_CAPABILITY_ID,
+                SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID
+            )]
         );
         assert_eq!(
             registrar.schema_modules,

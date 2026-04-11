@@ -11,6 +11,7 @@ use super::contexts::{
     KnowledgeIngestContext,
 };
 use super::descriptor::CapabilityDescriptor;
+use super::events::CurrentStateConsumer;
 use super::health::CapabilityHealthCheck;
 use super::migrations::CapabilityMigration;
 
@@ -49,6 +50,14 @@ pub trait CapabilityRegistrar {
     fn register_schema_module(&mut self, module: SchemaModule) -> Result<()>;
 
     fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()>;
+
+    fn register_current_state_consumer(
+        &mut self,
+        registration: CurrentStateConsumerRegistration,
+    ) -> Result<()> {
+        let _ = registration;
+        Ok(())
+    }
 
     fn register_event_handler(
         &mut self,
@@ -278,6 +287,27 @@ impl KnowledgeIngesterRegistration {
         Self {
             capability_id,
             ingester_name,
+            handler,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CurrentStateConsumerRegistration {
+    pub capability_id: &'static str,
+    pub consumer_id: &'static str,
+    pub handler: Arc<dyn CurrentStateConsumer>,
+}
+
+impl CurrentStateConsumerRegistration {
+    pub fn new(
+        capability_id: &'static str,
+        consumer_id: &'static str,
+        handler: Arc<dyn CurrentStateConsumer>,
+    ) -> Self {
+        Self {
+            capability_id,
+            consumer_id,
             handler,
         }
     }

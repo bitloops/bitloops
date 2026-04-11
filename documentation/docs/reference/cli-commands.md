@@ -306,10 +306,10 @@ DevQL commands now talk to the local daemon over the existing HTTP and GraphQL s
 
 ```bash
 bitloops devql init
-bitloops devql ingest
-bitloops devql sync
-bitloops devql sync --status
-bitloops devql sync --validate --status
+bitloops devql tasks enqueue --kind ingest
+bitloops devql tasks enqueue --kind sync
+bitloops devql tasks enqueue --kind sync --status
+bitloops devql tasks enqueue --kind sync --validate --status
 bitloops devql projection checkpoint-file-snapshots --dry-run
 ```
 
@@ -317,11 +317,12 @@ Highlights:
 
 - `devql init` explicitly ensures the configured relational and event schemas exist
 - daemon startup owns the normal schema bootstrap path
-- `devql ingest` performs ingestion only
-- `devql sync` queues a sync task and returns immediately by default
-- `devql sync --status` follows the queued task until it completes or fails
-- `devql sync --validate` queues a read-only validation task instead of mutating current-state tables
-- `bitloops status` and `bitloops daemon status` show global sync queue totals and the current repo sync task when you run them inside a repo
+- `devql tasks enqueue --kind ingest` queues ingestion only
+- `devql tasks enqueue --kind sync` queues a sync task and returns immediately by default
+- `devql tasks enqueue --kind sync --status` follows the queued task until it completes or fails
+- `devql tasks enqueue --kind sync --validate` queues a read-only validation task instead of mutating current-state tables
+- successful sync tasks publish current-state generations that built-in consumers process asynchronously at their own pace
+- `bitloops status` and `bitloops daemon status` show the shared DevQL task queue plus current-state consumer follow-up when you run them inside a repo
 
 ### Query and diagnostics
 

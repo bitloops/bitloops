@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::host::capability_host::CapabilityRegistrar;
 
-use super::event_handlers::TestHarnessSyncHandler;
+use super::event_handlers::TestHarnessCurrentStateConsumer;
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
 };
@@ -18,7 +18,13 @@ pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Re
     registrar.register_stage(build_tests_stage())?;
     registrar.register_stage(build_tests_summary_stage())?;
     registrar.register_stage(build_coverage_stage())?;
-    registrar.register_event_handler(Arc::new(TestHarnessSyncHandler))?;
+    registrar.register_current_state_consumer(
+        crate::host::capability_host::CurrentStateConsumerRegistration::new(
+            super::types::TEST_HARNESS_CAPABILITY_ID,
+            super::types::TEST_HARNESS_CURRENT_STATE_CONSUMER_ID,
+            Arc::new(TestHarnessCurrentStateConsumer),
+        ),
+    )?;
     registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
     registrar.register_query_examples(TEST_HARNESS_QUERY_EXAMPLES)?;
     Ok(())
@@ -29,11 +35,13 @@ mod tests {
     use super::*;
     use crate::capability_packs::test_harness::types::{
         TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,
-        TEST_HARNESS_COVERAGE_STAGE_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
-        TEST_HARNESS_TESTS_STAGE_ID, TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
+        TEST_HARNESS_COVERAGE_STAGE_ID, TEST_HARNESS_CURRENT_STATE_CONSUMER_ID,
+        TEST_HARNESS_LINKAGE_INGESTER_ID, TEST_HARNESS_TESTS_STAGE_ID,
+        TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     };
     use crate::host::capability_host::{
-        HostEventHandler, IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
+        CurrentStateConsumerRegistration, IngesterRegistration, QueryExample, SchemaModule,
+        StageRegistration,
     };
     use anyhow::Result;
 
@@ -41,7 +49,7 @@ mod tests {
     struct CollectingRegistrar {
         stages: Vec<(&'static str, &'static str)>,
         ingesters: Vec<(&'static str, &'static str)>,
-        event_handlers: Vec<String>,
+        current_state_consumers: Vec<(&'static str, &'static str)>,
         schema_modules: Vec<SchemaModule>,
         query_examples: Vec<QueryExample>,
     }
@@ -58,9 +66,12 @@ mod tests {
             Ok(())
         }
 
-        fn register_event_handler(&mut self, handler: Arc<dyn HostEventHandler>) -> Result<()> {
-            self.event_handlers
-                .push(handler.capability_id().to_string());
+        fn register_current_state_consumer(
+            &mut self,
+            registration: CurrentStateConsumerRegistration,
+        ) -> Result<()> {
+            self.current_state_consumers
+                .push((registration.capability_id, registration.consumer_id));
             Ok(())
         }
 
@@ -97,7 +108,10 @@ mod tests {
                 ("test_harness", TEST_HARNESS_CLASSIFICATION_INGESTER_ID),
             ]
         );
-        assert_eq!(registrar.event_handlers, vec!["test_harness".to_string()]);
+        assert_eq!(
+            registrar.current_state_consumers,
+            vec![("test_harness", TEST_HARNESS_CURRENT_STATE_CONSUMER_ID)]
+        );
         assert_eq!(registrar.schema_modules, vec![TEST_HARNESS_SCHEMA_MODULE]);
         assert_eq!(registrar.query_examples, TEST_HARNESS_QUERY_EXAMPLES);
         Ok(())

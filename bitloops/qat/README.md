@@ -24,6 +24,13 @@ cargo qat
 ```
 
 Works from both the `bitloops/` crate directory and the repository root.
+The checked-in alias has `cargo-nextest` as the runner and adds `--no-capture` so the long bundled journey streams progress instead of failing opaquely under output capture.
+
+Equivalent explicit form:
+
+```bash
+cargo nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance --run-ignored only --no-capture -- qat --exact
+```
 
 The DevQL capabilities suite is part of `cargo qat`, and the focused aliases remain available for targeted runs.
 

@@ -310,8 +310,6 @@ async fn execute_sync_inner(
         .await
         .context("opening persistent SQLite sync writer")?;
     let current_projection = build_current_projection_context(cfg)?;
-    let mut current_projection_dirty = false;
-
     let removals = classified
         .iter()
         .filter(|path| matches!(path.action, sync::types::PathAction::Removed))
@@ -340,7 +338,6 @@ async fn execute_sync_inner(
                     format!("removing current semantic clone projection for `{path}`")
                 })?;
         }
-        current_projection_dirty |= !outcome.removed_paths.is_empty();
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
         }
@@ -449,7 +446,6 @@ async fn execute_sync_inner(
                                 extractor_version.as_str(),
                                 &mut diff_collector,
                                 &mut stats,
-                                &mut current_projection_dirty,
                                 observer,
                                 &counters,
                                 paths_total,
@@ -474,7 +470,6 @@ async fn execute_sync_inner(
                             extractor_version.as_str(),
                             &mut diff_collector,
                             &mut stats,
-                            &mut current_projection_dirty,
                             observer,
                             &counters,
                             paths_total,
@@ -528,7 +523,6 @@ async fn execute_sync_inner(
                         extractor_version.as_str(),
                         &mut diff_collector,
                         &mut stats,
-                        &mut current_projection_dirty,
                         observer,
                         &counters,
                         paths_total,
@@ -555,7 +549,6 @@ async fn execute_sync_inner(
         extractor_version,
         &mut diff_collector,
         &mut stats,
-        &mut current_projection_dirty,
         observer,
         &counters,
         paths_total,
@@ -578,15 +571,6 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
-
-    if current_projection_dirty {
-        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
-            relational,
-            &cfg.repo.repo_id,
-        )
-        .await
-        .context("rebuilding current semantic clone edges after DevQL sync")?;
-    }
 
     emit_progress(
         observer,
@@ -709,7 +693,6 @@ async fn flush_pending_materialisations(
     extractor_version: &str,
     diff_collector: &mut SyncDiffCollector,
     stats: &mut SyncExecutionStats,
-    current_projection_dirty: &mut bool,
     observer: Option<&dyn SyncObserver>,
     counters: &sync::types::SyncCounters,
     paths_total: usize,
@@ -738,7 +721,6 @@ async fn flush_pending_materialisations(
         )
         .await
         .context("projecting current semantic clone rows for synced paths")?;
-        *current_projection_dirty = true;
     }
     for artefact in outcome.pre_artefacts.clone() {
         diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);

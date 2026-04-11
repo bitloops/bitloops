@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Cross-project daemon/config misrouting**: Bitloops now rejects repo-scoped daemon requests whose repo binding does not match the running daemon's config path, with a clear `bitloops init` rebind error. When repo binding information is missing or invalid, hook capture now warns and skips instead of guessing another config and risking writes into the wrong project's stores.
+- **Capability-event current-state consumer scheduling and queue recovery**: successful empty sync generations now still schedule current-state consumers, no-op completions preserve the existing cursor instead of regressing it, retryable task requeues clear stale `started_at` markers, queue snapshots derive their latest action/timestamp from persisted run state, removed artefacts are stored with an explicit placeholder name, and the sync orchestrator/runtime schema wiring no longer carries dead state or needless per-open formatting overhead.
+- **QAT task helpers and bundled runner reliability**: the QAT support helpers now use the current `bitloops devql tasks ...` command surface and persisted task queue schema, and the checked-in `cargo qat` alias now runs the bundled ignored acceptance journey through `cargo-nextest --no-capture` so long daemon-backed runs stream progress reliably.
 
 ## [0.0.13] - 2026-04-10
 
