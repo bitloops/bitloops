@@ -163,12 +163,53 @@ pub(super) fn format_live_task_status_line(
             }
             line
         }
+        ("embeddings_bootstrap", "queued") => format!(
+            "Embeddings bootstrap queued for {} · profile={} · {} ahead",
+            task.repo_name,
+            task.embeddings_bootstrap_spec
+                .as_ref()
+                .map(|spec| spec.profile_name.as_str())
+                .unwrap_or("default"),
+            task.tasks_ahead.unwrap_or(0),
+        ),
+        ("embeddings_bootstrap", "running") => {
+            let progress = task.embeddings_bootstrap_progress.as_ref();
+            let mut line = format!(
+                "Bootstrapping embeddings for {} · {}",
+                task.repo_name,
+                progress
+                    .map(|progress| humanise_bootstrap_phase(progress.phase.as_str()))
+                    .unwrap_or("working"),
+            );
+            if let Some(progress) = progress {
+                if let (downloaded, Some(total)) = (progress.bytes_downloaded, progress.bytes_total)
+                    && total > 0
+                {
+                    line.push_str(&format!(" · {downloaded}/{total} bytes"));
+                }
+                if let Some(asset_name) = progress.asset_name.as_ref() {
+                    line.push_str(&format!(" · {asset_name}"));
+                } else if let Some(message) = progress.message.as_ref() {
+                    line.push_str(&format!(" · {message}"));
+                }
+            }
+            line
+        }
         ("sync", "completed") => format!("✓ Sync complete for {}", task.repo_name),
         ("ingest", "completed") => format!("✓ Ingest complete for {}", task.repo_name),
+        ("embeddings_bootstrap", "completed") => {
+            format!("✓ Embeddings bootstrap complete for {}", task.repo_name)
+        }
         ("sync", "failed") => format!("✖ Sync failed for {}", task.repo_name),
         ("ingest", "failed") => format!("✖ Ingest failed for {}", task.repo_name),
+        ("embeddings_bootstrap", "failed") => {
+            format!("✖ Embeddings bootstrap failed for {}", task.repo_name)
+        }
         ("sync", "cancelled") => format!("✖ Sync cancelled for {}", task.repo_name),
         ("ingest", "cancelled") => format!("✖ Ingest cancelled for {}", task.repo_name),
+        ("embeddings_bootstrap", "cancelled") => {
+            format!("✖ Embeddings bootstrap cancelled for {}", task.repo_name)
+        }
         _ => format!(
             "{} {} for {}",
             humanise_kind(task),
@@ -239,6 +280,22 @@ fn progress_ratio(task: &TaskGraphqlRecord) -> Option<(f64, i32, i32)> {
                 None
             }
         }),
+        "embeddings_bootstrap" => {
+            task.embeddings_bootstrap_progress
+                .as_ref()
+                .and_then(|progress| {
+                    progress
+                        .bytes_total
+                        .and_then(|total| {
+                            (total > 0).then_some((
+                                (progress.bytes_downloaded as f64 / total as f64).clamp(0.0, 1.0),
+                                progress.bytes_downloaded as i32,
+                                total as i32,
+                            ))
+                        })
+                        .or_else(|| (status_key(task) == "completed").then_some((1.0, 1, 1)))
+                })
+        }
         _ => None,
     }
 }
@@ -313,6 +370,7 @@ fn humanise_kind(task: &TaskGraphqlRecord) -> &'static str {
     match kind_key(task).as_str() {
         "sync" => "Sync",
         "ingest" => "Ingest",
+        "embeddings_bootstrap" => "Embeddings bootstrap",
         _ => "Task",
     }
 }
@@ -328,6 +386,11 @@ fn humanise_phase(task: &TaskGraphqlRecord) -> &'static str {
             .ingest_progress
             .as_ref()
             .map(|progress| humanise_ingest_phase(progress.phase.as_str()))
+            .unwrap_or("working"),
+        "embeddings_bootstrap" => task
+            .embeddings_bootstrap_progress
+            .as_ref()
+            .map(|progress| humanise_bootstrap_phase(progress.phase.as_str()))
             .unwrap_or("working"),
         _ => "working",
     }
@@ -356,6 +419,21 @@ fn humanise_ingest_phase(phase: &str) -> &'static str {
         "initializing" => "initialising",
         "extracting" => "extracting checkpoints",
         "persisting" => "persisting state",
+        "complete" => "complete",
+        "failed" => "failed",
+        _ => "working",
+    }
+}
+
+fn humanise_bootstrap_phase(phase: &str) -> &'static str {
+    match phase {
+        "queued" => "waiting in queue",
+        "preparing_config" => "preparing config",
+        "resolving_release" => "resolving release",
+        "downloading_runtime" => "downloading runtime",
+        "extracting_runtime" => "extracting runtime",
+        "rewriting_runtime" => "updating runtime config",
+        "warming_profile" => "warming profile cache",
         "complete" => "complete",
         "failed" => "failed",
         _ => "working",

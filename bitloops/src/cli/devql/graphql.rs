@@ -9,7 +9,11 @@ mod types;
 #[cfg(test)]
 pub(crate) use self::client::with_graphql_executor_hook;
 #[cfg(test)]
+pub(crate) use self::client::with_graphql_executor_hook_async;
+#[cfg(test)]
 pub(crate) use self::client::with_ingest_daemon_bootstrap_hook;
+#[cfg(test)]
+pub(crate) use self::client::with_ingest_daemon_bootstrap_hook_async;
 #[cfg(test)]
 pub(crate) use self::client::with_schema_sdl_fetch_hook;
 #[cfg(test)]
@@ -22,5 +26,6 @@ pub(crate) use self::client::{
     watch_task_via_graphql,
 };
 pub(crate) use self::types::{
-    TaskGraphqlRecord, TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord,
+    EmbeddingsBootstrapResultGraphqlRecord, TaskGraphqlRecord, TaskQueueControlGraphqlRecord,
+    TaskQueueGraphqlRecord,
 };

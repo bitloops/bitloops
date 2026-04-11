@@ -1,14 +1,32 @@
+use std::collections::BTreeMap;
+
 use super::super::types::{
     EnrichmentQueueMode, EnrichmentQueueState as ProjectedEnrichmentQueueState,
 };
 use super::{EnrichmentJobKind, EnrichmentJobStatus, EnrichmentQueueState};
+use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
-pub(super) fn next_pending_job_index(state: &EnrichmentQueueState) -> Option<usize> {
-    state
+pub(super) fn next_pending_job_index(
+    state: &EnrichmentQueueState,
+    runtime_store: &DaemonSqliteRuntimeStore,
+) -> anyhow::Result<Option<usize>> {
+    let embeddings_gate_blocked = embeddings_gate_blocked_by_config_root(state, runtime_store)?;
+    Ok(state
         .jobs
         .iter()
         .enumerate()
         .filter(|(_, job)| job.status == EnrichmentJobStatus::Pending)
+        .filter(|(_, job)| !job_is_paused(state, &job.job))
+        .filter(|(_, job)| {
+            !matches!(
+                job.job,
+                EnrichmentJobKind::SymbolEmbeddings { .. }
+                    | EnrichmentJobKind::CloneEdgesRebuild { .. }
+            ) || !embeddings_gate_blocked
+                .get(&job.config_root)
+                .copied()
+                .unwrap_or(true)
+        })
         .min_by_key(|(_, job)| {
             let active_branch = state.active_branch_by_repo.get(&job.repo_id);
             let branch_rank = match active_branch {
@@ -22,7 +40,31 @@ pub(super) fn next_pending_job_index(state: &EnrichmentQueueState) -> Option<usi
                 job.created_at_unix,
             )
         })
-        .map(|(index, _)| index)
+        .map(|(index, _)| index))
+}
+
+fn embeddings_gate_blocked_by_config_root(
+    state: &EnrichmentQueueState,
+    runtime_store: &DaemonSqliteRuntimeStore,
+) -> anyhow::Result<BTreeMap<std::path::PathBuf, bool>> {
+    let mut blocked_by_root = BTreeMap::new();
+    for job in state.jobs.iter().filter(|job| {
+        job.status == EnrichmentJobStatus::Pending
+            && matches!(
+                job.job,
+                EnrichmentJobKind::SymbolEmbeddings { .. }
+                    | EnrichmentJobKind::CloneEdgesRebuild { .. }
+            )
+    }) {
+        if !blocked_by_root.contains_key(&job.config_root) {
+            let blocked = crate::daemon::embeddings_bootstrap::embeddings_blocked_for_config_root(
+                runtime_store,
+                &job.config_root,
+            )?;
+            blocked_by_root.insert(job.config_root.clone(), blocked);
+        }
+    }
+    Ok(blocked_by_root)
 }
 
 pub(super) fn job_is_paused(state: &EnrichmentQueueState, job: &EnrichmentJobKind) -> bool {

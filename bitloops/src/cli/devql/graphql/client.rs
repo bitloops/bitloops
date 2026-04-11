@@ -5,6 +5,9 @@ use reqwest::StatusCode as ReqwestStatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
+#[cfg(test)]
+use std::future::Future;
+
 use super::documents::{
     CANCEL_TASK_MUTATION, ENQUEUE_TASK_MUTATION, INIT_SCHEMA_MUTATION, PAUSE_TASK_QUEUE_MUTATION,
     RESUME_TASK_QUEUE_MUTATION, TASK_QUERY, TASK_QUEUE_QUERY, TASKS_QUERY,
@@ -433,7 +436,8 @@ async fn ensure_daemon_available_for_tasks(
     }
 
     let report = daemon::status().await?;
-    let daemon_config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)?;
+    let daemon_config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))?;
     let daemon_config = daemon::resolve_daemon_config(Some(daemon_config_path.as_path()))?;
     let config = DashboardServerConfig {
         host: None,
@@ -470,11 +474,41 @@ pub(crate) fn with_task_daemon_bootstrap_hook<T>(
 }
 
 #[cfg(test)]
+pub(crate) async fn with_task_daemon_bootstrap_hook_async<T, Fut>(
+    hook: impl Fn(&Path) -> Result<()> + 'static,
+    f: impl FnOnce() -> Fut,
+) -> T
+where
+    Fut: Future<Output = T>,
+{
+    TASK_DAEMON_BOOTSTRAP_HOOK.with(|cell: &TaskDaemonBootstrapHookCell| {
+        assert!(
+            cell.borrow().is_none(),
+            "task daemon hook already installed"
+        );
+        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+    });
+    let _guard = ThreadLocalHookGuard(clear_task_daemon_bootstrap_hook);
+    f().await
+}
+
+#[cfg(test)]
 pub(crate) fn with_ingest_daemon_bootstrap_hook<T>(
     hook: impl Fn(&Path) -> Result<()> + 'static,
     f: impl FnOnce() -> T,
 ) -> T {
     with_task_daemon_bootstrap_hook(hook, f)
+}
+
+#[cfg(test)]
+pub(crate) async fn with_ingest_daemon_bootstrap_hook_async<T, Fut>(
+    hook: impl Fn(&Path) -> Result<()> + 'static,
+    f: impl FnOnce() -> Fut,
+) -> T
+where
+    Fut: Future<Output = T>,
+{
+    with_task_daemon_bootstrap_hook_async(hook, f).await
 }
 
 #[cfg(test)]
@@ -548,6 +582,27 @@ pub(crate) fn with_graphql_executor_hook<T>(
     );
     let _guard = ThreadLocalHookGuard(clear_graphql_executor_hook);
     f()
+}
+
+#[cfg(test)]
+pub(crate) async fn with_graphql_executor_hook_async<T, Fut>(
+    hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
+    f: impl FnOnce() -> Fut,
+) -> T
+where
+    Fut: Future<Output = T>,
+{
+    GRAPHQL_EXECUTOR_HOOK.with(
+        |cell: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
+            assert!(
+                cell.borrow().is_none(),
+                "graphql executor hook already installed"
+            );
+            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+        },
+    );
+    let _guard = ThreadLocalHookGuard(clear_graphql_executor_hook);
+    f().await
 }
 
 #[cfg(test)]

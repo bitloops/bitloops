@@ -91,10 +91,13 @@ pub(crate) struct TaskGraphqlRecord {
     pub error: Option<String>,
     pub sync_spec: Option<SyncTaskSpecGraphqlRecord>,
     pub ingest_spec: Option<IngestTaskSpecGraphqlRecord>,
+    pub embeddings_bootstrap_spec: Option<EmbeddingsBootstrapTaskSpecGraphqlRecord>,
     pub sync_progress: Option<SyncTaskProgressGraphqlRecord>,
     pub ingest_progress: Option<IngestTaskProgressGraphqlRecord>,
+    pub embeddings_bootstrap_progress: Option<EmbeddingsBootstrapProgressGraphqlRecord>,
     pub sync_result: Option<SyncMutationResult>,
     pub ingest_result: Option<IngestionCounters>,
+    pub embeddings_bootstrap_result: Option<EmbeddingsBootstrapResultGraphqlRecord>,
 }
 
 impl TaskGraphqlRecord {
@@ -104,6 +107,10 @@ impl TaskGraphqlRecord {
 
     pub(crate) fn is_ingest(&self) -> bool {
         self.kind.eq_ignore_ascii_case("ingest")
+    }
+
+    pub(crate) fn is_embeddings_bootstrap(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("embeddings_bootstrap")
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
@@ -129,6 +136,13 @@ pub(crate) struct SyncTaskSpecGraphqlRecord {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct IngestTaskSpecGraphqlRecord {
     pub backfill: Option<i32>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmbeddingsBootstrapTaskSpecGraphqlRecord {
+    pub config_path: String,
+    pub profile_name: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -159,6 +173,29 @@ pub(crate) struct IngestTaskProgressGraphqlRecord {
     pub current_commit_sha: Option<String>,
     pub events_inserted: i32,
     pub artefacts_upserted: i32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmbeddingsBootstrapProgressGraphqlRecord {
+    pub phase: String,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: i64,
+    pub bytes_total: Option<i64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EmbeddingsBootstrapResultGraphqlRecord {
+    pub version: Option<String>,
+    pub binary_path: Option<String>,
+    pub cache_dir: Option<String>,
+    pub runtime_name: Option<String>,
+    pub model_name: Option<String>,
+    pub freshly_installed: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

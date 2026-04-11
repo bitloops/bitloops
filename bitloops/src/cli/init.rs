@@ -11,7 +11,8 @@ mod agent_selection;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::cli::embeddings::{
-    EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
+    install_or_bootstrap_embeddings,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -216,10 +217,12 @@ async fn run_with_io_async_for_project_root(
         out,
         input,
     )?;
-    let defer_embeddings_install_until_after_sync =
-        should_install_embeddings && args.install_default_daemon;
-    if should_install_embeddings && !defer_embeddings_install_until_after_sync {
-        install_embeddings_during_init(project_root, out)?;
+    if should_install_embeddings {
+        if args.install_default_daemon {
+            enqueue_embeddings_bootstrap_during_init(project_root, out).await?;
+        } else {
+            install_embeddings_during_init(project_root, out)?;
+        }
     }
 
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
@@ -267,9 +270,6 @@ async fn run_with_io_async_for_project_root(
             }
         }
     }
-    if defer_embeddings_install_until_after_sync {
-        install_embeddings_during_init(project_root, out)?;
-    }
     Ok(())
 }
 
@@ -304,6 +304,25 @@ async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
         .config_path
         .canonicalize()
         .unwrap_or(runtime.config_path))
+}
+
+async fn enqueue_embeddings_bootstrap_during_init(
+    project_root: &Path,
+    out: &mut dyn Write,
+) -> Result<()> {
+    writeln!(out, "Queueing embeddings bootstrap in the daemon...")?;
+    let (_scope, queued) =
+        enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
+            .await?;
+    let phase = queued
+        .task
+        .embeddings_bootstrap_progress()
+        .map(|progress| progress.phase.as_str())
+        .unwrap_or("queued");
+    writeln!(out, "Embeddings bootstrap task: {}", queued.task.task_id)?;
+    writeln!(out, "Embeddings bootstrap phase: {phase}")?;
+    out.flush()?;
+    Ok(())
 }
 
 fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {

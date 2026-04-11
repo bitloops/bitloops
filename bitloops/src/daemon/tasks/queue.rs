@@ -46,6 +46,10 @@ pub(super) fn merge_existing_task(
     kind: DevqlTaskKind,
     spec: &DevqlTaskSpec,
 ) -> Option<DevqlTaskRecord> {
+    if kind == DevqlTaskKind::EmbeddingsBootstrap {
+        return None;
+    }
+
     if kind == DevqlTaskKind::Ingest {
         if let Some(existing) = state.tasks.iter_mut().find(|task| {
             task.repo_id == cfg.repo.repo_id
@@ -161,12 +165,14 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
 
 fn pending_sort_key(index: usize, task: &DevqlTaskRecord) -> (u8, u64, usize) {
     (
-        if task.kind == DevqlTaskKind::Sync
+        if task.kind == DevqlTaskKind::EmbeddingsBootstrap {
+            1
+        } else if task.kind == DevqlTaskKind::Sync
             && task
                 .sync_spec()
                 .is_some_and(|spec| matches!(spec.mode, SyncTaskMode::Validate))
         {
-            1
+            2
         } else {
             0
         },
@@ -302,7 +308,11 @@ pub(super) fn project_status(
 
 fn counts_by_kind(tasks: &[DevqlTaskRecord]) -> Vec<DevqlTaskKindCounts> {
     let mut counts = HashMap::<DevqlTaskKind, DevqlTaskKindCounts>::new();
-    for kind in [DevqlTaskKind::Sync, DevqlTaskKind::Ingest] {
+    for kind in [
+        DevqlTaskKind::Sync,
+        DevqlTaskKind::Ingest,
+        DevqlTaskKind::EmbeddingsBootstrap,
+    ] {
         counts.insert(
             kind,
             DevqlTaskKindCounts {
@@ -332,10 +342,14 @@ fn counts_by_kind(tasks: &[DevqlTaskRecord]) -> Vec<DevqlTaskKindCounts> {
 }
 
 fn select_repo_tasks(tasks: &[DevqlTaskRecord], repo_id: &str) -> Vec<DevqlTaskRecord> {
-    [DevqlTaskKind::Sync, DevqlTaskKind::Ingest]
-        .into_iter()
-        .filter_map(|kind| select_repo_task(tasks, repo_id, kind))
-        .collect()
+    [
+        DevqlTaskKind::Sync,
+        DevqlTaskKind::Ingest,
+        DevqlTaskKind::EmbeddingsBootstrap,
+    ]
+    .into_iter()
+    .filter_map(|kind| select_repo_task(tasks, repo_id, kind))
+    .collect()
 }
 
 fn select_repo_task(
@@ -435,6 +449,9 @@ pub(super) fn default_progress_for_spec(spec: &DevqlTaskSpec) -> DevqlTaskProgre
             current_commit_sha: None,
             counters: IngestionCounters::default(),
         }),
+        DevqlTaskSpec::EmbeddingsBootstrap(_) => DevqlTaskProgress::EmbeddingsBootstrap(
+            crate::daemon::EmbeddingsBootstrapProgress::default(),
+        ),
     }
 }
 
@@ -450,20 +467,25 @@ pub(super) fn failed_progress(progress: &DevqlTaskProgress) -> DevqlTaskProgress
             progress.phase = IngestionProgressPhase::Failed;
             DevqlTaskProgress::Ingest(progress)
         }
+        DevqlTaskProgress::EmbeddingsBootstrap(progress) => {
+            let mut progress = progress.clone();
+            progress.phase = crate::daemon::EmbeddingsBootstrapPhase::Failed;
+            DevqlTaskProgress::EmbeddingsBootstrap(progress)
+        }
     }
 }
 
 pub(super) fn sync_spec_from_task_spec(spec: &DevqlTaskSpec) -> Option<&SyncTaskSpec> {
     match spec {
         DevqlTaskSpec::Sync(spec) => Some(spec),
-        DevqlTaskSpec::Ingest(_) => None,
+        DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
     }
 }
 
 fn sync_spec_from_task_spec_mut(spec: &mut DevqlTaskSpec) -> Option<&mut SyncTaskSpec> {
     match spec {
         DevqlTaskSpec::Sync(spec) => Some(spec),
-        DevqlTaskSpec::Ingest(_) => None,
+        DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
     }
 }
 

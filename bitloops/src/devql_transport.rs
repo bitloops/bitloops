@@ -9,7 +9,10 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::config::discover_repo_policy_optional;
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, discover_repo_policy_optional,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+};
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::{RepoIdentity, resolve_repo_identity};
 
@@ -163,12 +166,21 @@ pub(crate) fn daemon_binding_identifier_for_config_path(config_path: &Path) -> S
     hex::encode(hasher.finalize())
 }
 
+pub(crate) fn repo_daemon_config_path_for_binding(repo_root: &Path) -> PathBuf {
+    resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| resolve_daemon_config_path_for_repo(repo_root))
+        .unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+}
+
+pub(crate) fn repo_daemon_binding_identifier(repo_root: &Path) -> String {
+    daemon_binding_identifier_for_config_path(&repo_daemon_config_path_for_binding(repo_root))
+}
+
 pub(crate) fn attach_repo_daemon_binding_headers(
     request: RequestBuilder,
     repo_root: &Path,
 ) -> Result<RequestBuilder> {
-    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)?;
-    let binding = daemon_binding_identifier_for_config_path(&config_path);
+    let binding = repo_daemon_binding_identifier(repo_root);
     Ok(request
         .header(
             HEADER_SCOPE_REPO_ROOT,

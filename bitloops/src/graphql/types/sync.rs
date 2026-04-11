@@ -10,6 +10,7 @@ use crate::graphql::mutation_root::{IngestResult, SyncResult};
 pub enum TaskKind {
     Sync,
     Ingest,
+    EmbeddingsBootstrap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -35,6 +36,13 @@ pub struct IngestTaskSpecObject {
 }
 
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "EmbeddingsBootstrapTaskSpec")]
+pub struct EmbeddingsBootstrapTaskSpecObject {
+    pub config_path: String,
+    pub profile_name: String,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
 #[graphql(name = "SyncTaskProgress")]
 pub struct SyncTaskProgressObject {
     pub phase: String,
@@ -49,6 +57,29 @@ pub struct SyncTaskProgressObject {
     pub cache_hits: i32,
     pub cache_misses: i32,
     pub parse_errors: i32,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "EmbeddingsBootstrapProgress")]
+pub struct EmbeddingsBootstrapProgressObject {
+    pub phase: String,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: i64,
+    pub bytes_total: Option<i64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "EmbeddingsBootstrapResult")]
+pub struct EmbeddingsBootstrapResultObject {
+    pub version: Option<String>,
+    pub binary_path: Option<String>,
+    pub cache_dir: Option<String>,
+    pub runtime_name: Option<String>,
+    pub model_name: Option<String>,
+    pub freshly_installed: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -70,10 +101,13 @@ pub struct TaskObject {
     pub error: Option<String>,
     pub sync_spec: Option<SyncTaskSpecObject>,
     pub ingest_spec: Option<IngestTaskSpecObject>,
+    pub embeddings_bootstrap_spec: Option<EmbeddingsBootstrapTaskSpecObject>,
     pub sync_progress: Option<SyncTaskProgressObject>,
     pub ingest_progress: Option<super::IngestionProgressEvent>,
+    pub embeddings_bootstrap_progress: Option<EmbeddingsBootstrapProgressObject>,
     pub sync_result: Option<SyncResult>,
     pub ingest_result: Option<IngestResult>,
+    pub embeddings_bootstrap_result: Option<EmbeddingsBootstrapResultObject>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -145,6 +179,13 @@ impl From<DevqlTaskRecord> for TaskObject {
         let ingest_spec = value.ingest_spec().map(|spec| IngestTaskSpecObject {
             backfill: spec.backfill.map(to_graphql_count),
         });
+        let embeddings_bootstrap_spec =
+            value
+                .embeddings_bootstrap_spec()
+                .map(|spec| EmbeddingsBootstrapTaskSpecObject {
+                    config_path: spec.config_path.display().to_string(),
+                    profile_name: spec.profile_name.clone(),
+                });
         let sync_progress = value
             .sync_progress()
             .map(|progress| SyncTaskProgressObject {
@@ -162,8 +203,36 @@ impl From<DevqlTaskRecord> for TaskObject {
                 parse_errors: to_graphql_count(progress.parse_errors),
             });
         let ingest_progress = value.ingest_progress().cloned().map(Into::into);
+        let embeddings_bootstrap_progress = value.embeddings_bootstrap_progress().map(|progress| {
+            EmbeddingsBootstrapProgressObject {
+                phase: progress.phase.as_str().to_string(),
+                asset_name: progress.asset_name.clone(),
+                bytes_downloaded: progress.bytes_downloaded as i64,
+                bytes_total: progress.bytes_total.map(|value| value as i64),
+                version: progress.version.clone(),
+                message: progress.message.clone(),
+            }
+        });
         let sync_result = value.sync_result().cloned().map(Into::into);
         let ingest_result = value.ingest_result().cloned().map(Into::into);
+        let embeddings_bootstrap_result =
+            value
+                .embeddings_bootstrap_result()
+                .map(|result| EmbeddingsBootstrapResultObject {
+                    version: result.version.clone(),
+                    binary_path: result
+                        .binary_path
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                    cache_dir: result
+                        .cache_dir
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                    runtime_name: result.runtime_name.clone(),
+                    model_name: result.model_name.clone(),
+                    freshly_installed: result.freshly_installed,
+                    message: result.message.clone(),
+                });
 
         Self {
             task_id: value.task_id,
@@ -173,6 +242,7 @@ impl From<DevqlTaskRecord> for TaskObject {
             kind: match value.kind {
                 crate::daemon::DevqlTaskKind::Sync => TaskKind::Sync,
                 crate::daemon::DevqlTaskKind::Ingest => TaskKind::Ingest,
+                crate::daemon::DevqlTaskKind::EmbeddingsBootstrap => TaskKind::EmbeddingsBootstrap,
             },
             source: value.source.to_string(),
             status: match value.status {
@@ -191,10 +261,13 @@ impl From<DevqlTaskRecord> for TaskObject {
             error: value.error,
             sync_spec,
             ingest_spec,
+            embeddings_bootstrap_spec,
             sync_progress,
             ingest_progress,
+            embeddings_bootstrap_progress,
             sync_result,
             ingest_result,
+            embeddings_bootstrap_result,
         }
     }
 }
@@ -210,6 +283,7 @@ impl From<TaskKind> for crate::daemon::DevqlTaskKind {
         match value {
             TaskKind::Sync => Self::Sync,
             TaskKind::Ingest => Self::Ingest,
+            TaskKind::EmbeddingsBootstrap => Self::EmbeddingsBootstrap,
         }
     }
 }
@@ -232,6 +306,7 @@ impl From<DevqlTaskKindCounts> for TaskKindCountsObject {
             kind: match value.kind {
                 crate::daemon::DevqlTaskKind::Sync => TaskKind::Sync,
                 crate::daemon::DevqlTaskKind::Ingest => TaskKind::Ingest,
+                crate::daemon::DevqlTaskKind::EmbeddingsBootstrap => TaskKind::EmbeddingsBootstrap,
             },
             queued_tasks: to_graphql_count(value.queued_tasks),
             running_tasks: to_graphql_count(value.running_tasks),

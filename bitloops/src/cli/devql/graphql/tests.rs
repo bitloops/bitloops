@@ -31,6 +31,7 @@ fn sample_task(status: &str) -> TaskGraphqlRecord {
             paths: Vec::new(),
         }),
         ingest_spec: None,
+        embeddings_bootstrap_spec: None,
         sync_progress: Some(SyncTaskProgressGraphqlRecord {
             phase: "extracting_paths".to_string(),
             current_path: Some("src/lib.rs".to_string()),
@@ -46,8 +47,10 @@ fn sample_task(status: &str) -> TaskGraphqlRecord {
             parse_errors: 0,
         }),
         ingest_progress: None,
+        embeddings_bootstrap_progress: None,
         sync_result: None,
         ingest_result: None,
+        embeddings_bootstrap_result: None,
     }
 }
 
@@ -72,6 +75,7 @@ fn sample_task_json(status: &str) -> serde_json::Value {
             "paths": []
         },
         "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": serde_json::Value::Null,
         "syncProgress": {
             "phase": "complete",
             "currentPath": serde_json::Value::Null,
@@ -86,7 +90,11 @@ fn sample_task_json(status: &str) -> serde_json::Value {
             "cacheMisses": 2,
             "parseErrors": 0
         },
-        "ingestProgress": serde_json::Value::Null
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
     })
 }
 

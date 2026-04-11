@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::daemon::{
-    DaemonRuntimeState, DaemonServiceMetadata, PersistedEnrichmentQueueState,
-    SupervisorRuntimeState, SupervisorServiceMetadata,
+    DaemonRuntimeState, DaemonServiceMetadata, PersistedEmbeddingsBootstrapState,
+    PersistedEnrichmentQueueState, SupervisorRuntimeState, SupervisorServiceMetadata,
 };
 use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::storage::SqliteConnectionPool;
@@ -161,6 +161,10 @@ impl DaemonSqliteRuntimeStore {
         self.document_exists(document_key_enrichment_state())
     }
 
+    pub fn embeddings_bootstrap_state_exists(&self) -> Result<bool> {
+        self.document_exists(document_key_embeddings_bootstrap_state())
+    }
+
     pub fn capability_event_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_capability_event_state())
     }
@@ -301,6 +305,31 @@ impl DaemonSqliteRuntimeStore {
 
     pub fn save_enrichment_queue_state(&self, state: &PersistedEnrichmentQueueState) -> Result<()> {
         self.save_document(document_key_enrichment_state(), state)
+    }
+
+    pub fn load_embeddings_bootstrap_state(
+        &self,
+    ) -> Result<Option<PersistedEmbeddingsBootstrapState>> {
+        self.load_document(document_key_embeddings_bootstrap_state(), None)
+    }
+
+    pub fn save_embeddings_bootstrap_state(
+        &self,
+        state: &PersistedEmbeddingsBootstrapState,
+    ) -> Result<()> {
+        self.save_document(document_key_embeddings_bootstrap_state(), state)
+    }
+
+    pub fn mutate_embeddings_bootstrap_state<T>(
+        &self,
+        mutate: impl FnOnce(&mut PersistedEmbeddingsBootstrapState) -> Result<T>,
+    ) -> Result<T> {
+        self.mutate_document(
+            document_key_embeddings_bootstrap_state(),
+            None,
+            PersistedEmbeddingsBootstrapState::default,
+            mutate,
+        )
     }
 
     pub fn load_capability_event_queue_state(
@@ -490,6 +519,10 @@ fn document_key_devql_task_state() -> &'static str {
 
 fn document_key_enrichment_state() -> &'static str {
     "enrichment_queue_state"
+}
+
+fn document_key_embeddings_bootstrap_state() -> &'static str {
+    "embeddings_bootstrap_state"
 }
 
 fn document_key_capability_event_state() -> &'static str {

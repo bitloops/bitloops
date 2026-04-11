@@ -732,6 +732,12 @@ fn resolve_enqueue_task_input(
                 crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec { backfill }),
             ))
         }
+        TaskKind::EmbeddingsBootstrap => Err(operation_error(
+            "BAD_USER_INPUT",
+            "validation",
+            operation,
+            "`enqueueTask` does not support EMBEDDINGS_BOOTSTRAP; bootstrap tasks are enqueued internally by the daemon-aware CLI flows",
+        )),
     }
 }
 

@@ -3,6 +3,7 @@ use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, sleep};
@@ -23,7 +24,7 @@ mod queue;
 mod worker_count;
 
 use execution::execute_job;
-use queue::{job_is_paused, next_pending_job_index, project_status};
+use queue::{next_pending_job_index, project_status};
 use worker_count::configured_enrichment_worker_count;
 
 const MAX_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
@@ -124,6 +125,8 @@ pub struct EnrichmentCoordinator {
     runtime_store: DaemonSqliteRuntimeStore,
     lock: Mutex<()>,
     notify: Notify,
+    state_initialised: AtomicBool,
+    workers_started: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -187,24 +190,46 @@ where
 impl EnrichmentCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
         static INSTANCE: OnceLock<Arc<EnrichmentCoordinator>> = OnceLock::new();
-        Arc::clone(INSTANCE.get_or_init(|| {
-            let coordinator = Arc::new(Self {
+        let coordinator = Arc::clone(INSTANCE.get_or_init(|| {
+            Arc::new(Self {
                 runtime_store: DaemonSqliteRuntimeStore::open()
                     .expect("opening daemon runtime store for enrichment queue"),
                 lock: Mutex::new(()),
                 notify: Notify::new(),
+                state_initialised: AtomicBool::new(false),
+                workers_started: AtomicBool::new(false),
+            })
+        }));
+        coordinator.ensure_started();
+        coordinator
+    }
+
+    pub(crate) fn ensure_started(self: &Arc<Self>) {
+        if !self.state_initialised.swap(true, Ordering::AcqRel) {
+            self.ensure_state_file();
+            self.requeue_running_jobs();
+        }
+        self.start_workers_if_possible();
+    }
+
+    fn start_workers_if_possible(self: &Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self.workers_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        let worker_count = configured_enrichment_worker_count();
+        if worker_count > 1 {
+            log::info!("starting {worker_count} enrichment workers");
+        }
+        for _ in 0..worker_count {
+            let coordinator = Arc::clone(self);
+            handle.spawn(async move {
+                coordinator.run_loop().await;
             });
-            coordinator.ensure_state_file();
-            coordinator.requeue_running_jobs();
-            let worker_count = configured_enrichment_worker_count();
-            if worker_count > 1 {
-                log::info!("starting {worker_count} enrichment workers");
-            }
-            for _ in 0..worker_count {
-                coordinator.spawn_worker_if_possible();
-            }
-            coordinator
-        }))
+        }
     }
 
     pub async fn enqueue_semantic_summaries(
@@ -380,15 +405,6 @@ impl EnrichmentCoordinator {
         log::warn!("requeued {recovered} stale running enrichment jobs on daemon startup");
     }
 
-    fn spawn_worker_if_possible(self: &Arc<Self>) {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let coordinator = Arc::clone(self);
-            handle.spawn(async move {
-                coordinator.run_loop().await;
-            });
-        }
-    }
-
     async fn run_loop(self: Arc<Self>) {
         loop {
             match self.process_next_job().await {
@@ -409,12 +425,9 @@ impl EnrichmentCoordinator {
         let job = {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            let Some(index) = next_pending_job_index(&state) else {
+            let Some(index) = next_pending_job_index(&state, &self.runtime_store)? else {
                 return Ok(false);
             };
-            if job_is_paused(&state, &state.jobs[index].job) {
-                return Ok(false);
-            }
             let mut job = state.jobs[index].clone();
             job.status = EnrichmentJobStatus::Running;
             job.attempts += 1;
@@ -528,9 +541,14 @@ pub fn snapshot() -> Result<EnrichmentQueueStatus> {
     let state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
+    let gate = crate::daemon::embeddings_bootstrap::gate_status_for_enrichment_queue(
+        &runtime_store,
+        state.jobs.iter().map(|job| job.config_root.clone()),
+    )?;
     Ok(EnrichmentQueueStatus {
         state: project_status(&state),
         persisted: runtime_store.enrichment_state_exists()?,
+        embeddings_gate: gate,
     })
 }
 

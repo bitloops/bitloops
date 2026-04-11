@@ -39,13 +39,9 @@ pub(super) async fn watch_task_via_subscription(
     );
     request.headers_mut().insert(
         crate::devql_transport::HEADER_DAEMON_BINDING,
-        HeaderValue::from_str(
-            &crate::devql_transport::daemon_binding_identifier_for_config_path(
-                &crate::config::resolve_bound_daemon_config_path_for_repo(
-                    scope.repo_root.as_path(),
-                )?,
-            ),
-        )
+        HeaderValue::from_str(&crate::devql_transport::repo_daemon_binding_identifier(
+            scope.repo_root.as_path(),
+        ))
         .context("encoding DevQL websocket daemon binding header")?,
     );
 

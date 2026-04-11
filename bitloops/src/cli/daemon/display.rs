@@ -213,6 +213,30 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     if let Some(reason) = status.state.paused_reason.as_ref() {
         lines.push(format!("Enrichment pause reason: {reason}"));
     }
+    if let Some(gate) = status.embeddings_gate.as_ref() {
+        lines.push(format!(
+            "Embeddings gate blocked: {}",
+            if gate.blocked { "yes" } else { "no" }
+        ));
+        if let Some(readiness) = gate.readiness {
+            lines.push(format!("Embeddings gate readiness: {readiness}"));
+        }
+        if let Some(reason) = gate.reason.as_ref() {
+            lines.push(format!("Embeddings gate reason: {reason}"));
+        }
+        if let Some(task_id) = gate.active_task_id.as_ref() {
+            lines.push(format!("Embeddings gate active task: {task_id}"));
+        }
+        if let Some(profile_name) = gate.profile_name.as_ref() {
+            lines.push(format!("Embeddings gate profile: {profile_name}"));
+        }
+        if let Some(config_path) = gate.config_path.as_ref() {
+            lines.push(format!("Embeddings gate config: {}", config_path.display()));
+        }
+        if let Some(last_error) = gate.last_error.as_ref() {
+            lines.push(format!("Embeddings gate last error: {last_error}"));
+        }
+    }
     lines.push(format!(
         "Enrichment persisted: {}",
         if status.persisted { "yes" } else { "no" }

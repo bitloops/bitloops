@@ -1,6 +1,8 @@
 use super::*;
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tempfile::TempDir;
 use tokio::sync::{Mutex, Notify};
 
@@ -142,6 +144,8 @@ fn new_test_coordinator(runtime_db_path: PathBuf) -> EnrichmentCoordinator {
             .expect("open test daemon runtime store"),
         lock: Mutex::new(()),
         notify: Notify::new(),
+        state_initialised: AtomicBool::new(false),
+        workers_started: AtomicBool::new(false),
     }
 }
 
@@ -299,6 +303,53 @@ fn requeue_running_jobs_moves_stale_running_jobs_back_to_pending() {
         .expect("write initial enrichment state");
 
     coordinator.requeue_running_jobs();
+
+    let recovered_state = coordinator
+        .runtime_store
+        .load_enrichment_queue_state()
+        .expect("read recovered state")
+        .expect("state exists");
+    assert_eq!(
+        recovered_state
+            .jobs
+            .iter()
+            .filter(|job| job.status == EnrichmentJobStatus::Running)
+            .count(),
+        0
+    );
+    assert_eq!(
+        recovered_state
+            .jobs
+            .iter()
+            .filter(|job| job.status == EnrichmentJobStatus::Pending)
+            .count(),
+        3
+    );
+    assert_eq!(
+        recovered_state.last_action.as_deref(),
+        Some("requeue_running")
+    );
+}
+
+#[test]
+fn ensure_started_recovers_stale_running_jobs_on_startup() {
+    let temp = TempDir::new().expect("temp dir");
+    let runtime_db_path = temp.path().join("runtime.sqlite");
+    let coordinator = Arc::new(new_test_coordinator(runtime_db_path));
+    let repo_id = "repo-1";
+
+    let mut initial_state = default_state();
+    initial_state.jobs = vec![
+        sample_semantic_job(repo_id, EnrichmentJobStatus::Running, "semantic-a"),
+        sample_embedding_job(repo_id, EnrichmentJobStatus::Running, "embedding-a"),
+        sample_embedding_job(repo_id, EnrichmentJobStatus::Pending, "embedding-b"),
+    ];
+    coordinator
+        .runtime_store
+        .save_enrichment_queue_state(&initial_state)
+        .expect("write initial enrichment state");
+
+    coordinator.ensure_started();
 
     let recovered_state = coordinator
         .runtime_store

@@ -7,7 +7,11 @@ pub(crate) use config::{
     managed_embeddings_metadata_path, managed_runtime_command_is_eligible,
     managed_runtime_version_for_command,
 };
-pub(crate) use install::{ensure_managed_embeddings_runtime, install_or_bootstrap_embeddings};
+#[allow(unused_imports)]
+pub(crate) use install::{
+    ensure_managed_embeddings_runtime, ensure_managed_embeddings_runtime_with_progress,
+    install_or_bootstrap_embeddings,
+};
 
 #[cfg(test)]
 pub(crate) use install::{
