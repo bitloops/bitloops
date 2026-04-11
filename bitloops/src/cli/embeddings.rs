@@ -30,3 +30,8 @@ pub(crate) use managed::{
 
 #[cfg(test)]
 pub(crate) use profiles::{clear_cache_for_profile, doctor_profile, pull_profile};
+
+#[cfg(test)]
+pub(crate) async fn run_async(args: EmbeddingsArgs) -> anyhow::Result<()> {
+    args::run_async(args).await
+}

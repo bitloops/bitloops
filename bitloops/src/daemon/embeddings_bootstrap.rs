@@ -232,32 +232,10 @@ pub(crate) fn gate_status_for_enrichment_queue(
         let state = runtime_store
             .load_embeddings_bootstrap_state()?
             .unwrap_or_else(PersistedEmbeddingsBootstrapState::default);
-        return Ok(state
-            .entries
-            .values()
-            .next()
-            .map(|entry| EmbeddingsBootstrapGateStatus {
-                blocked: entry.readiness != EmbeddingsBootstrapReadiness::Ready,
-                readiness: Some(entry.readiness),
-                reason: entry.last_error.clone().or_else(|| {
-                    Some(match entry.readiness {
-                        EmbeddingsBootstrapReadiness::Pending => {
-                            "Managed embeddings runtime is not ready yet".to_string()
-                        }
-                        EmbeddingsBootstrapReadiness::Ready => {
-                            "Managed embeddings runtime is ready".to_string()
-                        }
-                        EmbeddingsBootstrapReadiness::Failed => {
-                            "Managed embeddings bootstrap failed".to_string()
-                        }
-                    })
-                }),
-                active_task_id: entry.active_task_id.clone(),
-                profile_name: Some(entry.profile_name.clone()),
-                config_path: Some(entry.config_path.clone()),
-                last_error: entry.last_error.clone(),
-                last_updated_unix: entry.last_updated_unix,
-            }));
+        return match state.entries.values().next() {
+            Some(entry) => gate_status_for_config_path(runtime_store, &entry.config_path).map(Some),
+            None => Ok(None),
+        };
     };
 
     gate_status_for_config_path(runtime_store, &config_path).map(Some)
@@ -528,4 +506,49 @@ fn canonical_config_path(config_path: &Path) -> PathBuf {
 
 fn config_path_key(config_path: &Path) -> String {
     canonical_config_path(config_path).display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enrichment_queue_gate_status_recomputes_from_config_when_no_jobs_are_present() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let runtime_store = DaemonSqliteRuntimeStore::open_at(temp.path().join("runtime.sqlite"))
+            .expect("open daemon runtime store");
+        let config_path = temp.path().join("config.toml");
+
+        std::fs::write(&config_path, "[runtime]\nlocal_dev = false\n")
+            .expect("write minimal daemon config");
+
+        runtime_store
+            .mutate_embeddings_bootstrap_state(|state| {
+                state.entries.insert(
+                    config_path_key(&config_path),
+                    EmbeddingsBootstrapGateEntry {
+                        config_path: config_path.clone(),
+                        profile_name: "local_code".to_string(),
+                        readiness: EmbeddingsBootstrapReadiness::Pending,
+                        active_task_id: Some("bootstrap-task-1".to_string()),
+                        last_error: None,
+                        last_updated_unix: unix_timestamp_now(),
+                    },
+                );
+                Ok(())
+            })
+            .expect("persist stale bootstrap gate state");
+
+        let status =
+            gate_status_for_enrichment_queue(&runtime_store, std::iter::empty::<PathBuf>())
+                .expect("load enrichment queue gate status")
+                .expect("gate status should exist");
+
+        assert!(!status.blocked);
+        assert_eq!(status.readiness, Some(EmbeddingsBootstrapReadiness::Ready));
+        assert_eq!(
+            status.reason.as_deref(),
+            Some("Embeddings are not configured for this daemon")
+        );
+    }
 }

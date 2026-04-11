@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::super::types::{
     EnrichmentQueueMode, EnrichmentQueueState as ProjectedEnrichmentQueueState,
 };
@@ -8,6 +10,7 @@ pub(super) fn next_pending_job_index(
     state: &EnrichmentQueueState,
     runtime_store: &DaemonSqliteRuntimeStore,
 ) -> anyhow::Result<Option<usize>> {
+    let embeddings_gate_blocked = embeddings_gate_blocked_by_config_root(state, runtime_store)?;
     Ok(state
         .jobs
         .iter()
@@ -19,11 +22,10 @@ pub(super) fn next_pending_job_index(
                 job.job,
                 EnrichmentJobKind::SymbolEmbeddings { .. }
                     | EnrichmentJobKind::CloneEdgesRebuild { .. }
-            ) || !crate::daemon::embeddings_bootstrap::embeddings_blocked_for_config_root(
-                runtime_store,
-                &job.config_root,
-            )
-            .unwrap_or(true)
+            ) || !embeddings_gate_blocked
+                .get(&job.config_root)
+                .copied()
+                .unwrap_or(true)
         })
         .min_by_key(|(_, job)| {
             let active_branch = state.active_branch_by_repo.get(&job.repo_id);
@@ -39,6 +41,30 @@ pub(super) fn next_pending_job_index(
             )
         })
         .map(|(index, _)| index))
+}
+
+fn embeddings_gate_blocked_by_config_root(
+    state: &EnrichmentQueueState,
+    runtime_store: &DaemonSqliteRuntimeStore,
+) -> anyhow::Result<BTreeMap<std::path::PathBuf, bool>> {
+    let mut blocked_by_root = BTreeMap::new();
+    for job in state.jobs.iter().filter(|job| {
+        job.status == EnrichmentJobStatus::Pending
+            && matches!(
+                job.job,
+                EnrichmentJobKind::SymbolEmbeddings { .. }
+                    | EnrichmentJobKind::CloneEdgesRebuild { .. }
+            )
+    }) {
+        if !blocked_by_root.contains_key(&job.config_root) {
+            let blocked = crate::daemon::embeddings_bootstrap::embeddings_blocked_for_config_root(
+                runtime_store,
+                &job.config_root,
+            )?;
+            blocked_by_root.insert(job.config_root.clone(), blocked);
+        }
+    }
+    Ok(blocked_by_root)
 }
 
 pub(super) fn job_is_paused(state: &EnrichmentQueueState, job: &EnrichmentJobKind) -> bool {

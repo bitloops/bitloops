@@ -237,7 +237,7 @@ where
         required_version,
     ) {
         report(crate::daemon::EmbeddingsBootstrapProgress {
-            phase: crate::daemon::EmbeddingsBootstrapPhase::RewritingRuntime,
+            phase: crate::daemon::EmbeddingsBootstrapPhase::ResolvingRelease,
             version: Some(outcome.version.clone()),
             message: Some("Managed embeddings runtime already installed".to_string()),
             ..Default::default()

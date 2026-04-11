@@ -627,7 +627,7 @@ impl DevqlTaskCoordinator {
         let task_id = task.task_id.clone();
         let runtime_store = self.runtime_store.clone();
         let repo_root = task.repo_root.clone();
-        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
+        let (progress_tx, progress_rx) = mpsc::unbounded_channel();
         let execution = tokio::task::spawn_blocking(move || {
             crate::daemon::embeddings_bootstrap::execute_task_with_progress(
                 &runtime_store,
@@ -642,7 +642,7 @@ impl DevqlTaskCoordinator {
                 },
             )
         });
-        let (result_tx, mut result_rx) = oneshot::channel();
+        let (result_tx, result_rx) = oneshot::channel();
         tokio::spawn(async move {
             let result = execution
                 .await
@@ -651,35 +651,16 @@ impl DevqlTaskCoordinator {
             let _ = result_tx.send(result);
         });
 
-        let mut final_result = None;
-        loop {
-            tokio::select! {
-                maybe_progress = progress_rx.recv() => {
-                    let Some(progress) = maybe_progress else {
-                        break;
-                    };
-                    self.update_task_progress(
-                        &task.task_id,
-                        DevqlTaskProgress::EmbeddingsBootstrap(progress),
-                    )?;
-                }
-                result = &mut result_rx, if final_result.is_none() => {
-                    final_result = Some(result.map_err(|_| anyhow!("embeddings bootstrap worker result channel dropped"))?);
-                    break;
-                }
-            }
-        }
+        let final_result =
+            receive_embeddings_bootstrap_outcome(progress_rx, result_rx, |progress| {
+                self.update_task_progress(
+                    &task.task_id,
+                    DevqlTaskProgress::EmbeddingsBootstrap(progress),
+                )
+            })
+            .await?;
 
-        while let Some(progress) = progress_rx.recv().await {
-            self.update_task_progress(
-                &task.task_id,
-                DevqlTaskProgress::EmbeddingsBootstrap(progress),
-            )?;
-        }
-
-        match final_result
-            .unwrap_or_else(|| Err(anyhow!("embeddings bootstrap task exited without a result")))
-        {
+        match final_result {
             Ok(result) => self.finish_embeddings_bootstrap_task_completed(&task.task_id, result)?,
             Err(err) => self.finish_task_failed(&task.task_id, err)?,
         }
@@ -894,6 +875,36 @@ impl DevqlTaskCoordinator {
     }
 }
 
+async fn receive_embeddings_bootstrap_outcome<R>(
+    mut progress_rx: mpsc::UnboundedReceiver<EmbeddingsBootstrapProgress>,
+    mut result_rx: oneshot::Receiver<Result<EmbeddingsBootstrapResult>>,
+    mut on_progress: R,
+) -> Result<Result<EmbeddingsBootstrapResult>>
+where
+    R: FnMut(EmbeddingsBootstrapProgress) -> Result<()>,
+{
+    let mut progress_closed = false;
+    let mut final_result = None;
+
+    while final_result.is_none() || !progress_closed {
+        tokio::select! {
+            maybe_progress = progress_rx.recv(), if !progress_closed => {
+                match maybe_progress {
+                    Some(progress) => on_progress(progress)?,
+                    None => progress_closed = true,
+                }
+            }
+            result = &mut result_rx, if final_result.is_none() => {
+                final_result = Some(
+                    result.map_err(|_| anyhow!("embeddings bootstrap worker result channel dropped"))?
+                );
+            }
+        }
+    }
+
+    final_result.ok_or_else(|| anyhow!("embeddings bootstrap task exited without a result"))
+}
+
 fn task_kind_from_spec(spec: &DevqlTaskSpec) -> DevqlTaskKind {
     match spec {
         DevqlTaskSpec::Sync(_) => DevqlTaskKind::Sync,
@@ -961,3 +972,7 @@ fn sync_spec_from_task_spec_mut(spec: &mut DevqlTaskSpec) -> Option<&mut SyncTas
         DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
     }
 }
+
+#[cfg(test)]
+#[path = "coordinator_tests.rs"]
+mod tests;

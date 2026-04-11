@@ -61,7 +61,7 @@ pub fn run(args: EmbeddingsArgs) -> Result<()> {
     runtime.block_on(run_async(args))
 }
 
-async fn run_async(args: EmbeddingsArgs) -> Result<()> {
+pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
     let Some(command) = args.command else {
         bail!(
             "missing subcommand. Use one of: `bitloops embeddings install`, `bitloops embeddings pull`, `bitloops embeddings doctor`, `bitloops embeddings clear-cache`"

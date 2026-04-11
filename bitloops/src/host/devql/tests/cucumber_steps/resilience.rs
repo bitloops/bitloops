@@ -1,6 +1,9 @@
 use crate::capability_packs::semantic_clones::features::SemanticFeatureInput;
 use crate::capability_packs::semantic_clones::health::SEMANTIC_CLONES_HEALTH_CHECKS;
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID;
+use crate::cli::devql::graphql::{
+    with_graphql_executor_hook_async, with_ingest_daemon_bootstrap_hook_async,
+};
 use crate::cli::embeddings::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsPullArgs,
 };
@@ -15,6 +18,7 @@ use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use serde_json::json;
 use std::env;
 use std::fs;
+use std::future::Future;
 use std::path::PathBuf;
 
 fn doc_string(ctx: &cucumber::step::Context) -> String {
@@ -117,10 +121,37 @@ fn with_scenario_process_state<T>(world: &mut DevqlBddWorld, f: impl FnOnce() ->
                 "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
                 Some(state_override.as_str()),
             ),
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
             ("PATH", Some(path_value.as_str())),
         ],
     );
     f()
+}
+
+async fn with_scenario_process_state_async<T, Fut>(
+    world: &mut DevqlBddWorld,
+    f: impl FnOnce() -> Fut,
+) -> T
+where
+    Fut: Future<Output = T>,
+{
+    let (repo_root, config_override, state_override, path_value) = scenario_env_overrides(world);
+    let _guard = enter_process_state(
+        Some(&repo_root),
+        &[
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_override.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_override.as_str()),
+            ),
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("PATH", Some(path_value.as_str())),
+        ],
+    );
+    f().await
 }
 
 fn daemon_config_path(world: &mut DevqlBddWorld) -> PathBuf {
@@ -128,6 +159,59 @@ fn daemon_config_path(world: &mut DevqlBddWorld) -> PathBuf {
         .scenario_config_override_root()
         .join("bitloops")
         .join("config.toml")
+}
+
+fn completed_embeddings_bootstrap_task_graphql_json(
+    task: &crate::daemon::DevqlTaskRecord,
+    message: String,
+) -> serde_json::Value {
+    let embeddings_bootstrap_spec = task.embeddings_bootstrap_spec().map(|spec| {
+        serde_json::json!({
+            "configPath": spec.config_path.display().to_string(),
+            "profileName": spec.profile_name,
+        })
+    });
+
+    serde_json::json!({
+        "taskId": task.task_id,
+        "repoId": task.repo_id,
+        "repoName": task.repo_name,
+        "repoIdentity": task.repo_identity,
+        "kind": task.kind.to_string().to_ascii_uppercase(),
+        "source": task.source.to_string(),
+        "status": "COMPLETED",
+        "submittedAtUnix": task.submitted_at_unix,
+        "startedAtUnix": task.started_at_unix.or(Some(task.submitted_at_unix)),
+        "updatedAtUnix": task.updated_at_unix.saturating_add(1),
+        "completedAtUnix": task.completed_at_unix.or(Some(task.updated_at_unix.saturating_add(1))),
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": embeddings_bootstrap_spec,
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "complete",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Bootstrap completed"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": {
+            "version": serde_json::Value::Null,
+            "binaryPath": serde_json::Value::Null,
+            "cacheDir": serde_json::Value::Null,
+            "runtimeName": serde_json::Value::Null,
+            "modelName": serde_json::Value::Null,
+            "freshlyInstalled": false,
+            "message": message
+        },
+    })
 }
 
 fn write_daemon_config(world: &mut DevqlBddWorld, config: &str) {
@@ -297,11 +381,53 @@ fn when_embeddings_pull_runs_for_profile(
         world.operation_error = None;
         world.operation_output.clear();
         let profile = ctx.matches[1].1.clone();
-        let result = with_scenario_process_state(world, || {
-            crate::cli::embeddings::run(EmbeddingsArgs {
-                command: Some(EmbeddingsCommand::Pull(EmbeddingsPullArgs { profile })),
-            })
-        });
+        let result = with_ingest_daemon_bootstrap_hook_async(
+            |_repo_root| Ok(()),
+            || async {
+                with_graphql_executor_hook_async(
+                    |repo_root, query, variables| {
+                        if query.contains("task(") || query.contains("query Task") {
+                            let task_id = variables["id"].as_str().expect("task id");
+                            let task = crate::daemon::devql_task(task_id)
+                                .expect("load daemon task")
+                                .expect("queued daemon task");
+                            let capability =
+                                resolve_embedding_capability_config_for_repo(repo_root);
+                            let lines = crate::cli::embeddings::pull_profile(
+                                repo_root,
+                                &capability,
+                                task.embeddings_bootstrap_spec()
+                                    .expect("embeddings bootstrap spec")
+                                    .profile_name
+                                    .as_str(),
+                            )
+                            .expect("pull profile");
+                            return Ok(serde_json::json!({
+                                "task": completed_embeddings_bootstrap_task_graphql_json(
+                                    &task,
+                                    lines.join("\n"),
+                                )
+                            }));
+                        }
+
+                        panic!("unexpected repo-scoped query: {query}");
+                    },
+                    || async {
+                        with_scenario_process_state_async(world, || async move {
+                            crate::cli::embeddings::run_async(EmbeddingsArgs {
+                                command: Some(EmbeddingsCommand::Pull(EmbeddingsPullArgs {
+                                    profile,
+                                })),
+                            })
+                            .await
+                        })
+                        .await
+                    },
+                )
+                .await
+            },
+        )
+        .await;
         if let Err(err) = result {
             world.operation_error = Some(format!("{err:#}"));
         }
@@ -335,13 +461,15 @@ fn when_embeddings_clear_cache_runs_for_profile(
         world.operation_error = None;
         world.operation_output.clear();
         let profile = ctx.matches[1].1.clone();
-        let result = with_scenario_process_state(world, || {
-            crate::cli::embeddings::run(EmbeddingsArgs {
+        let result = with_scenario_process_state_async(world, || async move {
+            crate::cli::embeddings::run_async(EmbeddingsArgs {
                 command: Some(EmbeddingsCommand::ClearCache(EmbeddingsClearCacheArgs {
                     profile,
                 })),
             })
-        });
+            .await
+        })
+        .await;
         if let Err(err) = result {
             world.operation_error = Some(format!("{err:#}"));
         }
