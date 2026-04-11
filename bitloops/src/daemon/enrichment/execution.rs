@@ -209,7 +209,7 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 expected_input_hashes: BTreeMap::new(),
                 representation_kind,
                 mode: EmbeddingRefreshMode::ConfiguredStrict,
-                manage_active_state: true,
+                manage_active_state: false,
             };
             match capability_host
                 .invoke_ingester_with_relational(
