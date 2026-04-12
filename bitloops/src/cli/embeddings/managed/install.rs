@@ -92,32 +92,10 @@ pub(crate) fn ensure_managed_embeddings_runtime(
 ) -> Result<Vec<String>> {
     let outcome =
         ensure_managed_embeddings_runtime_with_progress(repo_root, config_path, |_| Ok(()))?;
-    let mut lines = vec![if outcome.install.freshly_installed {
-        format!(
-            "Installed managed standalone `bitloops-embeddings` runtime {}.",
-            outcome.install.version
-        )
-    } else {
-        format!(
-            "Managed standalone `bitloops-embeddings` runtime {} already installed.",
-            outcome.install.version
-        )
-    }];
-    lines.push(format!(
-        "Binary path: {}",
-        outcome.install.binary_path.display()
-    ));
-
-    if let Some(config_path) = config_path
-        && outcome.command_rewritten
-    {
-        lines.push(format!(
-            "Updated embeddings runtime command and args in {}.",
-            config_path.display()
-        ));
-    }
-
-    Ok(lines)
+    Ok(format_managed_embeddings_runtime_lines(
+        &outcome,
+        config_path,
+    ))
 }
 
 pub(crate) fn ensure_managed_embeddings_runtime_with_progress<R>(
@@ -154,6 +132,38 @@ where
     })
 }
 
+fn format_managed_embeddings_runtime_lines(
+    outcome: &ManagedEmbeddingsRuntimeEnsureOutcome,
+    config_path: Option<&Path>,
+) -> Vec<String> {
+    let mut lines = vec![if outcome.install.freshly_installed {
+        format!(
+            "Installed managed standalone `bitloops-embeddings` runtime {}.",
+            outcome.install.version
+        )
+    } else {
+        format!(
+            "Managed standalone `bitloops-embeddings` runtime {} already installed.",
+            outcome.install.version
+        )
+    }];
+    lines.push(format!(
+        "Binary path: {}",
+        outcome.install.binary_path.display()
+    ));
+
+    if let Some(config_path) = config_path
+        && outcome.command_rewritten
+    {
+        lines.push(format!(
+            "Updated embeddings runtime command and args in {}.",
+            config_path.display()
+        ));
+    }
+
+    lines
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<String>> {
     let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
@@ -174,17 +184,12 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
         DaemonEmbeddingsInstallMode::WarmExisting | DaemonEmbeddingsInstallMode::Bootstrap => {}
     }
 
-    let capability = embedding_capability_for_config_path(&config_path)?;
-    let result =
-        pull_profile_with_config_path(repo_root, &config_path, &capability, &plan.profile_name);
-    match result {
-        Ok(mut lines) => {
-            if matches!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap) {
-                lines.insert(
-                    0,
-                    format!("Configured embeddings in {}.", plan.config_path.display()),
-                );
-            } else {
+    if matches!(plan.mode, DaemonEmbeddingsInstallMode::WarmExisting) {
+        let capability = embedding_capability_for_config_path(&config_path)?;
+        let result =
+            pull_profile_with_config_path(repo_root, &config_path, &capability, &plan.profile_name);
+        return match result {
+            Ok(mut lines) => {
                 lines.insert(
                     0,
                     format!(
@@ -192,7 +197,32 @@ pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<St
                         plan.profile_name
                     ),
                 );
+                Ok(lines)
             }
+            Err(err) => {
+                if plan.config_modified {
+                    plan.rollback()?;
+                }
+                Err(err)
+            }
+        };
+    }
+
+    let ensure = ensure_managed_embeddings_runtime_with_progress(repo_root, None, |_| Ok(()))?;
+    plan.apply_with_managed_runtime_path(&ensure.install.binary_path)?;
+    let capability = embedding_capability_for_config_path(&config_path)?;
+    let result =
+        pull_profile_with_config_path(repo_root, &config_path, &capability, &plan.profile_name);
+    match result {
+        Ok(mut lines) => {
+            lines.splice(
+                0..0,
+                format_managed_embeddings_runtime_lines(&ensure, Some(&config_path)),
+            );
+            lines.insert(
+                0,
+                format!("Configured embeddings in {}.", plan.config_path.display()),
+            );
             Ok(lines)
         }
         Err(err) => {

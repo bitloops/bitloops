@@ -6,10 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::adapters::model_providers::llm::{self, LlmProvider};
 use crate::config::{
@@ -381,9 +382,14 @@ impl BitloopsEmbeddingsIpcService {
             request_timeout_secs: runtime.request_timeout_secs,
             model: model.to_string(),
             cache_dir: cache_dir.map(Path::to_path_buf),
+            launch_artifact_fingerprint: embeddings_runtime_launch_artifact_fingerprint(
+                &runtime.command,
+                &runtime.args,
+            ),
+            process_environment_fingerprint: process_environment_fingerprint(),
         };
-        let shared_session = shared_bitloops_embeddings_session_registry()
-            .get_or_create(&session_config)?;
+        let shared_session =
+            shared_bitloops_embeddings_session_registry().get_or_create(&session_config)?;
         let output_dimension = shared_session.output_dimension()?;
         let cache_key = format!(
             "profile={profile_name}::driver={BITLOOPS_EMBEDDINGS_IPC_DRIVER}::model={model}::dimension={output_dimension}"
@@ -455,6 +461,8 @@ struct PythonEmbeddingsSessionConfig {
     request_timeout_secs: u64,
     model: String,
     cache_dir: Option<PathBuf>,
+    launch_artifact_fingerprint: String,
+    process_environment_fingerprint: String,
 }
 
 struct PythonEmbeddingsSession {
@@ -550,9 +558,8 @@ impl SharedBitloopsEmbeddingsSession {
             }
             Err(first_err) => {
                 state.session = None;
-                let restarted = PythonEmbeddingsSession::start(&self.config).context(
-                    "restarting standalone `bitloops-embeddings` runtime after failure",
-                )?;
+                let restarted = PythonEmbeddingsSession::start(&self.config)
+                    .context("restarting standalone `bitloops-embeddings` runtime after failure")?;
                 state.session = Some(restarted);
                 let retry = state
                     .session
@@ -603,8 +610,8 @@ impl SharedBitloopsEmbeddingsSession {
     }
 }
 
-fn shared_bitloops_embeddings_session_registry() -> &'static Arc<SharedBitloopsEmbeddingsSessionRegistry>
-{
+fn shared_bitloops_embeddings_session_registry()
+-> &'static Arc<SharedBitloopsEmbeddingsSessionRegistry> {
     static REGISTRY: OnceLock<Arc<SharedBitloopsEmbeddingsSessionRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let registry = Arc::new(SharedBitloopsEmbeddingsSessionRegistry {
@@ -613,12 +620,87 @@ fn shared_bitloops_embeddings_session_registry() -> &'static Arc<SharedBitloopsE
         let sweeper_registry = Arc::clone(&registry);
         let _ = thread::Builder::new()
             .name("bitloops-embeddings-ipc-sweeper".to_string())
-            .spawn(move || loop {
-                thread::sleep(SHARED_EMBEDDINGS_SWEEP_INTERVAL);
-                sweeper_registry.shutdown_idle_sessions(SHARED_EMBEDDINGS_IDLE_TIMEOUT);
+            .spawn(move || {
+                loop {
+                    thread::sleep(SHARED_EMBEDDINGS_SWEEP_INTERVAL);
+                    sweeper_registry.shutdown_idle_sessions(SHARED_EMBEDDINGS_IDLE_TIMEOUT);
+                }
             });
         registry
     })
+}
+
+fn process_environment_fingerprint() -> String {
+    let mut vars = std::env::vars_os()
+        .map(|(key, value)| format!("{}={}", key.to_string_lossy(), value.to_string_lossy()))
+        .collect::<Vec<_>>();
+    vars.sort();
+    sha256_hex(vars.join("\n").as_bytes())
+}
+
+fn embeddings_runtime_launch_artifact_fingerprint(command: &str, args: &[String]) -> String {
+    let command_path = Path::new(command);
+    let mut candidates = vec![command];
+    if runtime_command_uses_script_argument(command_path)
+        && let Some(script_path) = args.first()
+    {
+        candidates.push(script_path.as_str());
+    }
+
+    let mut artefacts = candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let path = Path::new(candidate);
+            if !path.is_file() {
+                return None;
+            }
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let metadata = std::fs::metadata(&canonical).ok()?;
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|timestamp| timestamp.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| format!("{}:{}", duration.as_secs(), duration.subsec_nanos()))
+                .unwrap_or_else(|| "unknown".to_string());
+            Some(format!(
+                "{}|{}|{}",
+                canonical.display(),
+                metadata.len(),
+                modified
+            ))
+        })
+        .collect::<Vec<_>>();
+    artefacts.sort();
+    sha256_hex(artefacts.join("\n").as_bytes())
+}
+
+fn runtime_command_uses_script_argument(command: &Path) -> bool {
+    command
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "sh" | "bash"
+                    | "zsh"
+                    | "python"
+                    | "python3"
+                    | "python3.11"
+                    | "python3.12"
+                    | "python3.13"
+                    | "node"
+                    | "ruby"
+                    | "perl"
+                    | "pwsh"
+                    | "powershell"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -778,10 +860,7 @@ impl PythonEmbeddingsSession {
                         }
                         match serde_json::from_str(trimmed) {
                             Ok(value) => {
-                                if tx
-                                    .send(PythonEmbeddingsSessionOutput::Json(value))
-                                    .is_err()
-                                {
+                                if tx.send(PythonEmbeddingsSessionOutput::Json(value)).is_err() {
                                     break;
                                 }
                             }
@@ -812,16 +891,16 @@ impl PythonEmbeddingsSession {
 
     fn read_json_response(&mut self, timeout_secs: u64, operation: &str) -> Result<Value> {
         let next = if timeout_secs == 0 {
-            self.response_rx.recv().map_err(|_| {
-                anyhow!("standalone embeddings runtime exited before replying")
-            })
+            self.response_rx
+                .recv()
+                .map_err(|_| anyhow!("standalone embeddings runtime exited before replying"))
         } else {
             self.response_rx
                 .recv_timeout(Duration::from_secs(timeout_secs))
                 .map_err(|err| match err {
-                    RecvTimeoutError::Timeout => anyhow!(
-                        "{operation} timed out after {timeout_secs}s"
-                    ),
+                    RecvTimeoutError::Timeout => {
+                        anyhow!("{operation} timed out after {timeout_secs}s")
+                    }
                     RecvTimeoutError::Disconnected => {
                         anyhow!("standalone embeddings runtime exited before replying")
                     }
@@ -835,7 +914,9 @@ impl PythonEmbeddingsSession {
             }
             Ok(PythonEmbeddingsSessionOutput::Closed) => {
                 self.terminate_child();
-                Err(anyhow!("standalone embeddings runtime exited before replying"))
+                Err(anyhow!(
+                    "standalone embeddings runtime exited before replying"
+                ))
             }
             Err(err) => {
                 self.terminate_child();
@@ -976,16 +1057,18 @@ done
         write_fake_runtime_script(&script_path, Some(&timeout_marker));
 
         let runtime = fake_runtime_config(&script_path, &launch_log);
-        let service =
-            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-                .expect("build ipc service");
+        let service = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+            .expect("build ipc service");
 
         let vector = service
             .embed("hello world", EmbeddingInputType::Document)
             .expect("embedding request should recover after timeout");
 
         assert_eq!(vector, vec![1.0, 2.0]);
-        assert!(timeout_marker.exists(), "first request should have timed out");
+        assert!(
+            timeout_marker.exists(),
+            "first request should have timed out"
+        );
     }
 
     #[test]
@@ -996,9 +1079,8 @@ done
         write_fake_runtime_script(&script_path, None);
 
         let runtime = fake_runtime_config(&script_path, &launch_log);
-        let first =
-            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-                .expect("build first ipc service");
+        let first = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+            .expect("build first ipc service");
         assert_eq!(
             first
                 .embed("hello world", EmbeddingInputType::Document)
@@ -1007,9 +1089,8 @@ done
         );
         drop(first);
 
-        let second =
-            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-                .expect("build second ipc service");
+        let second = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+            .expect("build second ipc service");
         assert_eq!(
             second
                 .embed("goodbye world", EmbeddingInputType::Document)
@@ -1033,9 +1114,8 @@ done
         write_fake_runtime_script(&script_path, None);
 
         let runtime = fake_runtime_config(&script_path, &launch_log);
-        let first =
-            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-                .expect("build first ipc service");
+        let first = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+            .expect("build first ipc service");
         assert_eq!(
             first
                 .embed("hello world", EmbeddingInputType::Document)
@@ -1045,9 +1125,8 @@ done
 
         evict_idle_embeddings_sessions_for_tests(Duration::ZERO);
 
-        let second =
-            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-                .expect("build second ipc service");
+        let second = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
+            .expect("build second ipc service");
         assert_eq!(
             second
                 .embed("goodbye world", EmbeddingInputType::Document)

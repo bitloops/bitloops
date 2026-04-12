@@ -233,6 +233,135 @@ request_timeout_secs = 5
     .expect("write daemon config");
 }
 
+fn completed_sync_task_json(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "SYNC",
+        "source": "init",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": {
+            "mode": "auto",
+            "paths": []
+        },
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": serde_json::Value::Null,
+        "syncProgress": {
+            "phase": "complete",
+            "currentPath": serde_json::Value::Null,
+            "pathsTotal": 1,
+            "pathsCompleted": 1,
+            "pathsRemaining": 0,
+            "pathsUnchanged": 0,
+            "pathsAdded": 0,
+            "pathsChanged": 0,
+            "pathsRemoved": 0,
+            "cacheHits": 0,
+            "cacheMisses": 0,
+            "parseErrors": 0
+        },
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
+    })
+}
+
+fn completed_ingest_task_json(task_id: &str, backfill: usize) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "INGEST",
+        "source": "manual_cli",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": {
+            "backfill": backfill
+        },
+        "embeddingsBootstrapSpec": serde_json::Value::Null,
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": {
+            "phase": "complete",
+            "commitsTotal": backfill,
+            "commitsProcessed": backfill,
+            "checkpointCompanionsProcessed": 0,
+            "currentCheckpointId": serde_json::Value::Null,
+            "currentCommitSha": serde_json::Value::Null,
+            "eventsInserted": 0,
+            "artefactsUpserted": 0
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
+    })
+}
+
+fn completed_bootstrap_task_json(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "EMBEDDINGS_BOOTSTRAP",
+        "source": "init",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": {
+            "configPath": "/tmp/config.toml",
+            "profileName": "local_code"
+        },
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "complete",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Bootstrap completed"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": {
+            "version": serde_json::Value::Null,
+            "binaryPath": serde_json::Value::Null,
+            "cacheDir": serde_json::Value::Null,
+            "runtimeName": serde_json::Value::Null,
+            "modelName": serde_json::Value::Null,
+            "freshlyInstalled": false,
+            "message": "Bootstrap completed"
+        }
+    })
+}
+
 #[test]
 fn init_args_supports_agent_flag() {
     let parsed =
@@ -1063,6 +1192,9 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 .contains("Embeddings bootstrap task: embeddings_bootstrap-task-")
                         );
                         assert!(rendered.contains("Embeddings bootstrap phase: queued"));
+                        assert!(
+                            rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
+                        );
                         let config = std::fs::read_to_string(
                             repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
                         )
@@ -1196,8 +1328,21 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                             if query.contains("task(")
                                                 || query.contains("query Task")
                                             {
+                                                let task_id =
+                                                    variables["id"].as_str().expect("task id");
+                                                let task = if task_id == "sync-task-1" {
+                                                    completed_sync_task_json(task_id)
+                                                } else if task_id == "ingest-task-1" {
+                                                    completed_ingest_task_json(task_id, 50)
+                                                } else if task_id
+                                                    .starts_with("embeddings_bootstrap-task-")
+                                                {
+                                                    completed_bootstrap_task_json(task_id)
+                                                } else {
+                                                    panic!("unexpected task id: {task_id}");
+                                                };
                                                 return Ok(serde_json::json!({
-                                                    "task": null
+                                                    "task": task
                                                 }));
                                             }
 
@@ -1278,14 +1423,14 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         let bootstrap_index = rendered
                                             .find("Queueing embeddings bootstrap in the daemon...")
                                             .expect("bootstrap output");
+                                        let handoff_index = rendered
+                                            .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
+                                            .expect("handoff output");
                                         let sync_index = rendered
                                             .find("Starting initial DevQL sync...")
                                             .expect("sync output");
-                                        let ingest_index = rendered
-                                            .find("Starting initial DevQL ingest after sync...")
-                                            .expect("ingest output");
                                         assert!(bootstrap_index < sync_index);
-                                        assert!(sync_index < ingest_index);
+                                        assert!(handoff_index < sync_index);
                                         assert_eq!(&*events.borrow(), &["sync", "ingest"]);
                                         let queued = crate::daemon::devql_tasks(
                                             None,

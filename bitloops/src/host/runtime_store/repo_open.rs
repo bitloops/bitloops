@@ -51,3 +51,13 @@ impl RepoSqliteRuntimeStore {
         SqliteInteractionSpool::new(sqlite, self.repo_id.clone())
     }
 }
+
+pub(crate) fn open_runtime_sqlite_for_config_root(
+    daemon_config_root: &Path,
+) -> Result<SqliteConnectionPool> {
+    let db_path = resolve_repo_runtime_db_path_for_config_root(daemon_config_root);
+    let sqlite = SqliteConnectionPool::connect(db_path.clone())
+        .with_context(|| format!("opening repo runtime database {}", db_path.display()))?;
+    initialise_repo_runtime_schema(&sqlite)?;
+    Ok(sqlite)
+}

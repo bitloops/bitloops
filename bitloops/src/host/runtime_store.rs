@@ -16,6 +16,7 @@ mod util;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use repo_open::open_runtime_sqlite_for_config_root;
 pub use repo_workplane::{
     CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneJobInsert,
     CapabilityWorkplaneMailboxStatus, WorkplaneCursorRunRecord, WorkplaneCursorRunStatus,

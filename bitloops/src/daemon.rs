@@ -297,9 +297,12 @@ pub fn shared_devql_task_coordinator() -> Arc<DevqlTaskCoordinator> {
     DevqlTaskCoordinator::shared()
 }
 
-pub(crate) fn activate_task_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
+pub(crate) fn activate_task_worker(
+    config_root: &Path,
+    subscription_hub: Arc<crate::graphql::SubscriptionHub>,
+) {
     CapabilityEventCoordinator::shared().activate_worker();
-    DevqlTaskCoordinator::shared().activate_worker(Some(subscription_hub));
+    DevqlTaskCoordinator::shared().activate_worker(config_root, Some(subscription_hub));
 }
 
 pub fn devql_task_status(repo_id: Option<&str>) -> Result<DevqlTaskQueueStatus> {

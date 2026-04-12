@@ -99,7 +99,7 @@ impl TaskProgressRenderer {
     }
 }
 
-pub(super) fn format_live_task_status_line(
+pub(crate) fn format_live_task_status_line(
     task: &TaskGraphqlRecord,
     spinner: &str,
     terminal_width: Option<usize>,
@@ -224,7 +224,7 @@ pub(super) fn format_live_task_status_line(
     format!("{spinner} {fitted}")
 }
 
-pub(super) fn format_live_task_progress_bar_line(
+pub(crate) fn format_live_task_progress_bar_line(
     task: &TaskGraphqlRecord,
     spinner_index: usize,
     terminal_width: Option<usize>,

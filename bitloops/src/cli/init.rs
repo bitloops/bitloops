@@ -1,10 +1,12 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
+use terminal_size::{Width, terminal_size};
 
 mod agent_hooks;
 mod agent_selection;
@@ -21,15 +23,25 @@ use crate::config::settings::{
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
 };
-use crate::devql_transport::discover_slim_cli_repo_scope;
+use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
+use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 
 pub use agent_selection::detect_or_select_agent;
 
 pub type AgentSelector = dyn Fn(&[String]) -> std::result::Result<Vec<String>, String>;
 const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
+const INIT_PROGRESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const INIT_PROGRESS_TICK_INTERVAL: Duration = Duration::from_millis(120);
+const INIT_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 #[cfg(test)]
 type InstallDefaultDaemonHook = dyn Fn(bool) -> Result<()> + 'static;
+
+#[derive(Clone)]
+struct QueuedEmbeddingsBootstrapTask {
+    scope: SlimCliRepoScope,
+    task_id: String,
+}
 
 #[cfg(test)]
 thread_local! {
@@ -211,6 +223,7 @@ async fn run_with_io_async_for_project_root(
         out,
     )?;
 
+    let mut queued_embeddings_bootstrap = None;
     let should_install_embeddings = should_install_embeddings_during_init(
         project_root,
         args.install_default_daemon,
@@ -219,17 +232,53 @@ async fn run_with_io_async_for_project_root(
     )?;
     if should_install_embeddings {
         if args.install_default_daemon {
-            enqueue_embeddings_bootstrap_during_init(project_root, out).await?;
+            queued_embeddings_bootstrap =
+                Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
         } else {
             install_embeddings_during_init(project_root, out)?;
         }
     }
-
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
+    if args.install_default_daemon {
+        write_init_setup_handoff(out).await?;
+    }
     if should_sync || should_ingest {
         let scope = discover_slim_cli_repo_scope(Some(project_root))?;
-        if should_sync {
+        let run_concurrent_init_progress =
+            args.install_default_daemon && queued_embeddings_bootstrap.is_some();
+        if run_concurrent_init_progress {
+            let initial_top_task = if should_sync {
+                writeln!(out, "Starting initial DevQL sync...")?;
+                out.flush()?;
+                let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
+                    &scope, false, None, false, false, "init", false,
+                )
+                .await?;
+                Some(task)
+            } else if should_ingest {
+                writeln!(out, "Starting initial DevQL ingest...")?;
+                out.flush()?;
+                let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
+                    &scope,
+                    Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
+                    false,
+                )
+                .await?;
+                Some(task)
+            } else {
+                None
+            };
+            run_dual_init_progress(
+                out,
+                &scope,
+                initial_top_task,
+                should_sync && should_ingest,
+                args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL),
+                queued_embeddings_bootstrap.as_ref(),
+            )
+            .await?;
+        } else if should_sync {
             writeln!(out, "Starting initial DevQL sync...")?;
             out.flush()?;
             let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
@@ -245,8 +294,26 @@ async fn run_with_io_async_for_project_root(
                     crate::cli::devql::format_task_completion_summary(&task)
                 )?;
             }
-        }
-        if should_ingest {
+            if should_ingest {
+                writeln!(out, "Starting initial DevQL ingest after sync...")?;
+                out.flush()?;
+                let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
+                    &scope,
+                    Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
+                    false,
+                )
+                .await?;
+                if let Some(task) =
+                    crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
+                {
+                    writeln!(
+                        out,
+                        "{}",
+                        crate::cli::devql::format_task_completion_summary(&task)
+                    )?;
+                }
+            }
+        } else if should_ingest {
             if should_sync {
                 writeln!(out, "Starting initial DevQL ingest after sync...")?;
             } else {
@@ -309,9 +376,9 @@ async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
 async fn enqueue_embeddings_bootstrap_during_init(
     project_root: &Path,
     out: &mut dyn Write,
-) -> Result<()> {
+) -> Result<QueuedEmbeddingsBootstrapTask> {
     writeln!(out, "Queueing embeddings bootstrap in the daemon...")?;
-    let (_scope, queued) =
+    let (scope, queued) =
         enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
             .await?;
     let phase = queued
@@ -322,7 +389,10 @@ async fn enqueue_embeddings_bootstrap_during_init(
     writeln!(out, "Embeddings bootstrap task: {}", queued.task.task_id)?;
     writeln!(out, "Embeddings bootstrap phase: {phase}")?;
     out.flush()?;
-    Ok(())
+    Ok(QueuedEmbeddingsBootstrapTask {
+        scope,
+        task_id: queued.task.task_id,
+    })
 }
 
 fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
@@ -343,6 +413,441 @@ fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> R
             bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
         }
     }
+}
+
+async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{}",
+        color_hex_if_enabled(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX)
+    )?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background. You can continue viewing the progress here or you can close this terminal if you prefer and you can always run `bitloops status` or visit the dashboard for more information."
+    )?;
+    if let Some(url) = current_dashboard_url().await? {
+        writeln!(out, "Dashboard URL: {url}")?;
+    }
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
+async fn current_dashboard_url() -> Result<Option<String>> {
+    Ok(crate::daemon::status()
+        .await
+        .ok()
+        .and_then(|status| status.runtime.map(|runtime| runtime.url)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EmbeddingQueueSnapshot {
+    pending: u64,
+    running: u64,
+    failed: u64,
+}
+
+impl EmbeddingQueueSnapshot {
+    fn remaining(self) -> u64 {
+        self.pending + self.running
+    }
+}
+
+async fn current_embedding_queue_snapshot() -> Result<Option<EmbeddingQueueSnapshot>> {
+    Ok(crate::daemon::status()
+        .await?
+        .enrichment
+        .map(|status| EmbeddingQueueSnapshot {
+            pending: status.state.pending_embedding_jobs,
+            running: status.state.running_embedding_jobs,
+            failed: status.state.failed_embedding_jobs,
+        }))
+}
+
+enum BottomProgressState {
+    Bootstrap(crate::cli::devql::graphql::TaskGraphqlRecord),
+    Queue {
+        snapshot: EmbeddingQueueSnapshot,
+        baseline_total: u64,
+    },
+    QueueComplete {
+        failed_jobs: u64,
+    },
+    BootstrapFailed(crate::cli::devql::graphql::TaskGraphqlRecord),
+    Hidden,
+}
+
+struct InitProgressRenderer {
+    interactive: bool,
+    terminal_width: Option<usize>,
+    spinner_index: usize,
+    last_frame: Option<String>,
+    wrote_in_place: bool,
+    rendered_lines: usize,
+}
+
+impl InitProgressRenderer {
+    fn new() -> Self {
+        Self {
+            interactive: std::io::stdout().is_terminal() && std::env::var("ACCESSIBLE").is_err(),
+            terminal_width: terminal_size().map(|(Width(width), _)| width as usize),
+            spinner_index: 0,
+            last_frame: None,
+            wrote_in_place: false,
+            rendered_lines: 0,
+        }
+    }
+
+    fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
+    fn render(
+        &mut self,
+        out: &mut dyn Write,
+        top_task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+        bottom_state: &BottomProgressState,
+    ) -> Result<()> {
+        let frame = self.render_frame(top_task, bottom_state);
+        self.write_frame(out, frame, false)
+    }
+
+    fn tick(
+        &mut self,
+        out: &mut dyn Write,
+        top_task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+        bottom_state: &BottomProgressState,
+    ) -> Result<()> {
+        if !self.interactive {
+            return Ok(());
+        }
+        self.spinner_index = (self.spinner_index + 1) % INIT_SPINNER_FRAMES.len();
+        let frame = self.render_frame(top_task, bottom_state);
+        self.write_frame(out, frame, true)
+    }
+
+    fn finish(&mut self, out: &mut dyn Write) -> Result<()> {
+        if self.interactive && self.wrote_in_place {
+            writeln!(out)?;
+            out.flush()?;
+            self.wrote_in_place = false;
+        }
+        Ok(())
+    }
+
+    fn render_frame(
+        &self,
+        top_task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+        bottom_state: &BottomProgressState,
+    ) -> String {
+        let mut lines = Vec::new();
+        let spinner =
+            color_hex_if_enabled(INIT_SPINNER_FRAMES[self.spinner_index], BITLOOPS_PURPLE_HEX);
+        if let Some(task) = top_task {
+            lines.push(
+                crate::cli::devql::graphql::format_live_task_progress_bar_line(
+                    task,
+                    self.spinner_index,
+                    self.terminal_width,
+                ),
+            );
+            lines.push(crate::cli::devql::graphql::format_live_task_status_line(
+                task,
+                spinner.as_str(),
+                self.terminal_width,
+            ));
+        }
+        match bottom_state {
+            BottomProgressState::Bootstrap(task) | BottomProgressState::BootstrapFailed(task) => {
+                lines.push(
+                    crate::cli::devql::graphql::format_live_task_progress_bar_line(
+                        task,
+                        self.spinner_index,
+                        self.terminal_width,
+                    ),
+                );
+                lines.push(crate::cli::devql::graphql::format_live_task_status_line(
+                    task,
+                    spinner.as_str(),
+                    self.terminal_width,
+                ));
+            }
+            BottomProgressState::Queue {
+                snapshot,
+                baseline_total,
+            } => {
+                lines.push(format_embedding_queue_progress_bar_line(
+                    *snapshot,
+                    *baseline_total,
+                    self.spinner_index,
+                    self.terminal_width,
+                ));
+                lines.push(format_embedding_queue_status_line(
+                    *snapshot,
+                    spinner.as_str(),
+                ));
+            }
+            BottomProgressState::QueueComplete { failed_jobs } => {
+                lines.push(
+                    "[████████████████████████████████████████████████████████████] 100% 1/1"
+                        .to_string(),
+                );
+                if *failed_jobs > 0 {
+                    lines.push(format!(
+                        "✖ Embedding queue finished with {} failed job(s)",
+                        failed_jobs
+                    ));
+                } else {
+                    lines.push("✓ Embedding queue complete".to_string());
+                }
+            }
+            BottomProgressState::Hidden => {}
+        }
+        lines.join("\n")
+    }
+
+    fn write_frame(&mut self, out: &mut dyn Write, frame: String, force: bool) -> Result<()> {
+        if self.interactive {
+            if !force && self.last_frame.as_deref() == Some(frame.as_str()) {
+                return Ok(());
+            }
+            if self.wrote_in_place {
+                clear_rendered_lines(out, self.rendered_lines)?;
+            } else {
+                write!(out, "{frame}")?;
+                out.flush()?;
+                self.last_frame = Some(frame.clone());
+                self.wrote_in_place = true;
+                self.rendered_lines = frame.lines().count().max(1);
+                return Ok(());
+            }
+            write!(out, "{frame}")?;
+            out.flush()?;
+            self.last_frame = Some(frame.clone());
+            self.wrote_in_place = true;
+            self.rendered_lines = frame.lines().count().max(1);
+            return Ok(());
+        }
+
+        if self.last_frame.as_deref() != Some(frame.as_str()) {
+            writeln!(out, "{frame}")?;
+            out.flush()?;
+            self.last_frame = Some(frame);
+        }
+        Ok(())
+    }
+}
+
+fn clear_rendered_lines(out: &mut dyn Write, line_count: usize) -> Result<()> {
+    if line_count == 0 {
+        return Ok(());
+    }
+    write!(out, "\r\x1b[2K")?;
+    for _ in 1..line_count {
+        write!(out, "\x1b[1A\r\x1b[2K")?;
+    }
+    Ok(())
+}
+
+async fn run_dual_init_progress(
+    out: &mut dyn Write,
+    scope: &SlimCliRepoScope,
+    mut top_task: Option<crate::cli::devql::graphql::TaskGraphqlRecord>,
+    mut enqueue_ingest_after_sync: bool,
+    ingest_backfill: usize,
+    queued_embeddings_bootstrap: Option<&QueuedEmbeddingsBootstrapTask>,
+) -> Result<()> {
+    let mut bottom_state = if let Some(bootstrap) = queued_embeddings_bootstrap {
+        match crate::cli::devql::graphql::query_task_via_graphql(
+            &bootstrap.scope,
+            bootstrap.task_id.as_str(),
+        )
+        .await?
+        {
+            Some(task) => BottomProgressState::Bootstrap(task),
+            None => BottomProgressState::Hidden,
+        }
+    } else {
+        BottomProgressState::Hidden
+    };
+    let mut renderer = InitProgressRenderer::new();
+    renderer.render(out, top_task.as_ref(), &bottom_state)?;
+
+    let mut poll_interval = tokio::time::interval(INIT_PROGRESS_POLL_INTERVAL);
+    let mut render_tick = tokio::time::interval(INIT_PROGRESS_TICK_INTERVAL);
+    loop {
+        tokio::select! {
+            _ = render_tick.tick(), if renderer.is_interactive() => {
+                renderer.tick(out, top_task.as_ref(), &bottom_state)?;
+            }
+            _ = poll_interval.tick() => {
+                if let Some(current) = top_task.clone() {
+                    let task_id = current.task_id.clone();
+                    let refreshed = crate::cli::devql::graphql::query_task_via_graphql(scope, task_id.as_str())
+                        .await?
+                        .unwrap_or(current);
+                    if refreshed.is_terminal() {
+                        if refreshed.status.eq_ignore_ascii_case("completed") {
+                            if refreshed.is_sync() && enqueue_ingest_after_sync {
+                                let (ingest_task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
+                                    scope,
+                                    Some(ingest_backfill),
+                                    false,
+                                ).await?;
+                                top_task = Some(ingest_task);
+                                enqueue_ingest_after_sync = false;
+                            } else {
+                                top_task = None;
+                            }
+                        } else if let Some(error) = refreshed.error.as_ref() {
+                            renderer.finish(out)?;
+                            bail!("task {} failed: {error}", refreshed.task_id);
+                        } else {
+                            renderer.finish(out)?;
+                            bail!(
+                                "task {} ended with status {}",
+                                refreshed.task_id,
+                                refreshed.status
+                            );
+                        }
+                    } else {
+                        top_task = Some(refreshed);
+                    }
+                }
+
+                bottom_state = match bottom_state {
+                    BottomProgressState::Bootstrap(current_task) => {
+                        let refreshed = crate::cli::devql::graphql::query_task_via_graphql(
+                            scope,
+                            current_task.task_id.as_str(),
+                        )
+                        .await?
+                        .unwrap_or(current_task);
+                        if refreshed.is_terminal() {
+                            if refreshed.status.eq_ignore_ascii_case("completed") {
+                                if let Some(snapshot) = current_embedding_queue_snapshot().await? {
+                                    if snapshot.remaining() > 0 || snapshot.failed > 0 {
+                                        BottomProgressState::Queue {
+                                            baseline_total: snapshot.remaining(),
+                                            snapshot,
+                                        }
+                                    } else {
+                                        BottomProgressState::QueueComplete { failed_jobs: 0 }
+                                    }
+                                } else {
+                                    BottomProgressState::Hidden
+                                }
+                            } else {
+                                BottomProgressState::BootstrapFailed(refreshed)
+                            }
+                        } else {
+                            BottomProgressState::Bootstrap(refreshed)
+                        }
+                    }
+                    BottomProgressState::Queue {
+                        snapshot: _,
+                        baseline_total,
+                    } => {
+                        if let Some(snapshot) = current_embedding_queue_snapshot().await? {
+                            let baseline_total = baseline_total.max(snapshot.remaining());
+                            if snapshot.remaining() == 0 {
+                                BottomProgressState::QueueComplete {
+                                    failed_jobs: snapshot.failed,
+                                }
+                            } else {
+                                BottomProgressState::Queue {
+                                    snapshot,
+                                    baseline_total,
+                                }
+                            }
+                        } else {
+                            BottomProgressState::Hidden
+                        }
+                    }
+                    other => other,
+                };
+
+                renderer.render(out, top_task.as_ref(), &bottom_state)?;
+                if top_task.is_none()
+                    && matches!(
+                        bottom_state,
+                        BottomProgressState::Hidden
+                            | BottomProgressState::QueueComplete { .. }
+                            | BottomProgressState::BootstrapFailed(_)
+                    )
+                {
+                    renderer.finish(out)?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+fn format_embedding_queue_status_line(snapshot: EmbeddingQueueSnapshot, spinner: &str) -> String {
+    let mut line = format!(
+        "{spinner} Embedding queue · {} remaining · {} running",
+        snapshot.remaining(),
+        snapshot.running
+    );
+    if snapshot.failed > 0 {
+        line.push_str(&format!(" · {} failed", snapshot.failed));
+    }
+    line
+}
+
+fn format_embedding_queue_progress_bar_line(
+    snapshot: EmbeddingQueueSnapshot,
+    baseline_total: u64,
+    spinner_index: usize,
+    terminal_width: Option<usize>,
+) -> String {
+    let available_width = terminal_width.unwrap_or(80).max(16);
+    let done = baseline_total.saturating_sub(snapshot.remaining());
+    let summary = if baseline_total > 0 {
+        let ratio = (done as f64 / baseline_total as f64).clamp(0.0, 1.0);
+        format!(
+            " {:>3}% {done}/{}",
+            (ratio * 100.0).round() as usize,
+            baseline_total
+        )
+    } else {
+        " waiting ".to_string()
+    };
+    let reserved = summary.chars().count() + 2;
+    if available_width <= reserved + 1 {
+        return summary.trim().to_string();
+    }
+
+    let bar_width = available_width - reserved;
+    let bar = if baseline_total > 0 {
+        let ratio = (done as f64 / baseline_total as f64).clamp(0.0, 1.0);
+        render_init_determinate_progress_bar(bar_width, ratio)
+    } else {
+        render_init_indeterminate_progress_bar(bar_width, spinner_index)
+    };
+    format!("[{bar}]{summary}")
+}
+
+fn render_init_determinate_progress_bar(width: usize, ratio: f64) -> String {
+    let filled = ((width as f64) * ratio).round() as usize;
+    let filled = filled.min(width);
+    let fill = color_hex_if_enabled(&"█".repeat(filled), BITLOOPS_PURPLE_HEX);
+    let empty = "░".repeat(width.saturating_sub(filled));
+    format!("{fill}{empty}")
+}
+
+fn render_init_indeterminate_progress_bar(width: usize, spinner_index: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let position = spinner_index % width;
+    let prefix = "░".repeat(position);
+    let pulse = color_hex_if_enabled("█", BITLOOPS_PURPLE_HEX);
+    let suffix = "░".repeat(width.saturating_sub(position + 1));
+    format!("{prefix}{pulse}{suffix}")
 }
 
 fn should_install_embeddings_during_init(

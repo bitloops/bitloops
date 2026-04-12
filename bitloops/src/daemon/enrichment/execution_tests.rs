@@ -857,7 +857,11 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
         outcome.follow_ups.first(),
         Some(FollowUpJob::CloneEdgesRebuild { .. })
     ));
-    assert_eq!(rows.len(), 1, "workplane job should only embed the selected artefact");
+    assert_eq!(
+        rows.len(),
+        1,
+        "workplane job should only embed the selected artefact"
+    );
     assert_eq!(rows[0].path, "src/invoice.ts");
     assert_eq!(rows[0].model, "mailbox-model");
     assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);

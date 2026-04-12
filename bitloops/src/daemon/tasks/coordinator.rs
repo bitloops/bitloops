@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -206,7 +207,11 @@ impl DevqlTaskCoordinator {
         })
     }
 
-    pub(crate) fn activate_worker(self: &Arc<Self>, hub: Option<Arc<SubscriptionHub>>) {
+    pub(crate) fn activate_worker(
+        self: &Arc<Self>,
+        config_root: &Path,
+        hub: Option<Arc<SubscriptionHub>>,
+    ) {
         if let Some(hub) = hub {
             self.register_subscription_hub(hub);
         }
@@ -216,17 +221,21 @@ impl DevqlTaskCoordinator {
         if let Err(err) = self.recover_running_tasks() {
             log::warn!("failed to recover queued DevQL tasks: {err:#}");
         }
+        if let Err(err) = crate::host::devql::recover_running_producer_spool_jobs(config_root) {
+            log::warn!("failed to recover DevQL producer spool jobs: {err:#}");
+        }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
             log::warn!("DevQL task worker activation requested without an active tokio runtime");
             return;
         };
         let coordinator = Arc::clone(self);
+        let producer_spool_config_root = config_root.to_path_buf();
         handle.spawn(async move {
             let _guard = WorkerStartedGuard {
                 coordinator: Arc::clone(&coordinator),
             };
-            coordinator.run_loop().await;
+            coordinator.run_loop(producer_spool_config_root).await;
         });
     }
 
@@ -394,20 +403,45 @@ impl DevqlTaskCoordinator {
         })
     }
 
-    async fn run_loop(self: Arc<Self>) {
+    async fn run_loop(self: Arc<Self>, producer_spool_config_root: std::path::PathBuf) {
         loop {
+            let mut made_progress = false;
+
+            match self.schedule_pending_producer_spool_jobs(&producer_spool_config_root) {
+                Ok(progressed) => made_progress |= progressed,
+                Err(err) => log::warn!("daemon DevQL producer spool worker error: {err:#}"),
+            }
             match self.schedule_pending_tasks() {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(err) => {
-                    log::warn!("daemon DevQL task worker error: {err:#}");
-                }
+                Ok(progressed) => made_progress |= progressed,
+                Err(err) => log::warn!("daemon DevQL task worker error: {err:#}"),
+            }
+
+            if made_progress {
+                continue;
             }
             tokio::select! {
                 _ = self.notify.notified() => {},
                 _ = sleep(WORKER_POLL_INTERVAL) => {},
             }
         }
+    }
+
+    fn schedule_pending_producer_spool_jobs(self: &Arc<Self>, config_root: &Path) -> Result<bool> {
+        let jobs = crate::host::devql::claim_next_producer_spool_jobs(config_root)?;
+        if jobs.is_empty() {
+            return Ok(false);
+        }
+
+        for job in jobs {
+            let coordinator = Arc::clone(self);
+            tokio::spawn(async move {
+                if let Err(err) = coordinator.run_producer_spool_job(job).await {
+                    log::warn!("DevQL producer spool execution failed: {err:#}");
+                }
+            });
+        }
+
+        Ok(true)
     }
 
     fn schedule_pending_tasks(self: &Arc<Self>) -> Result<bool> {
@@ -456,6 +490,113 @@ impl DevqlTaskCoordinator {
             DevqlTaskKind::Ingest => self.run_ingest_task(task).await,
             DevqlTaskKind::EmbeddingsBootstrap => self.run_embeddings_bootstrap_task(task).await,
         }
+    }
+
+    async fn run_producer_spool_job(
+        self: Arc<Self>,
+        job: crate::host::devql::ProducerSpoolJobRecord,
+    ) -> Result<()> {
+        let outcome = self.process_producer_spool_job(&job).await;
+        match outcome {
+            Ok(()) => {
+                if let Err(err) =
+                    crate::host::devql::delete_producer_spool_job(&job.config_root, &job.job_id)
+                {
+                    log::warn!(
+                        "failed to delete completed DevQL producer spool job `{}`: {err:#}",
+                        job.job_id
+                    );
+                    if let Err(requeue_err) = crate::host::devql::requeue_producer_spool_job(
+                        &job.config_root,
+                        &job.job_id,
+                        &err,
+                    ) {
+                        log::warn!(
+                            "failed to requeue DevQL producer spool job `{}` after delete failure: {requeue_err:#}",
+                            job.job_id
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                log::warn!("DevQL producer spool job `{}` failed: {err:#}", job.job_id);
+                if let Err(requeue_err) = crate::host::devql::requeue_producer_spool_job(
+                    &job.config_root,
+                    &job.job_id,
+                    &err,
+                ) {
+                    log::warn!(
+                        "failed to requeue DevQL producer spool job `{}`: {requeue_err:#}",
+                        job.job_id
+                    );
+                }
+            }
+        }
+
+        self.notify.notify_waiters();
+        Ok(())
+    }
+
+    async fn process_producer_spool_job(
+        &self,
+        job: &crate::host::devql::ProducerSpoolJobRecord,
+    ) -> Result<()> {
+        match &job.payload {
+            crate::host::devql::ProducerSpoolJobPayload::Task { source, spec } => {
+                let cfg = self.devql_config_from_producer_spool_job(job)?;
+                self.enqueue(&cfg, *source, spec.clone())?;
+                Ok(())
+            }
+            crate::host::devql::ProducerSpoolJobPayload::PostCommitRefresh {
+                commit_sha,
+                changed_files,
+            } => {
+                let cfg = self.devql_config_from_producer_spool_job(job)?;
+                crate::host::checkpoints::strategy::manual_commit::execute_devql_post_commit_refresh(
+                    &cfg,
+                    commit_sha,
+                    changed_files,
+                )
+                .await
+            }
+            crate::host::devql::ProducerSpoolJobPayload::PostMergeRefresh {
+                head_sha,
+                changed_files,
+            } => {
+                let cfg = self.devql_config_from_producer_spool_job(job)?;
+                crate::host::checkpoints::strategy::manual_commit::execute_devql_post_merge_refresh(
+                    &cfg,
+                    head_sha,
+                    changed_files,
+                )
+                .await
+            }
+            crate::host::devql::ProducerSpoolJobPayload::PrePushSync {
+                remote,
+                stdin_lines,
+            } => {
+                crate::host::checkpoints::strategy::manual_commit::execute_devql_pre_push_sync(
+                    &job.repo_root,
+                    remote,
+                    stdin_lines,
+                )
+                .await
+            }
+        }
+    }
+
+    fn devql_config_from_producer_spool_job(
+        &self,
+        job: &crate::host::devql::ProducerSpoolJobRecord,
+    ) -> Result<DevqlConfig> {
+        let repo = RepoIdentity {
+            repo_id: job.repo_id.clone(),
+            name: job.repo_name.clone(),
+            provider: job.repo_provider.clone(),
+            organization: job.repo_organisation.clone(),
+            identity: job.repo_identity.clone(),
+        };
+        DevqlConfig::from_roots(job.config_root.clone(), job.repo_root.clone(), repo)
     }
 
     async fn run_sync_task(self: Arc<Self>, task: DevqlTaskRecord) -> Result<()> {
@@ -624,6 +765,12 @@ impl DevqlTaskCoordinator {
             .embeddings_bootstrap_spec()
             .cloned()
             .ok_or_else(|| anyhow!("embeddings bootstrap task missing spec"))?;
+        let catch_up_config_path = spec.config_path.clone();
+        let needs_repo_catch_up =
+            crate::daemon::embeddings_bootstrap::repo_catch_up_required_for_bootstrap(
+                &spec.config_path,
+                &spec.profile_name,
+            )?;
         let task_id = task.task_id.clone();
         let runtime_store = self.runtime_store.clone();
         let repo_root = task.repo_root.clone();
@@ -661,7 +808,16 @@ impl DevqlTaskCoordinator {
             .await?;
 
         match final_result {
-            Ok(result) => self.finish_embeddings_bootstrap_task_completed(&task.task_id, result)?,
+            Ok(result) => {
+                if needs_repo_catch_up {
+                    crate::daemon::embeddings_bootstrap::enqueue_repo_catch_up_after_bootstrap(
+                        &task.repo_root,
+                        &catch_up_config_path,
+                    )
+                    .await?;
+                }
+                self.finish_embeddings_bootstrap_task_completed(&task.task_id, result)?
+            }
             Err(err) => self.finish_task_failed(&task.task_id, err)?,
         }
 
