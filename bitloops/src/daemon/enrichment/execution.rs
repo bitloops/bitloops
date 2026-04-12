@@ -32,7 +32,8 @@ use crate::host::devql::{
 };
 use crate::host::runtime_store::WorkplaneJobRecord;
 
-use super::{EnrichmentJobTarget, FollowUpJob, JobExecutionOutcome, fallback_repo_identity};
+use super::workplane::fallback_repo_identity;
+use super::{EnrichmentJobTarget, FollowUpJob, JobExecutionOutcome};
 
 #[cfg(test)]
 use anyhow::Context;
