@@ -4,12 +4,11 @@ use crate::host::capability_host::{
     ReconcileMode,
 };
 
-use super::runtime_config::{embeddings_enabled, resolve_semantic_clones_config};
+use super::runtime_config::resolve_semantic_clones_config;
 use super::types::{SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID};
-use crate::capability_packs::semantic_clones::features as semantic_features;
-use crate::config::resolve_bound_daemon_config_root_for_repo;
-use std::collections::BTreeMap;
-
+use super::workplane::{
+    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
+};
 pub struct SemanticClonesCurrentStateConsumer;
 
 impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
@@ -31,7 +30,8 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 SEMANTIC_CLONES_CAPABILITY_ID,
                 context.config_root.clone(),
             ));
-            if !embeddings_enabled(&config) {
+            let intent = resolve_effective_mailbox_intent(context.workplane.as_ref(), &config)?;
+            if !intent.has_any_pipeline_intent() {
                 super::pipeline::delete_repo_current_symbol_clone_edges(
                     context.storage.as_ref(),
                     &request.repo_id,
@@ -40,6 +40,13 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 return Ok(CurrentStateConsumerResult::applied(
                     request.to_generation_seq_inclusive,
                 ));
+            }
+            if !intent.has_any_embedding_intent() {
+                super::pipeline::delete_repo_current_symbol_clone_edges(
+                    context.storage.as_ref(),
+                    &request.repo_id,
+                )
+                .await?;
             }
 
             let inputs = match request.reconcile_mode {
@@ -72,55 +79,11 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 ));
             }
 
-            let input_hashes = build_input_hashes(&inputs);
-            let config_root =
-                resolve_bound_daemon_config_root_for_repo(request.repo_root.as_path())?;
-            let target = crate::daemon::EnrichmentJobTarget::new(
-                config_root,
-                request.repo_root.clone(),
-                request.repo_id.clone(),
-                request
-                    .active_branch
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-            );
-            let enrichment = crate::daemon::shared_enrichment_coordinator();
-            enrichment
-                .enqueue_symbol_embeddings(
-                    target.clone(),
-                    inputs.clone(),
-                    input_hashes.clone(),
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                )
-                .await?;
-            enrichment
-                .enqueue_symbol_embeddings(
-                    target,
-                    inputs,
-                    input_hashes,
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-                )
-                .await?;
+            enqueue_summary_refresh_jobs(context.workplane.as_ref(), &inputs, &intent)?;
+            enqueue_embedding_jobs(context.workplane.as_ref(), &inputs, &intent)?;
             Ok(CurrentStateConsumerResult::applied(
                 request.to_generation_seq_inclusive,
             ))
         })
     }
-}
-
-fn build_input_hashes(
-    inputs: &[semantic_features::SemanticFeatureInput],
-) -> BTreeMap<String, String> {
-    inputs
-        .iter()
-        .map(|input| {
-            (
-                input.artefact_id.clone(),
-                semantic_features::build_semantic_feature_input_hash(
-                    input,
-                    &semantic_features::NoopSemanticSummaryProvider,
-                ),
-            )
-        })
-        .collect()
 }

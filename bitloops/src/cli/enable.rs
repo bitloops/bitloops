@@ -10,6 +10,7 @@ use clap::Args;
 use crate::adapters::agents::AgentAdapterRegistry;
 #[cfg(test)]
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
 use crate::cli::embeddings::{
     EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
 };
@@ -196,6 +197,8 @@ pub(crate) async fn run_with_io(
     writeln!(out, "Updated project config: {}", target_path.display())?;
 
     if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
+        activate_embedding_pipeline_mailboxes(&git_root, "enable")
+            .context("activating semantic clones embedding mailboxes for enable")?;
         let (scope, queued) = enqueue_embeddings_bootstrap_task(
             &cwd,
             None,

@@ -48,6 +48,8 @@ mod commands_refresh;
 mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+#[path = "devql/producer_spool.rs"]
+mod producer_spool;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
 mod types;
@@ -78,6 +80,13 @@ pub use self::commands_sync::{
     run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
+pub(crate) use self::producer_spool::{
+    ProducerSpoolJobPayload, ProducerSpoolJobRecord, claim_next_producer_spool_jobs,
+    delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
+    enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
+    enqueue_spooled_sync_task_for_repo_root, producer_spool_schema_sql_sqlite,
+    recover_running_producer_spool_jobs, requeue_producer_spool_job,
+};
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};

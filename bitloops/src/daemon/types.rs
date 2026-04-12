@@ -295,10 +295,30 @@ impl Default for EnrichmentQueueState {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct FailedEmbeddingJobSummary {
+    pub job_id: String,
+    pub repo_id: String,
+    pub branch: String,
+    pub representation_kind: String,
+    pub artefact_count: u64,
+    pub attempts: u32,
+    pub error: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BlockedMailboxStatus {
+    pub mailbox_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct EnrichmentQueueStatus {
     pub state: EnrichmentQueueState,
     pub persisted: bool,
     pub embeddings_gate: Option<EmbeddingsBootstrapGateStatus>,
+    pub blocked_mailboxes: Vec<BlockedMailboxStatus>,
+    pub last_failed_embedding: Option<FailedEmbeddingJobSummary>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

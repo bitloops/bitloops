@@ -67,9 +67,26 @@ mod tests {
         RemovedFile, SyncArtefactDiff, SyncCompletedPayload, SyncFileDiff,
     };
     use crate::host::capability_host::gateways::{
-        DefaultHostServicesGateway, EmptyLanguageServicesGateway,
+        CapabilityMailboxStatus, CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneGateway,
+        CapabilityWorkplaneJob, DefaultHostServicesGateway, EmptyLanguageServicesGateway,
     };
     use crate::host::devql::RelationalStorage;
+    use std::collections::BTreeMap;
+
+    struct NoopCapabilityWorkplaneGateway;
+
+    impl CapabilityWorkplaneGateway for NoopCapabilityWorkplaneGateway {
+        fn enqueue_jobs(
+            &self,
+            _jobs: Vec<CapabilityWorkplaneJob>,
+        ) -> anyhow::Result<CapabilityWorkplaneEnqueueResult> {
+            Ok(CapabilityWorkplaneEnqueueResult::default())
+        }
+
+        fn mailbox_status(&self) -> anyhow::Result<BTreeMap<String, CapabilityMailboxStatus>> {
+            Ok(BTreeMap::new())
+        }
+    }
 
     struct CountingHandler {
         count: Arc<AtomicUsize>,
@@ -158,6 +175,7 @@ mod tests {
             ),
             language_services: Arc::new(EmptyLanguageServicesGateway),
             host_services: Arc::new(DefaultHostServicesGateway::new("repo-1")),
+            workplane: Arc::new(NoopCapabilityWorkplaneGateway),
         })
     }
 

@@ -6,22 +6,20 @@ use clap::Args;
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
 
-mod agent_hooks;
-mod agent_selection;
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::adapters::agents::claude_code::git_hooks;
-use crate::cli::embeddings::{
-    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
-    install_or_bootstrap_embeddings,
-};
+use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
 use crate::cli::telemetry_consent;
-use crate::config::settings::{
-    DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings_with_daemon_binding,
-};
-use crate::config::{
-    REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
-};
-use crate::devql_transport::discover_slim_cli_repo_scope;
+use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
+use crate::devql_transport::SlimCliRepoScope;
+
+#[path = "init/agent_hooks.rs"]
+mod agent_hooks;
+#[path = "init/agent_selection.rs"]
+mod agent_selection;
+#[path = "init/progress.rs"]
+mod progress;
+#[path = "init/workflow.rs"]
+mod workflow;
 
 pub use agent_selection::detect_or_select_agent;
 
@@ -30,6 +28,12 @@ const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
 #[cfg(test)]
 type InstallDefaultDaemonHook = dyn Fn(bool) -> Result<()> + 'static;
+
+#[derive(Clone)]
+struct QueuedEmbeddingsBootstrapTask {
+    scope: SlimCliRepoScope,
+    task_id: String,
+}
 
 #[cfg(test)]
 thread_local! {
@@ -131,218 +135,7 @@ async fn run_with_io_async_for_project_root(
     input: &mut dyn BufRead,
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
-    let git_root = crate::cli::enable::find_repo_root(project_root)?;
-    let daemon_config_existed_at_entry = default_daemon_config_exists()?;
-    let telemetry_choice =
-        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
-    if args.backfill.is_some() && args.ingest == Some(false) {
-        bail!("`bitloops init --backfill` cannot be combined with `--ingest=false`.");
-    }
-    let effective_ingest = if args.backfill.is_some() {
-        Some(true)
-    } else {
-        args.ingest
-    };
-
-    if (args.sync.is_none() || effective_ingest.is_none())
-        && !telemetry_consent::can_prompt_interactively()
-    {
-        bail!(
-            "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
-        );
-    }
-
-    if !daemon_config_existed_at_entry
-        && args.install_default_daemon
-        && telemetry_choice.is_none()
-        && !telemetry_consent::can_prompt_interactively()
-    {
-        bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
-    }
-
-    maybe_install_default_daemon(args.install_default_daemon).await?;
-    telemetry_consent::ensure_default_daemon_running().await?;
-    let daemon_config_path = bound_running_daemon_config_path().await?;
-    if daemon_config_existed_at_entry {
-        telemetry_consent::ensure_existing_config_telemetry_consent(
-            project_root,
-            telemetry_choice,
-            out,
-            input,
-        )
-        .await?;
-    } else if let Some(choice) = telemetry_choice {
-        let persisted =
-            telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, Some(choice))
-                .await?;
-        if persisted.needs_prompt {
-            bail!("failed to persist telemetry consent");
-        }
-    }
-    ensure_repo_local_policy_excluded(&git_root, project_root)?;
-
-    let selected_agents = if let Some(agent) = args.agent.as_deref() {
-        vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
-    } else {
-        detect_or_select_agent(project_root, out, select_fn)?
-    };
-    let strategy = load_settings(project_root)
-        .map(|settings| settings.strategy)
-        .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
-    let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
-    write_project_bootstrap_settings_with_daemon_binding(
-        &local_policy_path,
-        &strategy,
-        &selected_agents,
-        Some(&daemon_config_path),
-    )?;
-
-    let settings = load_settings(project_root).unwrap_or_default();
-    let git_count = git_hooks::install_git_hooks(&git_root, settings.local_dev)?;
-    if git_count > 0 {
-        writeln!(out, "Installed {git_count} git hook(s).")?;
-    }
-
-    reconcile_agent_hooks(
-        project_root,
-        &selected_agents,
-        settings.local_dev,
-        args.force,
-        out,
-    )?;
-
-    let should_install_embeddings = should_install_embeddings_during_init(
-        project_root,
-        args.install_default_daemon,
-        out,
-        input,
-    )?;
-    if should_install_embeddings {
-        if args.install_default_daemon {
-            enqueue_embeddings_bootstrap_during_init(project_root, out).await?;
-        } else {
-            install_embeddings_during_init(project_root, out)?;
-        }
-    }
-
-    let should_sync = should_run_initial_sync(args.sync, out, input)?;
-    let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
-    if should_sync || should_ingest {
-        let scope = discover_slim_cli_repo_scope(Some(project_root))?;
-        if should_sync {
-            writeln!(out, "Starting initial DevQL sync...")?;
-            out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
-                &scope, false, None, false, false, "init", false,
-            )
-            .await?;
-            if let Some(task) =
-                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task.clone()).await?
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
-            }
-        }
-        if should_ingest {
-            if should_sync {
-                writeln!(out, "Starting initial DevQL ingest after sync...")?;
-            } else {
-                writeln!(out, "Starting initial DevQL ingest...")?;
-            }
-            out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                &scope,
-                Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                false,
-            )
-            .await?;
-            if let Some(task) =
-                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
-    if let Some(runtime) = crate::daemon::status().await?.runtime {
-        return Ok(runtime
-            .config_path
-            .canonicalize()
-            .unwrap_or(runtime.config_path));
-    }
-
-    #[cfg(test)]
-    if crate::cli::telemetry_consent::test_assume_daemon_running_override() == Some(true) {
-        let config_path = crate::config::ensure_daemon_config_exists()?;
-        return Ok(config_path.canonicalize().unwrap_or(config_path));
-    }
-
-    #[cfg(test)]
-    if std::env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
-    {
-        let config_path = crate::config::ensure_daemon_config_exists()?;
-        return Ok(config_path.canonicalize().unwrap_or(config_path));
-    }
-
-    let runtime = crate::daemon::status()
-        .await?
-        .runtime
-        .context("Bitloops daemon is not running")?;
-    Ok(runtime
-        .config_path
-        .canonicalize()
-        .unwrap_or(runtime.config_path))
-}
-
-async fn enqueue_embeddings_bootstrap_during_init(
-    project_root: &Path,
-    out: &mut dyn Write,
-) -> Result<()> {
-    writeln!(out, "Queueing embeddings bootstrap in the daemon...")?;
-    let (_scope, queued) =
-        enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
-            .await?;
-    let phase = queued
-        .task
-        .embeddings_bootstrap_progress()
-        .map(|progress| progress.phase.as_str())
-        .unwrap_or("queued");
-    writeln!(out, "Embeddings bootstrap task: {}", queued.task.task_id)?;
-    writeln!(out, "Embeddings bootstrap phase: {phase}")?;
-    out.flush()?;
-    Ok(())
-}
-
-fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
-    writeln!(out, "Preparing local embeddings setup...")?;
-    writeln!(
-        out,
-        "This can take a moment if the managed runtime needs to be downloaded."
-    )?;
-    out.flush()?;
-    match install_or_bootstrap_embeddings(project_root) {
-        Ok(lines) => {
-            for line in lines {
-                writeln!(out, "{line}")?;
-            }
-            Ok(())
-        }
-        Err(err) => {
-            bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
-        }
-    }
+    workflow::run_for_project_root(args, project_root, out, input, select_fn).await
 }
 
 fn should_install_embeddings_during_init(

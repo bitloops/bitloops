@@ -9,14 +9,15 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, SummaryProviderMode, embeddings_enabled, resolve_embedding_provider,
     resolve_semantic_clones_config, resolve_summary_provider,
 };
+use crate::capability_packs::semantic_clones::workplane::{
+    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
+};
 use crate::capability_packs::semantic_clones::{
     RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
     determine_repo_embedding_sync_action, load_active_embedding_setup,
     load_current_repo_embedding_states, load_semantic_feature_inputs_for_current_repo,
     persist_active_embedding_setup,
 };
-use crate::config::SemanticSummaryMode;
-
 pub async fn run_ingest(cfg: &DevqlConfig) -> Result<()> {
     let summary = execute_ingest(cfg).await?;
     println!("{}", format_ingestion_summary(&summary));
@@ -93,6 +94,18 @@ async fn execute_ingest_inner(
     let semantic_clones = resolve_semantic_clones_config(
         &capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID),
     );
+    let semantic_clones_workplane = if enrichment.is_some() {
+        Some(capability_host.build_workplane_gateway(SEMANTIC_CLONES_CAPABILITY_ID)?)
+    } else {
+        None
+    };
+    let semantic_clones_workplane_intent = match semantic_clones_workplane.as_ref() {
+        Some(workplane) => Some(resolve_effective_mailbox_intent(
+            workplane.as_ref(),
+            &semantic_clones,
+        )?),
+        None => None,
+    };
     let semantic_inference = capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
     let preferred_representation_kind =
         crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code;
@@ -137,7 +150,7 @@ async fn execute_ingest_inner(
         Err(err) => return Err(err).context("resolving HEAD for commit history ingest"),
     };
     let active_branch = checked_out_branch_name(&cfg.repo_root);
-    let active_branch_for_enqueue = active_branch
+    let _active_branch_for_enqueue = active_branch
         .clone()
         .unwrap_or_else(|| active_branch_name(&cfg.repo_root));
     let mut commits = match explicit_commits {
@@ -341,40 +354,18 @@ async fn execute_ingest_inner(
                             knowledge_context.ingester_id, knowledge_context.capability_pack_id
                         )
                     })?;
-                    if let Some(enrichment) = enrichment.as_ref() {
-                        let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                            cfg.daemon_config_root.clone(),
-                            cfg.repo_root.clone(),
-                            cfg.repo.repo_id.clone(),
-                            active_branch_for_enqueue.clone(),
-                        );
-                        if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
-                            enrichment
-                                .enqueue_semantic_summaries(
-                                    enqueue_target.clone(),
-                                    semantic_feature_inputs.clone(),
-                                    input_hashes.clone(),
-                                )
-                                .await?;
-                        }
-
-                        if embedding_outputs_enabled {
-                            enrichment
-                                .enqueue_symbol_embeddings(
-                                    enqueue_target.clone(),
-                                    semantic_feature_inputs.clone(),
-                                    input_hashes.clone(),
-                                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                                )
-                                .await?;
-                            enrichment
-                                .enqueue_symbol_embeddings(
-                                    enqueue_target,
-                                    semantic_feature_inputs.clone(),
-                                    input_hashes.clone(),
-                                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-                                )
-                                .await?;
+                    if let Some(workplane) = semantic_clones_workplane.as_ref() {
+                        if let Some(intent) = semantic_clones_workplane_intent.as_ref() {
+                            enqueue_summary_refresh_jobs(
+                                workplane.as_ref(),
+                                &semantic_feature_inputs,
+                                intent,
+                            )?;
+                            enqueue_embedding_jobs(
+                                workplane.as_ref(),
+                                &semantic_feature_inputs,
+                                intent,
+                            )?;
                         }
                     } else if direct_embedding_provider_available {
                         let code_refresh = run_symbol_embeddings_refresh(
@@ -527,8 +518,10 @@ async fn execute_ingest_inner(
         );
     }
 
-    if let Some(enrichment) = enrichment.as_ref()
-        && embedding_outputs_enabled
+    if let Some(workplane) = semantic_clones_workplane.as_ref()
+        && semantic_clones_workplane_intent
+            .as_ref()
+            .is_some_and(|intent| intent.has_any_embedding_intent())
         && counters.artefacts_upserted == 0
         && load_active_embedding_setup(
             &relational,
@@ -550,7 +543,7 @@ async fn execute_ingest_inner(
                 &semantic_inference,
                 SummaryProviderMode::DeterministicOnly,
             )?;
-            let bootstrap_input_hashes = bootstrap_inputs
+            let _bootstrap_input_hashes = bootstrap_inputs
                 .iter()
                 .map(|input| {
                     (
@@ -562,28 +555,10 @@ async fn execute_ingest_inner(
                     )
                 })
                 .collect::<std::collections::BTreeMap<_, _>>();
-            let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                cfg.daemon_config_root.clone(),
-                cfg.repo_root.clone(),
-                cfg.repo.repo_id.clone(),
-                active_branch_for_enqueue.clone(),
-            );
-            enrichment
-                .enqueue_symbol_embeddings(
-                    enqueue_target.clone(),
-                    bootstrap_inputs.clone(),
-                    bootstrap_input_hashes.clone(),
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                )
-                .await?;
-            enrichment
-                .enqueue_symbol_embeddings(
-                    enqueue_target,
-                    bootstrap_inputs,
-                    bootstrap_input_hashes,
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-                )
-                .await?;
+            if let Some(intent) = semantic_clones_workplane_intent.as_ref() {
+                enqueue_summary_refresh_jobs(workplane.as_ref(), &bootstrap_inputs, intent)?;
+                enqueue_embedding_jobs(workplane.as_ref(), &bootstrap_inputs, intent)?;
+            }
         }
     }
 

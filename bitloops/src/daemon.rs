@@ -78,9 +78,10 @@ pub use self::types::{
     DevqlTaskStatus, EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus,
     EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
     EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, IngestTaskSpec, InternalDaemonProcessArgs,
-    InternalDaemonSupervisorArgs, RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind,
-    SupervisorRuntimeState, SupervisorServiceMetadata, SyncTaskMode, SyncTaskSpec,
+    EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
+    InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, RepoTaskControlState,
+    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
+    SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -261,7 +262,7 @@ pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
 }
 
 pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
-    CapabilityEventCoordinator::shared().snapshot(repo_id)
+    CapabilityEventCoordinator::try_shared()?.snapshot(repo_id)
 }
 
 pub fn current_state_consumer_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
@@ -296,9 +297,12 @@ pub fn shared_devql_task_coordinator() -> Arc<DevqlTaskCoordinator> {
     DevqlTaskCoordinator::shared()
 }
 
-pub(crate) fn activate_task_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
+pub(crate) fn activate_task_worker(
+    config_root: &Path,
+    subscription_hub: Arc<crate::graphql::SubscriptionHub>,
+) {
     CapabilityEventCoordinator::shared().activate_worker();
-    DevqlTaskCoordinator::shared().activate_worker(Some(subscription_hub));
+    DevqlTaskCoordinator::shared().activate_worker(config_root, Some(subscription_hub));
 }
 
 pub fn devql_task_status(repo_id: Option<&str>) -> Result<DevqlTaskQueueStatus> {

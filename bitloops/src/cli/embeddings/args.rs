@@ -4,6 +4,7 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
 use crate::cli::enable::find_repo_root;
 use crate::cli::telemetry_consent;
 use crate::config::{
@@ -73,6 +74,8 @@ pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
 
     match command {
         EmbeddingsCommand::Install(_args) => {
+            activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_install")
+                .context("activating semantic clones embedding mailboxes for embeddings install")?;
             let (scope, queued) =
                 enqueue_embeddings_bootstrap_task(&repo_root, None, DevqlTaskSource::ManualCli)
                     .await?;
@@ -91,6 +94,8 @@ pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
             Ok(())
         }
         EmbeddingsCommand::Pull(args) => {
+            activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_pull")
+                .context("activating semantic clones embedding mailboxes for embeddings pull")?;
             let (scope, queued) = enqueue_embeddings_bootstrap_task(
                 &repo_root,
                 Some(args.profile.as_str()),

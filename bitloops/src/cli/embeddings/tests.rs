@@ -739,14 +739,19 @@ fn install_or_bootstrap_embeddings_rolls_back_when_runtime_bootstrap_fails() {
     let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
     let original = fs::read_to_string(&config_path).expect("read original config");
 
-    let err =
-        install_or_bootstrap_embeddings(repo.path()).expect_err("runtime bootstrap should fail");
-    let after = fs::read_to_string(&config_path).expect("read rolled-back config");
+    with_managed_embeddings_install_hook(
+        |_repo_root| anyhow::bail!("simulated managed runtime install failure"),
+        || {
+            let err = install_or_bootstrap_embeddings(repo.path())
+                .expect_err("runtime bootstrap should fail");
+            let after = fs::read_to_string(&config_path).expect("read rolled-back config");
 
-    assert_eq!(after, original);
-    assert!(
-        format!("{err:#}").contains("spawning standalone `bitloops-embeddings` runtime"),
-        "unexpected error: {err:#}"
+            assert_eq!(after, original);
+            assert!(
+                format!("{err:#}").contains("simulated managed runtime install failure"),
+                "unexpected error: {err:#}"
+            );
+        },
     );
 }
 

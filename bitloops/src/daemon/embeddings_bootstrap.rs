@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use crate::cli::embeddings::{
     PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
@@ -91,7 +91,6 @@ pub(crate) fn gate_status_for_config_path(
     let last_updated_unix = persisted_entry
         .map(|entry| entry.last_updated_unix)
         .unwrap_or_default();
-
     let capability = match embedding_capability_for_config_path(&config_path) {
         Ok(capability) => capability,
         Err(err) => {
@@ -164,6 +163,25 @@ pub(crate) fn gate_status_for_config_path(
             profile_name: Some(profile_name),
             config_path: Some(config_path),
             last_error: None,
+            last_updated_unix,
+        });
+    }
+
+    if let Some(entry) = persisted_entry
+        && entry.readiness == EmbeddingsBootstrapReadiness::Pending
+        && entry.active_task_id.is_some()
+    {
+        return Ok(EmbeddingsBootstrapGateStatus {
+            blocked: true,
+            readiness: Some(EmbeddingsBootstrapReadiness::Pending),
+            reason: Some(format!(
+                "Managed embeddings runtime is still bootstrapping via task `{}`",
+                entry.active_task_id.as_deref().unwrap_or_default()
+            )),
+            active_task_id: entry.active_task_id.clone(),
+            profile_name: Some(entry.profile_name.clone()),
+            config_path: Some(config_path),
+            last_error: entry.last_error.clone(),
             last_updated_unix,
         });
     }
@@ -241,17 +259,6 @@ pub(crate) fn gate_status_for_enrichment_queue(
     gate_status_for_config_path(runtime_store, &config_path).map(Some)
 }
 
-pub(crate) fn embeddings_blocked_for_config_root(
-    runtime_store: &DaemonSqliteRuntimeStore,
-    config_root: &Path,
-) -> Result<bool> {
-    let status = gate_status_for_config_path(
-        runtime_store,
-        &config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
-    )?;
-    Ok(status.blocked)
-}
-
 fn execute_bootstrap_flow<R>(
     repo_root: &Path,
     config_path: &Path,
@@ -294,7 +301,7 @@ where
                     target_profile_name
                 ),
             }),
-            DaemonEmbeddingsInstallMode::WarmExisting | DaemonEmbeddingsInstallMode::Bootstrap => {
+            DaemonEmbeddingsInstallMode::WarmExisting => {
                 let capability = embedding_capability_for_config_path(config_path)?;
                 warm_existing_profile(
                     repo_root,
@@ -304,6 +311,46 @@ where
                     report,
                     Some(install_plan.mode),
                 )
+            }
+            DaemonEmbeddingsInstallMode::Bootstrap => {
+                let ensure =
+                    ensure_managed_embeddings_runtime_with_progress(repo_root, None, &mut *report)?;
+                report(EmbeddingsBootstrapProgress {
+                    phase: EmbeddingsBootstrapPhase::RewritingRuntime,
+                    version: Some(ensure.install.version.clone()),
+                    message: Some(format!(
+                        "Applying embeddings config in {}",
+                        config_path.display()
+                    )),
+                    ..Default::default()
+                })?;
+                install_plan
+                    .apply_with_managed_runtime_path(&ensure.install.binary_path)
+                    .with_context(|| {
+                        format!(
+                            "applying staged embeddings config in {}",
+                            config_path.display()
+                        )
+                    })?;
+                let capability = embedding_capability_for_config_path(config_path)?;
+                let pulled = pull_profile_with_config_path_and_progress(
+                    repo_root,
+                    config_path,
+                    &capability,
+                    &target_profile_name,
+                    &mut *report,
+                )?;
+                Ok(EmbeddingsBootstrapResult {
+                    version: Some(ensure.install.version.clone()),
+                    binary_path: Some(ensure.install.binary_path.clone()),
+                    cache_dir: Some(pulled.cache_dir),
+                    runtime_name: Some(pulled.runtime_name),
+                    model_name: Some(pulled.model_name),
+                    freshly_installed: ensure.install.freshly_installed,
+                    message: format!(
+                        "Configured embeddings and warmed profile `{target_profile_name}`."
+                    ),
+                })
             }
         }
     })();
@@ -390,7 +437,7 @@ fn should_install_managed_runtime(
 }
 
 fn already_ready_result(
-    runtime_store: &DaemonSqliteRuntimeStore,
+    _runtime_store: &DaemonSqliteRuntimeStore,
     config_path: &Path,
     profile_name: &str,
 ) -> Result<Option<EmbeddingsBootstrapResult>> {
@@ -401,8 +448,40 @@ fn already_ready_result(
     if selected_inference_profile_name(&capability) != Some(profile_name) {
         return Ok(None);
     }
-    let status = gate_status_for_config_path(runtime_store, config_path)?;
-    if status.readiness != Some(EmbeddingsBootstrapReadiness::Ready) {
+    let Some(profile) = capability.inference.profiles.get(profile_name) else {
+        return Ok(None);
+    };
+    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER
+        || profile.runtime.as_deref() != Some(BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+    {
+        return Ok(Some(EmbeddingsBootstrapResult {
+            version: None,
+            binary_path: None,
+            cache_dir: None,
+            runtime_name: None,
+            model_name: Some(profile_name.to_string()),
+            freshly_installed: false,
+            message: format!("Embeddings bootstrap already ready for profile `{profile_name}`."),
+        }));
+    }
+    if !managed_runtime_command_is_eligible(config_path)? {
+        return Ok(Some(EmbeddingsBootstrapResult {
+            version: None,
+            binary_path: None,
+            cache_dir: None,
+            runtime_name: None,
+            model_name: Some(profile_name.to_string()),
+            freshly_installed: false,
+            message: format!("Embeddings bootstrap already ready for profile `{profile_name}`."),
+        }));
+    }
+    let Some(runtime_name) = profile.runtime.as_deref() else {
+        return Ok(None);
+    };
+    let Some(runtime) = capability.inference.runtimes.get(runtime_name) else {
+        return Ok(None);
+    };
+    if managed_runtime_version_for_command(&runtime.command)?.is_none() {
         return Ok(None);
     }
     Ok(Some(EmbeddingsBootstrapResult {

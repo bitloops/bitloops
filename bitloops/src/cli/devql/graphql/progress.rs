@@ -99,7 +99,7 @@ impl TaskProgressRenderer {
     }
 }
 
-pub(super) fn format_live_task_status_line(
+pub(crate) fn format_live_task_status_line(
     task: &TaskGraphqlRecord,
     spinner: &str,
     terminal_width: Option<usize>,
@@ -224,7 +224,7 @@ pub(super) fn format_live_task_status_line(
     format!("{spinner} {fitted}")
 }
 
-pub(super) fn format_live_task_progress_bar_line(
+pub(crate) fn format_live_task_progress_bar_line(
     task: &TaskGraphqlRecord,
     spinner_index: usize,
     terminal_width: Option<usize>,
@@ -267,7 +267,9 @@ fn progress_ratio(task: &TaskGraphqlRecord) -> Option<(f64, i32, i32)> {
             }
         }),
         "ingest" => task.ingest_progress.as_ref().and_then(|progress| {
-            if progress.commits_total > 0 {
+            if progress.phase.eq_ignore_ascii_case("persisting") {
+                None
+            } else if progress.commits_total > 0 {
                 Some((
                     (progress.commits_processed as f64 / progress.commits_total as f64)
                         .clamp(0.0, 1.0),

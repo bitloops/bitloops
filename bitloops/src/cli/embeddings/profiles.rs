@@ -20,6 +20,8 @@ use super::managed::{
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 
+const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EmbeddingsInstallState {
     NotConfigured,
@@ -140,7 +142,8 @@ fn warm_local_profile<R>(
 where
     R: FnMut(crate::daemon::EmbeddingsBootstrapProgress) -> Result<()>,
 {
-    let profile = resolve_profile(capability, profile_name)?;
+    let capability = capability_with_local_warmup_timeouts(capability, profile_name);
+    let profile = resolve_profile(&capability, profile_name)?;
     ensure_local_profile(profile, profile_name)?;
 
     let cache_dir = local_profile_cache_dir(profile)?;
@@ -174,6 +177,28 @@ where
         runtime_name: provider.provider_name().to_string(),
         model_name: provider.model_name().to_string(),
     })
+}
+
+fn capability_with_local_warmup_timeouts(
+    capability: &EmbeddingCapabilityConfig,
+    profile_name: &str,
+) -> EmbeddingCapabilityConfig {
+    let mut adjusted = capability.clone();
+    let Some(profile) = adjusted.inference.profiles.get(profile_name) else {
+        return adjusted;
+    };
+    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER {
+        return adjusted;
+    }
+    let Some(runtime_name) = profile.runtime.clone() else {
+        return adjusted;
+    };
+    let Some(runtime) = adjusted.inference.runtimes.get_mut(&runtime_name) else {
+        return adjusted;
+    };
+    runtime.startup_timeout_secs = runtime.startup_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
+    runtime.request_timeout_secs = runtime.request_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
+    adjusted
 }
 
 pub(crate) fn doctor_profile(

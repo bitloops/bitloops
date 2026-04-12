@@ -1,6 +1,8 @@
-use crate::capability_packs::semantic_clones::features::SemanticFeatureInput;
 use crate::capability_packs::semantic_clones::health::SEMANTIC_CLONES_HEALTH_CHECKS;
-use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID;
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+};
 use crate::cli::devql::graphql::{
     with_graphql_executor_hook_async, with_ingest_daemon_bootstrap_hook_async,
 };
@@ -12,6 +14,9 @@ use crate::daemon;
 use crate::host::capability_host::runtime_contexts::LocalCapabilityRuntimeResources;
 use crate::host::devql::cucumber_world::DevqlBddWorld;
 use crate::host::devql::{RepoIdentity, deterministic_uuid};
+use crate::host::runtime_store::{
+    DaemonSqliteRuntimeStore, RepoSqliteRuntimeStore, WorkplaneJobStatus,
+};
 use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::process_state::enter_process_state;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
@@ -363,7 +368,7 @@ fn when_semantic_clone_health_checks_run(
         let results = with_scenario_process_state(world, || {
             let resources = LocalCapabilityRuntimeResources::new(&repo_root, repo)
                 .expect("build local capability runtime resources");
-            let ctx = resources.runtime_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
+            let ctx = resources.runtime_for_capability(SEMANTIC_CLONES_CAPABILITY_ID, &[]);
             SEMANTIC_CLONES_HEALTH_CHECKS
                 .iter()
                 .map(|check| (check.name.to_string(), (check.run)(&ctx)))
@@ -476,36 +481,6 @@ fn when_embeddings_clear_cache_runs_for_profile(
     })
 }
 
-fn build_dummy_semantic_input(repo_id: &str, artefact_id: &str) -> SemanticFeatureInput {
-    SemanticFeatureInput {
-        artefact_id: artefact_id.to_string(),
-        symbol_id: Some(format!("sym::{artefact_id}")),
-        repo_id: repo_id.to_string(),
-        blob_sha: format!("blob::{artefact_id}"),
-        path: format!("src/{artefact_id}.rs"),
-        language: "rust".to_string(),
-        canonical_kind: "function".to_string(),
-        language_kind: "function_item".to_string(),
-        symbol_fqn: format!("src/{artefact_id}.rs::{artefact_id}"),
-        name: artefact_id.to_string(),
-        signature: Some(format!("fn {artefact_id}()")),
-        modifiers: Vec::new(),
-        body: format!("fn {artefact_id}() {{}}"),
-        docstring: None,
-        parent_kind: None,
-        dependency_signals: Vec::new(),
-        content_hash: Some(format!("hash::{artefact_id}")),
-    }
-}
-
-fn enrichment_state_path(world: &mut DevqlBddWorld) -> PathBuf {
-    world
-        .scenario_state_override_root()
-        .join("bitloops")
-        .join("daemon")
-        .join("enrichment.json")
-}
-
 fn local_cache_dir(world: &mut DevqlBddWorld, profile_name: &str) -> PathBuf {
     let repo_root = ensure_scenario_repo(world);
     let capability = resolve_embedding_capability_config_for_repo(&repo_root);
@@ -539,105 +514,127 @@ fn given_enrichment_queue_state(
     Box::pin(async move {
         let repo_id = world.cfg.repo.repo_id.clone();
         let repo_root = ensure_scenario_repo(world);
-        let config_root = repo_root.clone();
-        let mut jobs = Vec::new();
-        for (index, row) in table_row_maps(&ctx).into_iter().enumerate() {
-            let kind = row
-                .get("kind")
-                .expect("kind column should exist")
-                .as_str()
-                .trim()
-                .to_string();
-            let status = row
-                .get("status")
-                .expect("status column should exist")
-                .as_str()
-                .trim()
-                .to_string();
-            let artefact_id = format!("artefact-{}", index + 1);
-            let input = build_dummy_semantic_input(&repo_id, &artefact_id);
-            let input_hashes =
-                json!({ input.artefact_id.clone(): format!("semantic-hash-{}", index + 1) });
-            let job = match kind.as_str() {
-                "semantic_summaries" => json!({
-                    "id": format!("semantic-job-{}", index + 1),
-                    "repo_id": repo_id,
-                    "repo_root": repo_root,
-                    "config_root": config_root,
-                    "branch": "main",
-                    "status": status,
-                    "attempts": 1,
-                    "error": serde_json::Value::Null,
-                    "created_at_unix": 1,
-                    "updated_at_unix": 1,
-                    "job": {
-                        "kind": "semantic_summaries",
-                        "inputs": [input],
-                        "input_hashes": input_hashes,
-                        "batch_key": artefact_id,
-                        "embedding_mode": "semantic_aware_once"
-                    }
-                }),
-                "symbol_embeddings" => json!({
-                    "id": format!("embedding-job-{}", index + 1),
-                    "repo_id": repo_id,
-                    "repo_root": repo_root,
-                    "config_root": config_root,
-                    "branch": "main",
-                    "status": status,
-                    "attempts": 1,
-                    "error": "simulated failure",
-                    "created_at_unix": 1,
-                    "updated_at_unix": 1,
-                    "job": {
-                        "kind": "symbol_embeddings",
-                        "inputs": [input],
-                        "input_hashes": input_hashes,
-                        "batch_key": artefact_id,
-                        "embedding_mode": "semantic_aware_once"
-                    }
-                }),
-                "clone_edges_rebuild" => json!({
-                    "id": format!("clone-job-{}", index + 1),
-                    "repo_id": repo_id,
-                    "repo_root": repo_root,
-                    "config_root": config_root,
-                    "branch": "main",
-                    "status": status,
-                    "attempts": 1,
-                    "error": "simulated failure",
-                    "created_at_unix": 1,
-                    "updated_at_unix": 1,
-                    "job": {
-                        "kind": "clone_edges_rebuild",
-                        "embedding_mode": "semantic_aware_once"
-                    }
-                }),
-                other => panic!("unsupported enrichment job kind `{other}`"),
-            };
-            jobs.push(job);
-        }
+        let config = config_with_fake_runtime(
+            world,
+            r#"[semantic_clones]
+summary_mode = "off"
+embedding_mode = "deterministic"
 
-        let state = json!({
-            "version": 1,
-            "paused_semantic": false,
-            "paused_embeddings": false,
-            "active_branch_by_repo": { world.cfg.repo.repo_id.clone(): "main" },
-            "jobs": jobs,
-            "retried_failed_jobs": 0,
-            "last_action": "seeded",
-            "paused_reason": serde_json::Value::Null,
-            "updated_at_unix": 1
+[semantic_clones.inference]
+code_embeddings = "local"
+summary_embeddings = "local"
+
+[inference.profiles.local]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bdd-test-model""#,
+        );
+        write_daemon_config(world, &config);
+        let daemon_config_root = daemon_config_path(world)
+            .parent()
+            .expect("daemon config should have parent")
+            .to_path_buf();
+
+        let rows = table_row_maps(&ctx);
+        with_scenario_process_state(world, || {
+            let runtime_store =
+                DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            runtime_store
+                .save_enrichment_queue_state(&crate::daemon::PersistedEnrichmentQueueState {
+                    version: 1,
+                    paused_semantic: false,
+                    paused_embeddings: false,
+                    active_branch_by_repo: std::collections::BTreeMap::new(),
+                    jobs: Vec::new(),
+                    retried_failed_jobs: 0,
+                    last_action: Some("seeded".to_string()),
+                    paused_reason: None,
+                    updated_at_unix: 1,
+                })
+                .expect("write enrichment control state");
+
+            let repo_store =
+                RepoSqliteRuntimeStore::open_for_roots(&daemon_config_root, &repo_root)
+                    .expect("open repo workplane store");
+            for (index, row) in rows.into_iter().enumerate() {
+                let kind = row
+                    .get("kind")
+                    .expect("kind column should exist")
+                    .as_str()
+                    .trim();
+                let status = WorkplaneJobStatus::parse(
+                    row.get("status")
+                        .expect("status column should exist")
+                        .as_str()
+                        .trim(),
+                );
+                let artefact_id = format!("artefact-{}", index + 1);
+                let (mailbox_name, payload, last_error) = match kind {
+                    "semantic_summaries" => (
+                        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                        json!({ "artefact_id": artefact_id }),
+                        None,
+                    ),
+                    "symbol_embeddings" => (
+                        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                        json!({ "artefact_id": artefact_id }),
+                        Some("simulated failure"),
+                    ),
+                    "clone_edges_rebuild" => (
+                        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+                        json!({}),
+                        Some("simulated failure"),
+                    ),
+                    other => panic!("unsupported enrichment job kind `{other}`"),
+                };
+                let job_id = format!("{mailbox_name}-{index}");
+                let dedupe_key = match mailbox_name {
+                    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => Some(mailbox_name.to_string()),
+                    _ => Some(format!("{mailbox_name}:{artefact_id}")),
+                };
+                let started_at_unix = (status == WorkplaneJobStatus::Running).then_some(1_i64);
+                let completed_at_unix = matches!(
+                    status,
+                    WorkplaneJobStatus::Completed | WorkplaneJobStatus::Failed
+                )
+                .then_some(1_i64);
+                repo_store
+                    .connect_repo_sqlite()
+                    .expect("connect repo workplane sqlite")
+                    .with_connection(|conn| {
+                        conn.execute(
+                            "INSERT INTO capability_workplane_jobs (
+                                 job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                                 dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                                 started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                                 lease_expires_at_unix, last_error
+                             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL, NULL, ?16)",
+                            rusqlite::params![
+                                job_id,
+                                &repo_id,
+                                repo_root.to_string_lossy().to_string(),
+                                daemon_config_root.to_string_lossy().to_string(),
+                                SEMANTIC_CLONES_CAPABILITY_ID,
+                                mailbox_name,
+                                dedupe_key,
+                                payload.to_string(),
+                                status.as_str(),
+                                1_u32,
+                                1_i64,
+                                1_i64,
+                                started_at_unix,
+                                1_i64,
+                                completed_at_unix,
+                                last_error,
+                            ],
+                        )
+                        .map(|_| ())
+                        .map_err(anyhow::Error::from)
+                    })
+                    .expect("insert seeded workplane job");
+            }
         });
-        let state_path = enrichment_state_path(world);
-        if let Some(parent) = state_path.parent() {
-            fs::create_dir_all(parent).expect("create enrichment state parent");
-        }
-        fs::write(
-            &state_path,
-            serde_json::to_vec_pretty(&state).expect("serialize enrichment state"),
-        )
-        .expect("write enrichment state");
     })
 }
 
