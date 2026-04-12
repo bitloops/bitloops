@@ -4,6 +4,7 @@ use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
@@ -282,6 +283,89 @@ request_timeout_secs = 5
         ),
     )
     .expect("write daemon config");
+}
+
+fn completed_embeddings_bootstrap_task_graphql_json(
+    task: &crate::daemon::DevqlTaskRecord,
+    message: String,
+) -> serde_json::Value {
+    let embeddings_bootstrap_spec = task.embeddings_bootstrap_spec().map(|spec| {
+        serde_json::json!({
+            "configPath": spec.config_path.display().to_string(),
+            "profileName": spec.profile_name,
+        })
+    });
+
+    serde_json::json!({
+        "taskId": task.task_id,
+        "repoId": task.repo_id,
+        "repoName": task.repo_name,
+        "repoIdentity": task.repo_identity,
+        "kind": task.kind.to_string().to_ascii_uppercase(),
+        "source": task.source.to_string(),
+        "status": "COMPLETED",
+        "submittedAtUnix": task.submitted_at_unix,
+        "startedAtUnix": task.started_at_unix.or(Some(task.submitted_at_unix)),
+        "updatedAtUnix": task.updated_at_unix.saturating_add(1),
+        "completedAtUnix": task.completed_at_unix.or(Some(task.updated_at_unix.saturating_add(1))),
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": embeddings_bootstrap_spec,
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "complete",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Bootstrap completed"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": {
+            "version": serde_json::Value::Null,
+            "binaryPath": serde_json::Value::Null,
+            "cacheDir": serde_json::Value::Null,
+            "runtimeName": serde_json::Value::Null,
+            "modelName": serde_json::Value::Null,
+            "freshlyInstalled": false,
+            "message": message
+        },
+    })
+}
+
+fn with_embeddings_task_watch_test_hooks<T>(f: impl FnOnce() -> T) -> T {
+    with_ingest_daemon_bootstrap_hook(
+        |_repo_root| Ok(()),
+        || {
+            with_graphql_executor_hook(
+                |repo_root, query, variables| {
+                    if query.contains("task(") || query.contains("query Task") {
+                        let task_id = variables["id"].as_str().expect("task id");
+                        let task = crate::daemon::devql_task(task_id)
+                            .expect("load daemon task")
+                            .expect("queued daemon task");
+                        let lines =
+                            crate::cli::embeddings::install_or_bootstrap_embeddings(repo_root)
+                                .expect("run embeddings bootstrap");
+                        return Ok(serde_json::json!({
+                            "task": completed_embeddings_bootstrap_task_graphql_json(
+                                &task,
+                                lines.join("\n"),
+                            )
+                        }));
+                    }
+
+                    panic!("unexpected repo-scoped query: {query}");
+                },
+                f,
+            )
+        },
+    )
 }
 
 /// Sets `enabled = true` in the project settings file and prints a confirmation.
@@ -1079,34 +1163,38 @@ enabled = false
                             })
                         },
                         || {
-                            let mut out = Vec::new();
-                            let mut input = Cursor::new("\n");
-                            let runtime = test_runtime();
-                            runtime
-                                .block_on(run_with_io(
-                                    EnableArgs {
-                                        local: false,
-                                        project: false,
-                                        force: false,
-                                        agent: None,
-                                        telemetry: None,
-                                        no_telemetry: false,
-                                        install_embeddings: false,
-                                    },
-                                    &mut out,
-                                    &mut input,
-                                ))
-                                .expect("run enable");
+                            with_embeddings_task_watch_test_hooks(|| {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("\n");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io(
+                                        EnableArgs {
+                                            local: false,
+                                            project: false,
+                                            force: false,
+                                            agent: None,
+                                            telemetry: None,
+                                            no_telemetry: false,
+                                            install_embeddings: false,
+                                        },
+                                        &mut out,
+                                        &mut input,
+                                    ))
+                                    .expect("run enable");
 
-                            let rendered = String::from_utf8(out).expect("utf8 output");
-                            assert!(rendered.contains("Install embeddings now? [Y/n]"));
-                            assert!(rendered.contains("Installed managed standalone"));
-                            assert!(rendered.contains("Pulled embedding profile `local_code`."));
-                            let daemon_config = fs::read_to_string(
-                                default_daemon_config_path().expect("daemon config path"),
-                            )
-                            .expect("read daemon config");
-                            assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(rendered.contains("Install embeddings now? [Y/n]"));
+                                assert!(rendered.contains("Installed managed standalone"));
+                                assert!(
+                                    rendered.contains("Pulled embedding profile `local_code`.")
+                                );
+                                let daemon_config = fs::read_to_string(
+                                    default_daemon_config_path().expect("daemon config path"),
+                                )
+                                .expect("read daemon config");
+                                assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                            });
                         },
                     );
                 },
@@ -1146,29 +1234,31 @@ enabled = false
                     })
                 },
                 || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("");
-                    let runtime = test_runtime();
-                    runtime
-                        .block_on(run_with_io(
-                            EnableArgs {
-                                local: false,
-                                project: false,
-                                force: false,
-                                agent: None,
-                                telemetry: None,
-                                no_telemetry: false,
-                                install_embeddings: true,
-                            },
-                            &mut out,
-                            &mut input,
-                        ))
-                        .expect("run enable");
+                    with_embeddings_task_watch_test_hooks(|| {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io(
+                                EnableArgs {
+                                    local: false,
+                                    project: false,
+                                    force: false,
+                                    agent: None,
+                                    telemetry: None,
+                                    no_telemetry: false,
+                                    install_embeddings: true,
+                                },
+                                &mut out,
+                                &mut input,
+                            ))
+                            .expect("run enable");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(!rendered.contains("Install embeddings now? [Y/n]"));
-                    assert!(rendered.contains("Installed managed standalone"));
-                    assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                        let rendered = String::from_utf8(out).expect("utf8 output");
+                        assert!(!rendered.contains("Install embeddings now? [Y/n]"));
+                        assert!(rendered.contains("Installed managed standalone"));
+                        assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                    });
                 },
             );
         },

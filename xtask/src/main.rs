@@ -660,13 +660,22 @@ fn nextest_list_args(run_args: &[String], profile_args: &[String]) -> Result<Vec
         return Err("expected nextest run arguments for test lane".to_string());
     }
     args[1] = "list".to_string();
-    args.extend_from_slice(profile_args);
-    args.push("--list-type".to_string());
-    args.push("binaries-only".to_string());
-    args.push("--message-format".to_string());
-    args.push("json".to_string());
-    args.push("--cargo-message-format".to_string());
-    args.push("json-render-diagnostics".to_string());
+
+    let separator_index = args.iter().position(|arg| arg == "--");
+    let mut list_only_args = profile_args.to_vec();
+    list_only_args.push("--list-type".to_string());
+    list_only_args.push("binaries-only".to_string());
+    list_only_args.push("--message-format".to_string());
+    list_only_args.push("json".to_string());
+    list_only_args.push("--cargo-message-format".to_string());
+    list_only_args.push("json-render-diagnostics".to_string());
+
+    if let Some(index) = separator_index {
+        args.splice(index..index, list_only_args);
+    } else {
+        args.extend(list_only_args);
+    }
+
     Ok(args)
 }
 
@@ -1321,6 +1330,46 @@ mod tests {
         assert!(out.contains(&"--list-type".to_string()));
         assert!(out.contains(&"binaries-only".to_string()));
         assert!(out.contains(&"json-render-diagnostics".to_string()));
+    }
+
+    #[test]
+    fn nextest_list_args_inserts_machine_output_before_test_binary_args() {
+        let args = vec![
+            "nextest".to_string(),
+            "run".to_string(),
+            "--manifest-path".to_string(),
+            BITLOOPS_MANIFEST.to_string(),
+            "--no-default-features".to_string(),
+            "--features".to_string(),
+            "slow-tests".to_string(),
+            "--lib".to_string(),
+            "--".to_string(),
+            "host::devql::cucumber_bdd::devql_bdd_features_pass".to_string(),
+            "--exact".to_string(),
+        ];
+        let out = super::nextest_list_args(&args, &[]).expect("list args");
+
+        let separator_index = out
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("separator should be preserved");
+        assert!(
+            separator_index > 1,
+            "separator should remain after nextest list arguments"
+        );
+        assert_eq!(
+            out[separator_index + 1],
+            "host::devql::cucumber_bdd::devql_bdd_features_pass"
+        );
+        assert_eq!(out[separator_index + 2], "--exact");
+        assert!(
+            out[..separator_index].contains(&"--list-type".to_string()),
+            "list-only flags must stay before the test-binary separator"
+        );
+        assert!(
+            !out[separator_index + 1..].contains(&"--list-type".to_string()),
+            "list-only flags must not be forwarded to the test binary"
+        );
     }
 
     #[test]

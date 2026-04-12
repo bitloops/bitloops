@@ -1,6 +1,8 @@
 use super::backend_error;
 use super::context::DevqlGraphqlContext;
-use super::types::{HealthStatus, Repository, SyncTaskObject};
+use super::types::{
+    HealthStatus, Repository, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
+};
 use async_graphql::{Context, Object, Result};
 
 #[derive(Default)]
@@ -21,25 +23,41 @@ impl QueryRoot {
             .map_err(|err| backend_error(format!("failed to resolve repository: {err:#}")))
     }
 
-    #[graphql(name = "syncTask")]
-    async fn sync_task(&self, _ctx: &Context<'_>, id: String) -> Result<Option<SyncTaskObject>> {
-        crate::daemon::sync_task(id.as_str())
+    async fn task(&self, _ctx: &Context<'_>, id: String) -> Result<Option<TaskObject>> {
+        crate::daemon::devql_task(id.as_str())
             .map(|task| task.map(Into::into))
-            .map_err(|err| backend_error(format!("failed to load sync task: {err:#}")))
+            .map_err(|err| backend_error(format!("failed to load task: {err:#}")))
     }
 
-    #[graphql(name = "syncTasks")]
-    async fn sync_tasks(
+    async fn tasks(
         &self,
         _ctx: &Context<'_>,
         #[graphql(name = "repoId")] repo_id: Option<String>,
+        kind: Option<TaskKind>,
+        status: Option<TaskStatus>,
         limit: Option<i32>,
-    ) -> Result<Vec<SyncTaskObject>> {
+    ) -> Result<Vec<TaskObject>> {
         let limit = limit
             .map(|limit| usize::try_from(limit.max(0)).unwrap_or(usize::MAX))
             .or(Some(25));
-        crate::daemon::sync_tasks(repo_id.as_deref(), limit)
-            .map(|tasks| tasks.into_iter().map(Into::into).collect())
-            .map_err(|err| backend_error(format!("failed to list sync tasks: {err:#}")))
+        crate::daemon::devql_tasks(
+            repo_id.as_deref(),
+            kind.map(Into::into),
+            status.map(Into::into),
+            limit,
+        )
+        .map(|tasks| tasks.into_iter().map(Into::into).collect())
+        .map_err(|err| backend_error(format!("failed to list tasks: {err:#}")))
+    }
+
+    #[graphql(name = "taskQueue")]
+    async fn task_queue(
+        &self,
+        _ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+    ) -> Result<TaskQueueStatusObject> {
+        crate::daemon::devql_task_status(repo_id.as_deref())
+            .map(Into::into)
+            .map_err(|err| backend_error(format!("failed to load task queue status: {err:#}")))
     }
 }

@@ -50,9 +50,39 @@ pub(crate) struct DaemonEmbeddingsInstallPlan {
     pub mode: DaemonEmbeddingsInstallMode,
     pub config_modified: bool,
     original_contents: Option<String>,
+    prepared_contents: Option<String>,
 }
 
 impl DaemonEmbeddingsInstallPlan {
+    #[cfg(test)]
+    pub fn apply(&self) -> Result<()> {
+        self.write_prepared_contents(self.prepared_contents.as_deref())
+    }
+
+    pub fn apply_with_managed_runtime_path(&self, binary_path: &Path) -> Result<()> {
+        if !self.config_modified {
+            return Ok(());
+        }
+
+        let base_contents = self
+            .prepared_contents
+            .as_deref()
+            .or(self.original_contents.as_deref())
+            .unwrap_or_default();
+        let mut doc = base_contents.parse::<DocumentMut>().with_context(|| {
+            format!(
+                "parsing staged Bitloops daemon config {}",
+                self.config_path.display()
+            )
+        })?;
+        let inference = ensure_table(&mut doc, "inference");
+        let runtimes = ensure_child_table(inference, "runtimes");
+        let runtime = ensure_child_table(runtimes, BITLOOPS_EMBEDDINGS_RUNTIME_ID);
+        runtime["command"] = Item::Value(binary_path.to_string_lossy().to_string().into());
+        runtime["args"] = Item::Value(TomlValue::Array(Array::new()));
+        self.write_prepared_contents(Some(&doc.to_string()))
+    }
+
     pub fn rollback(&self) -> Result<()> {
         if !self.config_modified {
             return Ok(());
@@ -78,6 +108,23 @@ impl DaemonEmbeddingsInstallPlan {
         }
 
         Ok(())
+    }
+
+    fn write_prepared_contents(&self, contents: Option<&str>) -> Result<()> {
+        if !self.config_modified {
+            return Ok(());
+        }
+
+        let Some(contents) = contents else {
+            return Ok(());
+        };
+
+        fs::write(&self.config_path, contents).with_context(|| {
+            format!(
+                "writing Bitloops daemon config {}",
+                self.config_path.display()
+            )
+        })
     }
 }
 
@@ -164,9 +211,15 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
         log_level: file.logging.level.unwrap_or_default(),
     };
 
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let canonical_root = canonical_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(root.clone());
+
     Ok(LoadedDaemonSettings {
-        path,
-        root,
+        path: canonical_path,
+        root: canonical_root,
         settings: UnifiedSettings {
             enabled: None,
             strategy: None,
@@ -364,6 +417,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
             mode,
             config_modified: false,
             original_contents,
+            prepared_contents: None,
         });
     }
 
@@ -495,10 +549,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
         }
     }
 
-    if modified {
-        fs::write(config_path, doc.to_string())
-            .with_context(|| format!("writing Bitloops daemon config {}", config_path.display()))?;
-    }
+    let prepared_contents = modified.then(|| doc.to_string());
 
     Ok(DaemonEmbeddingsInstallPlan {
         config_path: config_path.to_path_buf(),
@@ -507,6 +558,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
         mode: DaemonEmbeddingsInstallMode::Bootstrap,
         config_modified: modified,
         original_contents,
+        prepared_contents,
     })
 }
 
@@ -756,14 +808,19 @@ local_path = "stores/blob"
         let returned_path =
             ensure_daemon_store_artifacts(Some(config_path.as_path())).expect("bootstrap stores");
 
-        assert_eq!(returned_path, config_path);
+        assert_eq!(
+            returned_path,
+            config_path
+                .canonicalize()
+                .unwrap_or_else(|_| config_path.clone())
+        );
         assert!(dir.path().join("stores/relational/relational.db").is_file());
         assert!(dir.path().join("stores/event/events.duckdb").is_file());
         assert!(dir.path().join("stores/blob").is_dir());
     }
 
     #[test]
-    fn prepare_daemon_embeddings_install_clears_stale_default_runtime_args() {
+    fn prepare_daemon_embeddings_install_applies_staged_runtime_args_cleanup() {
         let config = NamedTempFile::new().expect("create temp config");
         fs::write(
             config.path(),
@@ -783,6 +840,7 @@ request_timeout_secs = 300
         let plan =
             prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
         assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
+        plan.apply().expect("apply staged embeddings config");
 
         let rendered = fs::read_to_string(config.path()).expect("read updated config");
         assert!(

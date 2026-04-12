@@ -55,7 +55,7 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
         return match execute_sync_validation(cfg, &relational).await {
             Ok(summary) => Ok((summary, SyncFileDiff::default(), SyncArtefactDiff::default())),
             Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
-                "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync --validate`.",
+                "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql tasks enqueue --kind sync --validate --status`.",
             ),
             Err(err) => Err(err),
         };
@@ -67,7 +67,7 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
             Ok((summary, file_diff, artefact_diff))
         }
         Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
-            "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync`.",
+            "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql tasks enqueue --kind sync --status`.",
         ),
         Err(err) => Err(err),
     }
@@ -310,8 +310,6 @@ async fn execute_sync_inner(
         .await
         .context("opening persistent SQLite sync writer")?;
     let current_projection = build_current_projection_context(cfg)?;
-    let mut current_projection_dirty = false;
-
     let removals = classified
         .iter()
         .filter(|path| matches!(path.action, sync::types::PathAction::Removed))
@@ -340,7 +338,6 @@ async fn execute_sync_inner(
                     format!("removing current semantic clone projection for `{path}`")
                 })?;
         }
-        current_projection_dirty |= !outcome.removed_paths.is_empty();
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
         }
@@ -449,7 +446,6 @@ async fn execute_sync_inner(
                                 extractor_version.as_str(),
                                 &mut diff_collector,
                                 &mut stats,
-                                &mut current_projection_dirty,
                                 observer,
                                 &counters,
                                 paths_total,
@@ -474,7 +470,6 @@ async fn execute_sync_inner(
                             extractor_version.as_str(),
                             &mut diff_collector,
                             &mut stats,
-                            &mut current_projection_dirty,
                             observer,
                             &counters,
                             paths_total,
@@ -528,7 +523,6 @@ async fn execute_sync_inner(
                         extractor_version.as_str(),
                         &mut diff_collector,
                         &mut stats,
-                        &mut current_projection_dirty,
                         observer,
                         &counters,
                         paths_total,
@@ -555,7 +549,6 @@ async fn execute_sync_inner(
         extractor_version,
         &mut diff_collector,
         &mut stats,
-        &mut current_projection_dirty,
         observer,
         &counters,
         paths_total,
@@ -578,15 +571,6 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
-
-    if current_projection_dirty {
-        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
-            relational,
-            &cfg.repo.repo_id,
-        )
-        .await
-        .context("rebuilding current semantic clone edges after DevQL sync")?;
-    }
 
     emit_progress(
         observer,
@@ -709,7 +693,6 @@ async fn flush_pending_materialisations(
     extractor_version: &str,
     diff_collector: &mut SyncDiffCollector,
     stats: &mut SyncExecutionStats,
-    current_projection_dirty: &mut bool,
     observer: Option<&dyn SyncObserver>,
     counters: &sync::types::SyncCounters,
     paths_total: usize,
@@ -738,7 +721,6 @@ async fn flush_pending_materialisations(
         )
         .await
         .context("projecting current semantic clone rows for synced paths")?;
-        *current_projection_dirty = true;
     }
     for artefact in outcome.pre_artefacts.clone() {
         diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
@@ -852,36 +834,6 @@ async fn project_materialized_items(
             )
             .await
             .with_context(|| format!("refreshing current semantic features for `{}`", item.desired.path))?;
-        for representation_kind in [
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-        ] {
-            current_projection
-                .invoke_ingester_with_relational(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
-                    serde_json::to_value(
-                        crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshPayload {
-                            scope: crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshScope::CurrentPath,
-                            path: Some(item.desired.path.clone()),
-                            content_id: Some(item.desired.effective_content_id.clone()),
-                            inputs: inputs.clone(),
-                            expected_input_hashes: Default::default(),
-                            representation_kind,
-                            mode: crate::capability_packs::semantic_clones::ingesters::EmbeddingRefreshMode::ConfiguredDegrade,
-                            manage_active_state: false,
-                        }
-                    )?,
-                    Some(relational),
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "refreshing current symbol embeddings for `{}` ({representation_kind})",
-                        item.desired.path
-                    )
-                })?;
-        }
     }
 
     Ok(())

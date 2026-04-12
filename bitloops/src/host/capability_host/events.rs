@@ -4,8 +4,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use super::gateways::{HostServicesGateway, LanguageServicesGateway, RelationalGateway};
+use super::gateways::{
+    CapabilityWorkplaneGateway, HostServicesGateway, LanguageServicesGateway, RelationalGateway,
+};
 use crate::host::devql::RelationalStorage;
 
 #[derive(Debug, Clone)]
@@ -81,14 +85,70 @@ pub struct RemovedArtefact {
 }
 
 #[derive(Clone)]
-pub struct EventHandlerContext {
+pub struct CurrentStateConsumerContext {
+    pub config_root: Value,
     pub storage: Arc<RelationalStorage>,
     pub relational: Arc<dyn RelationalGateway>,
     pub language_services: Arc<dyn LanguageServicesGateway>,
     pub host_services: Arc<dyn HostServicesGateway>,
+    pub workplane: Arc<dyn CapabilityWorkplaneGateway>,
 }
 
+pub type EventHandlerContext = CurrentStateConsumerContext;
+pub type CurrentStateConsumerFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<CurrentStateConsumerResult>> + Send + 'a>>;
 pub type EventHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconcileMode {
+    MergedDelta,
+    FullReconcile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentStateConsumerRequest {
+    pub repo_id: String,
+    pub repo_root: PathBuf,
+    pub active_branch: Option<String>,
+    pub head_commit_sha: Option<String>,
+    pub from_generation_seq_exclusive: u64,
+    pub to_generation_seq_inclusive: u64,
+    pub reconcile_mode: ReconcileMode,
+    pub file_upserts: Vec<ChangedFile>,
+    pub file_removals: Vec<RemovedFile>,
+    pub artefact_upserts: Vec<ChangedArtefact>,
+    pub artefact_removals: Vec<RemovedArtefact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurrentStateConsumerResult {
+    pub applied_to_generation_seq: u64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub metrics: Option<Value>,
+}
+
+impl CurrentStateConsumerResult {
+    pub fn applied(applied_to_generation_seq: u64) -> Self {
+        Self {
+            applied_to_generation_seq,
+            warnings: Vec::new(),
+            metrics: None,
+        }
+    }
+}
+
+pub trait CurrentStateConsumer: Send + Sync {
+    fn capability_id(&self) -> &str;
+    fn consumer_id(&self) -> &str;
+    fn reconcile<'a>(
+        &'a self,
+        request: &'a CurrentStateConsumerRequest,
+        context: &'a CurrentStateConsumerContext,
+    ) -> CurrentStateConsumerFuture<'a>;
+}
 
 pub trait HostEventHandler: Send + Sync {
     fn event_kind(&self) -> HostEventKind;
@@ -121,5 +181,13 @@ mod tests {
     fn host_event_kind_matches_variant() {
         let event = HostEvent::SyncCompleted(sync_payload());
         assert_eq!(event.kind(), HostEventKind::SyncCompleted);
+    }
+
+    #[test]
+    fn current_state_consumer_result_helper_defaults_to_empty_metadata() {
+        let result = CurrentStateConsumerResult::applied(7);
+        assert_eq!(result.applied_to_generation_seq, 7);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.metrics, None);
     }
 }

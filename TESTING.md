@@ -39,6 +39,7 @@ For other platforms, follow the official installation guide:
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
 `cargo-nextest` is the default runner behind `dev-test-*`, `test-*`, and `qat*`.
+That default does not ban `cargo test`: use the checked-in aliases for the standard lanes, and use `cargo test` only where this guide explicitly calls for it or where `cargo-nextest` cannot cover the case.
 The checked-in local `nextest` default is `8` test threads.
 CI uses the `ci` `nextest` profile, pinned to `6` test threads.
 `cargo dev-test-merge` runs the fast lane plus a curated set of slow smoke suites and is the blocking gate for pull requests into `develop`.
@@ -46,6 +47,7 @@ CI uses the `ci` `nextest` profile, pinned to `6` test threads.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
 `cargo qat` runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite.
+`cargo qat` forces `--no-capture` so the bundled ignored QAT journey streams progress reliably during long daemon-backed runs.
 `cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
 `cargo qat-devql-sync` is the focused DevQL sync alias.
 
@@ -133,7 +135,7 @@ The `postgres-tests` Cargo feature is **not** enabled by `slow-tests`, `dev-test
 cargo test -p bitloops --lib --no-default-features --features postgres-tests
 ```
 
-If the repo gains doctests in future, keep running those through `cargo test --doc`; `cargo-nextest` does not support doctests.
+If the repo gains doctests in future, keep running those through `cargo test --doc`; `cargo-nextest` does not support doctests. This is another explicit exception to the default `nextest`-backed lanes above.
 
 ## Checklist before opening a PR
 

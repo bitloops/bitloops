@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::config::resolve_store_backend_config_for_repo;
+use crate::config::resolve_bound_store_backend_config_for_repo;
 use crate::storage::SqliteConnectionPool;
 
 use super::types::RepoSqliteRuntimeStore;
@@ -8,7 +8,7 @@ use super::util::sha256_hex;
 
 impl RepoSqliteRuntimeStore {
     pub(crate) fn open_repo_blob_store(&self) -> Result<crate::storage::blob::ResolvedBlobStore> {
-        let cfg = resolve_store_backend_config_for_repo(&self.repo_root)
+        let cfg = resolve_bound_store_backend_config_for_repo(&self.repo_root)
             .context("resolving backend config for repo runtime metadata")?;
         crate::storage::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, &self.repo_root)
             .context("initialising blob storage for repo runtime metadata")

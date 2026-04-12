@@ -233,6 +233,135 @@ request_timeout_secs = 5
     .expect("write daemon config");
 }
 
+fn completed_sync_task_json(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "SYNC",
+        "source": "init",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": {
+            "mode": "auto",
+            "paths": []
+        },
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": serde_json::Value::Null,
+        "syncProgress": {
+            "phase": "complete",
+            "currentPath": serde_json::Value::Null,
+            "pathsTotal": 1,
+            "pathsCompleted": 1,
+            "pathsRemaining": 0,
+            "pathsUnchanged": 0,
+            "pathsAdded": 0,
+            "pathsChanged": 0,
+            "pathsRemoved": 0,
+            "cacheHits": 0,
+            "cacheMisses": 0,
+            "parseErrors": 0
+        },
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
+    })
+}
+
+fn completed_ingest_task_json(task_id: &str, backfill: usize) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "INGEST",
+        "source": "manual_cli",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": {
+            "backfill": backfill
+        },
+        "embeddingsBootstrapSpec": serde_json::Value::Null,
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": {
+            "phase": "complete",
+            "commitsTotal": backfill,
+            "commitsProcessed": backfill,
+            "checkpointCompanionsProcessed": 0,
+            "currentCheckpointId": serde_json::Value::Null,
+            "currentCommitSha": serde_json::Value::Null,
+            "eventsInserted": 0,
+            "artefactsUpserted": 0
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
+    })
+}
+
+fn completed_bootstrap_task_json(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "EMBEDDINGS_BOOTSTRAP",
+        "source": "init",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": {
+            "configPath": "/tmp/config.toml",
+            "profileName": "local_code"
+        },
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "complete",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Bootstrap completed"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": {
+            "version": serde_json::Value::Null,
+            "binaryPath": serde_json::Value::Null,
+            "cacheDir": serde_json::Value::Null,
+            "runtimeName": serde_json::Value::Null,
+            "modelName": serde_json::Value::Null,
+            "freshlyInstalled": false,
+            "message": "Bootstrap completed"
+        }
+    })
+}
+
 #[test]
 fn init_args_supports_agent_flag() {
     let parsed =
@@ -350,7 +479,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Some(DEFAULT_AGENT.to_string()),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -378,6 +507,111 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         assert!(!exclude.contains(".bitloops/"));
         assert!(!exclude.contains("config.local.json"));
         assert!(!exclude.contains(".bitloops/config.local.json"));
+    });
+}
+
+#[test]
+fn run_init_binds_repo_to_running_daemon_config() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let daemon_root = tempfile::tempdir().expect("daemon tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        write_current_daemon_runtime_state(daemon_root.path());
+
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let local_policy = std::fs::read_to_string(repo.path().join(".bitloops.local.toml"))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains(
+                daemon_root
+                    .path()
+                    .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "expected daemon binding in local policy:\n{local_policy}"
+        );
+    });
+}
+
+#[test]
+fn run_init_rewrites_existing_daemon_binding() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let old_daemon_root = tempfile::tempdir().expect("old daemon tempdir");
+    let new_daemon_root = tempfile::tempdir().expect("new daemon tempdir");
+    setup_git_repo(&repo);
+
+    crate::config::settings::write_repo_daemon_binding(
+        &repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &old_daemon_root.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("write initial repo daemon binding");
+
+    with_temp_app_dirs(&app_dirs, false, false, || {
+        write_current_daemon_runtime_state(new_daemon_root.path());
+
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let local_policy = std::fs::read_to_string(repo.path().join(".bitloops.local.toml"))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains(
+                new_daemon_root
+                    .path()
+                    .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "expected updated daemon binding in local policy:\n{local_policy}"
+        );
+        assert!(
+            !local_policy.contains(
+                old_daemon_root
+                    .path()
+                    .join(BITLOOPS_CONFIG_RELATIVE_PATH)
+                    .to_string_lossy()
+                    .as_ref()
+            ),
+            "old daemon binding should be replaced:\n{local_policy}"
+        );
     });
 }
 
@@ -926,66 +1160,65 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                         }))
                     },
                     || {
-                        with_managed_embeddings_install_hook(
-                            move |repo_root| {
-                                Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                                    version: "v0.1.0".to_string(),
-                                    binary_path: fake_managed_runtime_path(repo_root),
-                                    freshly_installed: true,
-                                })
-                            },
-                            || {
-                                let mut out = Vec::new();
-                                let mut input = Cursor::new("");
-                                let runtime = test_runtime();
-                                runtime
-                                    .block_on(run_with_io_async_for_project_root(
-                                        InitArgs {
-                                            install_default_daemon: true,
-                                            force: false,
-                                            agent: None,
-                                            telemetry: Some(false),
-                                            no_telemetry: false,
-                                            skip_baseline: false,
-                                            sync: Some(false),
-                                            ingest: Some(false),
-                                            backfill: None,
-                                        },
-                                        repo.path(),
-                                        &mut out,
-                                        &mut input,
-                                        None,
-                                    ))
-                                    .expect("run init");
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    install_default_daemon: true,
+                                    force: false,
+                                    agent: None,
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
 
-                                let rendered = String::from_utf8(out).expect("utf8 output");
-                                assert!(rendered.contains("Preparing local embeddings setup..."));
-                                assert!(rendered.contains(
-                                    "This can take a moment if the managed runtime needs to be downloaded."
-                                ));
-                                assert!(rendered.contains("Installed managed standalone"));
-                                assert!(
-                                    rendered.contains("Pulled embedding profile `local_code`.")
-                                );
-                                let config = std::fs::read_to_string(
-                                    repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
-                                )
-                                .unwrap_or_else(|_| String::new());
-                                assert!(
-                                    config.is_empty(),
-                                    "init with default daemon should use the daemon config, not repo-local config:\n{config}"
-                                );
-                                let daemon_config = ensure_daemon_config_exists()
-                                    .expect("resolve daemon config after init");
-                                let daemon_config = std::fs::read_to_string(daemon_config)
-                                    .expect("read daemon config");
-                                assert!(daemon_config.contains("code_embeddings = \"local_code\""));
-                                assert!(daemon_config.contains("[inference.profiles.local_code]"));
-                                assert!(
-                                    daemon_config.contains("driver = \"bitloops_embeddings_ipc\"")
-                                );
-                            },
+                        let rendered = String::from_utf8(out).expect("utf8 output");
+                        assert!(
+                            rendered.contains("Queueing embeddings bootstrap in the daemon...")
                         );
+                        assert!(
+                            rendered
+                                .contains("Embeddings bootstrap task: embeddings_bootstrap-task-")
+                        );
+                        assert!(rendered.contains("Embeddings bootstrap phase: queued"));
+                        assert!(
+                            rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
+                        );
+                        let config = std::fs::read_to_string(
+                            repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+                        )
+                        .unwrap_or_else(|_| String::new());
+                        assert!(
+                            config.is_empty(),
+                            "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                        );
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(daemon_config).expect("read daemon config");
+                        assert!(
+                            !daemon_config.contains("code_embeddings = \"local_code\""),
+                            "embeddings config should now be applied asynchronously by the daemon task:\n{daemon_config}"
+                        );
+                        let queued = crate::daemon::devql_tasks(
+                            None,
+                            Some(crate::daemon::DevqlTaskKind::EmbeddingsBootstrap),
+                            Some(crate::daemon::DevqlTaskStatus::Queued),
+                            None,
+                        )
+                        .expect("load queued bootstrap tasks");
+                        assert_eq!(queued.len(), 1);
                     },
                 );
             },
@@ -994,7 +1227,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
 }
 
 #[test]
-fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_ingest() {
+fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest() {
     let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
@@ -1028,85 +1261,133 @@ fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_i
                                     {
                                         let events = std::rc::Rc::clone(&events);
                                         move |_repo_root, query, variables| {
-                                            if query.contains("enqueueSync") {
+                                            if query.contains("enqueueTask")
+                                                && variables["input"]["kind"] == "SYNC"
+                                            {
                                                 events.borrow_mut().push("sync");
                                                 assert_eq!(
                                                     variables,
                                                     &serde_json::json!({
                                                         "input": {
-                                                            "full": false,
-                                                            "paths": serde_json::Value::Null,
-                                                            "repair": false,
-                                                            "validate": false,
-                                                            "source": "init"
+                                                            "kind": "SYNC",
+                                                            "sync": {
+                                                                "full": false,
+                                                                "paths": serde_json::Value::Null,
+                                                                "repair": false,
+                                                                "validate": false,
+                                                                "source": "init"
+                                                            }
                                                         }
                                                     })
                                                 );
                                                 return Ok(serde_json::json!({
-                                                    "enqueueSync": {
+                                                    "enqueueTask": {
                                                         "merged": false,
                                                         "task": {
                                                             "taskId": "sync-task-1",
                                                             "repoId": "repo-1",
                                                             "repoName": "demo",
                                                             "repoIdentity": "local/demo",
+                                                            "kind": "SYNC",
                                                             "source": "init",
-                                                            "mode": "auto",
-                                                            "status": "queued",
-                                                            "phase": "queued",
+                                                            "status": "QUEUED",
                                                             "submittedAtUnix": 1,
                                                             "startedAtUnix": null,
                                                             "updatedAtUnix": 1,
                                                             "completedAtUnix": null,
                                                             "queuePosition": 1,
                                                             "tasksAhead": 0,
-                                                            "currentPath": null,
-                                                            "pathsTotal": 0,
-                                                            "pathsCompleted": 0,
-                                                            "pathsRemaining": 0,
-                                                            "pathsUnchanged": 0,
-                                                            "pathsAdded": 0,
-                                                            "pathsChanged": 0,
-                                                            "pathsRemoved": 0,
-                                                            "cacheHits": 0,
-                                                            "cacheMisses": 0,
-                                                            "parseErrors": 0,
                                                             "error": null,
-                                                            "summary": null
+                                                            "syncSpec": {
+                                                                "mode": "auto",
+                                                                "paths": []
+                                                            },
+                                                            "ingestSpec": null,
+                                                            "syncProgress": {
+                                                                "phase": "queued",
+                                                                "currentPath": null,
+                                                                "pathsTotal": 0,
+                                                                "pathsCompleted": 0,
+                                                                "pathsRemaining": 0,
+                                                                "pathsUnchanged": 0,
+                                                                "pathsAdded": 0,
+                                                                "pathsChanged": 0,
+                                                                "pathsRemoved": 0,
+                                                                "cacheHits": 0,
+                                                                "cacheMisses": 0,
+                                                                "parseErrors": 0
+                                                            },
+                                                            "ingestProgress": null,
+                                                            "syncResult": null,
+                                                            "ingestResult": null
                                                         }
                                                     }
                                                 }));
                                             }
 
-                                            if query.contains("syncTask") {
+                                            if query.contains("task(")
+                                                || query.contains("query Task")
+                                            {
+                                                let task_id =
+                                                    variables["id"].as_str().expect("task id");
+                                                let task = if task_id == "sync-task-1" {
+                                                    completed_sync_task_json(task_id)
+                                                } else if task_id == "ingest-task-1" {
+                                                    completed_ingest_task_json(task_id, 50)
+                                                } else if task_id
+                                                    .starts_with("embeddings_bootstrap-task-")
+                                                {
+                                                    completed_bootstrap_task_json(task_id)
+                                                } else {
+                                                    panic!("unexpected task id: {task_id}");
+                                                };
                                                 return Ok(serde_json::json!({
-                                                    "syncTask": null
+                                                    "task": task
                                                 }));
                                             }
 
-                                            if query.contains("ingest") {
+                                            if query.contains("enqueueTask")
+                                                && variables["input"]["kind"] == "INGEST"
+                                            {
                                                 events.borrow_mut().push("ingest");
                                                 assert_eq!(
                                                     variables,
                                                     &serde_json::json!({
                                                         "input": {
-                                                            "backfill": 50
+                                                            "kind": "INGEST",
+                                                            "ingest": {
+                                                                "backfill": 50
+                                                            }
                                                         }
                                                     })
                                                 );
                                                 return Ok(serde_json::json!({
-                                                    "ingest": {
-                                                        "success": true,
-                                                        "commitsProcessed": 1,
-                                                        "checkpointCompanionsProcessed": 0,
-                                                        "eventsInserted": 0,
-                                                        "artefactsUpserted": 1,
-                                                        "semanticFeatureRowsUpserted": 0,
-                                                        "semanticFeatureRowsSkipped": 0,
-                                                        "symbolEmbeddingRowsUpserted": 0,
-                                                        "symbolEmbeddingRowsSkipped": 0,
-                                                        "symbolCloneEdgesUpserted": 0,
-                                                        "symbolCloneSourcesScored": 0
+                                                    "enqueueTask": {
+                                                        "merged": false,
+                                                        "task": {
+                                                            "taskId": "ingest-task-1",
+                                                            "repoId": "repo-1",
+                                                            "repoName": "demo",
+                                                            "repoIdentity": "local/demo",
+                                                            "kind": "INGEST",
+                                                            "source": "manual_cli",
+                                                            "status": "QUEUED",
+                                                            "submittedAtUnix": 1,
+                                                            "startedAtUnix": null,
+                                                            "updatedAtUnix": 1,
+                                                            "completedAtUnix": null,
+                                                            "queuePosition": 1,
+                                                            "tasksAhead": 0,
+                                                            "error": null,
+                                                            "syncSpec": null,
+                                                            "ingestSpec": {
+                                                                "backfill": 50
+                                                            },
+                                                            "syncProgress": null,
+                                                            "ingestProgress": null,
+                                                            "syncResult": null,
+                                                            "ingestResult": null
+                                                        }
                                                     }
                                                 }));
                                             }
@@ -1115,63 +1396,65 @@ fn run_init_with_install_default_daemon_defers_embeddings_until_after_sync_and_i
                                         }
                                     },
                                     || {
-                                        with_managed_embeddings_install_hook(
-                                            {
-                                                let events = std::rc::Rc::clone(&events);
-                                                move |repo_root| {
-                                                    events.borrow_mut().push("install");
-                                                    Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                                                        version: "v0.1.0".to_string(),
-                                                        binary_path: fake_managed_runtime_path(
-                                                            repo_root,
-                                                        ),
-                                                        freshly_installed: true,
-                                                    })
-                                                }
-                                            },
-                                            || {
-                                                let mut out = Vec::new();
-                                                let mut input = Cursor::new("");
-                                                let runtime = test_runtime();
-                                                runtime
-                                                    .block_on(run_with_io_async_for_project_root(
-                                                        InitArgs {
-                                                            install_default_daemon: true,
-                                                            force: false,
-                                                            agent: None,
-                                                            telemetry: Some(false),
-                                                            no_telemetry: false,
-                                                            skip_baseline: false,
-                                                            sync: Some(true),
-                                                            ingest: Some(true),
-                                                            backfill: None,
-                                                        },
-                                                        repo.path(),
-                                                        &mut out,
-                                                        &mut input,
-                                                        None,
-                                                    ))
-                                                    .expect("run init");
+                                        let mut out = Vec::new();
+                                        let mut input = Cursor::new("");
+                                        let runtime = test_runtime();
+                                        runtime
+                                            .block_on(run_with_io_async_for_project_root(
+                                                InitArgs {
+                                                    install_default_daemon: true,
+                                                    force: false,
+                                                    agent: None,
+                                                    telemetry: Some(false),
+                                                    no_telemetry: false,
+                                                    skip_baseline: false,
+                                                    sync: Some(true),
+                                                    ingest: Some(true),
+                                                    backfill: None,
+                                                },
+                                                repo.path(),
+                                                &mut out,
+                                                &mut input,
+                                                None,
+                                            ))
+                                            .expect("run init");
 
-                                                let rendered =
-                                                    String::from_utf8(out).expect("utf8 output");
-                                                let sync_index = rendered
-                                                    .find("Starting initial DevQL sync...")
-                                                    .expect("sync output");
-                                                let ingest_index = rendered
-                                                    .find("Starting initial DevQL ingest after sync...")
-                                                    .expect("ingest output");
-                                                let embeddings_index = rendered
-                                                    .find("Preparing local embeddings setup...")
-                                                    .expect("embeddings output");
-                                                assert!(sync_index < ingest_index);
-                                                assert!(ingest_index < embeddings_index);
-                                                assert_eq!(
-                                                    &*events.borrow(),
-                                                    &["sync", "ingest", "install"]
-                                                );
-                                            },
+                                        let rendered = String::from_utf8(out).expect("utf8 output");
+                                        let bootstrap_index = rendered
+                                            .find("Queueing embeddings bootstrap in the daemon...")
+                                            .expect("bootstrap output");
+                                        let handoff_index = rendered
+                                            .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
+                                            .expect("handoff output");
+                                        let checklist_index = rendered
+                                            .find("Bitloops is currently updating its local database with the following:")
+                                            .expect("checklist output");
+                                        let sync_description_index = rendered
+                                            .find(
+                                                "Analysing your current branch to know what's what",
+                                            )
+                                            .expect("sync description output");
+                                        let embeddings_description_index = rendered
+                                            .find("Creating code embeddings for fast search using our local embeddings provider")
+                                            .expect("embeddings description output");
+                                        assert!(bootstrap_index < checklist_index);
+                                        assert!(handoff_index < checklist_index);
+                                        assert!(checklist_index < sync_description_index);
+                                        assert!(
+                                            sync_description_index < embeddings_description_index
                                         );
+                                        assert!(
+                                            !rendered.contains("Starting initial DevQL sync...")
+                                        );
+                                        assert_eq!(&*events.borrow(), &["sync", "ingest"]);
+                                        let queued = crate::daemon::devql_tasks(
+                                            None,
+                                            Some(crate::daemon::DevqlTaskKind::EmbeddingsBootstrap),
+                                            Some(crate::daemon::DevqlTaskStatus::Queued),
+                                            None,
+                                        )
+                                        .expect("load queued bootstrap tasks");
+                                        assert_eq!(queued.len(), 1);
                                     },
                                 )
                             },
@@ -1311,34 +1594,61 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                     .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                 assert_eq!(actual_repo_root, expected_repo_root);
 
-                                if query.contains("enqueueSync") {
+                                if query.contains("enqueueTask")
+                                    && variables["input"]["kind"] == "SYNC"
+                                {
                                     panic!("init should not enqueue sync when sync=false");
                                 }
 
-                                if query.contains("ingest") {
+                                if query.contains("enqueueTask")
+                                    && variables["input"]["kind"] == "INGEST"
+                                {
                                     *saw_ingest.borrow_mut() = true;
                                     assert_eq!(
                                         variables,
                                         &serde_json::json!({
                                             "input": {
-                                                "backfill": 50
+                                                "kind": "INGEST",
+                                                "ingest": {
+                                                    "backfill": 50
+                                                }
                                             }
                                         })
                                     );
                                     return Ok(serde_json::json!({
-                                        "ingest": {
-                                            "success": true,
-                                            "commitsProcessed": 1,
-                                            "checkpointCompanionsProcessed": 0,
-                                            "eventsInserted": 0,
-                                            "artefactsUpserted": 1,
-                                            "semanticFeatureRowsUpserted": 0,
-                                            "semanticFeatureRowsSkipped": 0,
-                                            "symbolEmbeddingRowsUpserted": 0,
-                                            "symbolEmbeddingRowsSkipped": 0,
-                                            "symbolCloneEdgesUpserted": 0,
-                                            "symbolCloneSourcesScored": 0
+                                        "enqueueTask": {
+                                            "merged": false,
+                                            "task": {
+                                                "taskId": "ingest-task-2",
+                                                "repoId": "repo-1",
+                                                "repoName": "demo",
+                                                "repoIdentity": "local/demo",
+                                                "kind": "INGEST",
+                                                "source": "manual_cli",
+                                                "status": "QUEUED",
+                                                "submittedAtUnix": 1,
+                                                "startedAtUnix": null,
+                                                "updatedAtUnix": 1,
+                                                "completedAtUnix": null,
+                                                "queuePosition": 1,
+                                                "tasksAhead": 0,
+                                                "error": null,
+                                                "syncSpec": null,
+                                                "ingestSpec": {
+                                                    "backfill": 50
+                                                },
+                                                "syncProgress": null,
+                                                "ingestProgress": null,
+                                                "syncResult": null,
+                                                "ingestResult": null
+                                            }
                                         }
+                                    }));
+                                }
+
+                                if query.contains("task(") || query.contains("query Task") {
+                                    return Ok(serde_json::json!({
+                                        "task": null
                                     }));
                                 }
 
@@ -1426,34 +1736,63 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                         assert_eq!(actual_repo_root, expected_repo_root);
 
-                                        if query.contains("enqueueSync") {
+                                        if query.contains("enqueueTask")
+                                            && variables["input"]["kind"] == "SYNC"
+                                        {
                                             panic!("init should not enqueue sync when sync=false");
                                         }
 
-                                        if query.contains("ingest") {
+                                        if query.contains("enqueueTask")
+                                            && variables["input"]["kind"] == "INGEST"
+                                        {
                                             *saw_ingest.borrow_mut() = true;
                                             assert_eq!(
                                                 variables,
                                                 &serde_json::json!({
                                                     "input": {
-                                                        "backfill": 10
+                                                        "kind": "INGEST",
+                                                        "ingest": {
+                                                            "backfill": 10
+                                                        }
                                                     }
                                                 })
                                             );
                                             return Ok(serde_json::json!({
-                                                "ingest": {
-                                                    "success": true,
-                                                    "commitsProcessed": 1,
-                                                    "checkpointCompanionsProcessed": 0,
-                                                    "eventsInserted": 0,
-                                                    "artefactsUpserted": 1,
-                                                    "semanticFeatureRowsUpserted": 0,
-                                                    "semanticFeatureRowsSkipped": 0,
-                                                    "symbolEmbeddingRowsUpserted": 0,
-                                                    "symbolEmbeddingRowsSkipped": 0,
-                                                    "symbolCloneEdgesUpserted": 0,
-                                                    "symbolCloneSourcesScored": 0
+                                                "enqueueTask": {
+                                                    "merged": false,
+                                                    "task": {
+                                                        "taskId": "ingest-task-3",
+                                                        "repoId": "repo-1",
+                                                        "repoName": "demo",
+                                                        "repoIdentity": "local/demo",
+                                                        "kind": "INGEST",
+                                                        "source": "manual_cli",
+                                                        "status": "QUEUED",
+                                                        "submittedAtUnix": 1,
+                                                        "startedAtUnix": null,
+                                                        "updatedAtUnix": 1,
+                                                        "completedAtUnix": null,
+                                                        "queuePosition": 1,
+                                                        "tasksAhead": 0,
+                                                        "error": null,
+                                                        "syncSpec": null,
+                                                        "ingestSpec": {
+                                                            "backfill": 10
+                                                        },
+                                                        "syncProgress": null,
+                                                        "ingestProgress": null,
+                                                        "syncResult": null,
+                                                        "ingestResult": null
+                                                    }
                                                 }
+                                            }));
+                                        }
+
+                                        if query.contains("task(")
+                                            || query.contains("query Task")
+                                        {
+                                            return Ok(serde_json::json!({
+                                                "task": null
                                             }));
                                         }
 

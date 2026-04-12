@@ -18,7 +18,7 @@ The daemon bootstraps the DevQL schema automatically on startup. `bitloops devql
 ## Ingest Data
 
 ```bash
-bitloops devql ingest
+bitloops devql tasks enqueue --kind ingest
 ```
 
 The CLI resolves repo policy locally, then sends ingestion requests to the daemon. Ingestion no longer owns schema bootstrap.
@@ -26,14 +26,16 @@ The CLI resolves repo policy locally, then sends ingestion requests to the daemo
 ## Sync Current State
 
 ```bash
-bitloops devql sync
-bitloops devql sync --status
-bitloops devql sync --validate --status
+bitloops devql tasks enqueue --kind sync
+bitloops devql tasks enqueue --kind sync --status
+bitloops devql tasks enqueue --kind sync --validate --status
 ```
 
-`bitloops devql sync` now queues a sync task and returns immediately by default. Use `--status` when you want the CLI to follow that queued task until it completes or fails.
+`bitloops devql tasks enqueue --kind sync` now queues a sync task and returns immediately by default. Use `--status` when you want the CLI to follow that queued task until it completes or fails.
 
 `--validate` queues a read-only validation task instead of mutating the current-state tables.
+
+Successful sync tasks publish current-state generations. Built-in consumers such as `test_harness.current_state` and `semantic_clones.current_state` reconcile asynchronously from that feed, while historical ingest follow-up stays on the enrichment queue.
 
 ## Query Data
 

@@ -2,6 +2,15 @@ use std::path::Path;
 
 use crate::daemon;
 
+fn current_state_consumer_status(
+    report: &daemon::DaemonStatusReport,
+) -> Option<&daemon::CapabilityEventQueueStatus> {
+    report
+        .current_state_consumers
+        .as_ref()
+        .or(report.capability_events.as_ref())
+}
+
 pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     let log_path = daemon::daemon_log_file_path();
     status_lines_with_log_path(report, &log_path)
@@ -27,11 +36,11 @@ pub(super) fn status_lines_with_log_path(
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
-        if let Some(capability_events) = report.capability_events.as_ref() {
+        if let Some(capability_events) = current_state_consumer_status(report) {
             append_capability_event_lines(&mut lines, capability_events);
         }
-        if let Some(sync) = report.sync.as_ref() {
-            append_sync_lines(&mut lines, sync);
+        if let Some(devql_tasks) = report.devql_tasks.as_ref() {
+            append_devql_task_lines(&mut lines, devql_tasks);
         }
         return lines;
     }
@@ -59,11 +68,11 @@ pub(super) fn status_lines_with_log_path(
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
-        if let Some(capability_events) = report.capability_events.as_ref() {
+        if let Some(capability_events) = current_state_consumer_status(report) {
             append_capability_event_lines(&mut lines, capability_events);
         }
-        if let Some(sync) = report.sync.as_ref() {
-            append_sync_lines(&mut lines, sync);
+        if let Some(devql_tasks) = report.devql_tasks.as_ref() {
+            append_devql_task_lines(&mut lines, devql_tasks);
         }
         return lines;
     }
@@ -74,11 +83,11 @@ pub(super) fn status_lines_with_log_path(
     if let Some(enrichment) = report.enrichment.as_ref() {
         append_enrichment_lines(&mut lines, enrichment);
     }
-    if let Some(capability_events) = report.capability_events.as_ref() {
+    if let Some(capability_events) = current_state_consumer_status(report) {
         append_capability_event_lines(&mut lines, capability_events);
     }
-    if let Some(sync) = report.sync.as_ref() {
-        append_sync_lines(&mut lines, sync);
+    if let Some(devql_tasks) = report.devql_tasks.as_ref() {
+        append_devql_task_lines(&mut lines, devql_tasks);
     }
     lines
 }
@@ -204,6 +213,50 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     if let Some(reason) = status.state.paused_reason.as_ref() {
         lines.push(format!("Enrichment pause reason: {reason}"));
     }
+    if let Some(gate) = status.embeddings_gate.as_ref() {
+        lines.push(format!(
+            "Embeddings gate blocked: {}",
+            if gate.blocked { "yes" } else { "no" }
+        ));
+        if let Some(readiness) = gate.readiness {
+            lines.push(format!("Embeddings gate readiness: {readiness}"));
+        }
+        if let Some(reason) = gate.reason.as_ref() {
+            lines.push(format!("Embeddings gate reason: {reason}"));
+        }
+        if let Some(task_id) = gate.active_task_id.as_ref() {
+            lines.push(format!("Embeddings gate active task: {task_id}"));
+        }
+        if let Some(profile_name) = gate.profile_name.as_ref() {
+            lines.push(format!("Embeddings gate profile: {profile_name}"));
+        }
+        if let Some(config_path) = gate.config_path.as_ref() {
+            lines.push(format!("Embeddings gate config: {}", config_path.display()));
+        }
+        if let Some(last_error) = gate.last_error.as_ref() {
+            lines.push(format!("Embeddings gate last error: {last_error}"));
+        }
+    }
+    for mailbox in &status.blocked_mailboxes {
+        lines.push(format!(
+            "Mailbox blocked: {} ({})",
+            mailbox.mailbox_name, mailbox.reason
+        ));
+    }
+    if let Some(failed) = status.last_failed_embedding.as_ref() {
+        lines.push(format!(
+            "Last failed embedding job: {} (repo={}, branch={}, kind={}, artefacts={}, attempts={})",
+            failed.job_id,
+            failed.repo_id,
+            failed.branch,
+            failed.representation_kind,
+            failed.artefact_count,
+            failed.attempts,
+        ));
+        if let Some(error) = failed.error.as_ref() {
+            lines.push(format!("Last failed embedding error: {error}"));
+        }
+    }
     lines.push(format!(
         "Enrichment persisted: {}",
         if status.persisted { "yes" } else { "no" }
@@ -214,91 +267,122 @@ fn append_capability_event_lines(
     lines: &mut Vec<String>,
     status: &daemon::CapabilityEventQueueStatus,
 ) {
-    lines.push("Capability event queue: available".to_string());
+    lines.push("Current-state consumer queue: available".to_string());
     lines.push(format!(
-        "Capability event pending runs: {}",
+        "Current-state consumer pending runs: {}",
         status.state.pending_runs
     ));
     lines.push(format!(
-        "Capability event running runs: {}",
+        "Current-state consumer running runs: {}",
         status.state.running_runs
     ));
     lines.push(format!(
-        "Capability event failed runs: {}",
+        "Current-state consumer failed runs: {}",
         status.state.failed_runs
     ));
     lines.push(format!(
-        "Capability event completed recent runs: {}",
+        "Current-state consumer completed recent runs: {}",
         status.state.completed_recent_runs
     ));
     if let Some(action) = status.state.last_action.as_ref() {
-        lines.push(format!("Capability event last action: {action}"));
+        lines.push(format!("Current-state consumer last action: {action}"));
     }
     if let Some(run) = status.current_repo_run.as_ref() {
         lines.push(format!(
-            "Current repo capability event run: {} ({}, capability={}, handler={}, event_kind={})",
-            run.run_id, run.status, run.capability_id, run.handler_id, run.event_kind
+            "Current repo current-state consumer run: {} ({}, capability={}, consumer={}, mode={}, generations={}..={})",
+            run.run_id,
+            run.status,
+            run.capability_id,
+            run.consumer_id,
+            run.reconcile_mode,
+            run.from_generation_seq.saturating_add(1),
+            run.to_generation_seq
         ));
         if let Some(error) = run.error.as_ref() {
-            lines.push(format!("Current repo capability event error: {error}"));
+            lines.push(format!(
+                "Current repo current-state consumer error: {error}"
+            ));
         }
     }
     lines.push(format!(
-        "Capability event persisted: {}",
+        "Current-state consumer persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
 }
 
-fn append_sync_lines(lines: &mut Vec<String>, status: &daemon::SyncQueueStatus) {
+fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQueueStatus) {
+    lines.push("DevQL task queue: available".to_string());
+    lines.push(format!("DevQL queued tasks: {}", status.state.queued_tasks));
     lines.push(format!(
-        "Sync pending tasks: {}",
-        status.state.pending_tasks
-    ));
-    lines.push(format!(
-        "Sync running tasks: {}",
+        "DevQL running tasks: {}",
         status.state.running_tasks
     ));
-    lines.push(format!("Sync failed tasks: {}", status.state.failed_tasks));
+    lines.push(format!("DevQL failed tasks: {}", status.state.failed_tasks));
     lines.push(format!(
-        "Sync completed recent tasks: {}",
+        "DevQL completed recent tasks: {}",
         status.state.completed_recent_tasks
     ));
-    if let Some(action) = status.state.last_action.as_ref() {
-        lines.push(format!("Sync last action: {action}"));
+    for counts in &status.state.by_kind {
+        lines.push(format!(
+            "DevQL {} tasks: queued={}, running={}, failed={}, completed_recent={}",
+            counts.kind,
+            counts.queued_tasks,
+            counts.running_tasks,
+            counts.failed_tasks,
+            counts.completed_recent_tasks
+        ));
     }
-    if let Some(task) = status.current_repo_task.as_ref() {
+    if let Some(action) = status.state.last_action.as_ref() {
+        lines.push(format!("DevQL last action: {action}"));
+    }
+    if let Some(control) = status.current_repo_control.as_ref() {
         lines.push(format!(
-            "Current repo sync task: {} ({}, mode={}, source={})",
-            task.task_id, task.status, task.mode, task.source
+            "Current repo task queue: {}",
+            if control.paused { "paused" } else { "running" }
         ));
+        if let Some(reason) = control.paused_reason.as_ref() {
+            lines.push(format!("Current repo task pause reason: {reason}"));
+        }
+    }
+    for task in &status.current_repo_tasks {
         lines.push(format!(
-            "Current repo sync phase: {}",
-            task.progress.phase.as_str()
+            "Current repo task: {} ({}, kind={}, source={})",
+            task.task_id, task.status, task.kind, task.source
         ));
-        if task.progress.paths_total > 0 {
+        if let Some(progress) = task.sync_progress() {
             lines.push(format!(
-                "Current repo sync progress: {}/{} paths complete ({} remaining)",
-                task.progress.paths_completed,
-                task.progress.paths_total,
-                task.progress.paths_remaining
+                "Current repo sync phase: {}",
+                progress.phase.as_str()
             ));
+            if progress.paths_total > 0 {
+                lines.push(format!(
+                    "Current repo sync progress: {}/{} paths complete ({} remaining)",
+                    progress.paths_completed, progress.paths_total, progress.paths_remaining
+                ));
+            }
+            if let Some(path) = progress.current_path.as_ref() {
+                lines.push(format!("Current repo sync path: {path}"));
+            }
+        }
+        if let Some(progress) = task.ingest_progress() {
+            lines.push(format!("Current repo ingest phase: {:?}", progress.phase));
+            if let Some(commit_sha) = progress.current_commit_sha.as_ref() {
+                lines.push(format!("Current repo ingest commit: {commit_sha}"));
+            }
         }
         if let Some(position) = task.queue_position {
             lines.push(format!(
-                "Current repo sync queue position: {} ({} ahead)",
+                "Current repo task queue position: {} ({} ahead)",
                 position,
                 task.tasks_ahead.unwrap_or(position.saturating_sub(1))
             ));
         }
-        if let Some(path) = task.progress.current_path.as_ref() {
-            lines.push(format!("Current repo sync path: {path}"));
-        }
         if let Some(error) = task.error.as_ref() {
-            lines.push(format!("Current repo sync error: {error}"));
+            lines.push(format!("Current repo task error: {error}"));
         }
     }
     lines.push(format!(
-        "Sync persisted: {}",
+        "DevQL persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
 }

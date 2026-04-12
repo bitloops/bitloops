@@ -7,8 +7,8 @@ use std::path::Path;
 use super::{
     DevqlGraphqlContext,
     types::{
-        Checkpoint, DateTimeScalar, IngestionProgressEvent, KnowledgeItem, KnowledgeRelation,
-        SyncTaskObject,
+        DateTimeScalar, KnowledgeItem, KnowledgeRelation, TaskKind, TaskObject,
+        TaskQueueControlResultObject,
     },
 };
 
@@ -41,7 +41,7 @@ pub struct RefreshKnowledgeInput {
 }
 
 #[derive(Debug, Clone, InputObject)]
-pub struct EnqueueSyncInput {
+pub struct EnqueueSyncTaskInput {
     #[graphql(default = false)]
     pub full: bool,
     #[graphql(default)]
@@ -55,9 +55,18 @@ pub struct EnqueueSyncInput {
 }
 
 #[derive(Debug, Clone, InputObject)]
-pub struct IngestInput {
+pub struct EnqueueIngestTaskInput {
     #[graphql(default)]
     pub backfill: Option<i32>,
+}
+
+#[derive(Debug, Clone, InputObject)]
+pub struct EnqueueTaskInput {
+    pub kind: TaskKind,
+    #[graphql(default)]
+    pub sync: Option<EnqueueSyncTaskInput>,
+    #[graphql(default)]
+    pub ingest: Option<EnqueueIngestTaskInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -142,8 +151,8 @@ pub struct SyncResult {
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct EnqueueSyncResult {
-    pub task: SyncTaskObject,
+pub struct EnqueueTaskResult {
+    pub task: TaskObject,
     pub merged: bool,
 }
 
@@ -334,91 +343,119 @@ impl MutationRoot {
         Ok(summary.into())
     }
 
-    async fn ingest(&self, ctx: &Context<'_>, input: Option<IngestInput>) -> Result<IngestResult> {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        context
-            .require_repo_write_scope()
-            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "ingest", err))?;
-        let cfg = context
-            .devql_config()
-            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
-        crate::daemon::require_current_repo_runtime(cfg.repo_root.as_path(), "GraphQL ingest")
-            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
-        let observer = GraphqlIngestionObserver::new(context);
-        let backfill = match input.and_then(|input| input.backfill) {
-            Some(backfill) if backfill <= 0 => {
-                return Err(operation_error(
-                    "BAD_USER_INPUT",
-                    "validation",
-                    "ingest",
-                    "`backfill` must be greater than zero",
-                ));
-            }
-            Some(backfill) => Some(usize::try_from(backfill).map_err(|_| {
-                operation_error(
-                    "BAD_USER_INPUT",
-                    "validation",
-                    "ingest",
-                    "`backfill` must be greater than zero",
-                )
-            })?),
-            None => None,
-        };
-        let summary = if let Some(backfill) = backfill {
-            crate::host::devql::execute_ingest_with_backfill_window(
-                &cfg,
-                false,
-                backfill,
-                Some(&observer),
-                Some(crate::daemon::shared_enrichment_coordinator()),
-            )
-            .await
-        } else {
-            crate::host::devql::execute_ingest_with_observer(
-                &cfg,
-                false,
-                0,
-                Some(&observer),
-                Some(crate::daemon::shared_enrichment_coordinator()),
-            )
-            .await
-        }
-        .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
-        Ok(summary.into())
-    }
-
-    #[graphql(name = "enqueueSync")]
-    async fn enqueue_sync(
+    #[graphql(name = "enqueueTask")]
+    async fn enqueue_task(
         &self,
         ctx: &Context<'_>,
-        input: EnqueueSyncInput,
-    ) -> Result<EnqueueSyncResult> {
+        input: EnqueueTaskInput,
+    ) -> Result<EnqueueTaskResult> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         context
             .require_repo_write_scope()
-            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueTask", err))?;
         let cfg = context
             .devql_config()
-            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "enqueueSync", err))?;
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "enqueueTask", err))?;
+        let (source, spec) = resolve_enqueue_task_input(input, "enqueueTask")?;
 
-        let EnqueueSyncInput {
-            full,
-            paths,
-            repair,
-            validate,
-            source,
-        } = input;
-        let mode = resolve_sync_mode_input(full, paths, repair, validate, "enqueueSync")?;
-        let source = parse_sync_source(source.as_deref())
-            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
-
-        crate::daemon::shared_sync_coordinator().register_subscription_hub(context.subscriptions());
-        let queued = crate::daemon::enqueue_sync_for_config(&cfg, source, mode)
-            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "enqueueSync", err))?;
-        Ok(EnqueueSyncResult {
+        crate::daemon::shared_devql_task_coordinator()
+            .register_subscription_hub(context.subscriptions());
+        let queued = crate::daemon::enqueue_task_for_config(&cfg, source, spec)
+            .map_err(|err| operation_error("BACKEND_ERROR", "task", "enqueueTask", err))?;
+        Ok(EnqueueTaskResult {
             task: queued.task.into(),
             merged: queued.merged,
         })
+    }
+
+    #[graphql(name = "pauseTaskQueue")]
+    async fn pause_task_queue(
+        &self,
+        ctx: &Context<'_>,
+        reason: Option<String>,
+    ) -> Result<TaskQueueControlResultObject> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context.require_repo_write_scope().map_err(|err| {
+            operation_error("BAD_USER_INPUT", "validation", "pauseTaskQueue", err)
+        })?;
+        let cfg = context.devql_config().map_err(|err| {
+            operation_error("BACKEND_ERROR", "configuration", "pauseTaskQueue", err)
+        })?;
+        let reason = normalise_optional_input(reason, "reason", "pauseTaskQueue")?;
+        crate::daemon::pause_devql_tasks(cfg.repo.repo_id.as_str(), reason)
+            .map(Into::into)
+            .map_err(|err| operation_error("BACKEND_ERROR", "task", "pauseTaskQueue", err))
+    }
+
+    #[graphql(name = "resumeTaskQueue")]
+    async fn resume_task_queue(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+    ) -> Result<TaskQueueControlResultObject> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context.require_repo_write_scope().map_err(|err| {
+            operation_error("BAD_USER_INPUT", "validation", "resumeTaskQueue", err)
+        })?;
+        let cfg = context.devql_config().map_err(|err| {
+            operation_error("BACKEND_ERROR", "configuration", "resumeTaskQueue", err)
+        })?;
+        let requested_repo_id = repo_id
+            .map(|value| require_non_empty_input(value, "repoId", "resumeTaskQueue"))
+            .transpose()?;
+        if let Some(requested_repo_id) = requested_repo_id
+            && requested_repo_id != cfg.repo.repo_id
+        {
+            return Err(operation_error(
+                "BAD_USER_INPUT",
+                "validation",
+                "resumeTaskQueue",
+                format!(
+                    "repoId `{requested_repo_id}` does not match the current repository `{}`",
+                    cfg.repo.repo_id
+                ),
+            ));
+        }
+
+        crate::daemon::resume_devql_tasks(cfg.repo.repo_id.as_str())
+            .map(Into::into)
+            .map_err(|err| operation_error("BACKEND_ERROR", "task", "resumeTaskQueue", err))
+    }
+
+    #[graphql(name = "cancelTask")]
+    async fn cancel_task(&self, ctx: &Context<'_>, id: String) -> Result<TaskObject> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_repo_write_scope()
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "cancelTask", err))?;
+        let cfg = context
+            .devql_config()
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "cancelTask", err))?;
+        let task = crate::daemon::devql_task(id.as_str())
+            .map_err(|err| operation_error("BACKEND_ERROR", "task", "cancelTask", err))?
+            .ok_or_else(|| {
+                operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    "cancelTask",
+                    format!("unknown task `{id}`"),
+                )
+            })?;
+        if task.repo_id != cfg.repo.repo_id {
+            return Err(operation_error(
+                "BAD_USER_INPUT",
+                "validation",
+                "cancelTask",
+                format!(
+                    "task `{id}` belongs to repository `{}` and is outside the current repo scope",
+                    task.repo_id
+                ),
+            ));
+        }
+
+        crate::daemon::cancel_devql_task(id.as_str())
+            .map(Into::into)
+            .map_err(|err| operation_error("BACKEND_ERROR", "task", "cancelTask", err))
     }
 
     async fn add_knowledge(
@@ -585,23 +622,121 @@ impl MutationRoot {
     }
 }
 
-fn parse_sync_source(
+fn parse_task_source(
     raw: Option<&str>,
-) -> std::result::Result<crate::daemon::SyncTaskSource, String> {
+) -> std::result::Result<crate::daemon::DevqlTaskSource, String> {
     match raw.map(str::trim).filter(|value| !value.is_empty()) {
-        None => Ok(crate::daemon::SyncTaskSource::ManualCli),
-        Some("init") => Ok(crate::daemon::SyncTaskSource::Init),
+        None => Ok(crate::daemon::DevqlTaskSource::ManualCli),
+        Some("init") => Ok(crate::daemon::DevqlTaskSource::Init),
         Some("manual_cli") | Some("manual-cli") | Some("manual") => {
-            Ok(crate::daemon::SyncTaskSource::ManualCli)
+            Ok(crate::daemon::DevqlTaskSource::ManualCli)
         }
-        Some("watcher") => Ok(crate::daemon::SyncTaskSource::Watcher),
-        Some("post_commit") | Some("post-commit") => Ok(crate::daemon::SyncTaskSource::PostCommit),
-        Some("post_merge") | Some("post-merge") => Ok(crate::daemon::SyncTaskSource::PostMerge),
+        Some("watcher") => Ok(crate::daemon::DevqlTaskSource::Watcher),
+        Some("post_commit") | Some("post-commit") => Ok(crate::daemon::DevqlTaskSource::PostCommit),
+        Some("post_merge") | Some("post-merge") => Ok(crate::daemon::DevqlTaskSource::PostMerge),
         Some("post_checkout") | Some("post-checkout") => {
-            Ok(crate::daemon::SyncTaskSource::PostCheckout)
+            Ok(crate::daemon::DevqlTaskSource::PostCheckout)
         }
         Some(other) => Err(format!(
-            "unsupported sync source `{other}`; expected one of: init, manual_cli, watcher, post_commit, post_merge, post_checkout"
+            "unsupported task source `{other}`; expected one of: init, manual_cli, watcher, post_commit, post_merge, post_checkout"
+        )),
+    }
+}
+
+fn resolve_enqueue_task_input(
+    input: EnqueueTaskInput,
+    operation: &'static str,
+) -> Result<(crate::daemon::DevqlTaskSource, crate::daemon::DevqlTaskSpec)> {
+    match input.kind {
+        TaskKind::Sync => {
+            let sync = input.sync.ok_or_else(|| {
+                operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    operation,
+                    "`sync` input is required when kind is SYNC",
+                )
+            })?;
+            if input.ingest.is_some() {
+                return Err(operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    operation,
+                    "`ingest` must not be provided when kind is SYNC",
+                ));
+            }
+            let mode = resolve_sync_mode_input(
+                sync.full,
+                sync.paths,
+                sync.repair,
+                sync.validate,
+                operation,
+            )?;
+            let source = parse_task_source(sync.source.as_deref())
+                .map_err(|err| operation_error("BAD_USER_INPUT", "validation", operation, err))?;
+            Ok((
+                source,
+                crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                    mode: match mode {
+                        crate::host::devql::SyncMode::Auto => crate::daemon::SyncTaskMode::Auto,
+                        crate::host::devql::SyncMode::Full => crate::daemon::SyncTaskMode::Full,
+                        crate::host::devql::SyncMode::Paths(paths) => {
+                            crate::daemon::SyncTaskMode::Paths { paths }
+                        }
+                        crate::host::devql::SyncMode::Repair => crate::daemon::SyncTaskMode::Repair,
+                        crate::host::devql::SyncMode::Validate => {
+                            crate::daemon::SyncTaskMode::Validate
+                        }
+                    },
+                }),
+            ))
+        }
+        TaskKind::Ingest => {
+            let ingest = input.ingest.ok_or_else(|| {
+                operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    operation,
+                    "`ingest` input is required when kind is INGEST",
+                )
+            })?;
+            if input.sync.is_some() {
+                return Err(operation_error(
+                    "BAD_USER_INPUT",
+                    "validation",
+                    operation,
+                    "`sync` must not be provided when kind is INGEST",
+                ));
+            }
+            let backfill = match ingest.backfill {
+                Some(backfill) if backfill <= 0 => {
+                    return Err(operation_error(
+                        "BAD_USER_INPUT",
+                        "validation",
+                        operation,
+                        "`backfill` must be greater than zero",
+                    ));
+                }
+                Some(backfill) => Some(usize::try_from(backfill).map_err(|_| {
+                    operation_error(
+                        "BAD_USER_INPUT",
+                        "validation",
+                        operation,
+                        "`backfill` must be greater than zero",
+                    )
+                })?),
+                None => None,
+            };
+            Ok((
+                crate::daemon::DevqlTaskSource::ManualCli,
+                crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec { backfill }),
+            ))
+        }
+        TaskKind::EmbeddingsBootstrap => Err(operation_error(
+            "BAD_USER_INPUT",
+            "validation",
+            operation,
+            "`enqueueTask` does not support EMBEDDINGS_BOOTSTRAP; bootstrap tasks are enqueued internally by the daemon-aware CLI flows",
         )),
     }
 }
@@ -777,39 +912,6 @@ fn operation_error(
 
 fn to_graphql_count(value: usize) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
-}
-
-struct GraphqlIngestionObserver {
-    repo_name: String,
-    context: DevqlGraphqlContext,
-}
-
-impl GraphqlIngestionObserver {
-    fn new(context: &DevqlGraphqlContext) -> Self {
-        Self {
-            repo_name: context.repo_name().to_string(),
-            context: context.clone(),
-        }
-    }
-}
-
-impl crate::host::devql::IngestionObserver for GraphqlIngestionObserver {
-    fn on_progress(&self, update: crate::host::devql::IngestionProgressUpdate) {
-        self.context
-            .subscriptions()
-            .publish_progress(self.repo_name.clone(), IngestionProgressEvent::from(update));
-    }
-
-    fn on_checkpoint_ingested(
-        &self,
-        checkpoint: crate::host::devql::IngestedCheckpointNotification,
-    ) {
-        self.context.subscriptions().publish_checkpoint(
-            self.repo_name.clone(),
-            Checkpoint::from_ingested(&checkpoint.checkpoint, checkpoint.commit_sha.as_deref())
-                .with_scope(self.context.slim_root_scope()),
-        );
-    }
 }
 
 #[cfg(test)]

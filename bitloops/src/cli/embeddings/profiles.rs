@@ -16,9 +16,11 @@ use crate::host::inference::{
 };
 
 use super::managed::{
-    ensure_managed_embeddings_runtime, managed_runtime_command_is_eligible,
-    managed_runtime_version_for_command,
+    ensure_managed_embeddings_runtime, ensure_managed_embeddings_runtime_with_progress,
+    managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
+
+const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EmbeddingsInstallState {
@@ -30,6 +32,14 @@ pub(crate) enum EmbeddingsInstallState {
         profile_name: String,
         kind: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PulledEmbeddingProfileOutcome {
+    pub(crate) profile_name: String,
+    pub(crate) cache_dir: PathBuf,
+    pub(crate) runtime_name: String,
+    pub(crate) model_name: String,
 }
 
 pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsInstallState {
@@ -69,6 +79,7 @@ pub(crate) fn pull_profile(
     pull_profile_with_config_path(repo_root, &config_path, capability, profile_name)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn pull_profile_with_config_path(
     repo_root: &Path,
     config_path: &Path,
@@ -84,12 +95,54 @@ pub(super) fn pull_profile_with_config_path(
             Some(config_path),
         )?);
     }
+    let capability = if install_needed {
+        embedding_capability_for_config_path(config_path)?
+    } else {
+        capability.clone()
+    };
+    let outcome = warm_local_profile(repo_root, &capability, profile_name, |_| Ok(()))?;
+    lines.extend([
+        format!("Pulled embedding profile `{profile_name}`."),
+        format!("Cache directory: {}", outcome.cache_dir.display()),
+        format!("Runtime: {} {}", outcome.runtime_name, outcome.model_name),
+    ]);
+    Ok(lines)
+}
+
+pub(crate) fn pull_profile_with_config_path_and_progress<R>(
+    repo_root: &Path,
+    config_path: &Path,
+    capability: &EmbeddingCapabilityConfig,
+    profile_name: &str,
+    mut report: R,
+) -> Result<PulledEmbeddingProfileOutcome>
+where
+    R: FnMut(crate::daemon::EmbeddingsBootstrapProgress) -> Result<()>,
+{
+    let install_needed =
+        should_install_managed_runtime_for_profile(config_path, capability, profile_name)?;
+    if install_needed {
+        ensure_managed_embeddings_runtime_with_progress(repo_root, Some(config_path), &mut report)?;
+    }
 
     let capability = if install_needed {
         embedding_capability_for_config_path(config_path)?
     } else {
         capability.clone()
     };
+    warm_local_profile(repo_root, &capability, profile_name, report)
+}
+
+fn warm_local_profile<R>(
+    repo_root: &Path,
+    capability: &EmbeddingCapabilityConfig,
+    profile_name: &str,
+    mut report: R,
+) -> Result<PulledEmbeddingProfileOutcome>
+where
+    R: FnMut(crate::daemon::EmbeddingsBootstrapProgress) -> Result<()>,
+{
+    let capability = capability_with_local_warmup_timeouts(capability, profile_name);
     let profile = resolve_profile(&capability, profile_name)?;
     ensure_local_profile(profile, profile_name)?;
 
@@ -98,6 +151,12 @@ pub(super) fn pull_profile_with_config_path(
         fs::create_dir_all(parent)
             .with_context(|| format!("creating cache parent {}", parent.display()))?;
     }
+
+    report(crate::daemon::EmbeddingsBootstrapProgress {
+        phase: crate::daemon::EmbeddingsBootstrapPhase::WarmingProfile,
+        message: Some(format!("Warming profile `{profile_name}`")),
+        ..Default::default()
+    })?;
 
     let gateway = LocalInferenceGateway::new(
         repo_root,
@@ -112,17 +171,34 @@ pub(super) fn pull_profile_with_config_path(
         )
         .context("warming local embedding cache")?;
 
-    lines.extend([
-        format!("Pulled embedding profile `{profile_name}`."),
-        format!("Cache directory: {}", cache_dir.display()),
-        format!(
-            "Runtime: {} {}",
-            provider.provider_name(),
-            provider.model_name()
-        ),
-    ]);
+    Ok(PulledEmbeddingProfileOutcome {
+        profile_name: profile_name.to_string(),
+        cache_dir,
+        runtime_name: provider.provider_name().to_string(),
+        model_name: provider.model_name().to_string(),
+    })
+}
 
-    Ok(lines)
+fn capability_with_local_warmup_timeouts(
+    capability: &EmbeddingCapabilityConfig,
+    profile_name: &str,
+) -> EmbeddingCapabilityConfig {
+    let mut adjusted = capability.clone();
+    let Some(profile) = adjusted.inference.profiles.get(profile_name) else {
+        return adjusted;
+    };
+    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER {
+        return adjusted;
+    }
+    let Some(runtime_name) = profile.runtime.clone() else {
+        return adjusted;
+    };
+    let Some(runtime) = adjusted.inference.runtimes.get_mut(&runtime_name) else {
+        return adjusted;
+    };
+    runtime.startup_timeout_secs = runtime.startup_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
+    runtime.request_timeout_secs = runtime.request_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
+    adjusted
 }
 
 pub(crate) fn doctor_profile(
@@ -295,7 +371,7 @@ fn local_profile_cache_dir(profile: &EmbeddingProfileConfig) -> Result<PathBuf> 
         .context("resolving bitloops-embeddings cache directory")
 }
 
-pub(super) fn embedding_capability_for_config_path(
+pub(crate) fn embedding_capability_for_config_path(
     config_path: &Path,
 ) -> Result<EmbeddingCapabilityConfig> {
     let loaded = load_daemon_settings(Some(config_path))?;
@@ -306,7 +382,9 @@ pub(super) fn embedding_capability_for_config_path(
     ))
 }
 
-fn selected_inference_profile_name(capability: &EmbeddingCapabilityConfig) -> Option<&str> {
+pub(crate) fn selected_inference_profile_name(
+    capability: &EmbeddingCapabilityConfig,
+) -> Option<&str> {
     capability
         .semantic_clones
         .inference

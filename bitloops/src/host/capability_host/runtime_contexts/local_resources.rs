@@ -14,6 +14,7 @@ use crate::config::{
     resolve_inference_capability_config_for_repo, resolve_provider_config_for_repo,
     resolve_store_backend_config_for_repo,
 };
+use crate::host::capability_host::CapabilityMailboxRegistration;
 use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
@@ -23,7 +24,8 @@ use crate::host::relational_store::DefaultRelationalStore;
 use super::capability_config::build_capability_config_root;
 use super::language_services::{BuiltinLanguageServicesGateway, builtin_language_services};
 use super::local_gateways::{
-    DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalStoreHealthGateway,
+    DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalCapabilityWorkplaneGateway,
+    LocalStoreHealthGateway,
 };
 use super::local_runtime::LocalCapabilityRuntime;
 
@@ -100,14 +102,15 @@ impl LocalCapabilityRuntimeResources {
     }
 
     pub fn runtime(&self) -> LocalCapabilityRuntime<'_> {
-        self.runtime_with_relational(None, None, None)
+        self.runtime_with_relational(None, None, None, &[])
     }
 
     pub fn runtime_for_capability<'a>(
         &'a self,
         capability_id: &'a str,
+        declared_mailboxes: &'a [CapabilityMailboxRegistration],
     ) -> LocalCapabilityRuntime<'a> {
-        self.runtime_with_relational(None, Some(capability_id), None)
+        self.runtime_with_relational(None, Some(capability_id), None, declared_mailboxes)
     }
 
     pub fn runtime_with_relational<'a>(
@@ -115,6 +118,7 @@ impl LocalCapabilityRuntimeResources {
         devql_relational: Option<&'a RelationalStorage>,
         invoking_capability_id: Option<&'a str>,
         invoking_ingester_id: Option<&'a str>,
+        declared_mailboxes: &'a [CapabilityMailboxRegistration],
     ) -> LocalCapabilityRuntime<'a> {
         LocalCapabilityRuntime::new(
             &self.repo_root,
@@ -135,7 +139,23 @@ impl LocalCapabilityRuntimeResources {
             devql_relational,
             invoking_capability_id,
             invoking_ingester_id,
+            invoking_capability_id.and_then(|capability_id| {
+                LocalCapabilityWorkplaneGateway::new(
+                    &self.repo_root,
+                    capability_id,
+                    declared_mailboxes,
+                )
+                .ok()
+            }),
         )
+    }
+
+    pub fn workplane_gateway_for_capability(
+        &self,
+        capability_id: &str,
+        declared_mailboxes: &[CapabilityMailboxRegistration],
+    ) -> Result<LocalCapabilityWorkplaneGateway> {
+        LocalCapabilityWorkplaneGateway::new(&self.repo_root, capability_id, declared_mailboxes)
     }
 }
 
