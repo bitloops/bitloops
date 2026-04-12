@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-04-12
+
 ### Added
 
 - **Shared DevQL task orchestration for sync and ingest**: replaced the sync-only daemon queue with a generic persisted DevQL task subsystem that manages both sync and ingest work. The daemon now stores typed task records and repo control state, migrates legacy sync queue documents into the new task state on recovery, supports repo-scoped pause/resume plus queued-task cancellation, and schedules independent per-repo `sync` and `ingest` lanes so one sync and one ingest can run concurrently for the same repository. Ingest correctness remains owned by `commit_ingest_ledger` and branch watermarks rather than orchestration state.
