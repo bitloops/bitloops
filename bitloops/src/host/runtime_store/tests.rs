@@ -1,6 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+};
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE};
 use crate::host::checkpoints::session::backend::SessionBackend;
 use crate::host::checkpoints::session::state::SessionState;
@@ -563,6 +567,60 @@ fn repo_runtime_store_persists_repo_watcher_registration() {
     assert_eq!(registration.pid, 4242);
     assert_eq!(registration.restart_token, "restart-token");
     assert_eq!(registration.repo_root, repo_root);
+}
+
+#[test]
+fn repo_runtime_store_persists_capability_workplane_mailbox_intents() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .set_capability_workplane_mailbox_intents(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            [
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ],
+            true,
+            Some("test"),
+        )
+        .expect("activate mailbox intents");
+    store
+        .set_capability_workplane_mailbox_intents(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            [SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX],
+            false,
+            Some("test"),
+        )
+        .expect("persist inactive mailbox intent");
+
+    let status = store
+        .load_capability_workplane_mailbox_status(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            [
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            ],
+        )
+        .expect("load mailbox status");
+
+    assert!(
+        status[SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX].intent_active,
+        "summary refresh intent should be active"
+    );
+    assert!(
+        status[SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX].intent_active,
+        "code embedding intent should be active"
+    );
+    assert!(
+        !status[SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX].intent_active,
+        "summary embedding intent should remain inactive"
+    );
 }
 
 fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {

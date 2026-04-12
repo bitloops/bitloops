@@ -1426,11 +1426,26 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         let handoff_index = rendered
                                             .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                                             .expect("handoff output");
-                                        let sync_index = rendered
-                                            .find("Starting initial DevQL sync...")
-                                            .expect("sync output");
-                                        assert!(bootstrap_index < sync_index);
-                                        assert!(handoff_index < sync_index);
+                                        let checklist_index = rendered
+                                            .find("Bitloops is currently updating its local database with the following:")
+                                            .expect("checklist output");
+                                        let sync_description_index = rendered
+                                            .find(
+                                                "Analysing your current branch to know what's what",
+                                            )
+                                            .expect("sync description output");
+                                        let embeddings_description_index = rendered
+                                            .find("Creating code embeddings for fast search using our local embeddings provider")
+                                            .expect("embeddings description output");
+                                        assert!(bootstrap_index < checklist_index);
+                                        assert!(handoff_index < checklist_index);
+                                        assert!(checklist_index < sync_description_index);
+                                        assert!(
+                                            sync_description_index < embeddings_description_index
+                                        );
+                                        assert!(
+                                            !rendered.contains("Starting initial DevQL sync...")
+                                        );
                                         assert_eq!(&*events.borrow(), &["sync", "ingest"]);
                                         let queued = crate::daemon::devql_tasks(
                                             None,

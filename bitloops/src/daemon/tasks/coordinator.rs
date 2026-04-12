@@ -765,12 +765,6 @@ impl DevqlTaskCoordinator {
             .embeddings_bootstrap_spec()
             .cloned()
             .ok_or_else(|| anyhow!("embeddings bootstrap task missing spec"))?;
-        let catch_up_config_path = spec.config_path.clone();
-        let needs_repo_catch_up =
-            crate::daemon::embeddings_bootstrap::repo_catch_up_required_for_bootstrap(
-                &spec.config_path,
-                &spec.profile_name,
-            )?;
         let task_id = task.task_id.clone();
         let runtime_store = self.runtime_store.clone();
         let repo_root = task.repo_root.clone();
@@ -808,16 +802,7 @@ impl DevqlTaskCoordinator {
             .await?;
 
         match final_result {
-            Ok(result) => {
-                if needs_repo_catch_up {
-                    crate::daemon::embeddings_bootstrap::enqueue_repo_catch_up_after_bootstrap(
-                        &task.repo_root,
-                        &catch_up_config_path,
-                    )
-                    .await?;
-                }
-                self.finish_embeddings_bootstrap_task_completed(&task.task_id, result)?
-            }
+            Ok(result) => self.finish_embeddings_bootstrap_task_completed(&task.task_id, result)?,
             Err(err) => self.finish_task_failed(&task.task_id, err)?,
         }
 

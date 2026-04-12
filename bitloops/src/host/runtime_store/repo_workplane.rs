@@ -62,6 +62,19 @@ CREATE TABLE IF NOT EXISTS capability_workplane_cursor_mailboxes (
 CREATE INDEX IF NOT EXISTS idx_capability_workplane_cursor_mailboxes_repo_capability
 ON capability_workplane_cursor_mailboxes (repo_id, capability_id, mailbox_name);
 
+CREATE TABLE IF NOT EXISTS capability_workplane_mailbox_intents (
+    repo_id TEXT NOT NULL,
+    capability_id TEXT NOT NULL,
+    mailbox_name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    source TEXT,
+    updated_at_unix INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, capability_id, mailbox_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_capability_workplane_mailbox_intents_repo_capability
+ON capability_workplane_mailbox_intents (repo_id, capability_id, mailbox_name, active);
+
 CREATE TABLE IF NOT EXISTS capability_workplane_cursor_runs (
     run_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -242,6 +255,7 @@ pub struct CapabilityWorkplaneMailboxStatus {
     pub running_cursor_runs: u64,
     pub failed_cursor_runs: u64,
     pub completed_recent_cursor_runs: u64,
+    pub intent_active: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -251,6 +265,46 @@ pub struct CapabilityWorkplaneEnqueueResult {
 }
 
 impl RepoSqliteRuntimeStore {
+    pub fn set_capability_workplane_mailbox_intents<'a>(
+        &self,
+        capability_id: &str,
+        mailbox_names: impl IntoIterator<Item = &'a str>,
+        active: bool,
+        source: Option<&str>,
+    ) -> Result<()> {
+        let sqlite = self.connect_repo_sqlite()?;
+        sqlite.with_connection(|conn| {
+            let now = unix_timestamp_now();
+            let mut stmt = conn.prepare(
+                "INSERT INTO capability_workplane_mailbox_intents (
+                    repo_id, capability_id, mailbox_name, active, source, updated_at_unix
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (repo_id, capability_id, mailbox_name)
+                 DO UPDATE SET
+                    active = excluded.active,
+                    source = excluded.source,
+                    updated_at_unix = excluded.updated_at_unix",
+            )?;
+            for mailbox_name in mailbox_names {
+                stmt.execute(params![
+                    &self.repo_id,
+                    capability_id,
+                    mailbox_name,
+                    if active { 1 } else { 0 },
+                    source,
+                    sql_i64(now)?,
+                ])
+                .with_context(|| {
+                    format!(
+                        "upserting capability workplane mailbox intent `{mailbox_name}` for repo `{}`",
+                        self.repo_id
+                    )
+                })?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn enqueue_capability_workplane_jobs(
         &self,
         capability_id: &str,
@@ -372,6 +426,24 @@ impl RepoSqliteRuntimeStore {
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
+
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT mailbox_name, active
+                     FROM capability_workplane_mailbox_intents
+                     WHERE repo_id = ?1 AND capability_id = ?2",
+                )?;
+                let rows = stmt.query_map(params![&self.repo_id, capability_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?;
+                for row in rows {
+                    let (mailbox_name, active) = row?;
+                    let Some(entry) = status_by_mailbox.get_mut(&mailbox_name) else {
+                        continue;
+                    };
+                    entry.intent_active = active != 0;
+                }
+            }
 
             {
                 let mut stmt = conn.prepare(

@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::host::capability_host::{
-    CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxRegistration,
-    CapabilityRegistrar,
+    CapabilityMailboxBacklogPolicy, CapabilityMailboxHandler, CapabilityMailboxPolicy,
+    CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration, CapabilityRegistrar,
 };
 
 use super::current_state::SemanticClonesCurrentStateConsumer;
@@ -27,14 +27,20 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
             super::types::SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
         ),
     ))?;
-    registrar.register_mailbox(CapabilityMailboxRegistration::new(
-        super::types::SEMANTIC_CLONES_CAPABILITY_ID,
-        super::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-        CapabilityMailboxPolicy::Job,
-        CapabilityMailboxHandler::Ingester(
-            super::types::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
-        ),
-    ))?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(
+                super::types::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
+            ),
+        )
+        .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+            super::types::SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
+        ))
+        .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
+    )?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
             super::types::SEMANTIC_CLONES_CAPABILITY_ID,
@@ -44,7 +50,10 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
                 super::types::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
             ),
         )
-        .blocked_by_embeddings_bootstrap(),
+        .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
+            super::types::SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT,
+        ))
+        .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
     )?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
@@ -55,7 +64,10 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
                 super::types::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
             ),
         )
-        .blocked_by_embeddings_bootstrap(),
+        .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
+            super::types::SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
+        ))
+        .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
     )?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
@@ -66,7 +78,7 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
                 super::types::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
             ),
         )
-        .blocked_by_embeddings_bootstrap(),
+        .backlog_policy(CapabilityMailboxBacklogPolicy::RepoCoalesced),
     )?;
     registrar.register_current_state_consumer(
         crate::host::capability_host::CurrentStateConsumerRegistration::new(

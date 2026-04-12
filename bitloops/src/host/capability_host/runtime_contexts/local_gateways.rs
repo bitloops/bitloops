@@ -123,6 +123,8 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                                 running_cursor_runs: status.running_cursor_runs,
                                 failed_cursor_runs: status.failed_cursor_runs,
                                 completed_recent_cursor_runs: status.completed_recent_cursor_runs,
+                                intent_active: status.intent_active,
+                                blocked_reason: None,
                             },
                         )
                     })

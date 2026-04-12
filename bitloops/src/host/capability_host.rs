@@ -43,9 +43,10 @@ pub use policy::{
     CrossPackAccessPolicy, CrossPackGrant, HostInvocationPolicy, PackTrustTier, with_timeout,
 };
 pub use registrar::{
-    BoxFuture, CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxRegistration,
-    CapabilityPack, CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest,
-    IngestResult, IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler,
-    KnowledgeIngesterRegistration, KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample,
-    SchemaModule, StageHandler, StageRegistration, StageRequest, StageResponse,
+    BoxFuture, CapabilityMailboxBacklogPolicy, CapabilityMailboxHandler, CapabilityMailboxPolicy,
+    CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration, CapabilityPack,
+    CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest, IngestResult,
+    IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
+    KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
+    StageRegistration, StageRequest, StageResponse,
 };

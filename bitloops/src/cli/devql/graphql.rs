@@ -25,7 +25,6 @@ pub(crate) use self::client::{
     resume_task_queue_via_graphql, run_init_via_graphql, task_queue_status_via_graphql,
     watch_task_id_via_graphql, watch_task_via_graphql,
 };
-pub(crate) use self::progress::{format_live_task_progress_bar_line, format_live_task_status_line};
 pub(crate) use self::types::{
     EmbeddingsBootstrapResultGraphqlRecord, TaskGraphqlRecord, TaskQueueControlGraphqlRecord,
     TaskQueueGraphqlRecord,

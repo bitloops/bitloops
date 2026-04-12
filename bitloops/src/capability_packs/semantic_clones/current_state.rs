@@ -4,10 +4,10 @@ use crate::host::capability_host::{
     ReconcileMode,
 };
 
-use super::runtime_config::{embeddings_enabled, resolve_semantic_clones_config};
+use super::runtime_config::resolve_semantic_clones_config;
 use super::types::{SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID};
 use super::workplane::{
-    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, summary_refresh_required,
+    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
 };
 pub struct SemanticClonesCurrentStateConsumer;
 
@@ -30,7 +30,8 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 SEMANTIC_CLONES_CAPABILITY_ID,
                 context.config_root.clone(),
             ));
-            if !embeddings_enabled(&config) {
+            let intent = resolve_effective_mailbox_intent(context.workplane.as_ref(), &config)?;
+            if !intent.has_any_pipeline_intent() {
                 super::pipeline::delete_repo_current_symbol_clone_edges(
                     context.storage.as_ref(),
                     &request.repo_id,
@@ -39,6 +40,13 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 return Ok(CurrentStateConsumerResult::applied(
                     request.to_generation_seq_inclusive,
                 ));
+            }
+            if !intent.has_any_embedding_intent() {
+                super::pipeline::delete_repo_current_symbol_clone_edges(
+                    context.storage.as_ref(),
+                    &request.repo_id,
+                )
+                .await?;
             }
 
             let inputs = match request.reconcile_mode {
@@ -71,18 +79,8 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 ));
             }
 
-            let summary_refresh_required = summary_refresh_required(&config);
-            if summary_refresh_required {
-                enqueue_summary_refresh_jobs(context.workplane.as_ref(), &inputs)?;
-            }
-            if embeddings_enabled(&config) {
-                enqueue_embedding_jobs(
-                    context.workplane.as_ref(),
-                    &config,
-                    &inputs,
-                    summary_refresh_required,
-                )?;
-            }
+            enqueue_summary_refresh_jobs(context.workplane.as_ref(), &inputs, &intent)?;
+            enqueue_embedding_jobs(context.workplane.as_ref(), &inputs, &intent)?;
             Ok(CurrentStateConsumerResult::applied(
                 request.to_generation_seq_inclusive,
             ))

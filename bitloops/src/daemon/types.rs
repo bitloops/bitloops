@@ -307,10 +307,17 @@ pub struct FailedEmbeddingJobSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct BlockedMailboxStatus {
+    pub mailbox_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct EnrichmentQueueStatus {
     pub state: EnrichmentQueueState,
     pub persisted: bool,
     pub embeddings_gate: Option<EmbeddingsBootstrapGateStatus>,
+    pub blocked_mailboxes: Vec<BlockedMailboxStatus>,
     pub last_failed_embedding: Option<FailedEmbeddingJobSummary>,
 }
 

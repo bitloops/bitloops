@@ -324,6 +324,20 @@ pub enum CapabilityMailboxPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxReadinessPolicy {
+    None,
+    TextGenerationSlot(&'static str),
+    EmbeddingsSlot(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxBacklogPolicy {
+    None,
+    ArtefactCompaction,
+    RepoCoalesced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityMailboxHandler {
     CurrentStateConsumer(&'static str),
     Ingester(&'static str),
@@ -335,7 +349,8 @@ pub struct CapabilityMailboxRegistration {
     pub mailbox_name: &'static str,
     pub policy: CapabilityMailboxPolicy,
     pub handler: CapabilityMailboxHandler,
-    pub blocked_by_embeddings_bootstrap: bool,
+    pub readiness_policy: CapabilityMailboxReadinessPolicy,
+    pub backlog_policy: CapabilityMailboxBacklogPolicy,
 }
 
 impl CapabilityMailboxRegistration {
@@ -350,12 +365,18 @@ impl CapabilityMailboxRegistration {
             mailbox_name,
             policy,
             handler,
-            blocked_by_embeddings_bootstrap: false,
+            readiness_policy: CapabilityMailboxReadinessPolicy::None,
+            backlog_policy: CapabilityMailboxBacklogPolicy::None,
         }
     }
 
-    pub const fn blocked_by_embeddings_bootstrap(mut self) -> Self {
-        self.blocked_by_embeddings_bootstrap = true;
+    pub const fn readiness_policy(mut self, policy: CapabilityMailboxReadinessPolicy) -> Self {
+        self.readiness_policy = policy;
+        self
+    }
+
+    pub const fn backlog_policy(mut self, policy: CapabilityMailboxBacklogPolicy) -> Self {
+        self.backlog_policy = policy;
         self
     }
 }

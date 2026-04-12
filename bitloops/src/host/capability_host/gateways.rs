@@ -109,6 +109,8 @@ pub struct CapabilityMailboxStatus {
     pub running_cursor_runs: u64,
     pub failed_cursor_runs: u64,
     pub completed_recent_cursor_runs: u64,
+    pub intent_active: bool,
+    pub blocked_reason: Option<String>,
 }
 
 pub trait CapabilityWorkplaneGateway: Send + Sync {

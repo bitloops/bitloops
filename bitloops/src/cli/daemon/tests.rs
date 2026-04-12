@@ -495,6 +495,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
             },
             persisted: true,
             embeddings_gate: None,
+            blocked_mailboxes: Vec::new(),
             last_failed_embedding: Some(FailedEmbeddingJobSummary {
                 job_id: "embedding-job-1".to_string(),
                 repo_id: "repo-1".to_string(),

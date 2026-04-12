@@ -237,6 +237,12 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
             lines.push(format!("Embeddings gate last error: {last_error}"));
         }
     }
+    for mailbox in &status.blocked_mailboxes {
+        lines.push(format!(
+            "Mailbox blocked: {} ({})",
+            mailbox.mailbox_name, mailbox.reason
+        ));
+    }
     if let Some(failed) = status.last_failed_embedding.as_ref() {
         lines.push(format!(
             "Last failed embedding job: {} (repo={}, branch={}, kind={}, artefacts={}, attempts={})",

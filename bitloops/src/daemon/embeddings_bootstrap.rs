@@ -4,13 +4,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo;
-use crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_historical_repo;
-use crate::capability_packs::semantic_clones::runtime_config::resolve_semantic_clones_config;
-use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID;
-use crate::capability_packs::semantic_clones::workplane::{
-    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, summary_refresh_required,
-};
 use crate::cli::embeddings::{
     PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
     ensure_managed_embeddings_runtime_with_progress, managed_runtime_command_is_eligible,
@@ -19,15 +12,11 @@ use crate::cli::embeddings::{
 };
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
-    resolve_store_backend_config_for_repo,
 };
 use crate::daemon::{
     EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus, EmbeddingsBootstrapPhase,
     EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness, EmbeddingsBootstrapResult,
     EmbeddingsBootstrapTaskSpec, PersistedEmbeddingsBootstrapState, unix_timestamp_now,
-};
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
 };
 use crate::host::inference::{BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_EMBEDDINGS_RUNTIME_ID};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
@@ -270,17 +259,6 @@ pub(crate) fn gate_status_for_enrichment_queue(
     gate_status_for_config_path(runtime_store, &config_path).map(Some)
 }
 
-pub(crate) fn embeddings_blocked_for_config_root(
-    runtime_store: &DaemonSqliteRuntimeStore,
-    config_root: &Path,
-) -> Result<bool> {
-    let status = gate_status_for_config_path(
-        runtime_store,
-        &config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
-    )?;
-    Ok(status.blocked)
-}
-
 fn execute_bootstrap_flow<R>(
     repo_root: &Path,
     config_path: &Path,
@@ -386,61 +364,6 @@ where
             Err(err)
         }
     }
-}
-
-pub(crate) fn repo_catch_up_required_for_bootstrap(
-    config_path: &Path,
-    requested_profile_name: &str,
-) -> Result<bool> {
-    let capability = match embedding_capability_for_config_path(config_path) {
-        Ok(capability) => capability,
-        Err(_) => return Ok(true),
-    };
-    Ok(selected_inference_profile_name(&capability) != Some(requested_profile_name))
-}
-
-pub(crate) async fn enqueue_repo_catch_up_after_bootstrap(
-    repo_root: &Path,
-    config_path: &Path,
-) -> Result<()> {
-    let repo = resolve_repo_identity(repo_root)?;
-    let config_root = config_path
-        .parent()
-        .context("resolving daemon config root for embeddings catch-up")?
-        .to_path_buf();
-    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.to_path_buf(), repo.clone())?;
-    let backends = resolve_store_backend_config_for_repo(&config_root)?;
-    let relational =
-        RelationalStorage::connect(&cfg, &backends.relational, "embeddings bootstrap catch-up")
-            .await?;
-    let capability_host = build_capability_host(repo_root, repo)?;
-    let semantic_clones =
-        resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
-    let workplane = capability_host.build_workplane_gateway(SEMANTIC_CLONES_CAPABILITY_ID)?;
-    let mut inputs =
-        load_semantic_feature_inputs_for_current_repo(&relational, repo_root, &cfg.repo.repo_id)
-            .await?;
-    inputs.extend(
-        load_semantic_feature_inputs_for_historical_repo(&relational, repo_root, &cfg.repo.repo_id)
-            .await?,
-    );
-    if inputs.is_empty() {
-        return Ok(());
-    }
-    inputs.sort_by(|left, right| left.artefact_id.cmp(&right.artefact_id));
-    inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
-
-    let needs_summary_refresh = summary_refresh_required(&semantic_clones);
-    if needs_summary_refresh {
-        enqueue_summary_refresh_jobs(workplane.as_ref(), &inputs)?;
-    }
-    enqueue_embedding_jobs(
-        workplane.as_ref(),
-        &semantic_clones,
-        &inputs,
-        needs_summary_refresh,
-    )?;
-    Ok(())
 }
 
 fn warm_existing_profile<R>(

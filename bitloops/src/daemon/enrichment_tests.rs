@@ -193,6 +193,54 @@ fn insert_workplane_job(
         .expect("insert workplane job");
 }
 
+fn insert_pending_artefact_jobs_bulk(
+    coordinator: &EnrichmentCoordinator,
+    target: &EnrichmentJobTarget,
+    repo_id: &str,
+    mailbox_name: &str,
+    count: usize,
+    submitted_at_unix: u64,
+) {
+    coordinator
+        .workplane_store
+        .with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO capability_workplane_jobs (
+                         job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                         dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                         started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                         lease_expires_at_unix, last_error
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, NULL, ?12, NULL, NULL, NULL, NULL)",
+                )?;
+                for index in 0..count {
+                    let artefact_id = format!("artefact-{index}");
+                    stmt.execute(rusqlite::params![
+                        format!("bulk-job-{mailbox_name}-{index}"),
+                        repo_id,
+                        target.repo_root.to_string_lossy().to_string(),
+                        target.config_root.to_string_lossy().to_string(),
+                        SEMANTIC_CLONES_CAPABILITY_ID,
+                        mailbox_name,
+                        format!("{mailbox_name}:{artefact_id}"),
+                        serde_json::to_string(
+                            &crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::Artefact { artefact_id }
+                        )
+                        .expect("serialize bulk artefact payload"),
+                        WorkplaneJobStatus::Pending.as_str(),
+                        sql_i64(submitted_at_unix)?,
+                        sql_i64(submitted_at_unix)?,
+                        sql_i64(submitted_at_unix)?,
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("insert bulk workplane jobs");
+}
+
 #[tokio::test]
 async fn enqueue_clone_edges_rebuild_waits_for_embedding_and_semantic_jobs_to_drain() {
     let temp = TempDir::new().expect("temp dir");
@@ -549,4 +597,48 @@ fn snapshot_projects_last_failed_embedding_job_details() {
         Some("[capability_host:timeout] capability ingester timed out after 300s")
     );
     assert_eq!(summary.updated_at_unix, 20);
+}
+
+#[test]
+fn compaction_replaces_large_old_pending_embedding_backlog_with_repo_backfill_job() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let pending_count = usize::try_from(WORKPLANE_PENDING_COMPACTION_MIN_COUNT)
+        .expect("pending compaction threshold fits usize");
+    insert_pending_artefact_jobs_bulk(
+        &coordinator,
+        &target,
+        &repo_id,
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        pending_count,
+        1,
+    );
+
+    super::compact_and_prune_workplane_jobs(&coordinator.workplane_store)
+        .expect("compact pending workplane backlog");
+
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending)
+        .into_iter()
+        .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
+        .collect::<Vec<_>>();
+    let expected_dedupe_key =
+        crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        );
+
+    assert_eq!(
+        pending_jobs.len(),
+        1,
+        "artefact backlog should compact to a single repo backfill job"
+    );
+    assert_eq!(
+        pending_jobs[0].dedupe_key.as_deref(),
+        Some(expected_dedupe_key.as_str())
+    );
+    assert!(
+        crate::capability_packs::semantic_clones::workplane::payload_is_repo_backfill(
+            &pending_jobs[0].payload
+        ),
+        "pending job should be converted to a repo backfill payload"
+    );
 }
