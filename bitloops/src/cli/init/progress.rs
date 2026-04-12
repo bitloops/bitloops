@@ -315,14 +315,15 @@ impl InitProgressRenderer {
                 out.flush()?;
                 self.last_frame = Some(frame.clone());
                 self.wrote_in_place = true;
-                self.rendered_lines = frame.lines().count().max(1);
+                self.rendered_lines =
+                    rendered_terminal_line_count(&frame, self.terminal_width).max(1);
                 return Ok(());
             }
             write!(out, "{frame}")?;
             out.flush()?;
             self.last_frame = Some(frame.clone());
             self.wrote_in_place = true;
-            self.rendered_lines = frame.lines().count().max(1);
+            self.rendered_lines = rendered_terminal_line_count(&frame, self.terminal_width).max(1);
             return Ok(());
         }
 
@@ -344,6 +345,39 @@ fn clear_rendered_lines(out: &mut dyn Write, line_count: usize) -> Result<()> {
         write!(out, "\x1b[1A\r\x1b[2K")?;
     }
     Ok(())
+}
+
+fn rendered_terminal_line_count(frame: &str, terminal_width: Option<usize>) -> usize {
+    let Some(width) = terminal_width.filter(|width| *width > 0) else {
+        return frame.lines().count().max(1);
+    };
+
+    frame
+        .split('\n')
+        .map(|line| {
+            let visible_width = visible_terminal_width(line);
+            visible_width.max(1).div_ceil(width)
+        })
+        .sum::<usize>()
+        .max(1)
+}
+
+fn visible_terminal_width(text: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        width += 1;
+    }
+    width
 }
 
 pub(super) async fn run_dual_init_progress(
