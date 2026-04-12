@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_hash_changes_when_summary_changes() {
+    fn code_embedding_hash_ignores_summary_changes() {
         let provider = MockEmbeddingProvider;
         let base = sample_input();
         let mut changed = base.clone();
@@ -577,7 +577,14 @@ mod tests {
             build_symbol_embedding_input_hash(&base, &provider),
             build_symbol_embedding_input_hash(&changed, &provider)
         );
+    }
 
+    #[test]
+    fn summary_embedding_hash_changes_when_summary_changes() {
+        let provider = MockEmbeddingProvider;
+        let base = sample_input();
+        let mut changed = base.clone();
+        changed.summary = "Function normalize email. Normalizes email for storage.".to_string();
         let mut summary_base = base.clone();
         summary_base.representation_kind = EmbeddingRepresentationKind::Summary;
         let mut summary_changed = changed.clone();
@@ -601,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_text_includes_summary_and_body() {
+    fn code_embedding_text_includes_dependencies_and_body_but_omits_summary_and_metadata() {
         let text = build_symbol_embedding_text(&sample_input());
         assert!(text.contains("dependencies: calls:user repo::find by id"));
         assert!(text.contains("body:"));
