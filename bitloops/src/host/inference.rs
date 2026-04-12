@@ -4,8 +4,11 @@ use anyhow::Result;
 
 use crate::config::InferenceTask;
 
+#[path = "inference/embeddings.rs"]
 mod embeddings;
+#[path = "inference/gateway.rs"]
 mod gateway;
+#[path = "inference/text_generation.rs"]
 mod text_generation;
 
 pub use gateway::{EmptyInferenceGateway, LocalInferenceGateway, ScopedInferenceGateway};

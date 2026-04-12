@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -13,10 +12,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::config::{InferenceConfig, InferenceRuntimeConfig};
+use crate::config::InferenceRuntimeConfig;
 
 use super::{BITLOOPS_EMBEDDINGS_IPC_DRIVER, EmbeddingInputType, EmbeddingService};
-use super::{EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway};
 
 const PYTHON_EMBEDDINGS_DIMENSION_PROBE_TEXT: &str = "bitloops python embedding dimension probe";
 const SHARED_EMBEDDINGS_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -612,8 +610,14 @@ fn next_request_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, HashMap};
+    use std::fs;
 
     use tempfile::TempDir;
+
+    use crate::config::InferenceConfig;
+
+    use super::super::{EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway};
 
     fn write_fake_runtime_script(script_path: &Path, timeout_marker: Option<&Path>) {
         let timeout_branch = timeout_marker

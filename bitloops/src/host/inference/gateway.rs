@@ -5,9 +5,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::adapters::model_providers::llm;
-use crate::config::{
-    InferenceConfig, InferenceProfileConfig, InferenceRuntimeConfig, InferenceTask,
-};
+use crate::config::{InferenceConfig, InferenceProfileConfig, InferenceTask};
 
 use super::embeddings::BitloopsEmbeddingsIpcService;
 use super::text_generation::LlmTextGenerationService;
@@ -183,8 +181,8 @@ impl LocalInferenceGateway {
         let provider =
             llm::build_llm_provider(&profile.driver, model, api_key, profile.base_url.as_deref())
                 .with_context(|| {
-                    format!("building text-generation service for profile `{profile_name}`")
-                })?;
+                format!("building text-generation service for profile `{profile_name}`")
+            })?;
         Ok(Arc::new(LlmTextGenerationService { inner: provider }))
     }
 }
