@@ -222,6 +222,40 @@ fn parse_ingest_summary_field_reads_key_value_pairs() {
 }
 
 #[test]
+fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_and_two_workers() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let config =
+        render_guide_aligned_semantic_clones_config(&world, "sh", &["fake-runtime.sh".to_string()]);
+
+    assert!(config.contains("summary_mode = \"auto\""));
+    assert!(config.contains("embedding_mode = \"deterministic\""));
+    assert!(config.contains("enrichment_workers = 2"));
+    assert!(config.contains("[semantic_clones.inference]"));
+    assert!(config.contains("code_embeddings = \"fake\""));
+    assert!(config.contains("summary_embeddings = \"fake\""));
+    assert!(config.contains("[inference.profiles.fake]"));
+    assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
+    assert!(config.contains("model = \"qat-test-model\""));
+}
+
+#[test]
 fn build_git_command_prepends_qat_binary_dir_to_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");
@@ -256,6 +290,37 @@ fn build_git_command_prepends_qat_binary_dir_to_path() {
     let mut paths = std::env::split_paths(&path_value);
     let first = paths.next().expect("PATH should have at least one entry");
     assert_eq!(first, bin_dir);
+}
+
+#[test]
+fn build_git_command_excludes_bitloops_stores_from_git_add_all() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let args = build_git_command(&world, &["add", "-A"], &[])
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        vec!["add", "-A", "--", ".", ":(exclude).bitloops/stores"]
+    );
 }
 
 #[test]
@@ -407,6 +472,7 @@ fn count_chat_history_edges_for_agent_only_counts_matching_agent_rows() {
         count_chat_history_edges_for_agent(&payload, "claude-code"),
         2
     );
+    assert_eq!(count_chat_history_edges_for_agent(&payload, "claude"), 2);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "cursor"), 1);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "codex"), 0);
 }
@@ -479,6 +545,73 @@ fn semantic_clone_store_evidence_rejects_missing_embeddings_or_edges() {
 }
 
 #[test]
+fn parse_enrichment_status_snapshot_reads_cli_lines() {
+    let snapshot = parse_enrichment_status_snapshot(
+        "Enrichment queue: available\n\
+         Enrichment mode: paused\n\
+         Enrichment pending jobs: 6\n\
+         Enrichment pending semantic jobs: 3\n\
+         Enrichment pending embedding jobs: 2\n\
+         Enrichment pending clone-edge rebuild jobs: 1\n\
+         Enrichment running jobs: 4\n\
+         Enrichment running semantic jobs: 2\n\
+         Enrichment running embedding jobs: 1\n\
+         Enrichment running clone-edge rebuild jobs: 1\n\
+         Enrichment failed jobs: 0\n\
+         Enrichment failed semantic jobs: 0\n\
+         Enrichment failed embedding jobs: 0\n\
+         Enrichment failed clone-edge rebuild jobs: 0\n\
+         Enrichment retried failed jobs: 5\n\
+         Enrichment last action: paused\n\
+         Enrichment pause reason: qa hold\n\
+         Enrichment persisted: yes\n",
+    )
+    .expect("parse enrichments status");
+
+    assert_eq!(snapshot.mode, "paused");
+    assert_eq!(snapshot.pending_jobs, 6);
+    assert_eq!(snapshot.pending_semantic_jobs, 3);
+    assert_eq!(snapshot.pending_embedding_jobs, 2);
+    assert_eq!(snapshot.pending_clone_edges_rebuild_jobs, 1);
+    assert_eq!(snapshot.running_jobs, 4);
+    assert_eq!(snapshot.running_semantic_jobs, 2);
+    assert_eq!(snapshot.running_embedding_jobs, 1);
+    assert_eq!(snapshot.running_clone_edges_rebuild_jobs, 1);
+    assert_eq!(snapshot.failed_jobs, 0);
+    assert_eq!(snapshot.failed_semantic_jobs, 0);
+    assert_eq!(snapshot.failed_embedding_jobs, 0);
+    assert_eq!(snapshot.failed_clone_edges_rebuild_jobs, 0);
+    assert_eq!(snapshot.retried_failed_jobs, 5);
+    assert_eq!(snapshot.last_action.as_deref(), Some("paused"));
+    assert_eq!(snapshot.paused_reason.as_deref(), Some("qa hold"));
+    assert!(snapshot.persisted);
+}
+
+#[test]
+fn load_representation_kind_counts_normalizes_legacy_code_aliases() {
+    let conn = rusqlite::Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute(
+        "CREATE TABLE symbol_embeddings_current (repo_id TEXT NOT NULL, representation_kind TEXT NOT NULL)",
+        [],
+    )
+    .expect("create symbol_embeddings_current");
+    for kind in ["code", "baseline", "enriched", "summary", "summary"] {
+        conn.execute(
+            "INSERT INTO symbol_embeddings_current (repo_id, representation_kind) VALUES (?1, ?2)",
+            rusqlite::params!["repo-1", kind],
+        )
+        .expect("insert representation kind row");
+    }
+
+    let counts =
+        load_representation_kind_counts_for_repo(&conn, "symbol_embeddings_current", "repo-1")
+            .expect("load representation counts");
+
+    assert_eq!(counts.code, 3);
+    assert_eq!(counts.summary, 2);
+}
+
+#[test]
 fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
     let rows = serde_json::json!([
         {
@@ -493,6 +626,75 @@ fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
         extract_clone_nodes(&rows),
         rows.as_array().cloned().unwrap_or_default()
     );
+}
+
+#[test]
+fn extract_clone_summary_accepts_devql_summary_rows() {
+    let value = serde_json::json!([
+        {
+            "total_count": 3,
+            "groups": [
+                { "relation_kind": "similar_implementation", "count": 2 },
+                { "relation_kind": "weak_clone_candidate", "count": 1 }
+            ]
+        }
+    ]);
+
+    let summary = extract_clone_summary_from_devql_value(&value).expect("extract DevQL summary");
+
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 2);
+    assert_eq!(summary.groups[1].relation_kind, "weak_clone_candidate");
+    assert_eq!(summary.groups[1].count, 1);
+}
+
+#[test]
+fn extract_clone_summary_accepts_devql_summary_rows_with_camel_case_total_count() {
+    let value = serde_json::json!([
+        {
+            "totalCount": 3,
+            "groups": [
+                { "relationKind": "similar_implementation", "count": 2 },
+                { "relationKind": "weak_clone_candidate", "count": 1 }
+            ]
+        }
+    ]);
+
+    let summary = extract_clone_summary_from_devql_value(&value).expect("extract DevQL summary");
+
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 2);
+    assert_eq!(summary.groups[1].relation_kind, "weak_clone_candidate");
+    assert_eq!(summary.groups[1].count, 1);
+}
+
+#[test]
+fn extract_clone_summary_accepts_graphql_repo_payload() {
+    let value = serde_json::json!({
+        "repo": {
+            "cloneSummary": {
+                "totalCount": 4,
+                "groups": [
+                    { "relationKind": "similar_implementation", "count": 3 },
+                    { "relationKind": "contextual_neighbor", "count": 1 }
+                ]
+            }
+        }
+    });
+
+    let summary =
+        extract_clone_summary_from_graphql_value(&value).expect("extract GraphQL clone summary");
+
+    assert_eq!(summary.total_count, 4);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 3);
+    assert_eq!(summary.groups[1].relation_kind, "contextual_neighbor");
+    assert_eq!(summary.groups[1].count, 1);
 }
 
 #[test]

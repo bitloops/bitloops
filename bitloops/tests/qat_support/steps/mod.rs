@@ -232,8 +232,18 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a TypeScript project with semantic clone quality fixtures in (\S+)$"),
+            step_fn(given_create_ts_semantic_clone_quality_project),
+        )
+        .given(
+            None,
             regex(r"^I add semantic clone fixtures in (\S+)$"),
             step_fn(given_add_semantic_clone_fixtures),
+        )
+        .given(
+            None,
+            regex(r"^I configure guide-aligned semantic clones with fake embeddings runtime in (\S+)$"),
+            step_fn(given_configure_semantic_clones_guide_aligned_fake_runtime),
         )
         .given(
             None,
@@ -252,10 +262,35 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run daemon enrichments status in (\S+)$"),
+            step_fn(given_daemon_enrichments_status),
+        )
+        .when(
+            None,
+            regex(r"^I run daemon enrichments status in (\S+)$"),
+            step_fn(given_daemon_enrichments_status),
+        )
+        .given(
+            None,
+            regex(r"^I wait for semantic clone enrichments to drain in (\S+)$"),
+            step_fn(given_wait_semantic_clone_enrichments_to_drain),
+        )
+        .when(
+            None,
+            regex(r"^I wait for semantic clone enrichments to drain in (\S+)$"),
+            step_fn(given_wait_semantic_clone_enrichments_to_drain),
+        )
+        .given(
+            None,
             regex(r"^I create a simple Rust project in (\S+)$"),
             step_fn(given_create_simple_rust_project),
         )
         .given(
+            None,
+            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync),
+        )
+        .when(
             None,
             regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync),
@@ -265,7 +300,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_validate),
         )
+        .when(
+            None,
+            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync_validate),
+        )
         .given(
+            None,
+            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync_repair),
+        )
+        .when(
             None,
             regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_repair),
@@ -525,8 +570,33 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^semantic clone historical tables are populated in (\S+)$"),
+            step_fn(then_semantic_clone_historical_tables_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone current projection tables are populated without inline embeddings in (\S+)$"),
+            step_fn(then_semantic_clone_current_tables_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone historical embeddings and current artefacts expose code and summary channels in (\S+)$"),
+            step_fn(then_semantic_clone_representation_channels_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in (\S+)$"),
+            step_fn(then_semantic_clone_progress_observed),
+        )
+        .then(
+            None,
             regex(r"^DevQL clones results include score and relation_kind fields in (\S+)$"),
             step_fn(then_devql_clones_have_score_and_kind),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" ranks \"([^\"]+)\" above \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_clones_rank_target_above),
         )
         .then(
             None,
@@ -535,8 +605,23 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" with min_score (\S+) excludes \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_clones_with_min_score_excludes_target),
+        )
+        .then(
+            None,
             regex(r#"^DevQL clones query for \"([^\"]+)\" with min_score (\S+) returns fewer or equal results in (\S+)$"#),
             step_fn(then_devql_clones_fewer_or_equal),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clone summary for \"([^\"]+)\" with min_score (\S+) returns grouped counts in (\S+)$"#),
+            step_fn(then_devql_clone_summary_grouped_counts),
+        )
+        .then(
+            None,
+            regex(r#"^GraphQL clone summary for \"([^\"]+)\" with min_score (\S+) returns grouped counts in (\S+)$"#),
+            step_fn(then_graphql_clone_summary_grouped_counts),
         )
         .then(
             None,

@@ -32,4 +32,5 @@ Feature: Agent enablement produces a queryable repository
     And I make a first change using Claude Code to bitloops
     And I committed today in bitloops
     And I run DevQL init in bitloops
+    And I run DevQL ingest in bitloops
     Then DevQL chatHistory query returns results in bitloops

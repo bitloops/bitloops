@@ -1479,8 +1479,10 @@ mod tests {
         for alias in [
             "qat = ",
             "qat-smoke = ",
+            "qat-devql-capabilities = ",
             "qat-devql-sync = ",
             "qat-onboarding = ",
+            "qat-devql-ingest = ",
         ] {
             let line = config
                 .lines()

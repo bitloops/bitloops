@@ -603,6 +603,20 @@ pub(super) fn given_create_ts_similar_project(
     })
 }
 
+pub(super) fn given_create_ts_semantic_clone_quality_project(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a TypeScript project with semantic clone quality fixtures",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::create_ts_project_with_similar_impls(world.repo_dir())),
+        );
+    })
+}
+
 pub(super) fn given_add_semantic_clone_fixtures(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -617,6 +631,19 @@ pub(super) fn given_add_semantic_clone_fixtures(
     })
 }
 
+pub(super) fn given_configure_semantic_clones_guide_aligned_fake_runtime(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I configure guide-aligned semantic clones with fake embeddings runtime",
+            helpers::configure_semantic_clones_with_guide_aligned_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_configure_semantic_clones_fake_runtime(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -626,6 +653,32 @@ pub(super) fn given_configure_semantic_clones_fake_runtime(
         run_step(
             "I configure semantic clones with fake embeddings runtime",
             helpers::configure_semantic_clones_with_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_daemon_enrichments_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run daemon enrichments status",
+            helpers::run_daemon_enrichments_status(world, &repo_name).map(|_| ()),
+        );
+    })
+}
+
+pub(super) fn given_wait_semantic_clone_enrichments_to_drain(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I wait for semantic clone enrichments to drain",
+            helpers::wait_for_semantic_clone_enrichments_to_drain(world, &repo_name),
         );
     })
 }

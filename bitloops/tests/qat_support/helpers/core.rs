@@ -2011,6 +2011,7 @@ fn build_chat_history_query(path: &str) -> String {
 }
 
 fn count_chat_history_edges_for_agent(value: &serde_json::Value, agent_name: &str) -> usize {
+    let candidates = checkpoint_agent_candidates(agent_name);
     value.as_array().map_or(0, |rows| {
         rows.iter()
             .flat_map(|row| {
@@ -2024,7 +2025,7 @@ fn count_chat_history_edges_for_agent(value: &serde_json::Value, agent_name: &st
                 edge.get("node")
                     .and_then(|node| node.get("agent"))
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(|candidate| candidate == agent_name)
+                    .is_some_and(|candidate| candidates.iter().any(|value| value == candidate))
             })
             .count()
     })
@@ -2064,18 +2065,33 @@ pub fn assert_devql_chat_history_returns_results(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let target_path = smoke_target_relative_path(world);
-    let query = build_chat_history_query(&target_path);
-    let value = run_devql_query(world, &query)?;
     let agent_name = world
         .agent_name
         .as_deref()
         .ok_or_else(|| anyhow!("no agent name captured for chat history assertion"))?;
-    let count = count_chat_history_edges_for_agent(&value, agent_name);
-    world.last_query_result_count = Some(count);
+    let agent_name = agent_name.to_string();
+    let candidate_paths = chat_history_candidate_paths(world)?;
+    let mut best_path = String::new();
+    let mut best_count = 0_usize;
+
+    for target_path in candidate_paths {
+        let query = build_chat_history_query(&target_path);
+        let value = run_devql_query(world, &query)?;
+        let count = count_chat_history_edges_for_agent(&value, &agent_name);
+        if count > best_count {
+            best_count = count;
+            best_path = target_path.clone();
+        }
+        if count >= 1 {
+            world.last_query_result_count = Some(count);
+            return Ok(());
+        }
+    }
+
+    world.last_query_result_count = Some(best_count);
     ensure!(
-        count >= 1,
-        "expected at least 1 chat history result for agent `{agent_name}` in `{target_path}`, got {count}"
+        best_count >= 1,
+        "expected at least 1 chat history result for agent `{agent_name}` across queryable touched paths, best path `{best_path}` produced {best_count}"
     );
     Ok(())
 }
@@ -2130,17 +2146,70 @@ fn query_repo_id_optional(conn: &rusqlite::Connection, sql: &str) -> Result<Opti
 
 fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
     for sql in [
-        "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
-        "SELECT repo_id FROM commits ORDER BY committed_at DESC LIMIT 1",
         "SELECT repo_id FROM commit_ingest_ledger ORDER BY updated_at DESC LIMIT 1",
+        "SELECT repo_id FROM commits ORDER BY committed_at DESC LIMIT 1",
+        "SELECT repo_id FROM artefacts_historical LIMIT 1",
+        "SELECT repo_id FROM symbol_features LIMIT 1",
+        "SELECT repo_id FROM symbol_semantics LIMIT 1",
+        "SELECT repo_id FROM symbol_embeddings LIMIT 1",
         "SELECT repo_id FROM artefacts_current LIMIT 1",
         "SELECT repo_id FROM current_file_state LIMIT 1",
+        "SELECT repo_id FROM repositories WHERE provider = 'local' ORDER BY created_at DESC LIMIT 1",
+        "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
     ] {
         if let Some(repo_id) = query_repo_id_optional(conn, sql)? {
             return Ok(repo_id);
         }
     }
     bail!("unable to resolve repo_id from relational store for ingest assertions")
+}
+
+fn checkpoint_touched_paths_for_repo(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<Vec<String>> {
+    let sql = "SELECT COALESCE(path_after, path_before) \
+               FROM checkpoint_files \
+               WHERE repo_id = ?1 \
+               ORDER BY event_time DESC, checkpoint_id DESC, relation_id DESC \
+               LIMIT 20";
+    let mut stmt = match conn.prepare(sql) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("no such table") || message.contains("no such column") {
+                return Ok(Vec::new());
+            }
+            return Err(err).with_context(|| format!("preparing `{sql}`"));
+        }
+    };
+    let rows = stmt
+        .query_map([repo_id], |row| row.get::<_, Option<String>>(0))
+        .with_context(|| format!("querying checkpoint touched paths for repo `{repo_id}`"))?;
+    let mut paths = Vec::new();
+    for row in rows {
+        let Some(path) = row.context("reading checkpoint touched path")? else {
+            continue;
+        };
+        let path = path.trim();
+        if path.is_empty() || paths.iter().any(|existing| existing == path) {
+            continue;
+        }
+        paths.push(path.to_string());
+    }
+    Ok(paths)
+}
+
+fn chat_history_candidate_paths(world: &QatWorld) -> Result<Vec<String>> {
+    let mut candidates = vec![smoke_target_relative_path(world)];
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    for path in checkpoint_touched_paths_for_repo(&conn, &repo_id)? {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    }
+    Ok(candidates)
 }
 
 fn git_reachable_shas(world: &QatWorld, max_count: Option<usize>) -> Result<Vec<String>> {

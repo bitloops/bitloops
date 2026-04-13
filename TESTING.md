@@ -35,6 +35,7 @@ For other platforms, follow the official installation guide:
 | Quality Assurance Tests                          | `cargo qat`                  |
 | DevQL capabilities suite                         | `cargo qat-devql-capabilities` |
 | DevQL sync suite                                 | `cargo qat-devql-sync`       |
+| DevQL ingest suite                               | `cargo qat-devql-ingest`     |
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
@@ -46,9 +47,10 @@ CI uses the `ci` `nextest` profile, pinned to `6` test threads.
 `cargo dev-test-slow` runs all slow targets only.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
-`cargo qat` runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite.
+`cargo qat` runs onboarding, smoke, DevQL sync, DevQL capabilities, and DevQL ingest in parallel.
 `cargo qat` forces `--no-capture` so the bundled ignored QAT journey streams progress reliably during long daemon-backed runs.
 `cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
+`cargo qat-devql-ingest` is the focused DevQL ingest alias.
 `cargo qat-devql-sync` is the focused DevQL sync alias.
 
 ### Fast-lane thread tuning
