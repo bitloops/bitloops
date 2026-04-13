@@ -1,3 +1,5 @@
+use chrono::{TimeZone, Utc};
+
 use crate::host::checkpoints::checkpoint_id::is_valid_checkpoint_id;
 
 use super::{API_DEFAULT_PAGE_LIMIT, ApiError, ApiPage, CommitCheckpointQuery};
@@ -28,9 +30,13 @@ pub(crate) fn parse_optional_unix_seconds(
     let Some(raw) = normalize_optional_query(value) else {
         return Ok(None);
     };
-    raw.parse::<i64>()
-        .map(Some)
-        .map_err(|_| ApiError::bad_request(format!("invalid {field}; expected unix seconds")))
+    let timestamp = raw
+        .parse::<i64>()
+        .map_err(|_| ApiError::bad_request(format!("invalid {field}; expected unix seconds")))?;
+    Utc.timestamp_opt(timestamp, 0)
+        .single()
+        .map(|_| Some(timestamp))
+        .ok_or_else(|| ApiError::bad_request(format!("invalid {field}; unix seconds out of range")))
 }
 
 pub(crate) fn normalize_checkpoint_id(

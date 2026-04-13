@@ -40,7 +40,7 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
   function parseGraphqlError(payload) {
     var first = payload && payload.errors && payload.errors.length ? payload.errors[0] : null;
     var code = first && first.extensions && first.extensions.code ? first.extensions.code : "internal";
-    var message = first && first.message ? first.message : (messages[code] || messages.internal);
+    var message = messages[code] || (first && first.message) || messages.internal;
     return { code: code, message: message };
   }
 

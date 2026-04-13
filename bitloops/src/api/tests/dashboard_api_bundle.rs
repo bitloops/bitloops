@@ -571,6 +571,29 @@ async fn dashboard_query_reports_bad_user_input_for_invalid_time_filter() {
 }
 
 #[tokio::test]
+async fn dashboard_query_reports_bad_user_input_for_out_of_range_time_filter() {
+    let repo = seed_dashboard_repo();
+    let app = dashboard_app(
+        repo.path(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+
+    let (status, payload) = request_dashboard_graphql(
+        app,
+        r#"{ commits(branch: "main", from: "9223372036854775807") { checkpoint { checkpointId } } }"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["errors"][0]["extensions"]["code"], "BAD_USER_INPUT");
+    assert_eq!(
+        payload["errors"][0]["message"],
+        "invalid from; unix seconds out of range"
+    );
+}
+
+#[tokio::test]
 async fn dashboard_query_reports_not_found_for_unknown_repo_id() {
     let repo = seed_dashboard_repo();
     let app = dashboard_app(

@@ -118,7 +118,7 @@
     function toDashboardError(payload) {
       const first = payload && payload.errors && payload.errors.length ? payload.errors[0] : null;
       const code = first && first.extensions && first.extensions.code ? first.extensions.code : 'internal';
-      const message = first && first.message ? first.message : (errorMessages[code] || errorMessages.internal);
+      const message = errorMessages[code] || (first && first.message) || errorMessages.internal;
       return { code, message };
     }
 
