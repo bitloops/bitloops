@@ -299,10 +299,15 @@ pub fn shared_devql_task_coordinator() -> Arc<DevqlTaskCoordinator> {
 
 pub(crate) fn activate_task_worker(
     config_root: &Path,
+    repo_registry_path: Option<&Path>,
     subscription_hub: Arc<crate::graphql::SubscriptionHub>,
 ) {
     CapabilityEventCoordinator::shared().activate_worker();
-    DevqlTaskCoordinator::shared().activate_worker(config_root, Some(subscription_hub));
+    DevqlTaskCoordinator::shared().activate_worker(
+        config_root,
+        repo_registry_path,
+        Some(subscription_hub),
+    );
 }
 
 pub fn devql_task_status(repo_id: Option<&str>) -> Result<DevqlTaskQueueStatus> {

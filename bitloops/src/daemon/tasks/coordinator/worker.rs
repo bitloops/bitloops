@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -42,6 +44,7 @@ impl DevqlTaskCoordinator {
     pub(crate) fn activate_worker(
         self: &Arc<Self>,
         config_root: &Path,
+        repo_registry_path: Option<&Path>,
         hub: Option<Arc<SubscriptionHub>>,
     ) {
         if let Some(hub) = hub {
@@ -63,11 +66,17 @@ impl DevqlTaskCoordinator {
         };
         let coordinator = Arc::clone(self);
         let producer_spool_config_root = config_root.to_path_buf();
+        let producer_spool_repo_registry_path = repo_registry_path.map(Path::to_path_buf);
         handle.spawn(async move {
             let _guard = WorkerStartedGuard {
                 coordinator: Arc::clone(&coordinator),
             };
-            coordinator.run_loop(producer_spool_config_root).await;
+            coordinator
+                .run_loop(
+                    producer_spool_config_root,
+                    producer_spool_repo_registry_path,
+                )
+                .await;
         });
     }
 
@@ -77,11 +86,18 @@ impl DevqlTaskCoordinator {
         }
     }
 
-    async fn run_loop(self: Arc<Self>, producer_spool_config_root: std::path::PathBuf) {
+    async fn run_loop(
+        self: Arc<Self>,
+        producer_spool_config_root: std::path::PathBuf,
+        repo_registry_path: Option<PathBuf>,
+    ) {
         loop {
             let mut made_progress = false;
             let reconcile_blocked = match self
-                .ensure_scope_exclusion_reconcile(&producer_spool_config_root)
+                .ensure_scope_exclusion_reconciles(
+                    &producer_spool_config_root,
+                    repo_registry_path.as_deref(),
+                )
                 .await
             {
                 Ok(blocked) => blocked,
@@ -130,13 +146,75 @@ impl DevqlTaskCoordinator {
         Ok(true)
     }
 
-    async fn ensure_scope_exclusion_reconcile(
+    async fn ensure_scope_exclusion_reconciles(
         self: &Arc<Self>,
         config_root: &Path,
+        repo_registry_path: Option<&Path>,
     ) -> Result<bool> {
-        let repo = crate::host::devql::resolve_repo_identity(config_root)
+        let mut blocked = false;
+        for repo_root in
+            self.scope_exclusion_reconcile_repo_roots(config_root, repo_registry_path)?
+        {
+            match self
+                .ensure_scope_exclusion_reconcile_for_repo(&repo_root)
+                .await
+            {
+                Ok(repo_blocked) => blocked |= repo_blocked,
+                Err(err) => log::warn!(
+                    "daemon DevQL exclusion reconcile error for {}: {err:#}",
+                    repo_root.display()
+                ),
+            }
+        }
+        Ok(blocked)
+    }
+
+    fn scope_exclusion_reconcile_repo_roots(
+        &self,
+        config_root: &Path,
+        repo_registry_path: Option<&Path>,
+    ) -> Result<Vec<PathBuf>> {
+        let current_repo_root = config_root
+            .canonicalize()
+            .unwrap_or_else(|_| config_root.to_path_buf());
+        let current_daemon_config_root =
+            crate::config::resolve_bound_daemon_config_root_for_repo(&current_repo_root)
+                .unwrap_or_else(|_| current_repo_root.clone());
+        let mut repo_roots = vec![current_repo_root.clone()];
+        let mut seen = HashSet::from([current_repo_root]);
+
+        let Some(repo_registry_path) = repo_registry_path else {
+            return Ok(repo_roots);
+        };
+        let registry = crate::devql_transport::load_repo_path_registry(repo_registry_path)?;
+        for entry in registry.entries {
+            let repo_root = entry
+                .repo_root
+                .canonicalize()
+                .unwrap_or(entry.repo_root.clone());
+            let Ok(bound_daemon_config_root) =
+                crate::config::resolve_bound_daemon_config_root_for_repo(&repo_root)
+            else {
+                continue;
+            };
+            if bound_daemon_config_root != current_daemon_config_root {
+                continue;
+            }
+            if seen.insert(repo_root.clone()) {
+                repo_roots.push(repo_root);
+            }
+        }
+
+        Ok(repo_roots)
+    }
+
+    async fn ensure_scope_exclusion_reconcile_for_repo(
+        self: &Arc<Self>,
+        repo_root: &Path,
+    ) -> Result<bool> {
+        let repo = crate::host::devql::resolve_repo_identity(repo_root)
             .context("resolving repo identity for exclusion reconciliation")?;
-        let cfg = DevqlConfig::from_env(config_root.to_path_buf(), repo)
+        let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo)
             .context("building DevQL config for exclusion reconciliation")?;
         let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
             .context("resolving backend config for exclusion reconciliation")?;
@@ -153,6 +231,9 @@ impl DevqlTaskCoordinator {
                 .is_some();
         if blocking || needs_reconcile {
             self.prune_excluded_path_sync_tasks_for_repo(&cfg)?;
+        }
+        if blocking {
+            return Ok(true);
         }
         if needs_reconcile {
             self.enqueue(

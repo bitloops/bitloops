@@ -335,14 +335,9 @@ fn build_purge_statements(
         ));
     }
 
-    let historical_semantic_conditions = join_or_conditions([
-        artefact_ids_sql
-            .as_ref()
-            .map(|ids| format!("artefact_id IN ({ids})")),
-        blob_shas_sql
-            .as_ref()
-            .map(|ids| format!("blob_sha IN ({ids})")),
-    ]);
+    let historical_semantic_conditions = join_or_conditions([artefact_ids_sql
+        .as_ref()
+        .map(|ids| format!("artefact_id IN ({ids})"))]);
     if let Some(conditions) = historical_semantic_conditions {
         statements.push(format!(
             "DELETE FROM symbol_semantics WHERE repo_id = '{repo_id}' AND ({conditions})"
