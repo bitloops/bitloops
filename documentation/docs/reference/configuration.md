@@ -79,6 +79,12 @@ summary_generation = "summary_llm"
 code_embeddings = "local_code"
 summary_embeddings = "local_code"
 
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
 [inference.runtimes.bitloops_embeddings]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
 args = []
@@ -93,10 +99,11 @@ model = "bge-m3"
 
 [inference.profiles.summary_llm]
 task = "text_generation"
-driver = "openai"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1/chat/completions"
 
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
@@ -117,6 +124,13 @@ The current daemon parser accepts these top-level surfaces:
 - `semantic_clones`
 - `inference`
 - `dashboard`
+
+### Text-Generation Profiles
+
+- `task = "text_generation"` profiles must declare `runtime`.
+- Bitloops always routes text generation through the configured runtime, typically `bitloops_inference`.
+- `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
+- Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it.
 
 ### Telemetry Consent
 

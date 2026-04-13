@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue, de::from_str};
 
-use crate::host::inference::{BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_EMBEDDINGS_RUNTIME_ID};
+use crate::host::inference::{
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_EMBEDDINGS_RUNTIME_ID, BITLOOPS_INFERENCE_RUNTIME_ID,
+};
 use crate::utils::platform_dirs::{bitloops_config_file_path, ensure_dir, ensure_parent_dir};
 
 use super::resolve_blob_local_path_for_repo;
@@ -48,6 +50,14 @@ pub(crate) struct DaemonEmbeddingsInstallPlan {
     pub profile_name: String,
     pub profile_driver: Option<String>,
     pub mode: DaemonEmbeddingsInstallMode,
+    pub config_modified: bool,
+    original_contents: Option<String>,
+    prepared_contents: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DaemonInferenceInstallPlan {
+    pub config_path: PathBuf,
     pub config_modified: bool,
     original_contents: Option<String>,
     prepared_contents: Option<String>,
@@ -100,6 +110,56 @@ impl DaemonEmbeddingsInstallPlan {
                     fs::remove_file(&self.config_path).with_context(|| {
                         format!(
                             "removing Bitloops daemon config after failed embeddings install {}",
+                            self.config_path.display()
+                        )
+                    })?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_prepared_contents(&self, contents: Option<&str>) -> Result<()> {
+        if !self.config_modified {
+            return Ok(());
+        }
+
+        let Some(contents) = contents else {
+            return Ok(());
+        };
+
+        fs::write(&self.config_path, contents).with_context(|| {
+            format!(
+                "writing Bitloops daemon config {}",
+                self.config_path.display()
+            )
+        })
+    }
+}
+
+impl DaemonInferenceInstallPlan {
+    pub fn apply(&self) -> Result<()> {
+        self.write_prepared_contents(self.prepared_contents.as_deref())
+    }
+
+    pub fn rollback(&self) -> Result<()> {
+        if !self.config_modified {
+            return Ok(());
+        }
+
+        match &self.original_contents {
+            Some(contents) => fs::write(&self.config_path, contents).with_context(|| {
+                format!(
+                    "restoring Bitloops daemon config after failed inference install {}",
+                    self.config_path.display()
+                )
+            })?,
+            None => {
+                if self.config_path.exists() {
+                    fs::remove_file(&self.config_path).with_context(|| {
+                        format!(
+                            "removing Bitloops daemon config after failed inference install {}",
                             self.config_path.display()
                         )
                     })?;
@@ -562,6 +622,94 @@ pub(crate) fn prepare_daemon_embeddings_install(
     })
 }
 
+pub(crate) fn prepare_daemon_inference_install(
+    config_path: &Path,
+) -> Result<DaemonInferenceInstallPlan> {
+    ensure_parent_dir(config_path)?;
+
+    let original_contents = match fs::read_to_string(config_path) {
+        Ok(contents) => Some(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("reading Bitloops daemon config {}", config_path.display())
+            });
+        }
+    };
+
+    let mut doc = match original_contents.as_deref() {
+        Some(existing) => existing
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?,
+        None => DocumentMut::new(),
+    };
+
+    let mut modified = false;
+    let inference = ensure_table(&mut doc, "inference");
+    let runtimes = ensure_child_table(inference, "runtimes");
+    let runtime = ensure_child_table(runtimes, BITLOOPS_INFERENCE_RUNTIME_ID);
+    let current_runtime_command = runtime
+        .get("command")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .map(ToOwned::to_owned);
+
+    if runtime
+        .get("command")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .is_none()
+    {
+        runtime["command"] = Item::Value("bitloops-inference".into());
+        modified = true;
+    }
+
+    let manages_default_args = current_runtime_command.is_none()
+        || matches!(
+            current_runtime_command.as_deref(),
+            Some("") | Some("bitloops-inference") | Some("bitloops-inference.exe")
+        );
+    let runtime_args_are_empty = runtime
+        .get("args")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_array())
+        .is_some_and(|value| value.is_empty());
+    if (manages_default_args && !runtime_args_are_empty)
+        || !runtime.get("args").is_some_and(Item::is_value)
+    {
+        runtime["args"] = Item::Value(TomlValue::Array(Array::new()));
+        modified = true;
+    }
+    if runtime
+        .get("startup_timeout_secs")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_integer())
+        .is_none()
+    {
+        runtime["startup_timeout_secs"] = Item::Value(60.into());
+        modified = true;
+    }
+    if runtime
+        .get("request_timeout_secs")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_integer())
+        .is_none()
+    {
+        runtime["request_timeout_secs"] = Item::Value(300.into());
+        modified = true;
+    }
+
+    let prepared_contents = modified.then(|| doc.to_string());
+
+    Ok(DaemonInferenceInstallPlan {
+        config_path: config_path.to_path_buf(),
+        config_modified: modified,
+        original_contents,
+        prepared_contents,
+    })
+}
+
 fn default_daemon_config_toml() -> Result<String> {
     let mut doc = DocumentMut::new();
     doc["runtime"] = Item::Table(Table::new());
@@ -724,132 +872,5 @@ fn ensure_local_store_artifacts(loaded: &LoadedDaemonSettings) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn load_daemon_settings_rejects_unknown_top_level_fields() {
-        let config = NamedTempFile::new().expect("create temp config");
-        fs::write(
-            config.path(),
-            r#"
-cli_version = "0.0.3"
-
-[runtime]
-local_dev = true
-
-[telemetry]
-enabled = false
-
-[logging]
-level = "debug"
-"#,
-        )
-        .expect("write temp config");
-
-        let err = load_daemon_settings(Some(config.path())).expect_err("unknown top-level key");
-        let message = format!("{err:#}");
-        assert!(
-            message.contains("unknown field `cli_version`"),
-            "expected unknown field error, got: {message}"
-        );
-    }
-
-    #[test]
-    fn load_daemon_settings_accepts_runtime_cli_version_field() {
-        let config = NamedTempFile::new().expect("create temp config");
-        fs::write(
-            config.path(),
-            r#"
-[runtime]
-local_dev = true
-cli_version = "0.0.12"
-
-[telemetry]
-enabled = true
-
-[logging]
-level = "info"
-"#,
-        )
-        .expect("write temp config");
-
-        let loaded = load_daemon_settings(Some(config.path())).expect("load daemon settings");
-        assert!(loaded.cli.local_dev, "runtime.local_dev should be parsed");
-        assert_eq!(loaded.cli.telemetry, Some(true));
-        assert_eq!(loaded.cli.log_level, "info");
-    }
-
-    #[test]
-    fn ensure_daemon_store_artifacts_creates_local_store_files_for_explicit_config() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let config_path = dir.path().join("config.toml");
-        fs::write(
-            &config_path,
-            r#"
-[runtime]
-local_dev = false
-cli_version = "0.0.12"
-
-[stores.relational]
-sqlite_path = "stores/relational/relational.db"
-
-[stores.events]
-duckdb_path = "stores/event/events.duckdb"
-
-[stores.blob]
-local_path = "stores/blob"
-"#,
-        )
-        .expect("write daemon config");
-
-        let returned_path =
-            ensure_daemon_store_artifacts(Some(config_path.as_path())).expect("bootstrap stores");
-
-        assert_eq!(
-            returned_path,
-            config_path
-                .canonicalize()
-                .unwrap_or_else(|_| config_path.clone())
-        );
-        assert!(dir.path().join("stores/relational/relational.db").is_file());
-        assert!(dir.path().join("stores/event/events.duckdb").is_file());
-        assert!(dir.path().join("stores/blob").is_dir());
-    }
-
-    #[test]
-    fn prepare_daemon_embeddings_install_applies_staged_runtime_args_cleanup() {
-        let config = NamedTempFile::new().expect("create temp config");
-        fs::write(
-            config.path(),
-            r#"
-[runtime]
-local_dev = false
-
-[inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
-args = ["-B", "-m", "bitloops_embeddings"]
-startup_timeout_secs = 60
-request_timeout_secs = 300
-"#,
-        )
-        .expect("write temp config");
-
-        let plan =
-            prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
-        assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
-        plan.apply().expect("apply staged embeddings config");
-
-        let rendered = fs::read_to_string(config.path()).expect("read updated config");
-        assert!(
-            rendered.contains("args = []"),
-            "expected args reset:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("\"-B\""),
-            "expected stale python-style args removed:\n{rendered}"
-        );
-    }
-}
+#[path = "daemon_config/tests.rs"]
+mod tests;

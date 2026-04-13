@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
 use crate::cli::embeddings::{enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings};
+use crate::cli::inference::configure_local_summary_generation;
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
     DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
@@ -19,7 +20,8 @@ use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
     detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
     normalize_cli_exclusions, normalize_exclude_from_paths, reconcile_agent_hooks,
-    should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
+    should_configure_summaries_during_init, should_install_embeddings_during_init,
+    should_run_initial_ingest, should_run_initial_sync,
 };
 
 pub(super) async fn run_for_project_root(
@@ -135,6 +137,22 @@ pub(super) async fn run_for_project_root(
         } else {
             install_embeddings_during_init(project_root, out)?;
         }
+    }
+    if should_configure_summaries_during_init(
+        project_root,
+        args.install_default_daemon,
+        out,
+        input,
+    )? {
+        configure_local_summary_generation(
+            project_root,
+            out,
+            input,
+            telemetry_consent::can_prompt_interactively(),
+        )
+        .map_err(|err| {
+            anyhow::anyhow!("Bitloops init completed, but semantic summary setup failed: {err:#}")
+        })?;
     }
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;

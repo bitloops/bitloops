@@ -125,6 +125,7 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Debug(_) => None,
         crate::cli::Commands::Devql(args) => devql_action(args),
         crate::cli::Commands::Embeddings(args) => embeddings_action(args),
+        crate::cli::Commands::Inference(args) => inference_action(args),
         crate::cli::Commands::DevqlWatcher(_) => None,
         crate::cli::Commands::DaemonProcess(_) => None,
         crate::cli::Commands::DaemonSupervisor(_) => None,
@@ -739,6 +740,16 @@ fn embeddings_action(
             "bitloops embeddings clear-cache",
             HashMap::new(),
         )),
+    }
+}
+
+fn inference_action(
+    args: &crate::cli::inference::InferenceArgs,
+) -> Option<crate::telemetry::analytics::ActionDescriptor> {
+    match args.command.as_ref()? {
+        crate::cli::inference::InferenceCommand::Install(_) => {
+            Some(new_action("bitloops inference install", HashMap::new()))
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 mod args;
-mod managed;
+pub(crate) mod managed;
 mod profiles;
 
 #[cfg(test)]

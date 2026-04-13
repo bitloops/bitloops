@@ -15,9 +15,14 @@ Capability-pack inference configuration belongs in the global daemon config:
 [semantic_clones.inference]
 summary_generation = "summary_llm"
 
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+
 [inference.profiles.summary_llm]
 task = "text_generation"
-driver = "openai"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 ```

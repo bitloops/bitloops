@@ -18,8 +18,7 @@ pub use self::semantic::SymbolSemanticsRow;
 pub(crate) use self::semantic::synthesize_deterministic_summary;
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
-    SemanticSummaryProviderConfig, build_semantic_summary_provider,
-    resolve_semantic_summary_endpoint, summary_provider_from_service,
+    summary_provider_from_service,
 };
 use self::semantic::{build_semantics_row, normalize_summary_text};
 

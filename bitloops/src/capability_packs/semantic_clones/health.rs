@@ -5,12 +5,15 @@ use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentatio
 use crate::capability_packs::semantic_clones::runtime_config::embedding_slot_for_representation;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
+    SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
 };
-use crate::config::{InferenceTask, SemanticCloneEmbeddingMode, SemanticSummaryMode};
+use crate::config::{InferenceTask, SemanticSummaryMode};
 use crate::host::capability_host::CapabilityHealthContext;
 use crate::host::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
 
-use super::runtime_config::{resolve_selected_summary_slot, resolve_semantic_clones_config};
+use super::runtime_config::{
+    embeddings_enabled, resolve_selected_summary_slot, resolve_semantic_clones_config,
+};
 use super::types::SEMANTIC_CLONES_CAPABILITY_ID;
 
 fn check_semantic_clones_semantic_summaries(
@@ -56,30 +59,38 @@ fn check_semantic_clones_profile_resolution(
         );
     };
     let config = resolve_semantic_clones_config(&view);
-    if embeddings_disabled(&config) {
-        return CapabilityHealthResult::ok("semantic_clones embeddings disabled");
+    let configured_slots = configured_inference_slots(&config);
+    if configured_slots.is_empty() {
+        if !embeddings_enabled(&config) {
+            return CapabilityHealthResult::ok("semantic_clones embeddings disabled");
+        }
+        return CapabilityHealthResult::ok("semantic_clones inference slots not configured");
     }
 
     let mut resolved = Vec::new();
-    for (representation, slot_name) in configured_embedding_slots(&config) {
+    for (representation, slot_name, expected_task) in configured_slots {
         if !ctx.inference().has_slot(slot_name) {
             return CapabilityHealthResult::failed(
                 "semantic_clones.profile_resolution",
-                format!("{representation} embedding slot `{slot_name}` is not bound"),
+                format!("{representation} slot `{slot_name}` is not bound"),
             );
         }
         let Some(slot) = ctx.inference().describe(slot_name) else {
             return CapabilityHealthResult::failed(
                 "semantic_clones.profile_resolution",
-                format!("{representation} embedding slot `{slot_name}` is unresolved"),
+                format!("{representation} slot `{slot_name}` is unresolved"),
             );
         };
-        if slot.task != Some(InferenceTask::Embeddings) {
+        if slot.task != Some(expected_task) {
             return CapabilityHealthResult::failed(
                 "semantic_clones.profile_resolution",
                 format!(
-                    "{representation} embedding slot `{slot_name}` points to non-embedding profile `{}`",
-                    slot.profile_name
+                    "{representation} slot `{slot_name}` points to profile `{}` with task `{}` instead of `{}`",
+                    slot.profile_name,
+                    slot.task
+                        .map(|task| task.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    expected_task
                 ),
             );
         }
@@ -102,20 +113,30 @@ fn check_semantic_clones_runtime_command(
         );
     };
     let config = resolve_semantic_clones_config(&view);
-    if embeddings_disabled(&config) {
+    let configured_slots = configured_inference_slots(&config);
+    if configured_slots.is_empty() {
         return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime command not required)",
+            "semantic_clones inference slots not configured (runtime command not required)",
         );
     }
 
     let mut checked = Vec::new();
-    for (_, slot_name) in configured_embedding_slots(&config) {
+    for (representation, slot_name, _) in configured_slots {
         let Some(slot) = ctx.inference().describe(slot_name) else {
             return CapabilityHealthResult::failed(
                 "semantic_clones.runtime_command",
-                format!("embedding slot `{slot_name}` is unresolved"),
+                format!("{representation} slot `{slot_name}` is unresolved"),
             );
         };
+        if slot.task == Some(InferenceTask::TextGeneration) && slot.runtime.is_none() {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.runtime_command",
+                format!(
+                    "text-generation profile `{}` for slot `{slot_name}` has no runtime configured",
+                    slot.profile_name
+                ),
+            );
+        }
         let Some(runtime_name) = slot.runtime.as_deref() else {
             continue;
         };
@@ -131,7 +152,7 @@ fn check_semantic_clones_runtime_command(
         if !command_exists(&command) {
             return CapabilityHealthResult::failed(
                 "semantic_clones.runtime_command",
-                format!("embedding runtime command `{command}` was not found in PATH"),
+                format!("{representation} runtime command `{command}` was not found in PATH"),
             );
         }
         checked.push(format!("{} -> {}", slot.profile_name, command));
@@ -159,15 +180,20 @@ fn check_semantic_clones_runtime_handshake(
         );
     };
     let config = resolve_semantic_clones_config(&view);
-    if embeddings_disabled(&config) {
+    let configured_slots = configured_inference_slots(&config);
+    if configured_slots.is_empty() {
         return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime handshake skipped)",
+            "semantic_clones inference slots not configured (runtime handshake skipped)",
         );
     }
 
     let mut ready = Vec::new();
-    for (representation, slot_name) in configured_embedding_slots(&config) {
-        match ctx.inference().embeddings(slot_name) {
+    for (representation, slot_name, task) in configured_slots {
+        let resolution = match task {
+            InferenceTask::Embeddings => ctx.inference().embeddings(slot_name).map(|_| ()),
+            InferenceTask::TextGeneration => ctx.inference().text_generation(slot_name).map(|_| ()),
+        };
+        match resolution {
             Ok(_) => {
                 let profile_name = ctx
                     .inference()
@@ -179,21 +205,16 @@ fn check_semantic_clones_runtime_handshake(
             Err(err) => {
                 return CapabilityHealthResult::failed(
                     "semantic_clones.runtime_handshake",
-                    format!("{representation} embedding slot `{slot_name}` failed: {err:#}"),
+                    format!("{representation} slot `{slot_name}` failed: {err:#}"),
                 );
             }
         }
     }
 
     CapabilityHealthResult::ok(format!(
-        "semantic_clones embedding slots ready: {}",
+        "semantic_clones inference slots ready: {}",
         ready.join(", ")
     ))
-}
-
-fn embeddings_disabled(config: &crate::config::SemanticClonesConfig) -> bool {
-    config.embedding_mode == SemanticCloneEmbeddingMode::Off
-        || configured_embedding_slots(config).is_empty()
 }
 
 fn configured_embedding_slots(
@@ -210,6 +231,35 @@ fn configured_embedding_slots(
     {
         slots.push(("summary", SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT));
     }
+    slots
+}
+
+fn configured_summary_slot(
+    config: &crate::config::SemanticClonesConfig,
+) -> Option<(&'static str, &'static str, InferenceTask)> {
+    (resolve_selected_summary_slot(config).as_deref()
+        == Some(SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT))
+    .then_some((
+        "summary generation",
+        SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
+        InferenceTask::TextGeneration,
+    ))
+}
+
+fn configured_inference_slots(
+    config: &crate::config::SemanticClonesConfig,
+) -> Vec<(&'static str, &'static str, InferenceTask)> {
+    let mut slots = Vec::new();
+    if let Some(summary_slot) = configured_summary_slot(config) {
+        slots.push(summary_slot);
+    }
+    slots.extend(
+        configured_embedding_slots(config)
+            .into_iter()
+            .map(|(representation, slot_name)| {
+                (representation, slot_name, InferenceTask::Embeddings)
+            }),
+    );
     slots
 }
 

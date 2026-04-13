@@ -120,17 +120,26 @@ If you also want semantic summaries, bind the `summary_generation` slot to a tex
 [semantic_clones.inference]
 summary_generation = "summary_llm"
 
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
 [inference.profiles.summary_llm]
 task = "text_generation"
-driver = "openai"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1/chat/completions"
 ```
 
 Notes:
 
 - `summary_generation` is optional when `summary_mode = "auto"`. If it is unset or unavailable, Bitloops falls back to deterministic summaries.
+- `task = "text_generation"` profiles must declare `runtime`, and `driver` is interpreted by `bitloops-inference`.
+- `bitloops inference install` installs or repairs the managed summary runtime. Interactive `bitloops enable` and `bitloops init --install-default-daemon` can bind summaries to a local Ollama model automatically when it is available.
 - `code_embeddings` and `summary_embeddings` can point at the same embeddings profile or at different ones.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 

@@ -14,6 +14,7 @@ use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipe
 use crate::cli::embeddings::{
     EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
 };
+use crate::cli::inference::{configure_local_summary_generation, summary_generation_configured};
 use crate::cli::telemetry_consent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
@@ -225,6 +226,14 @@ pub(crate) async fn run_with_io(
             }
         }
     }
+
+    if should_install_summaries(&cwd, out, input)? {
+        configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+            anyhow::anyhow!(
+                "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -267,6 +276,47 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
         input
             .read_line(&mut line)
             .context("reading embeddings install prompt response")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(out, "Please answer yes or no.")?,
+        }
+    }
+}
+
+fn should_install_summaries(
+    repo_root: &Path,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(false);
+    }
+
+    if summary_generation_configured(repo_root) {
+        return Ok(false);
+    }
+
+    prompt_install_summaries(out, input)
+}
+
+fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
+    writeln!(out)?;
+    writeln!(out, "Configure local semantic summaries as well?")?;
+    writeln!(
+        out,
+        "Bitloops will install `bitloops-inference` and try to bind summaries to a local Ollama model."
+    )?;
+
+    loop {
+        writeln!(out, "Configure semantic summaries now? (Y/n)")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading semantic summary install prompt response")?;
         match line.trim().to_ascii_lowercase().as_str() {
             "" | "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),

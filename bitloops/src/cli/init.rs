@@ -8,6 +8,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
+use crate::cli::inference::summary_generation_configured;
 use crate::cli::telemetry_consent;
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
 use crate::devql_transport::SlimCliRepoScope;
@@ -187,6 +188,48 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
         input
             .read_line(&mut line)
             .context("reading init embeddings install prompt response")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(out, "Please answer yes or no.")?,
+        }
+    }
+}
+
+fn should_configure_summaries_during_init(
+    repo_root: &Path,
+    install_default_daemon: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if summary_generation_configured(repo_root) {
+        return Ok(false);
+    }
+
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(install_default_daemon);
+    }
+
+    prompt_install_summaries(out, input)
+}
+
+fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
+    writeln!(out)?;
+    writeln!(out, "Configure local semantic summaries as well?")?;
+    writeln!(
+        out,
+        "Bitloops will install `bitloops-inference` and try to bind summaries to a local Ollama model."
+    )?;
+
+    loop {
+        writeln!(out, "Configure semantic summaries now? (Y/n)")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading init semantic summary install prompt response")?;
         match line.trim().to_ascii_lowercase().as_str() {
             "" | "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),

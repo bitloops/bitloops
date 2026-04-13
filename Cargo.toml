@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "bitloops",
+    "bitloops-inference-protocol",
     "xtask",
 ]
 exclude = ["third_party/fastembed"]

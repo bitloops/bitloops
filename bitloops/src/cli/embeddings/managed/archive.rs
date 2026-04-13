@@ -16,13 +16,13 @@ pub(crate) enum ManagedEmbeddingsArchiveKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ManagedEmbeddingsBundleEntry {
-    pub(super) relative_path: PathBuf,
-    pub(super) bytes: Vec<u8>,
-    pub(super) executable: bool,
+pub(crate) struct ManagedEmbeddingsBundleEntry {
+    pub(crate) relative_path: PathBuf,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) executable: bool,
 }
 
-pub(super) fn extract_managed_embeddings_bundle_entries(
+pub(crate) fn extract_managed_embeddings_bundle_entries(
     archive_bytes: &[u8],
     archive_kind: ManagedEmbeddingsArchiveKind,
     binary_name: &str,
@@ -89,7 +89,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-pub(super) fn write_file_atomically(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
+pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
     ensure_parent_dir(path)?;
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;

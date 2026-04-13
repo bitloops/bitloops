@@ -15,6 +15,7 @@ pub use gateway::{EmptyInferenceGateway, LocalInferenceGateway, ScopedInferenceG
 
 pub const BITLOOPS_EMBEDDINGS_IPC_DRIVER: &str = "bitloops_embeddings_ipc";
 pub const BITLOOPS_EMBEDDINGS_RUNTIME_ID: &str = "bitloops_embeddings";
+pub const BITLOOPS_INFERENCE_RUNTIME_ID: &str = "bitloops_inference";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {

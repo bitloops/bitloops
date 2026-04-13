@@ -97,6 +97,9 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
                 "bitloops_embeddings": {
                     "command": "bitloops-embeddings",
                     "args": ["--verbose"]
+                },
+                "bitloops_inference": {
+                    "command": "bitloops-inference"
                 }
             },
             "profiles": {
@@ -115,9 +118,9 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
                 },
                 "summary_llm": {
                     "task": "text_generation",
-                    "driver": "openai",
+                    "driver": "ollama_chat",
+                    "runtime": "bitloops_inference",
                     "model": "gpt-5.4-mini",
-                    "api_key": "sk-test",
                     "base_url": "https://api.openai.com/v1"
                 }
             }
@@ -164,7 +167,8 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     );
     let llm_profile = inference.profiles.get("summary_llm").expect("llm profile");
     assert_eq!(llm_profile.task, InferenceTask::TextGeneration);
-    assert_eq!(llm_profile.driver, "openai");
+    assert_eq!(llm_profile.driver, "ollama_chat");
+    assert_eq!(llm_profile.runtime.as_deref(), Some("bitloops_inference"));
     assert_eq!(llm_profile.model.as_deref(), Some("gpt-5.4-mini"));
     assert_eq!(capability.semantic_clones, semantic_clones);
     assert_eq!(capability.inference, inference);

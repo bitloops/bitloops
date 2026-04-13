@@ -62,6 +62,12 @@ summary_generation = "summary_llm"
 code_embeddings = "local_code"
 summary_embeddings = "local_code"
 
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
 [inference.runtimes.bitloops_embeddings]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
 args = []
@@ -77,15 +83,16 @@ cache_dir = "/Users/alex/.cache/bitloops-embeddings"
 
 [inference.profiles.summary_llm]
 task = "text_generation"
-driver = "openai"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1/chat/completions"
 ```
 
-`bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` can create the default local profile for you. Edit the daemon config manually only when you want a hosted profile or a customised local profile.
+`bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` can create the default local embeddings profile for you. `bitloops inference install` manages the standalone summary runtime, and interactive `bitloops enable` or `bitloops init --install-default-daemon` can attach summaries to Ollama automatically when it is available. Edit the daemon config manually only when you want a hosted profile or a customised local profile.
 
-When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above. Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
+When Bitloops installs a managed runtime, it writes an absolute path under the Bitloops data directory, as shown above. Use `command = "bitloops-embeddings"` or `command = "bitloops-inference"` only when you are managing those standalone binaries yourself on `PATH`.
 
 ## Watch Behaviour
 

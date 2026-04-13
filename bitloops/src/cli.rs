@@ -13,6 +13,7 @@ pub mod doctor;
 pub mod embeddings;
 pub mod enable;
 pub mod explain;
+pub mod inference;
 pub mod init;
 pub mod reset;
 pub mod resume;
@@ -95,6 +96,8 @@ pub enum Commands {
     Devql(devql::DevqlArgs),
     /// Manage embedding profiles and caches.
     Embeddings(embeddings::EmbeddingsArgs),
+    /// Manage the standalone inference runtime used for semantic summaries.
+    Inference(inference::InferenceArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
@@ -211,6 +214,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
         Commands::Embeddings(args) => embeddings::run(args),
+        Commands::Inference(args) => inference::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
         Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,
