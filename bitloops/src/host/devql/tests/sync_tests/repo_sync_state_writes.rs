@@ -226,3 +226,39 @@ async fn repo_sync_state_write_failed_errors_without_started_row() {
         "error should explain the missing sync state row"
     );
 }
+
+#[tokio::test]
+async fn repo_sync_state_scope_exclusions_fingerprint_round_trips() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    crate::host::devql::sync::state::write_sync_started(
+        &relational,
+        &cfg.repo.repo_id,
+        cfg.repo_root.to_string_lossy().as_ref(),
+        "full",
+        "parser-v1",
+        "extractor-v1",
+    )
+    .await
+    .expect("write started state");
+
+    crate::host::devql::sync::state::write_scope_exclusions_fingerprint(
+        &relational,
+        &cfg.repo.repo_id,
+        "fingerprint-123",
+    )
+    .await
+    .expect("write scope exclusions fingerprint");
+
+    let stored = crate::host::devql::sync::state::read_scope_exclusions_fingerprint(
+        &relational,
+        &cfg.repo.repo_id,
+    )
+    .await
+    .expect("read scope exclusions fingerprint");
+    assert_eq!(stored.as_deref(), Some("fingerprint-123"));
+}

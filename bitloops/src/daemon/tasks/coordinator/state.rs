@@ -1,13 +1,14 @@
 use anyhow::{Result, anyhow, bail};
 
 use crate::graphql::Checkpoint;
-use crate::host::devql::{IngestionCounters, SyncSummary};
+use crate::host::devql::{DevqlConfig, IngestionCounters, SyncSummary};
 use crate::host::runtime_store::PersistedDevqlTaskQueueState;
 
 use super::super::super::types::{
-    DevqlTaskControlResult, DevqlTaskProgress, DevqlTaskQueueStatus, DevqlTaskRecord,
-    DevqlTaskResult, DevqlTaskStatus, EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress,
-    EmbeddingsBootstrapResult, RepoTaskControlState, SyncTaskMode, unix_timestamp_now,
+    DevqlTaskControlResult, DevqlTaskKind, DevqlTaskProgress, DevqlTaskQueueStatus,
+    DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskStatus, EmbeddingsBootstrapPhase,
+    EmbeddingsBootstrapProgress, EmbeddingsBootstrapResult, RepoTaskControlState, SyncTaskMode,
+    unix_timestamp_now,
 };
 use super::super::queue::{
     changed_tasks, default_progress_for_spec, failed_progress, ingest_progress_from_summary,
@@ -274,6 +275,60 @@ impl DevqlTaskCoordinator {
             task.result = None;
             task.progress = failed_progress(&task.progress);
             state.last_action = Some("failed".to_string());
+            Ok(())
+        })
+        .map(|_: ()| ())
+    }
+
+    pub(super) fn has_blocking_scope_exclusion_reconcile(&self, repo_id: &str) -> Result<bool> {
+        Ok(self.load_state()?.tasks.into_iter().any(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Sync
+                && task.source == DevqlTaskSource::RepoPolicyChange
+                && matches!(
+                    task.status,
+                    DevqlTaskStatus::Queued | DevqlTaskStatus::Running
+                )
+        }))
+    }
+
+    pub(super) fn prune_excluded_path_sync_tasks_for_repo(&self, cfg: &DevqlConfig) -> Result<()> {
+        let exclusion_matcher = crate::host::devql::load_repo_exclusion_matcher(&cfg.repo_root)?;
+        self.mutate_state(|state| {
+            let now = unix_timestamp_now();
+            let mut changed = false;
+            for task in state.tasks.iter_mut().filter(|task| {
+                task.repo_id == cfg.repo.repo_id && task.status == DevqlTaskStatus::Queued
+            }) {
+                let Some(sync_spec) = sync_spec_from_task_spec_mut(&mut task.spec) else {
+                    continue;
+                };
+                let SyncTaskMode::Paths { paths } = &mut sync_spec.mode else {
+                    continue;
+                };
+                let previous_len = paths.len();
+                paths.retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
+                paths.sort();
+                paths.dedup();
+                if paths.is_empty() {
+                    task.status = DevqlTaskStatus::Cancelled;
+                    task.updated_at_unix = now;
+                    task.completed_at_unix = Some(now);
+                    task.error =
+                        Some("task only targeted paths now excluded by repo policy".to_string());
+                    task.result = None;
+                    changed = true;
+                    continue;
+                }
+                if paths.len() != previous_len {
+                    task.updated_at_unix = now;
+                    task.error = None;
+                    changed = true;
+                }
+            }
+            if changed {
+                state.last_action = Some("prune_excluded_paths".to_string());
+            }
             Ok(())
         })
         .map(|_: ()| ())

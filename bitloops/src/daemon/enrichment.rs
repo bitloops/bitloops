@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -304,6 +304,72 @@ impl EnrichmentCoordinator {
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         Ok(())
+    }
+
+    pub async fn prune_pending_single_artefact_jobs_after_reconcile(
+        &self,
+        repo_id: &str,
+        relational: &crate::host::devql::RelationalStorage,
+    ) -> Result<u64> {
+        let repo_id_sql = crate::host::devql::esc_pg(repo_id);
+        let existing_artefact_ids = relational
+            .query_rows(&format!(
+                "SELECT DISTINCT artefact_id FROM artefacts WHERE repo_id = '{repo_id_sql}' \
+UNION \
+SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql}'"
+            ))
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                row.as_object()
+                    .and_then(|row| row.get("artefact_id"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+            .collect::<HashSet<_>>();
+
+        let _guard = self.lock.lock().await;
+        let deleted = self.workplane_store.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT job_id, payload FROM capability_workplane_jobs WHERE repo_id = ?1 AND status = ?2",
+            )?;
+            let rows = stmt.query_map(
+                params![repo_id, WorkplaneJobStatus::Pending.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            let mut job_ids = Vec::new();
+            for row in rows {
+                let (job_id, payload_raw) = row?;
+                let payload = serde_json::from_str::<serde_json::Value>(&payload_raw)
+                    .unwrap_or(serde_json::Value::Null);
+                if crate::capability_packs::semantic_clones::workplane::payload_is_repo_backfill(
+                    &payload,
+                ) {
+                    continue;
+                }
+                let Some(artefact_id) =
+                    crate::capability_packs::semantic_clones::workplane::payload_artefact_id(
+                        &payload,
+                    )
+                else {
+                    continue;
+                };
+                if !existing_artefact_ids.contains(&artefact_id) {
+                    job_ids.push(job_id);
+                }
+            }
+            for job_id in &job_ids {
+                conn.execute(
+                    "DELETE FROM capability_workplane_jobs WHERE job_id = ?1",
+                    params![job_id],
+                )?;
+            }
+            Ok(u64::try_from(job_ids.len()).unwrap_or_default())
+        })?;
+        if deleted > 0 {
+            compact_and_prune_workplane_jobs(&self.workplane_store)?;
+        }
+        Ok(deleted)
     }
 
     fn ensure_state_file(&self) {

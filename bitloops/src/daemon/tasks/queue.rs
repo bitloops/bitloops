@@ -42,7 +42,7 @@ pub(super) fn changed_tasks(
 pub(super) fn merge_existing_task(
     state: &mut PersistedDevqlTaskQueueState,
     cfg: &DevqlConfig,
-    _source: DevqlTaskSource,
+    source: DevqlTaskSource,
     kind: DevqlTaskKind,
     spec: &DevqlTaskSpec,
 ) -> Option<DevqlTaskRecord> {
@@ -76,6 +76,8 @@ pub(super) fn merge_existing_task(
                     task.status,
                     DevqlTaskStatus::Queued | DevqlTaskStatus::Running
                 )
+                && (source != DevqlTaskSource::RepoPolicyChange
+                    || task.status == DevqlTaskStatus::Queued)
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| {
                     match (&existing_spec.mode, mode) {
                         (SyncTaskMode::Repair, _) => true,
@@ -90,6 +92,12 @@ pub(super) fn merge_existing_task(
                 })
         })
     {
+        if source == DevqlTaskSource::RepoPolicyChange {
+            existing.source = DevqlTaskSource::RepoPolicyChange;
+        }
+        if let Some(existing_spec) = sync_spec_from_task_spec_mut(&mut existing.spec) {
+            existing_spec.mode = merge_sync_modes(&existing_spec.mode, mode);
+        }
         existing.updated_at_unix = unix_timestamp_now();
         existing.error = None;
         return Some(existing.clone());
@@ -129,16 +137,47 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
         .filter(|(_, control)| control.paused)
         .map(|(repo_id, _)| repo_id.as_str())
         .collect::<HashSet<_>>();
+    let repo_policy_change_blocked_repo_ids = state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.kind == DevqlTaskKind::Sync
+                && task.source == DevqlTaskSource::RepoPolicyChange
+                && matches!(
+                    task.status,
+                    DevqlTaskStatus::Queued | DevqlTaskStatus::Running
+                )
+        })
+        .map(|task| task.repo_id.as_str())
+        .collect::<HashSet<_>>();
     let running_lanes = state
         .tasks
         .iter()
         .filter(|task| task.status == DevqlTaskStatus::Running)
         .map(task_lane)
         .collect::<HashSet<_>>();
+    let running_repo_ids = state
+        .tasks
+        .iter()
+        .filter(|task| task.status == DevqlTaskStatus::Running)
+        .map(|task| task.repo_id.as_str())
+        .collect::<HashSet<_>>();
 
     let mut selected = HashMap::<TaskLaneKey, (usize, (u8, u64, usize))>::new();
     for (index, task) in state.tasks.iter().enumerate() {
         if task.status != DevqlTaskStatus::Queued || paused_repo_ids.contains(task.repo_id.as_str())
+        {
+            continue;
+        }
+        if repo_policy_change_blocked_repo_ids.contains(task.repo_id.as_str())
+            && !(task.kind == DevqlTaskKind::Sync
+                && task.source == DevqlTaskSource::RepoPolicyChange)
+        {
+            continue;
+        }
+        if task.kind == DevqlTaskKind::Sync
+            && task.source == DevqlTaskSource::RepoPolicyChange
+            && running_repo_ids.contains(task.repo_id.as_str())
         {
             continue;
         }
@@ -165,16 +204,18 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
 
 fn pending_sort_key(index: usize, task: &DevqlTaskRecord) -> (u8, u64, usize) {
     (
-        if task.kind == DevqlTaskKind::EmbeddingsBootstrap {
-            1
+        if task.kind == DevqlTaskKind::Sync && task.source == DevqlTaskSource::RepoPolicyChange {
+            0
+        } else if task.kind == DevqlTaskKind::EmbeddingsBootstrap {
+            2
         } else if task.kind == DevqlTaskKind::Sync
             && task
                 .sync_spec()
                 .is_some_and(|spec| matches!(spec.mode, SyncTaskMode::Validate))
         {
-            2
+            3
         } else {
-            0
+            1
         },
         task.submitted_at_unix,
         index,
@@ -517,6 +558,15 @@ fn is_weaker_than_repair(mode: &SyncTaskMode) -> bool {
         mode,
         SyncTaskMode::Auto | SyncTaskMode::Full | SyncTaskMode::Paths { .. }
     )
+}
+
+fn merge_sync_modes(existing: &SyncTaskMode, incoming: &SyncTaskMode) -> SyncTaskMode {
+    match (existing, incoming) {
+        (SyncTaskMode::Repair, _) | (_, SyncTaskMode::Repair) => SyncTaskMode::Repair,
+        (SyncTaskMode::Full, _) | (_, SyncTaskMode::Full) => SyncTaskMode::Full,
+        (SyncTaskMode::Auto, _) => SyncTaskMode::Auto,
+        (_, mode) => mode.clone(),
+    }
 }
 
 fn task_lane(task: &DevqlTaskRecord) -> TaskLaneKey {

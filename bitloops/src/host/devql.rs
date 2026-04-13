@@ -803,6 +803,8 @@ mod ingestion_artefact_persistence;
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
+#[path = "devql/exclusion_reconcile.rs"]
+mod exclusion_reconcile;
 #[path = "devql/exclusions.rs"]
 mod exclusions;
 #[path = "devql/query/dsl_compiler.rs"]
@@ -823,7 +825,10 @@ pub(crate) use self::db_utils::{
     sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
-use self::exclusions::*;
+pub(crate) use self::exclusion_reconcile::{
+    purge_scope_excluded_repo_data, scope_exclusion_reconcile_needed,
+};
+pub(crate) use self::exclusions::{RepoExclusionMatcher, load_repo_exclusion_matcher};
 use self::ingestion_artefact_identity::*;
 use self::ingestion_artefact_persistence::*;
 use self::ingestion_artefact_persistence_edges::*;

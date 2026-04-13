@@ -111,6 +111,23 @@ impl CapabilityEventCoordinator {
         Self::try_shared().expect("building current-state consumer coordinator")
     }
 
+    pub(crate) fn clear_queued_runs_for_repo(&self, repo_id: &str) -> Result<u64> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
+        let deleted = self.runtime_store.with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2",
+                params![repo_id, CapabilityEventRunStatus::Queued.to_string()],
+            )
+            .map(|count| u64::try_from(count).unwrap_or_default())
+            .map_err(anyhow::Error::from)
+        })?;
+        self.notify.notify_waiters();
+        Ok(deleted)
+    }
+
     fn new_shared_instance(runtime_store: DaemonSqliteRuntimeStore) -> Arc<Self> {
         Arc::new(Self {
             runtime_store,

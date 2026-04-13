@@ -593,11 +593,7 @@ impl MutationRoot {
             })?;
 
         let report = host.registry_report();
-        let pending_migrations = if report.migrations_applied_this_session {
-            Vec::new()
-        } else {
-            report.migration_plan
-        };
+        let migrations_to_report = report.migration_plan;
         host.ensure_migrations_applied_sync()
             .map_err(|err| operation_error("BACKEND_ERROR", "migration", "applyMigrations", err))?;
         ensure_knowledge_document_schema(host.repo_root())
@@ -605,7 +601,7 @@ impl MutationRoot {
 
         let applied_at = DateTimeScalar::from_rfc3339(Utc::now().to_rfc3339())
             .expect("current UTC timestamp must be RFC 3339");
-        let migrations_applied = pending_migrations
+        let migrations_applied = migrations_to_report
             .into_iter()
             .map(|migration| MigrationRecord {
                 pack_id: migration.capability_id,

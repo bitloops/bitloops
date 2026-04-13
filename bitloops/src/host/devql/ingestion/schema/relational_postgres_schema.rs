@@ -405,6 +405,7 @@ CREATE TABLE IF NOT EXISTS repo_sync_state (
     head_tree_sha TEXT,
     parser_version TEXT NOT NULL,
     extractor_version TEXT NOT NULL,
+    scope_exclusions_fingerprint TEXT,
     last_sync_started_at TEXT,
     last_sync_completed_at TEXT,
     last_sync_status TEXT,
