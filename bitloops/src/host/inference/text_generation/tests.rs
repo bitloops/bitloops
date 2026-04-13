@@ -7,7 +7,10 @@ use std::time::Duration;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use crate::config::{InferenceConfig, InferenceRuntimeConfig, InferenceTask};
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, InferenceConfig, InferenceRuntimeConfig, InferenceTask,
+    REPO_POLICY_LOCAL_FILE_NAME, resolve_inference_capability_config_for_repo,
+};
 use crate::host::inference::{EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway};
 
 use super::*;
@@ -304,5 +307,113 @@ fn gateway_rejects_text_generation_profile_without_runtime() {
     assert!(
         err.to_string().contains("requires a runtime"),
         "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn gateway_uses_same_daemon_config_path_as_host_inference_resolution() {
+    let _guard = test_lock();
+    let temp = TempDir::new().expect("temp dir");
+    let repo_root = temp.path();
+    let script_path = repo_root.join("fake_inference_runtime.sh");
+    let launch_log = repo_root.join("launches.log");
+    let local_config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let bound_config_path = repo_root.join("bound-config.toml");
+    std::fs::create_dir_all(local_config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(
+        &script_path,
+        format!(
+            r#"launch_log="$1"
+printf '%s\n' "$4" >> "$launch_log"
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{{"type":"shutdown","request_id":"%s"}}\n' "$request_id"
+      exit 0
+      ;;
+    *'"type":"infer"'*)
+      printf '{{"type":"infer","request_id":"%s","text":"","parsed_json":{{"summary":"Summarises the symbol.","confidence":0.91}},"provider_name":"ollama","model_name":"ministral-3:3b"}}\n' "$request_id"
+      ;;
+  esac
+done
+"#,
+        ),
+    )
+    .expect("write fake runtime script");
+    std::fs::write(
+        &local_config_path,
+        format!(
+            r#"
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.runtimes.bitloops_inference]
+command = "/bin/sh"
+args = ["{}", "{}"]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434"
+"#,
+            script_path.display(),
+            launch_log.display(),
+        ),
+    )
+    .expect("write local daemon config");
+    std::fs::write(&bound_config_path, "[inference]\n").expect("write bound config");
+    std::fs::write(
+        repo_root.join(REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"
+[daemon]
+config_path = "{}"
+"#,
+            bound_config_path.display(),
+        ),
+    )
+    .expect("write repo policy");
+
+    let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let gateway = LocalInferenceGateway::new(
+        repo_root,
+        capability.inference,
+        HashMap::from([(
+            "semantic_clones".to_string(),
+            BTreeMap::from([(
+                "summary_generation".to_string(),
+                "summary_local".to_string(),
+            )]),
+        )]),
+    );
+
+    let text = gateway
+        .scoped(Some("semantic_clones"))
+        .text_generation("summary_generation")
+        .and_then(|service| service.complete("system", "user"))
+        .expect("runtime-backed text generation");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).expect("parse response json"),
+        serde_json::json!({
+            "summary": "Summarises the symbol.",
+            "confidence": 0.91
+        })
+    );
+
+    let launched_with = std::fs::read_to_string(&launch_log).expect("read launch log");
+    assert_eq!(
+        launched_with.trim(),
+        local_config_path.to_string_lossy(),
+        "runtime should reuse the same daemon config path as the host inference config"
     );
 }

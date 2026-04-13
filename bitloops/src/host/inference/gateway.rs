@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, InferenceConfig, InferenceProfileConfig, InferenceRuntimeConfig,
-    InferenceTask, resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+    InferenceTask, resolve_daemon_config_path_for_repo,
 };
 
 use super::embeddings::BitloopsEmbeddingsIpcService;
@@ -198,8 +198,7 @@ impl LocalInferenceGateway {
     }
 
     fn resolve_runtime_config_path(&self) -> Result<PathBuf> {
-        resolve_bound_daemon_config_path_for_repo(&self.repo_root)
-            .or_else(|_| resolve_daemon_config_path_for_repo(&self.repo_root))
+        resolve_daemon_config_path_for_repo(&self.repo_root)
             .or_else(|_| Ok(self.repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
     }
 }

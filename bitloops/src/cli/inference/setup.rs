@@ -7,7 +7,8 @@ use serde::Deserialize;
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::{
-    resolve_daemon_config_path_for_repo, resolve_inference_capability_config_for_repo,
+    InferenceTask, resolve_daemon_config_path_for_repo,
+    resolve_inference_capability_config_for_repo,
 };
 use crate::host::inference::BITLOOPS_INFERENCE_RUNTIME_ID;
 
@@ -53,13 +54,28 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
         return hook(repo_root);
     }
 
-    resolve_inference_capability_config_for_repo(repo_root)
+    let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let Some(profile_name) = capability
         .semantic_clones
         .inference
         .summary_generation
         .as_deref()
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+
+    let Some(profile) = capability.inference.profiles.get(profile_name) else {
+        return false;
+    };
+
+    profile.task == InferenceTask::TextGeneration
+        && profile
+            .runtime
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
 }
 
 pub(crate) fn configure_local_summary_generation(
@@ -249,24 +265,77 @@ fn write_summary_profile(repo_root: &Path, model_name: &str) -> Result<()> {
             .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?
     };
 
+    let profile_name = {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        select_summary_profile_name(profiles)
+    };
+
+    {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        let profile = ensure_child_table(profiles, &profile_name);
+        profile["task"] = Item::Value("text_generation".into());
+        profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
+        profile["driver"] = Item::Value("ollama_chat".into());
+        profile["model"] = Item::Value(model_name.into());
+        profile["base_url"] = Item::Value(DEFAULT_OLLAMA_BASE_URL.into());
+        profile.remove("api_key");
+        profile.remove("cache_dir");
+    }
+
     let semantic_clones = ensure_table(&mut doc, "semantic_clones");
     let semantic_inference = ensure_child_table(semantic_clones, "inference");
-    semantic_inference["summary_generation"] = Item::Value(DEFAULT_SUMMARY_PROFILE_NAME.into());
-
-    let inference = ensure_table(&mut doc, "inference");
-    let profiles = ensure_child_table(inference, "profiles");
-    let profile = ensure_child_table(profiles, DEFAULT_SUMMARY_PROFILE_NAME);
-    profile["task"] = Item::Value("text_generation".into());
-    profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
-    profile["driver"] = Item::Value("ollama_chat".into());
-    profile["model"] = Item::Value(model_name.into());
-    profile["base_url"] = Item::Value(DEFAULT_OLLAMA_BASE_URL.into());
-    profile.remove("api_key");
-    profile.remove("cache_dir");
+    semantic_inference["summary_generation"] = Item::Value(profile_name.as_str().into());
 
     std::fs::write(&config_path, doc.to_string())
         .with_context(|| format!("writing Bitloops daemon config {}", config_path.display()))?;
     Ok(())
+}
+
+fn select_summary_profile_name(profiles: &Table) -> String {
+    match profiles
+        .get(DEFAULT_SUMMARY_PROFILE_NAME)
+        .and_then(Item::as_table)
+    {
+        None => DEFAULT_SUMMARY_PROFILE_NAME.to_string(),
+        Some(profile) if is_managed_summary_profile(profile) => {
+            DEFAULT_SUMMARY_PROFILE_NAME.to_string()
+        }
+        Some(_) => next_available_summary_profile_name(profiles),
+    }
+}
+
+fn next_available_summary_profile_name(profiles: &Table) -> String {
+    let mut suffix = 1usize;
+    loop {
+        let candidate = format!("{DEFAULT_SUMMARY_PROFILE_NAME}_{suffix}");
+        if !profiles.contains_key(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn is_managed_summary_profile(profile: &Table) -> bool {
+    profile
+        .get("task")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        == Some("text_generation")
+        && profile
+            .get("runtime")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(BITLOOPS_INFERENCE_RUNTIME_ID)
+        && profile
+            .get("driver")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some("ollama_chat")
 }
 
 fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
