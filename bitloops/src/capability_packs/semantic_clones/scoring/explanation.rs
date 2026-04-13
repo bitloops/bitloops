@@ -22,6 +22,7 @@ impl LimitingSignal {
 }
 
 pub(super) struct ExplanationContext<'a> {
+    pub(super) relation_kind: &'a str,
     pub(super) source: &'a SymbolCloneCandidateInput,
     pub(super) target: &'a SymbolCloneCandidateInput,
     pub(super) candidate_score: f32,
@@ -35,6 +36,7 @@ pub(super) struct ExplanationContext<'a> {
 }
 
 pub(super) fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
+    let interpretation = interpretation_for_relation_kind(ctx.relation_kind);
     let limiting_signals = build_limiting_signals(ctx)
         .into_iter()
         .map(LimitingSignal::as_str)
@@ -58,6 +60,9 @@ pub(super) fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
                 "summary_embedding_similarity": ctx.derived.summary_embedding_similarity,
                 "summary_embedding_available": ctx.derived.summary_embedding_available,
                 "summary_text_similarity": ctx.derived.summary_text_similarity,
+                "interpretation": interpretation.as_str(),
+                "primary_driver": ctx.derived.primary_semantic_driver.as_str(),
+                "summary_signal_source": ctx.derived.summary_signal_source.as_str(),
                 "match_pattern": multi_view_match_pattern(ctx.derived),
             },
             "facts": {
@@ -136,6 +141,21 @@ fn confidence_band(clone_confidence: f32) -> &'static str {
         "medium"
     } else {
         "weak"
+    }
+}
+
+fn interpretation_for_relation_kind(relation_kind: &str) -> SemanticInterpretation {
+    match relation_kind {
+        RELATION_KIND_EXACT_DUPLICATE => SemanticInterpretation::StrongDuplicate,
+        RELATION_KIND_SIMILAR_IMPLEMENTATION => {
+            SemanticInterpretation::SameBehaviourSimilarImplementation
+        }
+        RELATION_KIND_DIVERGED_IMPLEMENTATION => SemanticInterpretation::ImplementationReuseDrift,
+        RELATION_KIND_SHARED_LOGIC_CANDIDATE => {
+            SemanticInterpretation::SameBehaviourDifferentImplementation
+        }
+        RELATION_KIND_WEAK_CLONE_CANDIDATE => SemanticInterpretation::Mixed,
+        _ => SemanticInterpretation::Mixed,
     }
 }
 

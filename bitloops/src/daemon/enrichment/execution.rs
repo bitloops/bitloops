@@ -336,11 +336,9 @@ async fn execute_embedding_job(
     };
 
     let mut outcome = JobExecutionOutcome::ok();
-    if representation_kind
-        == crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
-        && result.payload["clone_rebuild_recommended"]
-            .as_bool()
-            .unwrap_or(false)
+    if result.payload["clone_rebuild_recommended"]
+        .as_bool()
+        .unwrap_or(false)
     {
         outcome.follow_ups.push(clone_edges_rebuild_follow_up(job));
     }
