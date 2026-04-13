@@ -30,9 +30,11 @@ pub use diagnostics::{
 };
 pub use event_dispatch::dispatch_event;
 pub use events::{
-    ChangedArtefact, ChangedFile, EventHandlerContext, EventHandlerFuture, HostEvent,
-    HostEventHandler, HostEventKind, RemovedArtefact, RemovedFile, SyncArtefactDiff,
-    SyncCompletedPayload, SyncFileDiff,
+    ChangedArtefact, ChangedFile, CurrentStateConsumer, CurrentStateConsumerContext,
+    CurrentStateConsumerFuture, CurrentStateConsumerRequest, CurrentStateConsumerResult,
+    EventHandlerContext, EventHandlerFuture, HostEvent, HostEventHandler, HostEventKind,
+    ReconcileMode, RemovedArtefact, RemovedFile, SyncArtefactDiff, SyncCompletedPayload,
+    SyncFileDiff,
 };
 pub use health::{CapabilityHealthCheck, CapabilityHealthResult};
 pub use host::DevqlCapabilityHost;
@@ -41,8 +43,10 @@ pub use policy::{
     CrossPackAccessPolicy, CrossPackGrant, HostInvocationPolicy, PackTrustTier, with_timeout,
 };
 pub use registrar::{
-    BoxFuture, CapabilityPack, CapabilityRegistrar, IngestRequest, IngestResult, IngesterHandler,
-    IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
+    BoxFuture, CapabilityMailboxBacklogPolicy, CapabilityMailboxHandler, CapabilityMailboxPolicy,
+    CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration, CapabilityPack,
+    CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest, IngestResult,
+    IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
     KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
     StageRegistration, StageRequest, StageResponse,
 };

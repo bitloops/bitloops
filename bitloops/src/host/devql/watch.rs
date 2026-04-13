@@ -124,6 +124,8 @@ pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
         repo_root.clone(),
         repo,
     )?;
+    let _ = crate::host::devql::load_repo_exclusion_matcher(&repo_root)
+        .context("loading repo policy exclusions for DevQL watcher start")?;
     let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
     let opts = DevqlWatchOptions::from(watch_cfg);
 

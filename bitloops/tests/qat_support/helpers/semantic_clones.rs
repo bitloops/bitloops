@@ -95,6 +95,41 @@ fn load_representation_kind_counts_for_repo(
     Ok(counts)
 }
 
+fn load_current_joined_representation_kind_counts_for_repo(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<RepresentationKindCounts> {
+    let sql = "SELECT e.representation_kind, COUNT(*) \
+               FROM artefacts_current a \
+               JOIN symbol_embeddings e \
+                 ON e.repo_id = a.repo_id \
+                AND e.artefact_id = a.artefact_id \
+               WHERE a.repo_id = ?1 \
+               GROUP BY e.representation_kind";
+    let mut counts = RepresentationKindCounts::default();
+    let mut stmt = match conn.prepare(sql) {
+        Ok(stmt) => stmt,
+        Err(err) if is_missing_table_or_column_error(&err) => return Ok(counts),
+        Err(err) => return Err(err).context("preparing current joined representation query"),
+    };
+    let rows = stmt
+        .query_map(rusqlite::params![repo_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .context("querying current joined representation kinds")?;
+    for row in rows {
+        let (kind, count) = row.context("reading current joined representation row")?;
+        let count = usize::try_from(count)
+            .context("converting current joined representation count to usize")?;
+        match normalize_representation_kind(kind.trim()) {
+            Some("code") => counts.code += count,
+            Some("summary") => counts.summary += count,
+            _ => {}
+        }
+    }
+    Ok(counts)
+}
+
 fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneTableSnapshot> {
     let conn = open_relational_connection(world)?;
     let repo_id = resolve_repo_id(&conn)?;
@@ -135,6 +170,10 @@ fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneT
             "symbol_embeddings_current",
             &repo_id,
         )?,
+        current_joined_representation_counts: load_current_joined_representation_kind_counts_for_repo(
+            &conn,
+            &repo_id,
+        )?,
     })
 }
 
@@ -144,7 +183,7 @@ fn store_semantic_clone_table_snapshot(world: &mut QatWorld, snapshot: SemanticC
 
 fn describe_semantic_clone_table_snapshot(snapshot: &SemanticCloneTableSnapshot) -> String {
     format!(
-        "historical(artefacts={}, features={}, semantics={}, embeddings={}, ledger={}); current(artefacts={}, features={}, semantics={}, embeddings={}, clone_edges={}); historical_kinds(code={}, summary={}); current_kinds(code={}, summary={})",
+        "historical(artefacts={}, features={}, semantics={}, embeddings={}, ledger={}); current(artefacts={}, features={}, semantics={}, embeddings={}, clone_edges={}); historical_kinds(code={}, summary={}); current_kinds(code={}, summary={}); current_joined_kinds(code={}, summary={})",
         snapshot.historical.artefacts_historical,
         snapshot.historical.symbol_features,
         snapshot.historical.symbol_semantics,
@@ -159,6 +198,8 @@ fn describe_semantic_clone_table_snapshot(snapshot: &SemanticCloneTableSnapshot)
         snapshot.historical_representation_counts.summary,
         snapshot.current_representation_counts.code,
         snapshot.current_representation_counts.summary,
+        snapshot.current_joined_representation_counts.code,
+        snapshot.current_joined_representation_counts.summary,
     )
 }
 
@@ -529,25 +570,29 @@ pub fn add_semantic_clone_fixtures(repo_dir: &Path) -> Result<()> {
 
 pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_devql_sync_for_repo(world, repo_name)?;
     let output = run_command_capture(
         world,
-        "bitloops devql ingest",
-        build_bitloops_command(world, &["devql", "ingest"])?,
+        "bitloops devql tasks enqueue --kind ingest --status",
+        build_bitloops_command(
+            world,
+            &["devql", "tasks", "enqueue", "--kind", "ingest", "--status"],
+        )?,
     )?;
-    ensure_success(&output, "bitloops devql ingest")?;
+    ensure_success(&output, "bitloops devql tasks enqueue --kind ingest --status")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let semantic_rows = extract_ingest_metric(&stdout, "semantic_feature_rows_upserted=")
         .ok_or_else(|| {
             anyhow!(
-                "bitloops devql ingest completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
+                "bitloops devql tasks enqueue --kind ingest --status completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
             )
         })?;
     let clone_edges = extract_ingest_metric(&stdout, "symbol_clone_edges_upserted=");
+    run_devql_sync_for_repo(world, repo_name)?;
+    wait_for_semantic_clone_enrichments_to_drain(world, repo_name)?;
     let store_snapshot = wait_for_semantic_clone_store_snapshot(world).with_context(|| {
         format!(
-            "bitloops devql ingest reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
+            "bitloops devql tasks enqueue --kind ingest --status reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
         )
     })?;
     let table_snapshot = load_semantic_clone_table_snapshot(world)?;
@@ -580,7 +625,7 @@ pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) 
     }
     ensure!(
         semantic_clone_store_evidence_proves_rebuild(clone_edges, store_evidence),
-        "bitloops devql semantic clones rebuild succeeded but did not leave persisted semantic clone evidence in {} (semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}, current_artefacts={}, symbol_embeddings={}, symbol_clone_edges={}). Re-run `bitloops devql sync --status` and `bitloops devql ingest` and inspect the semantic provider output.",
+        "bitloops devql semantic clones rebuild succeeded but did not leave persisted semantic clone evidence in {} (semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}, current_artefacts={}, symbol_embeddings={}, symbol_clone_edges={}). Re-run `bitloops devql tasks enqueue --kind sync --status` and `bitloops devql tasks enqueue --kind ingest --status` and inspect the semantic provider output.",
         store_snapshot.path.display(),
         store_evidence.current_artefacts,
         store_evidence.embeddings,
@@ -772,6 +817,7 @@ pub fn observe_semantic_clone_enrichment_progress(
     let poll_interval = semantic_clone_eventual_poll_interval();
     let started = Instant::now();
     let mut observation = SemanticCloneProgressObservation::default();
+    let mut previous_status: Option<EnrichmentStatusSnapshot> = None;
     let mut last_status: EnrichmentStatusSnapshot;
 
     loop {
@@ -782,45 +828,52 @@ pub fn observe_semantic_clone_enrichment_progress(
             describe_enrichment_status(&status)
         );
         observation.status_samples += 1;
-        observation.max_pending_semantic_jobs = observation
-            .max_pending_semantic_jobs
-            .max(status.pending_semantic_jobs);
         observation.max_pending_embedding_jobs = observation
             .max_pending_embedding_jobs
             .max(status.pending_embedding_jobs);
-        observation.semantic_pending_decreased |=
-            observation.max_pending_semantic_jobs > status.pending_semantic_jobs;
+        observation.max_pending_clone_edges_rebuild_jobs = observation
+            .max_pending_clone_edges_rebuild_jobs
+            .max(status.pending_clone_edges_rebuild_jobs);
         observation.embedding_pending_decreased |=
             observation.max_pending_embedding_jobs > status.pending_embedding_jobs;
-        observation.semantic_activity_observed |=
-            status.pending_semantic_jobs > 0 || status.running_semantic_jobs > 0;
+        if let Some(previous) = &previous_status {
+            let pending_drop = previous.pending_jobs.saturating_sub(status.pending_jobs);
+            let embedding_drop = previous
+                .pending_embedding_jobs
+                .saturating_sub(status.pending_embedding_jobs);
+            if status.running_jobs >= 2 || pending_drop >= 2 || embedding_drop >= 2 {
+                observation.parallel_progress_observed = true;
+            }
+        }
         if status.pending_embedding_jobs > 0 || status.running_embedding_jobs > 0 {
             observation.embedding_activity_observed = true;
         }
-        if status.running_jobs >= 2 {
-            observation.multiple_workers_observed = true;
+        if status.pending_clone_edges_rebuild_jobs > 0
+            || status.running_clone_edges_rebuild_jobs > 0
+        {
+            observation.clone_edges_rebuild_observed = true;
         }
 
         if let Ok(snapshot) = load_semantic_clone_table_snapshot(world) {
-            if snapshot.current_representation_counts.code > 0
-                && observation.first_code_embedding_current_count == 0
+            if snapshot.historical_representation_counts.code > 0
+                && observation.first_code_embedding_count == 0
             {
-                observation.first_code_embedding_current_count =
-                    snapshot.current_representation_counts.code;
-                observation.code_embeddings_appeared_while_semantic_active =
-                    status.pending_semantic_jobs > 0 || status.running_semantic_jobs > 0;
+                observation.first_code_embedding_count =
+                    snapshot.historical_representation_counts.code;
+                observation.code_embeddings_appeared_before_drain = !enrichments_drained(&status);
             }
-            if snapshot.current_representation_counts.summary > 0
-                && observation.first_summary_embedding_current_count == 0
+            if snapshot.historical_representation_counts.summary > 0
+                && observation.first_summary_embedding_count == 0
             {
-                observation.first_summary_embedding_current_count =
-                    snapshot.current_representation_counts.summary;
+                observation.first_summary_embedding_count =
+                    snapshot.historical_representation_counts.summary;
                 observation.summary_embeddings_appeared_before_drain =
                     !enrichments_drained(&status);
             }
             store_semantic_clone_table_snapshot(world, snapshot);
         }
 
+        previous_status = Some(status.clone());
         last_status = status.clone();
 
         if started.elapsed() >= timeout || enrichments_drained(&status) {
@@ -842,23 +895,18 @@ pub fn observe_semantic_clone_enrichment_progress(
         observation.status_samples
     );
     ensure!(
-        observation.semantic_activity_observed,
-        "expected semantic queue activity during semantic-clone observation, got {:?}",
-        world.last_enrichment_status_snapshot
-    );
-    ensure!(
         observation.embedding_activity_observed,
         "expected embedding queue activity during semantic-clone observation, got {:?}",
         world.last_enrichment_status_snapshot
     );
     ensure!(
-        observation.multiple_workers_observed,
-        "expected to observe at least 2 running enrichment jobs, which verifies the guide-aligned config uses 2 workers; got {:?}",
+        observation.clone_edges_rebuild_observed,
+        "expected clone-edge rebuild queue activity during semantic-clone observation, got {:?}",
         world.last_enrichment_status_snapshot
     );
     ensure!(
-        observation.semantic_pending_decreased,
-        "expected pending semantic jobs to decrease over the observation window, got {:?}",
+        observation.parallel_progress_observed,
+        "expected to observe guide-aligned parallel worker progress while embeddings were draining, got {:?}",
         world.semantic_clone_progress_observation
     );
     ensure!(
@@ -867,18 +915,18 @@ pub fn observe_semantic_clone_enrichment_progress(
         world.semantic_clone_progress_observation
     );
     ensure!(
-        observation.first_code_embedding_current_count > 0,
-        "expected current `code` embeddings to appear during observation, got {:?}",
+        observation.first_code_embedding_count > 0,
+        "expected historical `code` embeddings to appear during observation, got {:?}",
         world.semantic_clone_table_snapshot
     );
     ensure!(
-        observation.code_embeddings_appeared_while_semantic_active,
-        "expected current `code` embeddings to appear while semantic work was still pending or running, got {:?}",
-        world.last_enrichment_status_snapshot
+        observation.code_embeddings_appeared_before_drain,
+        "expected current `code` embeddings to appear before the enrichment queue fully drained, got {:?}",
+        world.semantic_clone_progress_observation
     );
     ensure!(
-        observation.first_summary_embedding_current_count > 0,
-        "expected current `summary` embeddings to appear during observation, got {:?}",
+        observation.first_summary_embedding_count > 0,
+        "expected historical `summary` embeddings to appear during observation, got {:?}",
         world.semantic_clone_table_snapshot
     );
     ensure!(
@@ -937,8 +985,12 @@ pub fn assert_semantic_clone_current_tables_populated(
         "expected current symbol semantics after sync, got {message}"
     );
     ensure!(
-        snapshot.current.symbol_embeddings_current > 0,
-        "expected current symbol embeddings after sync and enrichments, got {message}"
+        snapshot.current.symbol_clone_edges > 0,
+        "expected current symbol clone edges after sync and enrichments, got {message}"
+    );
+    ensure!(
+        snapshot.current.symbol_embeddings_current == 0,
+        "expected current inline symbol embeddings to remain empty after sync, got {message}"
     );
     Ok(())
 }
@@ -960,12 +1012,20 @@ pub fn assert_semantic_clone_representation_channels_populated(
         "expected historical `summary` embeddings, got {message}"
     );
     ensure!(
-        snapshot.current_representation_counts.code > 0,
-        "expected current `code` embeddings, got {message}"
+        snapshot.current_joined_representation_counts.code > 0,
+        "expected current artefacts to resolve `code` embeddings from the historical store, got {message}"
     );
     ensure!(
-        snapshot.current_representation_counts.summary > 0,
-        "expected current `summary` embeddings, got {message}"
+        snapshot.current_joined_representation_counts.summary > 0,
+        "expected current artefacts to resolve `summary` embeddings from the historical store, got {message}"
+    );
+    ensure!(
+        snapshot.current.symbol_embeddings_current == 0,
+        "expected current inline embedding rows to remain empty after sync, got {message}"
+    );
+    ensure!(
+        snapshot.current.symbol_clone_edges > 0,
+        "expected current clone edges to remain populated, got {message}"
     );
     Ok(())
 }
@@ -1370,8 +1430,9 @@ fn extract_clone_summary_from_devql_value(value: &serde_json::Value) -> Result<C
     };
     let total_count = row
         .get("total_count")
+        .or_else(|| row.get("totalCount"))
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| anyhow!("clone summary missing total_count: {row}"))?;
+        .ok_or_else(|| anyhow!("clone summary missing total_count/totalCount: {row}"))?;
     let groups = row
         .get("groups")
         .and_then(serde_json::Value::as_array)
@@ -1441,16 +1502,14 @@ fn read_graphql_clone_summary(
     let query = format!(
         r#"
 query {{
-  repo(name: "bitloops") {{
-    cloneSummary(
-      filter: {{ symbolFqn: "{}" }}
-      cloneFilter: {{ minScore: {} }}
-    ) {{
-      totalCount
-      groups {{
-        relationKind
-        count
-      }}
+  cloneSummary(
+    filter: {{ symbolFqn: "{}" }}
+    cloneFilter: {{ minScore: {} }}
+  ) {{
+    totalCount
+    groups {{
+      relationKind
+      count
     }}
   }}
 }}

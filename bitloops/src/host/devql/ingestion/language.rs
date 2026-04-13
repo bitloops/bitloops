@@ -30,18 +30,6 @@ pub(super) fn git_blob_line_count(repo_root: &Path, blob_sha: &str) -> Option<i3
     Some(count.max(1))
 }
 
-pub(super) fn fallback_language_from_path(path: &str) -> String {
-    Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::trim)
-        .filter(|extension| !extension.is_empty())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| "text".to_string())
-}
-
 pub(super) fn detect_language(path: &str) -> String {
-    resolve_language_id_for_file_path(path)
-        .map(str::to_string)
-        .unwrap_or_else(|| fallback_language_from_path(path))
+    indexing_language_for_path(path)
 }

@@ -21,24 +21,24 @@ Feature: Semantic Clones enrichment and query coverage
     Then semantic clone historical tables are populated in bitloops
 
   @devql @semantic-clones
-  Scenario: Current projection populates semantic-clone current tables
+  Scenario: Current projection populates semantic-clone current tables without inline embeddings
     When I run DevQL ingest in bitloops
     And I run DevQL sync --status in bitloops
     And I wait for semantic clone enrichments to drain in bitloops
-    Then semantic clone current projection tables are populated in bitloops
+    Then semantic clone current projection tables are populated without inline embeddings in bitloops
 
   @devql @semantic-clones
-  Scenario: Two workers drive decreasing semantic and embedding queues during the same run
+  Scenario: Two workers drive embedding and clone-edge rebuild queues during the same run
     When I run DevQL ingest in bitloops
     And I run DevQL sync --status in bitloops
-    Then semantic clone enrichments show code embeddings before semantic work fully drains in bitloops
+    Then semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in bitloops
 
   @devql @semantic-clones
-  Scenario: Historical and current embeddings persist separate code and summary channels
+  Scenario: Historical embeddings and current artefacts expose separate code and summary channels
     When I run DevQL ingest in bitloops
     And I run DevQL sync --status in bitloops
     And I wait for semantic clone enrichments to drain in bitloops
-    Then semantic clone historical and current embeddings contain code and summary channels in bitloops
+    Then semantic clone historical embeddings and current artefacts expose code and summary channels in bitloops
 
   @devql @semantic-clones
   Scenario: Handler clones rank the cross-file execute peer above the weaker same-file helper
@@ -50,7 +50,7 @@ Feature: Semantic Clones enrichment and query coverage
     And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" has highest-scored result with score above 0.60 in bitloops
     And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" ranks "src/handlers/sync-component-snapshots.handler.ts::SyncComponentSnapshotsCommandHandler::execute" above "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForBelongsToSnapshotRelationship" in bitloops
     And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" returns results with explanation data in bitloops
-    And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.60 excludes "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForBelongsToSnapshotRelationship" in bitloops
+    And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.90 excludes "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForBelongsToSnapshotRelationship" in bitloops
 
   @devql @semantic-clones
   Scenario: DevQL clone summary returns grouped counts for the handler fixture

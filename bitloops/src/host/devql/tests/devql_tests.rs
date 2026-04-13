@@ -34,10 +34,6 @@ fn test_cfg() -> DevqlConfig {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
-        semantic_provider: None,
-        semantic_model: None,
-        semantic_api_key: None,
-        semantic_base_url: None,
     }
 }
 
@@ -565,6 +561,7 @@ fn test_file_row(
         artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id),
         symbol_id,
         language: "typescript".to_string(),
+        extraction_fingerprint: "test-fingerprint".to_string(),
         end_line,
         end_byte,
     }
@@ -653,17 +650,24 @@ mod query_pipeline;
 
 #[test]
 fn devql_cli_parses_ingest_defaults() {
-    let parsed =
-        Cli::try_parse_from(["bitloops", "devql", "ingest"]).expect("devql ingest should parse");
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "tasks", "enqueue", "--kind", "ingest"])
+        .expect("devql task ingest enqueue should parse");
 
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
-        panic!("expected devql ingest command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
     };
-
-    let _ = ingest;
+    match tasks.command {
+        crate::cli::devql::DevqlTasksCommand::Enqueue(enqueue) => {
+            assert!(matches!(
+                enqueue.kind,
+                crate::cli::devql::DevqlTaskKindArg::Ingest
+            ));
+        }
+        other => panic!("expected task enqueue command, got {other:?}"),
+    }
 }
 
 #[test]

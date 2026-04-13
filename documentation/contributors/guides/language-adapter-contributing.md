@@ -99,8 +99,8 @@ Recommended targeted commands:
 
 ```bash
 cargo check -p bitloops
-cargo test -p bitloops --lib host::devql::mapping_tests -- --nocapture
-cargo test -p bitloops --lib extraction_<your_language> -- --nocapture
+cargo nextest run -p bitloops --lib --no-capture -- host::devql::mapping_tests --exact
+cargo nextest run -p bitloops --lib --no-capture -- extraction_<your_language> --exact
 ```
 
 ## 6) Where registration happens

@@ -406,11 +406,18 @@ pub(super) fn then_testlens_query_returns_results(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let artefact = ctx.matches[1].1.clone();
-        let view = ctx.matches[2].1.clone();
-        let repo_name = ctx.matches[3].1.clone();
+        let state_scope = ctx.matches[2].1.clone();
+        let view = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
         run_step(
             "TestHarness query returns results",
-            helpers::assert_testlens_query_returns_results(world, &repo_name, &artefact, &view),
+            helpers::assert_testlens_query_returns_results(
+                world,
+                &repo_name,
+                &artefact,
+                &view,
+                &state_scope,
+            ),
         );
     })
 }
@@ -457,11 +464,18 @@ pub(super) fn then_testlens_query_empty_or_zero(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let artefact = ctx.matches[1].1.clone();
-        let view = ctx.matches[2].1.clone();
-        let repo_name = ctx.matches[3].1.clone();
+        let state_scope = ctx.matches[2].1.clone();
+        let view = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
         run_step(
             "TestHarness query returns empty or zero-count",
-            helpers::assert_testlens_query_empty_or_zero(world, &repo_name, &artefact, &view),
+            helpers::assert_testlens_query_empty_or_zero(
+                world,
+                &repo_name,
+                &artefact,
+                &view,
+                &state_scope,
+            ),
         );
     })
 }
@@ -472,11 +486,18 @@ pub(super) fn then_testlens_includes_failing_test(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let artefact = ctx.matches[1].1.clone();
-        let view = ctx.matches[2].1.clone();
-        let repo_name = ctx.matches[3].1.clone();
+        let state_scope = ctx.matches[2].1.clone();
+        let view = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
         run_step(
             "TestHarness query includes a failing test",
-            helpers::assert_testlens_includes_failing_test(world, &repo_name, &artefact, &view),
+            helpers::assert_testlens_includes_failing_test(
+                world,
+                &repo_name,
+                &artefact,
+                &view,
+                &state_scope,
+            ),
         );
     })
 }
@@ -532,7 +553,7 @@ pub(super) fn then_semantic_clone_current_tables_populated(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "semantic clone current projection tables are populated",
+            "semantic clone current projection tables are populated without inline embeddings",
             helpers::assert_semantic_clone_current_tables_populated(world, &repo_name),
         );
     })
@@ -545,7 +566,7 @@ pub(super) fn then_semantic_clone_representation_channels_populated(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "semantic clone historical and current embeddings contain code and summary channels",
+            "semantic clone historical embeddings and current artefacts expose code and summary channels",
             helpers::assert_semantic_clone_representation_channels_populated(world, &repo_name),
         );
     })
@@ -558,7 +579,7 @@ pub(super) fn then_semantic_clone_progress_observed(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "semantic clone enrichments show progress before semantic work fully drains",
+            "semantic clone enrichments show embeddings before clone-edge rebuild work fully drains",
             helpers::observe_semantic_clone_enrichment_progress(world, &repo_name),
         );
     })

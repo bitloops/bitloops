@@ -119,6 +119,28 @@ fn text_has_missing_production_artefacts_error_detects_relational_materializatio
 }
 
 #[test]
+fn error_chain_contains_not_found_detects_missing_binary_errors() {
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "No such file or directory",
+    ))
+    .context("executing bitloops daemon stop");
+
+    assert!(error_chain_contains_not_found(&err));
+}
+
+#[test]
+fn error_chain_contains_not_found_ignores_other_io_errors() {
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "Permission denied",
+    ))
+    .context("executing bitloops daemon stop");
+
+    assert!(!error_chain_contains_not_found(&err));
+}
+
+#[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(
@@ -200,7 +222,7 @@ fn parse_ingest_summary_field_reads_key_value_pairs() {
 }
 
 #[test]
-fn render_guide_aligned_semantic_clones_config_uses_auto_summary_local_profile_and_two_workers() {
+fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_and_two_workers() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");
     fs::create_dir_all(&repo_dir).expect("create repo dir");
@@ -224,10 +246,12 @@ fn render_guide_aligned_semantic_clones_config_uses_auto_summary_local_profile_a
 
     assert!(config.contains("summary_mode = \"auto\""));
     assert!(config.contains("embedding_mode = \"deterministic\""));
-    assert!(config.contains("embedding_profile = \"local\""));
     assert!(config.contains("enrichment_workers = 2"));
-    assert!(config.contains("[embeddings.profiles.local]"));
-    assert!(config.contains("kind = \"local_fastembed\""));
+    assert!(config.contains("[semantic_clones.inference]"));
+    assert!(config.contains("code_embeddings = \"fake\""));
+    assert!(config.contains("summary_embeddings = \"fake\""));
+    assert!(config.contains("[inference.profiles.fake]"));
+    assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
     assert!(config.contains("model = \"qat-test-model\""));
 }
 
@@ -266,6 +290,37 @@ fn build_git_command_prepends_qat_binary_dir_to_path() {
     let mut paths = std::env::split_paths(&path_value);
     let first = paths.next().expect("PATH should have at least one entry");
     assert_eq!(first, bin_dir);
+}
+
+#[test]
+fn build_git_command_excludes_bitloops_stores_from_git_add_all() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let args = build_git_command(&world, &["add", "-A"], &[])
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        vec!["add", "-A", "--", ".", ":(exclude).bitloops/stores"]
+    );
 }
 
 #[test]
@@ -417,6 +472,7 @@ fn count_chat_history_edges_for_agent_only_counts_matching_agent_rows() {
         count_chat_history_edges_for_agent(&payload, "claude-code"),
         2
     );
+    assert_eq!(count_chat_history_edges_for_agent(&payload, "claude"), 2);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "cursor"), 1);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "codex"), 0);
 }
@@ -595,6 +651,28 @@ fn extract_clone_summary_accepts_devql_summary_rows() {
 }
 
 #[test]
+fn extract_clone_summary_accepts_devql_summary_rows_with_camel_case_total_count() {
+    let value = serde_json::json!([
+        {
+            "totalCount": 3,
+            "groups": [
+                { "relationKind": "similar_implementation", "count": 2 },
+                { "relationKind": "weak_clone_candidate", "count": 1 }
+            ]
+        }
+    ]);
+
+    let summary = extract_clone_summary_from_devql_value(&value).expect("extract DevQL summary");
+
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 2);
+    assert_eq!(summary.groups[1].relation_kind, "weak_clone_candidate");
+    assert_eq!(summary.groups[1].count, 1);
+}
+
+#[test]
 fn extract_clone_summary_accepts_graphql_repo_payload() {
     let value = serde_json::json!({
         "repo": {
@@ -655,6 +733,44 @@ fn wait_for_semantic_clone_condition_times_out_with_last_observation() {
     let message = format!("{err:#}");
     assert!(message.contains("clone rows to become visible"));
     assert!(message.contains("last observation=value: rows=0"));
+}
+
+#[test]
+fn wait_for_qat_condition_retries_until_ready() {
+    let mut attempts = 0_usize;
+
+    let value = wait_for_qat_condition(
+        StdDuration::from_millis(25),
+        StdDuration::from_millis(1),
+        "checkpoint mappings to be persisted",
+        || {
+            attempts += 1;
+            Ok(attempts)
+        },
+        |attempt| *attempt >= 3,
+        |attempt| format!("attempt={attempt}"),
+    )
+    .expect("eventual wait should succeed");
+
+    assert_eq!(value, 3);
+    assert_eq!(attempts, 3);
+}
+
+#[test]
+fn wait_for_qat_condition_times_out_with_last_observation() {
+    let err = wait_for_qat_condition(
+        StdDuration::from_millis(5),
+        StdDuration::from_millis(1),
+        "DevQL artefacts query to return results",
+        || Ok(0_usize),
+        |count| *count > 0,
+        |count| format!("artefacts={count}"),
+    )
+    .expect_err("eventual wait should time out");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("DevQL artefacts query to return results"));
+    assert!(message.contains("last observation=value: artefacts=0"));
 }
 
 #[test]

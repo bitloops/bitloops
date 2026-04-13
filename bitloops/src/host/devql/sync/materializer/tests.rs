@@ -26,10 +26,6 @@ fn test_cfg(repo_root: &std::path::Path) -> crate::host::devql::DevqlConfig {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
-        semantic_provider: None,
-        semantic_model: None,
-        semantic_api_key: None,
-        semantic_base_url: None,
     }
 }
 
@@ -77,7 +73,19 @@ async fn materialize_path_deduplicates_colliding_artefact_ids() {
         crate::host::devql::sync::content_identity::compute_blob_oid(content.as_bytes());
     let desired = DesiredFileState {
         path: path.to_string(),
+        analysis_mode: crate::host::devql::AnalysisMode::Code,
+        file_role: crate::host::devql::FileRole::SourceCode,
+        text_index_mode: crate::host::devql::TextIndexMode::None,
         language: "rust".to_string(),
+        resolved_language: "rust".to_string(),
+        dialect: None,
+        primary_context_id: None,
+        secondary_context_ids: Vec::new(),
+        frameworks: Vec::new(),
+        runtime_profile: None,
+        classification_reason: "test".to_string(),
+        context_fingerprint: None,
+        extraction_fingerprint: "fingerprint-v1".to_string(),
         head_content_id: Some(content_id.clone()),
         index_content_id: Some(content_id.clone()),
         worktree_content_id: Some(content_id.clone()),
@@ -90,6 +98,7 @@ async fn materialize_path_deduplicates_colliding_artefact_ids() {
     let extraction = CachedExtraction {
         content_id: content_id.clone(),
         language: "rust".to_string(),
+        extraction_fingerprint: "fingerprint-v1".to_string(),
         parser_version: "parser-v1".to_string(),
         extractor_version: "extractor-v1".to_string(),
         parse_status: "ok".to_string(),
@@ -176,7 +185,19 @@ async fn materialize_path_deduplicates_colliding_edge_ids() {
         crate::host::devql::sync::content_identity::compute_blob_oid(content.as_bytes());
     let desired = DesiredFileState {
         path: path.to_string(),
+        analysis_mode: crate::host::devql::AnalysisMode::Code,
+        file_role: crate::host::devql::FileRole::SourceCode,
+        text_index_mode: crate::host::devql::TextIndexMode::None,
         language: "rust".to_string(),
+        resolved_language: "rust".to_string(),
+        dialect: None,
+        primary_context_id: None,
+        secondary_context_ids: Vec::new(),
+        frameworks: Vec::new(),
+        runtime_profile: None,
+        classification_reason: "test".to_string(),
+        context_fingerprint: None,
+        extraction_fingerprint: "fingerprint-v1".to_string(),
         head_content_id: Some(content_id.clone()),
         index_content_id: Some(content_id.clone()),
         worktree_content_id: Some(content_id.clone()),
@@ -189,6 +210,7 @@ async fn materialize_path_deduplicates_colliding_edge_ids() {
     let extraction = CachedExtraction {
         content_id: content_id.clone(),
         language: "rust".to_string(),
+        extraction_fingerprint: "fingerprint-v1".to_string(),
         parser_version: "parser-v1".to_string(),
         extractor_version: "extractor-v1".to_string(),
         parse_status: "ok".to_string(),

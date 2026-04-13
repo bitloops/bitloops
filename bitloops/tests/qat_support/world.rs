@@ -39,6 +39,7 @@ pub struct SemanticCloneTableSnapshot {
     pub current: SemanticCloneCurrentTableSnapshot,
     pub historical_representation_counts: RepresentationKindCounts,
     pub current_representation_counts: RepresentationKindCounts,
+    pub current_joined_representation_counts: RepresentationKindCounts,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -65,17 +66,16 @@ pub struct EnrichmentStatusSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SemanticCloneProgressObservation {
     pub status_samples: usize,
-    pub max_pending_semantic_jobs: u64,
     pub max_pending_embedding_jobs: u64,
-    pub semantic_pending_decreased: bool,
+    pub max_pending_clone_edges_rebuild_jobs: u64,
     pub embedding_pending_decreased: bool,
-    pub first_code_embedding_current_count: usize,
-    pub first_summary_embedding_current_count: usize,
-    pub code_embeddings_appeared_while_semantic_active: bool,
+    pub first_code_embedding_count: usize,
+    pub first_summary_embedding_count: usize,
+    pub code_embeddings_appeared_before_drain: bool,
     pub summary_embeddings_appeared_before_drain: bool,
-    pub semantic_activity_observed: bool,
     pub embedding_activity_observed: bool,
-    pub multiple_workers_observed: bool,
+    pub clone_edges_rebuild_observed: bool,
+    pub parallel_progress_observed: bool,
 }
 
 #[derive(Debug, Default, cucumber::World)]

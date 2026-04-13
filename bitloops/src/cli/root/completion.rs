@@ -9,14 +9,10 @@ use super::metadata::ROOT_NAME;
 pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Result<()> {
     let mut cmd = crate::cli::Cli::command();
     // clap_complete splits subcommand paths using "__". Our hidden
-    // "__send_analytics", "__devql-watcher", "__embeddings-runtime", and daemon internal commands
+    // "__send_analytics", "__devql-watcher", and daemon internal commands
     // conflict with that separator and can panic during completion generation,
     // so we rename them only in this generated tree. Runtime parsing remains
     // unchanged.
-    cmd = cmd.mut_subcommand("__embeddings-runtime", |sub| {
-        sub.name("embeddings-runtime-internal")
-            .bin_name(format!("{ROOT_NAME} embeddings-runtime-internal"))
-    });
     cmd = cmd.mut_subcommand("__devql-watcher", |sub| {
         sub.name("devql-watcher-internal")
             .bin_name(format!("{ROOT_NAME} devql-watcher-internal"))

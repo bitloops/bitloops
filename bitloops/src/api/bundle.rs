@@ -560,6 +560,7 @@ mod tests {
         overrides: crate::api::DashboardBundleSourceOverrides,
     ) -> DashboardState {
         DashboardState {
+            config_path: PathBuf::from("."),
             config_root: PathBuf::from("."),
             repo_root: PathBuf::from("."),
             repo_registry_path: None,

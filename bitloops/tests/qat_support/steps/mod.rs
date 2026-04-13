@@ -290,12 +290,27 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync),
         )
+        .when(
+            None,
+            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync),
+        )
         .given(
             None,
             regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_validate),
         )
+        .when(
+            None,
+            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync_validate),
+        )
         .given(
+            None,
+            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync_repair),
+        )
+        .when(
             None,
             regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_repair),
@@ -508,7 +523,7 @@ pub fn collection() -> Collection<QatWorld> {
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
             ),
             step_fn(then_testlens_query_returns_results),
         )
@@ -532,14 +547,14 @@ pub fn collection() -> Collection<QatWorld> {
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
             ),
             step_fn(then_testlens_query_empty_or_zero),
         )
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
             ),
             step_fn(then_testlens_includes_failing_test),
         )
@@ -560,17 +575,17 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^semantic clone current projection tables are populated in (\S+)$"),
+            regex(r"^semantic clone current projection tables are populated without inline embeddings in (\S+)$"),
             step_fn(then_semantic_clone_current_tables_populated),
         )
         .then(
             None,
-            regex(r"^semantic clone historical and current embeddings contain code and summary channels in (\S+)$"),
+            regex(r"^semantic clone historical embeddings and current artefacts expose code and summary channels in (\S+)$"),
             step_fn(then_semantic_clone_representation_channels_populated),
         )
         .then(
             None,
-            regex(r"^semantic clone enrichments show code embeddings before semantic work fully drains in (\S+)$"),
+            regex(r"^semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in (\S+)$"),
             step_fn(then_semantic_clone_progress_observed),
         )
         .then(

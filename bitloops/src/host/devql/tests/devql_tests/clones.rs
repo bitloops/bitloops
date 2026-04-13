@@ -1,5 +1,9 @@
 use super::*;
 
+const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
+const TEST_EMBEDDINGS_MODEL: &str = "bge-m3";
+const ALT_TEST_EMBEDDINGS_MODEL: &str = "bge-large-en-v1.5";
+
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
@@ -432,6 +436,7 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
         ],
     )
     .expect("insert target embedding");
+    drop(conn);
 
     let parsed_neighbors = parse_devql_query(
         r#"repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/pdf.ts::createInvoicePdf")->clones(neighbors:5,min_score:0.5)->limit(10)"#,
@@ -1076,8 +1081,8 @@ async fn rebuild_symbol_clone_edges_uses_only_active_embedding_setup_candidates(
         "src/source.ts::renderInvoice",
         "render_invoice",
         "Function render invoice. Renders the invoice document.",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
         "[0.91,0.09,0.0]",
     );
@@ -1090,8 +1095,8 @@ async fn rebuild_symbol_clone_edges_uses_only_active_embedding_setup_candidates(
         "src/target-current.ts::renderInvoiceDocument",
         "render_invoice_document",
         "Function render invoice document. Renders the invoice document for an order.",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
         "[0.89,0.11,0.0]",
     );
@@ -1104,8 +1109,8 @@ async fn rebuild_symbol_clone_edges_uses_only_active_embedding_setup_candidates(
         "src/target-stale.ts::renderInvoiceDraft",
         "render_invoice_draft",
         "Function render invoice draft. Renders the invoice document for an order.",
-        "voyage",
-        "voyage-code-3",
+        TEST_EMBEDDINGS_DRIVER,
+        ALT_TEST_EMBEDDINGS_MODEL,
         3,
         "[0.92,0.08,0.0]",
     );
@@ -1114,12 +1119,12 @@ async fn rebuild_symbol_clone_edges_uses_only_active_embedding_setup_candidates(
          VALUES (?1, ?2, ?3, ?4, ?5)",
         rusqlite::params![
             repo_id,
-            "local_fastembed",
-            "jinaai/jina-embeddings-v2-base-code",
+            TEST_EMBEDDINGS_DRIVER,
+            TEST_EMBEDDINGS_MODEL,
             3_i64,
             crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                "local_fastembed",
-                "jinaai/jina-embeddings-v2-base-code",
+                TEST_EMBEDDINGS_DRIVER,
+                TEST_EMBEDDINGS_MODEL,
                 3,
             )
             .setup_fingerprint,
@@ -1166,8 +1171,8 @@ async fn rebuild_symbol_clone_edges_bootstraps_single_current_embedding_setup() 
         "src/source.ts::renderInvoice",
         "render_invoice",
         "Function render invoice. Renders the invoice document.",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
         "[0.91,0.09,0.0]",
     );
@@ -1180,8 +1185,8 @@ async fn rebuild_symbol_clone_edges_bootstraps_single_current_embedding_setup() 
         "src/target.ts::renderInvoiceDocument",
         "render_invoice_document",
         "Function render invoice document. Renders the invoice document for an order.",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
         "[0.89,0.11,0.0]",
     );
@@ -1199,7 +1204,7 @@ async fn rebuild_symbol_clone_edges_bootstraps_single_current_embedding_setup() 
     assert_eq!(persisted_setup.len(), 1);
     assert_eq!(
         persisted_setup[0]["provider"],
-        Value::String("local_fastembed".to_string())
+        Value::String(TEST_EMBEDDINGS_DRIVER.to_string())
     );
 }
 
@@ -1224,8 +1229,8 @@ async fn rebuild_symbol_clone_edges_refuses_to_bootstrap_mixed_current_embedding
         "src/source.ts::renderInvoice",
         "render_invoice",
         "Function render invoice. Renders the invoice document.",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
         "[0.91,0.09,0.0]",
     );
@@ -1238,8 +1243,8 @@ async fn rebuild_symbol_clone_edges_refuses_to_bootstrap_mixed_current_embedding
         "src/target-current.ts::renderInvoiceDocument",
         "render_invoice_document",
         "Function render invoice document. Renders the invoice document for an order.",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
         "[0.89,0.11,0.0]",
     );
@@ -1252,8 +1257,8 @@ async fn rebuild_symbol_clone_edges_refuses_to_bootstrap_mixed_current_embedding
         "src/target-stale.ts::renderInvoiceDraft",
         "render_invoice_draft",
         "Function render invoice draft. Renders the invoice document for an order.",
-        "voyage",
-        "voyage-code-3",
+        TEST_EMBEDDINGS_DRIVER,
+        ALT_TEST_EMBEDDINGS_MODEL,
         1024,
         "[0.92,0.08,0.0]",
     );

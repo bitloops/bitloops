@@ -221,6 +221,10 @@ pub(super) async fn run(
     }
 
     let state = DashboardState {
+        config_path: options
+            .config_path
+            .clone()
+            .unwrap_or_else(|| config_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH)),
         config_root: config_root.clone(),
         repo_root,
         repo_registry_path: options.repo_registry_path.clone(),
@@ -232,7 +236,11 @@ pub(super) async fn run(
         devql_schema,
         devql_slim_schema,
     };
-    crate::daemon::activate_sync_worker(state.subscription_hub());
+    crate::daemon::activate_task_worker(
+        &state.config_root,
+        state.repo_registry_path.as_deref(),
+        state.subscription_hub(),
+    );
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {

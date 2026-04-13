@@ -1,5 +1,24 @@
 use super::*;
 use crate::host::checkpoints::session::state::PendingCheckpointState;
+use crate::host::interactions::store::InteractionSpool;
+
+fn rewrite_post_commit_events_path(repo_root: &Path, replacement: &Path) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let content = fs::read_to_string(&config_path).expect("read post-commit test config");
+    let updated = content
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("duckdb_path =") {
+                format!("duckdb_path = {:?}", replacement.to_string_lossy())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&config_path, updated).expect("rewrite post-commit events path");
+}
 
 #[test]
 pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
@@ -58,6 +77,56 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     assert!(
         result.is_err(),
         "post_commit should no longer materialize metadata branch commits"
+    );
+}
+
+#[test]
+pub(crate) fn post_commit_falls_back_to_local_spool_when_interaction_repository_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn(
+        dir.path(),
+        "pc-fallback",
+        "pc-fallback-turn",
+        &["src/change.rs"],
+    );
+
+    let blocked_parent = dir.path().join("blocked-events-parent");
+    fs::write(&blocked_parent, "not a directory").unwrap();
+    rewrite_post_commit_events_path(dir.path(), &blocked_parent.join("events.duckdb"));
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/change.rs"),
+        "pub fn change() -> usize { 1 }\n",
+    )
+    .unwrap();
+    git_command()
+        .args(["add", "."])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    git_command()
+        .args(["commit", "-m", "fix: spool fallback"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy.post_commit().unwrap();
+
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("checkpoint mapping should exist after spool fallback post_commit");
+    let turns = open_test_spool(dir.path())
+        .list_turns_for_session("pc-fallback", 10)
+        .expect("list turns after spool fallback derivation");
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].checkpoint_id.as_deref(),
+        Some(checkpoint_id.as_str()),
+        "local spool should record the assigned checkpoint id when canonical interaction storage is unavailable"
     );
 }
 

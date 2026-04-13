@@ -174,10 +174,6 @@ impl DevqlGraphqlContext {
         Ok(Arc::clone(capability_host))
     }
 
-    pub(crate) fn repo_name(&self) -> &str {
-        self.repo_identity.name.as_str()
-    }
-
     pub(crate) fn require_slim_request_scope(&self) -> Result<()> {
         if self.schema_mode == DevqlSchemaMode::Slim && !self.request_scope_present {
             return Err(anyhow!(

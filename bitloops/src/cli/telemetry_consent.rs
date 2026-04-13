@@ -247,7 +247,7 @@ pub(crate) fn test_tty_override() -> Option<bool> {
 }
 
 #[cfg(test)]
-fn test_assume_daemon_running_override() -> Option<bool> {
+pub(crate) fn test_assume_daemon_running_override() -> Option<bool> {
     TEST_ASSUME_DAEMON_RUNNING_OVERRIDE.with(|cell| *cell.borrow())
 }
 

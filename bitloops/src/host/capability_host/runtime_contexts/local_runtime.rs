@@ -15,14 +15,17 @@ use crate::host::capability_host::contexts::{
     KnowledgeMigrationContext,
 };
 use crate::host::capability_host::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, ConnectorContext, ConnectorRegistry,
-    LanguageServicesGateway, ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
+    BlobPayloadGateway, CanonicalGraphGateway, CapabilityWorkplaneGateway, ConnectorContext,
+    ConnectorRegistry, LanguageServicesGateway, ProvenanceBuilder, RelationalGateway,
+    StoreHealthGateway,
 };
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::{InferenceGateway, LocalInferenceGateway, ScopedInferenceGateway};
 use crate::host::relational_store::DefaultRelationalStore;
 
 use super::language_services::BuiltinLanguageServicesGateway;
+use super::local_gateways::LocalCapabilityWorkplaneGateway;
 
 pub struct LocalCapabilityRuntime<'a> {
     repo_root: &'a Path,
@@ -37,11 +40,13 @@ pub struct LocalCapabilityRuntime<'a> {
     provenance: &'a dyn ProvenanceBuilder,
     graph: &'a dyn CanonicalGraphGateway,
     stores: &'a dyn StoreHealthGateway,
+    inference: ScopedInferenceGateway<'a>,
     test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
     languages: &'a BuiltinLanguageServicesGateway,
     devql_relational: Option<&'a RelationalStorage>,
     invoking_capability_id: Option<&'a str>,
     invoking_ingester_id: Option<&'a str>,
+    workplane: Option<LocalCapabilityWorkplaneGateway>,
 }
 
 impl<'a> LocalCapabilityRuntime<'a> {
@@ -59,11 +64,13 @@ impl<'a> LocalCapabilityRuntime<'a> {
         provenance: &'a dyn ProvenanceBuilder,
         graph: &'a dyn CanonicalGraphGateway,
         stores: &'a dyn StoreHealthGateway,
+        inference: &'a LocalInferenceGateway,
         test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
         languages: &'a BuiltinLanguageServicesGateway,
         devql_relational: Option<&'a RelationalStorage>,
         invoking_capability_id: Option<&'a str>,
         invoking_ingester_id: Option<&'a str>,
+        workplane: Option<LocalCapabilityWorkplaneGateway>,
     ) -> Self {
         Self {
             repo_root,
@@ -78,11 +85,13 @@ impl<'a> LocalCapabilityRuntime<'a> {
             provenance,
             graph,
             stores,
+            inference: inference.scoped(invoking_capability_id),
             test_harness,
             languages,
             devql_relational,
             invoking_capability_id,
             invoking_ingester_id,
+            workplane,
         }
     }
 }
@@ -102,6 +111,10 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
 
     fn host_relational(&self) -> &dyn RelationalGateway {
         self.relational
+    }
+
+    fn inference(&self) -> &dyn InferenceGateway {
+        &self.inference
     }
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
@@ -149,6 +162,10 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
         self.relational
     }
 
+    fn inference(&self) -> &dyn InferenceGateway {
+        &self.inference
+    }
+
     fn languages(&self) -> &dyn LanguageServicesGateway {
         self.languages
     }
@@ -166,6 +183,12 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
 
     fn devql_relational(&self) -> Option<&RelationalStorage> {
         self.devql_relational
+    }
+
+    fn workplane(&self) -> Option<&dyn CapabilityWorkplaneGateway> {
+        self.workplane
+            .as_ref()
+            .map(|gateway| gateway as &dyn CapabilityWorkplaneGateway)
     }
 
     fn invoking_capability_id(&self) -> Option<&str> {
@@ -251,5 +274,9 @@ impl CapabilityHealthContext for LocalCapabilityRuntime<'_> {
 
     fn stores(&self) -> &dyn StoreHealthGateway {
         self.stores
+    }
+
+    fn inference(&self) -> &dyn InferenceGateway {
+        &self.inference
     }
 }

@@ -31,11 +31,15 @@ function localHelper(): number {
     let desired = desired_file_state(path, "typescript", &content_id);
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        path,
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path,
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: &desired.extraction_fingerprint,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract TypeScript content into cache format")
     .expect("TypeScript cache extraction should be supported");
@@ -133,11 +137,15 @@ function localHelper(): number {
     let desired = desired_file_state(path, "typescript", &content_id);
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        path,
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path,
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: &desired.extraction_fingerprint,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract TypeScript content into cache format")
     .expect("TypeScript cache extraction should be supported");
@@ -323,17 +331,21 @@ function localHelper(): number {
 "#;
     let content_id =
         crate::host::devql::sync::content_identity::compute_blob_oid(content.as_bytes());
+    let desired = desired_file_state(materialized_path, "typescript", &content_id);
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        original_path,
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path: original_path,
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: &desired.extraction_fingerprint,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract original TypeScript content into cache format")
     .expect("original TypeScript cache extraction should be supported");
-    let desired = desired_file_state(materialized_path, "typescript", &content_id);
     let rev = crate::host::devql::FileRevision {
         commit_sha: &content_id,
         revision: crate::host::devql::TemporalRevisionRef {
@@ -438,11 +450,15 @@ function localHelper(): number {
     let desired = desired_file_state(path, "typescript", &content_id);
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        path,
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path,
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: &desired.extraction_fingerprint,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract TypeScript content into cache format")
     .expect("TypeScript cache extraction should be supported");

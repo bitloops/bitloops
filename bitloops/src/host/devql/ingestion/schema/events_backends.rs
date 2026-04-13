@@ -220,6 +220,9 @@ ON interaction_events (repo_id, event_type, event_time);
     duckdb_exec_path_allow_create(&duckdb_path, interaction_sql)
         .await
         .context("creating DuckDB interaction_events table")?;
+    duckdb_exec_path_allow_create(&duckdb_path, knowledge_schema_sql_duckdb())
+        .await
+        .context("creating DuckDB knowledge_document_versions table")?;
     Ok(())
 }
 
@@ -304,5 +307,33 @@ mod tests {
         assert!(rows.contains(&"interaction_events_repo_time_idx".to_string()));
         assert!(rows.contains(&"interaction_events_session_idx".to_string()));
         assert!(rows.contains(&"interaction_events_type_idx".to_string()));
+    }
+
+    #[tokio::test]
+    async fn init_duckdb_schema_creates_knowledge_document_versions_table() {
+        let repo = TempDir::new().expect("temp dir");
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(".bitloops/stores/events.duckdb".into()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+
+        init_duckdb_schema(repo.path(), &events_cfg)
+            .await
+            .expect("initialise duckdb schema");
+
+        let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(repo.path());
+        let conn = duckdb::Connection::open(duckdb_path).expect("open duckdb");
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'knowledge_document_versions'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count knowledge_document_versions table rows");
+
+        assert_eq!(table_exists, 1);
     }
 }

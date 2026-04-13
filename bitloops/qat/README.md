@@ -2,13 +2,13 @@
 
 This document explains how to run Bitloops QAT (Cucumber) journeys and how to inspect artifacts.
 
-QAT runs as a standard Cargo integration test. The production binary no longer exposes a
+QAT runs as a standard Rust integration test target, executed via `cargo-nextest`. The production binary no longer exposes a
 `qat` subcommand, and the repo aliases enable the dedicated `qat-tests` feature automatically.
 
 ## Where to run from
 
 All commands below assume you are at the repository root.
-The explicit `cargo test` forms also work from the `bitloops/` crate directory when you keep the `--manifest-path bitloops/Cargo.toml` flag.
+The explicit `cargo nextest run` forms also work from the `bitloops/` crate directory when you keep the `--manifest-path bitloops/Cargo.toml` flag.
 
 ## Implemented test suites
 
@@ -24,6 +24,13 @@ cargo qat
 ```
 
 Works from both the `bitloops/` crate directory and the repository root.
+The checked-in alias has `cargo-nextest` as the runner and adds `--no-capture` so the long bundled journey streams progress instead of failing opaquely under output capture.
+
+Equivalent explicit form:
+
+```bash
+cargo nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance --run-ignored only --no-capture -- qat --exact
+```
 
 The bundled suites are all part of `cargo qat`, and the focused aliases remain available for targeted runs.
 
@@ -41,7 +48,7 @@ cargo qat-smoke
 Or equivalently:
 
 ```bash
-cargo test --features qat-tests --test qat_acceptance qat_smoke -- --ignored
+cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_smoke --exact
 ```
 
 **Scenarios:**
@@ -66,7 +73,7 @@ cargo qat-onboarding
 Or equivalently:
 
 ```bash
-cargo test --features qat-tests --test qat_acceptance qat_onboarding -- --ignored
+cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_onboarding --exact
 ```
 
 **Scenarios:**
@@ -100,7 +107,7 @@ cargo qat-devql-sync
 Or equivalently:
 
 ```bash
-cargo test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignored
+cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_sync --exact
 ```
 
 **Scenarios:**
@@ -139,7 +146,7 @@ cargo qat-devql-capabilities
 Or equivalently:
 
 ```bash
-cargo test --features qat-tests --test qat_acceptance qat_devql -- --ignored
+cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_capabilities --exact
 ```
 
 **Scenarios:**
@@ -159,9 +166,9 @@ cargo test --features qat-tests --test qat_acceptance qat_devql -- --ignored
 | 11  | Untested artefact is clearly identified                       | `TestHarnessProofMap`      |
 | 12  | Failing test is distinguishable from passing test             | `TestHarnessProofMap`      |
 | 13  | Historical ingest populates semantic-clone historical tables  | `SemanticClones`           |
-| 14  | Current projection populates semantic-clone current tables    | `SemanticClones`           |
-| 15  | Semantic and embedding jobs both make progress                | `SemanticClones`           |
-| 16  | Historical and current embeddings keep code and summary rows  | `SemanticClones`           |
+| 14  | Current projection populates semantic-clone current tables without inline embeddings | `SemanticClones`           |
+| 15  | Embedding and clone-edge rebuild jobs both make progress      | `SemanticClones`           |
+| 16  | Historical embeddings and current artefacts expose code and summary channels | `SemanticClones`           |
 | 17  | Handler clones stay explainable, rankable, and filterable     | `SemanticClones`           |
 | 18  | DevQL clone summary returns grouped counts                    | `SemanticClones`           |
 | 19  | GraphQL clone summary returns grouped counts                  | `SemanticClones`           |

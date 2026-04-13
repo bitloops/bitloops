@@ -144,7 +144,7 @@ This transforms code review from "does this diff look correct?" to "do I agree w
 Index the new code for future sessions:
 
 ```bash
-bitloops devql ingest
+bitloops devql tasks enqueue --kind ingest
 ```
 
 ```

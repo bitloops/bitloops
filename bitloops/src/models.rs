@@ -7,6 +7,7 @@ pub struct RepositoryRecord {
     pub organization: String,
     pub name: String,
     pub default_branch: Option<String>,
+    pub metadata_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]

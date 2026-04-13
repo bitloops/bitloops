@@ -88,7 +88,7 @@ fn build_symbol_records_chain_file_and_nested_parent_links() {
 }
 
 #[test]
-fn build_symbol_records_derive_content_hash_from_symbol_content_not_blob() {
+fn build_symbol_records_keep_content_hash_stable_while_revision_artefact_id_changes_per_blob() {
     let cfg = test_cfg();
     let path = "src/ui.ts";
     let file_a = test_file_row(&cfg, path, "blob-a", 10, 100);
@@ -113,7 +113,8 @@ fn build_symbol_records_derive_content_hash_from_symbol_content_not_blob() {
     let second = build_symbol_records(&cfg, path, "blob-b", &file_b, &items, content);
 
     assert_eq!(first[0].content_hash, second[0].content_hash);
-    assert_eq!(first[0].artefact_id, second[0].artefact_id);
+    assert_eq!(first[0].symbol_id, second[0].symbol_id);
+    assert_ne!(first[0].artefact_id, second[0].artefact_id);
 }
 
 #[test]

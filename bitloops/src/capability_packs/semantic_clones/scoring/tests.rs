@@ -1,5 +1,8 @@
 use super::*;
 
+const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
+const TEST_EMBEDDINGS_MODEL: &str = "bge-m3";
+
 fn sample_input(symbol_id: &str, name: &str) -> SymbolCloneCandidateInput {
     SymbolCloneCandidateInput {
         repo_id: "repo-1".to_string(),
@@ -20,11 +23,7 @@ fn sample_input(symbol_id: &str, name: &str) -> SymbolCloneCandidateInput {
         ],
         parent_kind: Some("module".to_string()),
         context_tokens: vec!["services".to_string(), "orders".to_string()],
-        embedding_setup: EmbeddingSetup::new(
-            "local_fastembed",
-            "jinaai/jina-embeddings-v2-base-code",
-            3,
-        ),
+        embedding_setup: EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
         embedding: vec![0.9, 0.1, 0.0],
         summary_embedding_setup: None,
         summary_embedding: Vec::new(),
@@ -398,13 +397,13 @@ fn build_symbol_clone_edges_for_source_unions_code_and_summary_ann_neighbors() {
     code_neighbor.symbol_fqn = "src/services/code_neighbor.ts::normalize_checkout_fast".to_string();
     code_neighbor.embedding = vec![0.99, 0.01, 0.0];
     code_neighbor.summary_embedding_setup = Some(summary_setup.clone());
-    code_neighbor.summary_embedding = vec![-1.0, 0.0, 0.0];
+    code_neighbor.summary_embedding = vec![0.0, 1.0, 0.0];
 
     let mut summary_neighbor = sample_input("summary", "normalize_checkout_alt");
     summary_neighbor.path = "src/services/summary_neighbor.ts".to_string();
     summary_neighbor.symbol_fqn =
         "src/services/summary_neighbor.ts::normalize_checkout_alt".to_string();
-    summary_neighbor.embedding = vec![-1.0, 0.0, 0.0];
+    summary_neighbor.embedding = vec![0.0, 1.0, 0.0];
     summary_neighbor.summary_embedding_setup = Some(summary_setup);
     summary_neighbor.summary_embedding = vec![0.99, 0.01, 0.0];
 

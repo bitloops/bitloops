@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use crate::host::capability_host::{CapabilityConfigView, StageResponse};
 
 pub const TEST_HARNESS_CAPABILITY_ID: &str = "test_harness";
+pub const TEST_HARNESS_CURRENT_STATE_CONSUMER_ID: &str = "test_harness.current_state";
 pub const TEST_HARNESS_TESTS_STAGE_ID: &str = "tests";
 pub const TEST_HARNESS_TESTS_SUMMARY_STAGE_ID: &str = "test_harness_tests_summary";
 pub const TEST_HARNESS_COVERAGE_STAGE_ID: &str = "coverage";

@@ -1312,7 +1312,13 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
 
 fn build_git_command(world: &QatWorld, args: &[&str], env: &[(&str, OsString)]) -> Command {
     let mut command = Command::new("git");
-    command.args(args).current_dir(world.repo_dir());
+    if args == ["add", "-A"] {
+        command
+            .args(["add", "-A", "--", ".", ":(exclude).bitloops/stores"])
+            .current_dir(world.repo_dir());
+    } else {
+        command.args(args).current_dir(world.repo_dir());
+    }
 
     // Set HOME and XDG dirs so that git hooks (post-commit, post-checkout,
     // post-merge) invoked by this git process resolve daemon state paths to
