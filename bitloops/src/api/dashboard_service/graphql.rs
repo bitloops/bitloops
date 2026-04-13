@@ -125,7 +125,7 @@ pub(super) struct DashboardGraphqlTokenUsage {
 #[derive(Debug, Clone)]
 pub(super) struct DashboardGraphqlCommitRow {
     pub(super) commit: DashboardGraphqlCommitNode,
-    pub(super) checkpoint: DashboardGraphqlCheckpointNode,
+    pub(super) checkpoints: Vec<DashboardGraphqlCheckpointNode>,
 }
 
 pub(super) async fn load_dashboard_branches_via_graphql(
@@ -184,7 +184,7 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
                   authorEmail
                   committedAt
                   commitMessage
-                  checkpoints(first: 1) {
+                  checkpoints(first: 5000) {
                     edges {
                       node {
                         id
@@ -233,26 +233,27 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
 
     let mut rows = Vec::new();
     for edge in data.repo.commits.edges {
-        let commit = edge.node;
-        let Some(checkpoint) = commit
-            .checkpoints
-            .edges
-            .first()
-            .cloned()
+        let mut commit = edge.node;
+        let checkpoints = std::mem::take(&mut commit.checkpoints.edges)
+            .into_iter()
             .map(|edge| edge.node)
-        else {
+            .filter(|checkpoint| {
+                graphql_checkpoint_matches_agent_filter(checkpoint, filter.agent.as_deref())
+            })
+            .collect::<Vec<_>>();
+        if checkpoints.is_empty() {
             continue;
-        };
+        }
 
         let user = dashboard_user(&commit.author_name, &commit.author_email);
         if !user_matches_filter(&user, filter.user.as_deref()) {
             continue;
         }
-        if !graphql_checkpoint_matches_agent_filter(&checkpoint, filter.agent.as_deref()) {
-            continue;
-        }
 
-        rows.push(DashboardGraphqlCommitRow { commit, checkpoint });
+        rows.push(DashboardGraphqlCommitRow {
+            commit,
+            checkpoints,
+        });
     }
 
     Ok(rows)
@@ -327,24 +328,26 @@ pub(super) fn build_dashboard_kpis_from_graphql_rows(
     let mut api_call_count = 0u64;
 
     for row in rows {
-        if !unique_checkpoint_ids.insert(row.checkpoint.id.clone()) {
-            continue;
-        }
+        for checkpoint in &row.checkpoints {
+            if !unique_checkpoint_ids.insert(checkpoint.id.clone()) {
+                continue;
+            }
 
-        for agent_key in checkpoint_agents(&row.checkpoint) {
-            unique_agents.insert(agent_key);
-        }
-        total_sessions += row.checkpoint.session_count;
-        for file in &row.checkpoint.files_touched {
-            files_touched.insert(file.clone());
-        }
+            for agent_key in checkpoint_agents(checkpoint) {
+                unique_agents.insert(agent_key);
+            }
+            total_sessions += checkpoint.session_count;
+            for file in &checkpoint.files_touched {
+                files_touched.insert(file.clone());
+            }
 
-        if let Some(token_usage) = row.checkpoint.token_usage.as_ref() {
-            input_tokens += token_usage.input_tokens;
-            output_tokens += token_usage.output_tokens;
-            cache_creation_tokens += token_usage.cache_creation_tokens;
-            cache_read_tokens += token_usage.cache_read_tokens;
-            api_call_count += token_usage.api_call_count;
+            if let Some(token_usage) = checkpoint.token_usage.as_ref() {
+                input_tokens += token_usage.input_tokens;
+                output_tokens += token_usage.output_tokens;
+                cache_creation_tokens += token_usage.cache_creation_tokens;
+                cache_read_tokens += token_usage.cache_read_tokens;
+                api_call_count += token_usage.api_call_count;
+            }
         }
     }
 
@@ -432,12 +435,42 @@ pub(super) fn dashboard_commit_row_from_graphql(
     row: DashboardGraphqlCommitRow,
     files_touched: Vec<DashboardCommitFileDiff>,
 ) -> DashboardCommitRow {
-    let DashboardGraphqlCommitRow { commit, checkpoint } = row;
-    let agents = checkpoint_agents(&checkpoint);
-    let checkpoint_files_touched = checkpoint_file_diffs_from_graphql(&checkpoint, &files_touched);
+    let DashboardGraphqlCommitRow {
+        commit,
+        checkpoints,
+    } = row;
     let timestamp = DateTime::parse_from_rfc3339(&commit.committed_at)
         .map(|value| value.timestamp())
         .unwrap_or(0);
+    let checkpoints = checkpoints
+        .into_iter()
+        .map(|checkpoint| {
+            let checkpoint_files_touched =
+                checkpoint_file_diffs_from_graphql(&checkpoint, &files_touched);
+            let agents = checkpoint_agents(&checkpoint);
+            let token_usage = dashboard_token_usage_from_graphql(checkpoint.token_usage.as_ref());
+
+            DashboardCheckpoint {
+                checkpoint_id: checkpoint.id,
+                strategy: checkpoint.strategy.unwrap_or_default(),
+                branch: checkpoint.branch.unwrap_or_default(),
+                checkpoints_count: checkpoint.checkpoints_count.try_into().unwrap_or(u32::MAX),
+                files_touched: checkpoint_files_touched,
+                session_count: checkpoint.session_count,
+                token_usage,
+                session_id: checkpoint.session_id,
+                agents,
+                first_prompt_preview: checkpoint.first_prompt_preview.unwrap_or_default(),
+                created_at: checkpoint.created_at.unwrap_or_default(),
+                is_task: checkpoint.is_task,
+                tool_use_id: checkpoint.tool_use_id.unwrap_or_default(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let checkpoint = checkpoints
+        .first()
+        .cloned()
+        .expect("dashboard commit rows always include at least one checkpoint");
 
     DashboardCommitRow {
         commit: DashboardCommit {
@@ -449,21 +482,8 @@ pub(super) fn dashboard_commit_row_from_graphql(
             message: commit.commit_message,
             files_touched,
         },
-        checkpoint: DashboardCheckpoint {
-            checkpoint_id: checkpoint.id,
-            strategy: checkpoint.strategy.unwrap_or_default(),
-            branch: checkpoint.branch.unwrap_or_default(),
-            checkpoints_count: checkpoint.checkpoints_count.try_into().unwrap_or(u32::MAX),
-            files_touched: checkpoint_files_touched,
-            session_count: checkpoint.session_count,
-            token_usage: dashboard_token_usage_from_graphql(checkpoint.token_usage.as_ref()),
-            session_id: checkpoint.session_id,
-            agents,
-            first_prompt_preview: checkpoint.first_prompt_preview.unwrap_or_default(),
-            created_at: checkpoint.created_at.unwrap_or_default(),
-            is_task: checkpoint.is_task,
-            tool_use_id: checkpoint.tool_use_id.unwrap_or_default(),
-        },
+        checkpoint,
+        checkpoints,
     }
 }
 

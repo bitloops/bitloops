@@ -80,7 +80,12 @@ pub(in crate::api) async fn load_dashboard_commits(
                     row.commit.sha,
                     err
                 );
-                dashboard_zeroed_file_diff_list(&row.checkpoint.files_touched)
+                let fallback_files_touched = row
+                    .checkpoints
+                    .first()
+                    .map(|checkpoint| checkpoint.files_touched.as_slice())
+                    .unwrap_or(&[]);
+                dashboard_zeroed_file_diff_list(fallback_files_touched)
             }
         };
         result.push(dashboard_commit_row_from_graphql(row, files_touched));
@@ -159,8 +164,10 @@ pub(in crate::api) async fn load_dashboard_agents(
 
     let mut agents: Vec<DashboardAgent> = Vec::new();
     for row in rows {
-        for key in checkpoint_agents(&row.checkpoint) {
-            agents.push(DashboardAgent { key });
+        for checkpoint in &row.checkpoints {
+            for key in checkpoint_agents(checkpoint) {
+                agents.push(DashboardAgent { key });
+            }
         }
     }
     agents.sort_by(|left, right| left.key.cmp(&right.key));

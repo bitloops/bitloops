@@ -76,6 +76,7 @@ type DashboardCommitFileDiff {
 type DashboardCommitRow {
 	commit: DashboardCommit!
 	checkpoint: DashboardCheckpoint!
+	checkpoints: [DashboardCheckpoint!]!
 }
 
 type DashboardFetchBundleResult {

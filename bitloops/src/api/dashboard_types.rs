@@ -51,6 +51,7 @@ pub(crate) struct DashboardCheckpoint {
 pub(crate) struct DashboardCommitRow {
     pub(crate) commit: DashboardCommit,
     pub(crate) checkpoint: DashboardCheckpoint,
+    pub(crate) checkpoints: Vec<DashboardCheckpoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, SimpleObject)]
