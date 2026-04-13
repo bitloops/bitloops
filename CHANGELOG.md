@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Repo-policy scope and exclusion inputs now affect classification and invalidation end to end**: `scope.project_root` and `scope.include` now constrain automatic relevance detection, `exclude_from` paths are normalised to the repo-policy root and rejected when they point outside it, and referenced exclusion files are re-read on each evaluation so their paths and contents participate in the repo-policy fingerprint.
 - **Queued repo work now respects exclusion changes before execution**: queued path-scoped sync tasks now drop newly excluded paths and cancel themselves when nothing remains, pending producer-spool refresh jobs are pruned against the current exclusion matcher on recovery and claim, repo-policy reconciliation syncs take precedence over lower-priority repo work, and workplane enrichment jobs that reload zero inputs after reconciliation now exit cleanly instead of failing.
 
+### Fixed
+
+- **DevQL GraphQL end-to-end fixture stabilisation**: the Rust fixture used by the GraphQL smoke and verification tests is now generated as a valid crate with a manifest and module layout, preventing background current-state sync from rewriting the seeded artefact set into an incomplete view and keeping raw GraphQL, default GraphQL, and DSL query output aligned.
+- **Semantic-clone real-path fixture completeness and expectations**: real-path BDD fixtures now persist summary embeddings alongside code embeddings, and the semantic-clone feature expectations were refreshed to match the classifier's explainable output, including the lower-threshold clone case and unrelated-pair suppression coverage.
+
 ## [0.0.14] - 2026-04-12
 
 ### Added
