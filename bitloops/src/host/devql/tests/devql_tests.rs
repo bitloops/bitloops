@@ -561,6 +561,7 @@ fn test_file_row(
         artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id),
         symbol_id,
         language: "typescript".to_string(),
+        extraction_fingerprint: "test-fingerprint".to_string(),
         end_line,
         end_byte,
     }

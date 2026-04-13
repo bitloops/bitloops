@@ -95,10 +95,18 @@ pub(super) async fn persist_historical_artefact(
     path: &str,
     blob_sha: &str,
     language: &str,
+    extraction_fingerprint: &str,
     record: &PersistedArtefactRecord,
 ) -> Result<()> {
-    let sql =
-        build_upsert_historical_artefact_sql(cfg, relational, path, blob_sha, language, record);
+    let sql = build_upsert_historical_artefact_sql(
+        cfg,
+        relational,
+        path,
+        blob_sha,
+        language,
+        extraction_fingerprint,
+        record,
+    );
     relational.exec(&sql).await
 }
 
@@ -108,6 +116,7 @@ pub(super) fn build_upsert_historical_artefact_sql(
     _path: &str,
     _blob_sha: &str,
     language: &str,
+    extraction_fingerprint: &str,
     record: &PersistedArtefactRecord,
 ) -> String {
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
@@ -115,13 +124,14 @@ pub(super) fn build_upsert_historical_artefact_sql(
     let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, extraction_fingerprint = EXCLUDED.extraction_fingerprint, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&record.artefact_id),
         esc_pg(&record.symbol_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         canonical_kind_sql,
         esc_pg(&record.language_kind),
         esc_pg(&record.symbol_fqn),
@@ -190,6 +200,7 @@ mod tests {
             "src/lib.rs",
             "blob-sha",
             "rust",
+            "fingerprint",
             &sample_record(),
         );
         assert!(
@@ -209,6 +220,7 @@ mod tests {
             artefact_id: revision_artefact_id("repo-id", "blob-sha", &file_symbol_id("src/lib.rs")),
             symbol_id: file_symbol_id("src/lib.rs"),
             language: "rust".to_string(),
+            extraction_fingerprint: "fingerprint".to_string(),
             end_line: 2,
             end_byte: 32,
         };

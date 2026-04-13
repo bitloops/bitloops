@@ -123,3 +123,41 @@ async fn producer_spool_task_job_enqueues_devql_task_and_clears_spool_row() {
         "completed producer spool jobs should be removed from the repo runtime store"
     );
 }
+
+#[tokio::test]
+async fn producer_spool_claim_prunes_jobs_for_now_excluded_paths() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(
+        repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
+        "[scope]\nexclude = [\"src/**\"]\n",
+    )
+    .expect("write repo policy");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)
+        .expect("build devql config");
+    crate::host::devql::enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/lib.rs".to_string()]),
+    )
+    .expect("enqueue watcher sync into producer spool");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    assert!(
+        jobs.is_empty(),
+        "excluded path-only producer spool jobs should be dropped before claim"
+    );
+}

@@ -55,7 +55,7 @@ pub(super) async fn load_stored_manifest_for_paths(
 ) -> Result<sync::types::StoredManifest> {
     let sql = if let Some(requested_paths) = requested_paths {
         if requested_paths.is_empty() {
-            "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
+            "SELECT path, analysis_mode, file_role, text_index_mode, language, resolved_language, dialect, primary_context_id, secondary_context_ids_json, frameworks_json, runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint, effective_content_id, effective_source, parser_version, extractor_version \
              FROM current_file_state WHERE 1 = 0"
                 .to_string()
         } else {
@@ -67,7 +67,7 @@ pub(super) async fn load_stored_manifest_for_paths(
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
+                "SELECT path, analysis_mode, file_role, text_index_mode, language, resolved_language, dialect, primary_context_id, secondary_context_ids_json, frameworks_json, runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint, effective_content_id, effective_source, parser_version, extractor_version \
                  FROM current_file_state \
                  WHERE repo_id = '{}' AND path IN ({}) \
                  ORDER BY path",
@@ -77,7 +77,7 @@ pub(super) async fn load_stored_manifest_for_paths(
         }
     } else {
         format!(
-            "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
+            "SELECT path, analysis_mode, file_role, text_index_mode, language, resolved_language, dialect, primary_context_id, secondary_context_ids_json, frameworks_json, runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint, effective_content_id, effective_source, parser_version, extractor_version \
              FROM current_file_state \
              WHERE repo_id = '{}' \
              ORDER BY path",
@@ -109,11 +109,83 @@ fn stored_manifest_row(
         "worktree" => sync::types::EffectiveSource::Worktree,
         _ => return None,
     };
+    let analysis_mode = match row.get("analysis_mode").and_then(Value::as_str)? {
+        "code" => crate::host::devql::AnalysisMode::Code,
+        "text" => crate::host::devql::AnalysisMode::Text,
+        "track_only" => crate::host::devql::AnalysisMode::TrackOnly,
+        "excluded" => crate::host::devql::AnalysisMode::Excluded,
+        _ => return None,
+    };
+    let file_role = match row
+        .get("file_role")
+        .and_then(Value::as_str)
+        .unwrap_or("source_code")
+    {
+        "source_code" => crate::host::devql::FileRole::SourceCode,
+        "project_manifest" => crate::host::devql::FileRole::ProjectManifest,
+        "context_seed" => crate::host::devql::FileRole::ContextSeed,
+        "configuration" => crate::host::devql::FileRole::Configuration,
+        "documentation" => crate::host::devql::FileRole::Documentation,
+        "lockfile" => crate::host::devql::FileRole::Lockfile,
+        "generated" => crate::host::devql::FileRole::Generated,
+        "dependency_tree" => crate::host::devql::FileRole::DependencyTree,
+        "other" => crate::host::devql::FileRole::Other,
+        _ => return None,
+    };
+    let text_index_mode = match row
+        .get("text_index_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+    {
+        "embed" => crate::host::devql::TextIndexMode::Embed,
+        "store_only" => crate::host::devql::TextIndexMode::StoreOnly,
+        "none" => crate::host::devql::TextIndexMode::None,
+        _ => return None,
+    };
 
     Some(sync::types::StoredFileState {
         path,
+        analysis_mode,
+        file_role,
+        text_index_mode,
         language: row
             .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        resolved_language: row
+            .get("resolved_language")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        dialect: row
+            .get("dialect")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        primary_context_id: row
+            .get("primary_context_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        secondary_context_ids: parse_json_string_array(
+            row.get("secondary_context_ids_json")
+                .and_then(Value::as_str),
+        ),
+        frameworks: parse_json_string_array(row.get("frameworks_json").and_then(Value::as_str)),
+        runtime_profile: row
+            .get("runtime_profile")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        classification_reason: row
+            .get("classification_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        context_fingerprint: row
+            .get("context_fingerprint")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        extraction_fingerprint: row
+            .get("extraction_fingerprint")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
@@ -130,6 +202,11 @@ fn stored_manifest_row(
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+fn parse_json_string_array(raw: Option<&str>) -> Vec<String> {
+    raw.and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default()
 }
 
 pub(super) fn read_effective_content(
@@ -224,7 +301,19 @@ mod tests {
     fn determine_retention_class_matches_spec() {
         let base = sync::types::DesiredFileState {
             path: "src/lib.rs".to_string(),
+            analysis_mode: crate::host::devql::AnalysisMode::Code,
+            file_role: crate::host::devql::FileRole::SourceCode,
+            text_index_mode: crate::host::devql::TextIndexMode::None,
             language: "rust".to_string(),
+            resolved_language: "rust".to_string(),
+            dialect: None,
+            primary_context_id: None,
+            secondary_context_ids: Vec::new(),
+            frameworks: Vec::new(),
+            runtime_profile: None,
+            classification_reason: "test".to_string(),
+            context_fingerprint: None,
+            extraction_fingerprint: "fingerprint-v1".to_string(),
             head_content_id: Some("head".to_string()),
             index_content_id: Some("index".to_string()),
             worktree_content_id: Some("worktree".to_string()),

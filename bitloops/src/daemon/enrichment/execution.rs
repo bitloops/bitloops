@@ -142,6 +142,9 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 Ok(inputs) => inputs,
                 Err(err) => return JobExecutionOutcome::failed(err),
             };
+            if inputs.is_empty() {
+                return JobExecutionOutcome::ok();
+            }
             let payload = SemanticFeaturesRefreshPayload {
                 scope: SemanticFeaturesRefreshScope::Historical,
                 path: None,
@@ -193,6 +196,9 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 Ok(inputs) => inputs,
                 Err(err) => return JobExecutionOutcome::failed(err),
             };
+            if inputs.is_empty() {
+                return JobExecutionOutcome::ok();
+            }
             let payload = SymbolEmbeddingsRefreshPayload {
                 scope: SymbolEmbeddingsRefreshScope::Historical,
                 path: None,

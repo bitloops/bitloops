@@ -330,6 +330,12 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     if args.skip_baseline {
         flags.push("skip_baseline");
     }
+    if !args.exclude.is_empty() {
+        flags.push("exclude");
+    }
+    if !args.exclude_from.is_empty() {
+        flags.push("exclude_from");
+    }
     insert_flags(&mut props, flags);
     insert_bool_property(&mut props, "has_agent", args.agent.is_some());
     insert_bool_property(&mut props, "has_sync_choice", args.sync.is_some());

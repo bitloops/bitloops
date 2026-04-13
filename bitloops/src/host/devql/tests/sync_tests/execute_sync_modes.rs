@@ -223,7 +223,7 @@ async fn unborn_head_syncs_from_index_and_worktree() {
 }
 
 #[tokio::test]
-async fn unsupported_file_ignored_supported_file_added() {
+async fn unsupported_file_becomes_track_only_current_state() {
     let repo = seed_supported_and_unsupported_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());
     let sqlite_path = repo.path().join("devql.sqlite");
@@ -259,17 +259,293 @@ async fn unsupported_file_ignored_supported_file_added() {
             |row| row.get(0),
         )
         .expect("count unsupported current_file_state rows");
+    let unsupported_language: String = db
+        .query_row(
+            "SELECT language FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "docs/notes.foo"],
+            |row| row.get(0),
+        )
+        .expect("read unsupported current_file_state language");
 
     assert!(
         result.success,
-        "sync should succeed with ignored unsupported files"
+        "sync should succeed while retaining unsupported files as track-only state"
     );
-    assert_eq!(result.paths_added, 1);
+    assert_eq!(result.paths_added, 2);
     assert_eq!(result.paths_changed, 0);
     assert_eq!(result.paths_removed, 0);
     assert_eq!(result.paths_unchanged, 0);
-    assert_eq!(current_paths, vec!["src/lib.rs".to_string()]);
-    assert_eq!(unsupported_rows, 0);
+    assert_eq!(
+        current_paths,
+        vec!["docs/notes.foo".to_string(), "src/lib.rs".to_string()]
+    );
+    assert_eq!(unsupported_rows, 1);
+    assert_eq!(unsupported_language, "track_only");
+}
+
+#[tokio::test]
+async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-utf8-sync-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    fs::write(
+        repo.path().join("src/good.rs"),
+        "pub fn good() -> i32 {\n    1\n}\n",
+    )
+    .expect("write good rust file");
+    fs::write(
+        repo.path().join("src/bad.rs"),
+        "pub fn bad() -> i32 {\n    2\n}\n",
+    )
+    .expect("write bad rust file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed files"]);
+
+    fs::write(
+        repo.path().join("src/bad.rs"),
+        [0x66, 0x6e, 0x20, 0xff, 0x0a],
+    )
+    .expect("overwrite bad rust file with invalid UTF-8");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with one invalid UTF-8 file");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let good_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/good.rs"],
+            |row| row.get(0),
+        )
+        .expect("count good.rs rows");
+    let bad_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count bad.rs rows");
+
+    assert!(
+        result.success,
+        "sync should continue even when one supported file fails decoding"
+    );
+    assert!(
+        result.parse_errors >= 1,
+        "expected at least one parse error for invalid UTF-8 input"
+    );
+    assert_eq!(good_rows, 1, "good path should still be materialized");
+    assert_eq!(
+        bad_rows, 0,
+        "failing path should be skipped instead of aborting the sync run"
+    );
+}
+
+#[tokio::test]
+async fn full_sync_removes_current_rows_for_newly_excluded_paths() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::create_dir_all(repo.path().join("docs")).expect("create docs dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet() -> &'static str {\n    \"hi\"\n}\n",
+    )
+    .expect("write rust file");
+    fs::write(repo.path().join("docs/readme.md"), "# docs\n").expect("write docs file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[scope]
+exclude = ["docs/**"]
+"#,
+    )
+    .expect("write local exclusions");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after exclusions");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+
+    assert!(
+        result.success,
+        "sync should succeed after exclusions update"
+    );
+    assert!(
+        current_paths.iter().any(|path| path == "src/lib.rs"),
+        "expected src/lib.rs to remain indexed after exclusions update"
+    );
+    assert!(
+        !current_paths.iter().any(|path| path == "docs/readme.md"),
+        "expected excluded docs/readme.md to be removed from current state"
+    );
+}
+
+#[tokio::test]
+async fn full_sync_removes_current_rows_for_plain_folder_exclusion() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::create_dir_all(repo.path().join("docs")).expect("create docs dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet() -> &'static str {\n    \"hi\"\n}\n",
+    )
+    .expect("write rust file");
+    fs::write(repo.path().join("docs/readme.md"), "# docs\n").expect("write docs file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[scope]
+exclude = ["docs"]
+"#,
+    )
+    .expect("write local exclusions");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after exclusions");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+
+    assert!(
+        result.success,
+        "sync should succeed after exclusions update"
+    );
+    assert!(
+        current_paths.iter().any(|path| path == "src/lib.rs"),
+        "expected src/lib.rs to remain indexed after exclusions update"
+    );
+    assert!(
+        !current_paths.iter().any(|path| path == "docs/readme.md"),
+        "expected excluded docs/readme.md to be removed from current state"
+    );
+}
+
+#[tokio::test]
+async fn full_sync_fails_fast_when_exclude_from_file_is_missing() {
+    let repo = seed_full_sync_repo();
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_FILE_NAME),
+        r#"
+[scope]
+exclude_from = [".bitloopsignore"]
+"#,
+    )
+    .expect("write shared policy");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let err = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect_err("missing exclude_from file should fail sync");
+    let err_chain = format!("{err:#}");
+    assert!(
+        err_chain.contains("scope.exclude_from"),
+        "expected scope.exclude_from error, got: {err_chain}"
+    );
 }
 
 #[tokio::test]
@@ -577,7 +853,7 @@ async fn sync_removes_deleted_file() {
     assert_eq!(result.paths_removed, 1);
     assert_eq!(result.paths_added, 0);
     assert_eq!(result.paths_changed, 0);
-    assert_eq!(result.paths_unchanged, 3);
+    assert_eq!(result.paths_unchanged, 7);
     assert_eq!(artefact_count, 0);
     assert_eq!(edge_count, 0);
     assert_eq!(current_state_count, 0);

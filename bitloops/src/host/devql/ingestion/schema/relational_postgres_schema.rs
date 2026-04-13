@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS repositories (
     organization TEXT NOT NULL,
     name TEXT NOT NULL,
     default_branch TEXT,
+    metadata_json TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -38,7 +39,19 @@ ON file_state (repo_id, path, blob_sha, commit_sha);
 CREATE TABLE IF NOT EXISTS current_file_state (
     repo_id TEXT NOT NULL,
     path TEXT NOT NULL,
+    analysis_mode TEXT NOT NULL DEFAULT 'code',
+    file_role TEXT NOT NULL DEFAULT 'source_code',
+    text_index_mode TEXT NOT NULL DEFAULT 'none',
     language TEXT NOT NULL,
+    resolved_language TEXT NOT NULL DEFAULT '',
+    dialect TEXT,
+    primary_context_id TEXT,
+    secondary_context_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    frameworks_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    runtime_profile TEXT,
+    classification_reason TEXT NOT NULL DEFAULT '',
+    context_fingerprint TEXT,
+    extraction_fingerprint TEXT NOT NULL DEFAULT '',
     head_content_id TEXT,
     index_content_id TEXT,
     worktree_content_id TEXT,
@@ -51,6 +64,21 @@ CREATE TABLE IF NOT EXISTS current_file_state (
     exists_in_worktree INTEGER NOT NULL,
     last_synced_at TEXT NOT NULL,
     PRIMARY KEY (repo_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS project_contexts_current (
+    repo_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    root TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detection_source TEXT NOT NULL,
+    frameworks_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    runtime_profile TEXT,
+    config_files_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    config_fingerprint TEXT NOT NULL,
+    source_versions_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (repo_id, context_id),
+    FOREIGN KEY (repo_id) REFERENCES repositories(repo_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS checkpoint_files (
@@ -156,6 +184,7 @@ CREATE TABLE IF NOT EXISTS artefacts (
     symbol_id TEXT,
     repo_id TEXT NOT NULL,
     language TEXT NOT NULL,
+    extraction_fingerprint TEXT,
     canonical_kind TEXT,
     language_kind TEXT,
     symbol_fqn TEXT,
@@ -240,6 +269,7 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     symbol_id TEXT NOT NULL,
     artefact_id TEXT NOT NULL,
     language TEXT NOT NULL,
+    extraction_fingerprint TEXT,
     canonical_kind TEXT,
     language_kind TEXT,
     symbol_fqn TEXT,
@@ -375,6 +405,7 @@ CREATE TABLE IF NOT EXISTS repo_sync_state (
     head_tree_sha TEXT,
     parser_version TEXT NOT NULL,
     extractor_version TEXT NOT NULL,
+    scope_exclusions_fingerprint TEXT,
     last_sync_started_at TEXT,
     last_sync_completed_at TEXT,
     last_sync_status TEXT,
@@ -399,18 +430,20 @@ ON commit_ingest_ledger (repo_id);
 CREATE TABLE IF NOT EXISTS content_cache (
     content_id TEXT NOT NULL,
     language TEXT NOT NULL,
+    extraction_fingerprint TEXT NOT NULL,
     parser_version TEXT NOT NULL,
     extractor_version TEXT NOT NULL,
     retention_class TEXT NOT NULL,
     parse_status TEXT NOT NULL,
     parsed_at TEXT NOT NULL,
     last_accessed_at TEXT NOT NULL,
-    PRIMARY KEY (content_id, language, parser_version, extractor_version)
+    PRIMARY KEY (content_id, language, extraction_fingerprint, parser_version, extractor_version)
 );
 
 CREATE TABLE IF NOT EXISTS content_cache_artefacts (
     content_id TEXT NOT NULL,
     language TEXT NOT NULL,
+    extraction_fingerprint TEXT NOT NULL,
     parser_version TEXT NOT NULL,
     extractor_version TEXT NOT NULL,
     artifact_key TEXT NOT NULL,
@@ -426,12 +459,13 @@ CREATE TABLE IF NOT EXISTS content_cache_artefacts (
     modifiers JSONB NOT NULL DEFAULT '[]',
     docstring TEXT,
     metadata JSONB NOT NULL DEFAULT '{}',
-    PRIMARY KEY (content_id, language, parser_version, extractor_version, artifact_key)
+    PRIMARY KEY (content_id, language, extraction_fingerprint, parser_version, extractor_version, artifact_key)
 );
 
 CREATE TABLE IF NOT EXISTS content_cache_edges (
     content_id TEXT NOT NULL,
     language TEXT NOT NULL,
+    extraction_fingerprint TEXT NOT NULL,
     parser_version TEXT NOT NULL,
     extractor_version TEXT NOT NULL,
     edge_key TEXT NOT NULL,
@@ -442,7 +476,7 @@ CREATE TABLE IF NOT EXISTS content_cache_edges (
     start_line INTEGER,
     end_line INTEGER,
     metadata JSONB NOT NULL DEFAULT '{}',
-    PRIMARY KEY (content_id, language, parser_version, extractor_version, edge_key)
+    PRIMARY KEY (content_id, language, extraction_fingerprint, parser_version, extractor_version, edge_key)
 );
 "#
 }

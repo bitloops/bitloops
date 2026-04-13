@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -234,6 +234,7 @@ pub(crate) fn recover_running_producer_spool_jobs(config_root: &Path) -> Result<
                     ],
                 )
                 .context("recovering interrupted DevQL producer spool jobs")?;
+            prune_excluded_pending_producer_spool_jobs(conn)?;
             Ok(u64::try_from(updated).unwrap_or_default())
         })();
 
@@ -259,6 +260,7 @@ pub(crate) fn claim_next_producer_spool_jobs(
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool claim transaction")?;
         let result = (|| {
+            prune_excluded_pending_producer_spool_jobs(conn)?;
             let now = unix_timestamp_now();
             let running_repo_ids = load_running_repo_ids(conn)?;
             let mut claimed_repo_ids = HashSet::new();
@@ -327,6 +329,128 @@ pub(crate) fn claim_next_producer_spool_jobs(
             }
         }
     })
+}
+
+fn prune_excluded_pending_producer_spool_jobs(conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT job_id, repo_id, repo_root, config_root, repo_name, repo_provider,
+                repo_organisation, repo_identity, dedupe_key, payload, status, attempts,
+                available_at_unix, submitted_at_unix, updated_at_unix, last_error
+         FROM devql_producer_spool_jobs
+         WHERE status = ?1
+         ORDER BY submitted_at_unix ASC, job_id ASC",
+    )?;
+    let rows = stmt.query_map(
+        params![ProducerSpoolJobStatus::Pending.as_str()],
+        map_producer_spool_job_record_row,
+    )?;
+    let mut matchers = HashMap::<PathBuf, super::RepoExclusionMatcher>::new();
+    let now = unix_timestamp_now();
+    for row in rows {
+        let job = row?;
+        let matcher = matchers
+            .entry(job.repo_root.clone())
+            .or_insert(super::load_repo_exclusion_matcher(&job.repo_root)?)
+            .clone();
+        let Some(payload) = prune_excluded_paths_from_payload(job.payload.clone(), &matcher) else {
+            conn.execute(
+                "DELETE FROM devql_producer_spool_jobs WHERE job_id = ?1",
+                params![&job.job_id],
+            )
+            .with_context(|| {
+                format!(
+                    "deleting excluded DevQL producer spool job `{}` during prune",
+                    job.job_id
+                )
+            })?;
+            continue;
+        };
+        if payload != job.payload {
+            conn.execute(
+                "UPDATE devql_producer_spool_jobs
+                 SET payload = ?1, updated_at_unix = ?2, last_error = NULL
+                 WHERE job_id = ?3",
+                params![
+                    serde_json::to_string(&payload)
+                        .context("serialising pruned DevQL producer spool payload")?,
+                    sql_i64(now)?,
+                    &job.job_id,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "updating excluded DevQL producer spool job `{}` during prune",
+                    job.job_id
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn prune_excluded_paths_from_payload(
+    payload: ProducerSpoolJobPayload,
+    matcher: &super::RepoExclusionMatcher,
+) -> Option<ProducerSpoolJobPayload> {
+    match payload {
+        ProducerSpoolJobPayload::Task {
+            source,
+            spec:
+                DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                    mode: SyncTaskMode::Paths { paths },
+                }),
+        } => {
+            let paths = paths
+                .into_iter()
+                .filter(|path| !matcher.excludes_repo_relative_path(path))
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
+                None
+            } else {
+                Some(ProducerSpoolJobPayload::Task {
+                    source,
+                    spec: DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                        mode: SyncTaskMode::Paths { paths },
+                    }),
+                })
+            }
+        }
+        ProducerSpoolJobPayload::PostCommitRefresh {
+            commit_sha,
+            changed_files,
+        } => {
+            let changed_files = changed_files
+                .into_iter()
+                .filter(|path| !matcher.excludes_repo_relative_path(path))
+                .collect::<Vec<_>>();
+            if changed_files.is_empty() {
+                None
+            } else {
+                Some(ProducerSpoolJobPayload::PostCommitRefresh {
+                    commit_sha,
+                    changed_files,
+                })
+            }
+        }
+        ProducerSpoolJobPayload::PostMergeRefresh {
+            head_sha,
+            changed_files,
+        } => {
+            let changed_files = changed_files
+                .into_iter()
+                .filter(|path| !matcher.excludes_repo_relative_path(path))
+                .collect::<Vec<_>>();
+            if changed_files.is_empty() {
+                None
+            } else {
+                Some(ProducerSpoolJobPayload::PostMergeRefresh {
+                    head_sha,
+                    changed_files,
+                })
+            }
+        }
+        payload => Some(payload),
+    }
 }
 
 pub(crate) fn delete_producer_spool_job(config_root: &Path, job_id: &str) -> Result<()> {

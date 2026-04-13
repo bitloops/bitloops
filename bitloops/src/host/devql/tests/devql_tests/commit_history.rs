@@ -530,10 +530,106 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
 }
 
 #[tokio::test]
+async fn execute_ingest_continues_after_failed_checkpoint_companion_commit() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add one"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add two"]);
+    let mapped_commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\npub fn three() -> i32 { 3 }\n",
+    )
+    .expect("write third revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add three"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history continue after failure test")
+        .await
+        .expect("initialise local devql store");
+    insert_commit_checkpoint_mapping(repo.path(), &mapped_commit_sha, "abcdef123456");
+
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest with one failing mapped commit");
+
+    assert!(
+        !summary.success,
+        "ingest summary should report partial failure when at least one commit fails"
+    );
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let mapped_ledger_row: (String, String, Option<String>) = sqlite
+        .query_row(
+            "SELECT history_status, checkpoint_status, last_error
+             FROM commit_ingest_ledger
+             WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), mapped_commit_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read mapped commit ledger row");
+    let head_ledger_row: (String, String) = sqlite
+        .query_row(
+            "SELECT history_status, checkpoint_status
+             FROM commit_ingest_ledger
+             WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read head commit ledger row");
+
+    assert_eq!(
+        mapped_ledger_row.0, "completed",
+        "history ingestion can complete before checkpoint companion fails"
+    );
+    assert_eq!(
+        mapped_ledger_row.1, "failed",
+        "mapped commit checkpoint status should record failure"
+    );
+    assert!(
+        mapped_ledger_row
+            .2
+            .as_deref()
+            .unwrap_or_default()
+            .contains("checkpoint mapping exists but metadata is missing"),
+        "expected checkpoint metadata failure in ledger error message"
+    );
+    assert_eq!(
+        head_ledger_row.0, "completed",
+        "ingest should continue processing commits after a failure"
+    );
+    assert_eq!(head_ledger_row.1, "not_applicable");
+}
+
+#[tokio::test]
 async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_without_breaking_commit_queries()
  {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"commit-history-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
     std::fs::write(
         repo.path().join("src/lib.rs"),

@@ -491,6 +491,7 @@ pub enum DevqlTaskSource {
     PostCommit,
     PostMerge,
     PostCheckout,
+    RepoPolicyChange,
 }
 
 impl fmt::Display for DevqlTaskSource {
@@ -502,6 +503,7 @@ impl fmt::Display for DevqlTaskSource {
             Self::PostCommit => write!(f, "post_commit"),
             Self::PostMerge => write!(f, "post_merge"),
             Self::PostCheckout => write!(f, "post_checkout"),
+            Self::RepoPolicyChange => write!(f, "repo_policy_change"),
         }
     }
 }

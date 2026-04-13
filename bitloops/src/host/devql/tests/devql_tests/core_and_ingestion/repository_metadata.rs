@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 
 #[tokio::test]
 #[ignore = "promote_temporary_current_rows_for_head_commit is not yet aligned with sync-shaped artefacts_current"]
@@ -98,6 +99,105 @@ fn default_branch_name_uses_current_branch_and_falls_back_to_main() {
     assert_eq!(
         default_branch_name(tempdir().expect("temp dir").path()),
         "main"
+    );
+}
+
+#[tokio::test]
+async fn ensure_repository_row_persists_language_profile_metadata_json() {
+    let repo_dir = tempdir().expect("temp dir");
+    init_test_repo(
+        repo_dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::create_dir_all(repo_dir.path().join("src")).expect("create src dir");
+    std::fs::create_dir_all(repo_dir.path().join("docs")).expect("create docs dir");
+    std::fs::write(
+        repo_dir.path().join("src/lib.rs"),
+        "pub fn one() -> i32 {\n    1\n}\n",
+    )
+    .expect("write rust source");
+    std::fs::write(
+        repo_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo manifest");
+    std::fs::write(
+        repo_dir.path().join("docs/ignored.py"),
+        "print('ignored')\n",
+    )
+    .expect("write excluded python source");
+    std::fs::write(
+        repo_dir.path().join(crate::config::REPO_POLICY_FILE_NAME),
+        r#"
+[scope]
+exclude = ["docs/**"]
+"#,
+    )
+    .expect("write repo policy");
+    git_ok(repo_dir.path(), &["add", "."]);
+    git_ok(repo_dir.path(), &["commit", "-m", "seed"]);
+    crate::test_support::git_fixtures::write_test_daemon_config(repo_dir.path());
+
+    let repo = resolve_repo_identity(repo_dir.path()).expect("resolve repo identity");
+    let cfg = DevqlConfig::from_env(repo_dir.path().to_path_buf(), repo).expect("build config");
+    let sqlite_path = repo_dir.path().join("devql-relational.db");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("upsert repositories row");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let metadata_json: String = conn
+        .query_row(
+            "SELECT metadata_json FROM repositories WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("read repositories.metadata_json");
+    let metadata: Value = serde_json::from_str(&metadata_json).expect("parse metadata JSON");
+    let languages = metadata
+        .get("language_profile")
+        .and_then(|value| value.get("languages"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let role_counts = metadata
+        .get("language_profile")
+        .and_then(|value| value.get("file_count_by_role"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let text_index_mode_counts = metadata
+        .get("language_profile")
+        .and_then(|value| value.get("text_file_count_by_index_mode"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    assert!(
+        languages.iter().any(|value| value.as_str() == Some("rust")),
+        "expected rust in persisted language profile metadata: {metadata:#}"
+    );
+    assert_eq!(
+        role_counts.get("project_manifest").and_then(Value::as_u64),
+        Some(1),
+        "expected Cargo.toml to be classified as a project manifest: {metadata:#}"
+    );
+    assert_eq!(
+        text_index_mode_counts
+            .get("store_only")
+            .and_then(Value::as_u64),
+        Some(2),
+        "expected manifests and repo config to use store_only text indexing: {metadata:#}"
+    );
+    assert!(
+        !languages
+            .iter()
+            .any(|value| value.as_str() == Some("python")),
+        "excluded docs path should not influence persisted language profile metadata: {metadata:#}"
     );
 }
 

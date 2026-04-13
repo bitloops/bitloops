@@ -91,7 +91,19 @@ pub(super) fn desired_file_state(
 ) -> crate::host::devql::sync::types::DesiredFileState {
     crate::host::devql::sync::types::DesiredFileState {
         path: path.to_string(),
+        analysis_mode: crate::host::devql::AnalysisMode::Code,
+        file_role: crate::host::devql::FileRole::SourceCode,
+        text_index_mode: crate::host::devql::TextIndexMode::None,
         language: language.to_string(),
+        resolved_language: language.to_string(),
+        dialect: None,
+        primary_context_id: None,
+        secondary_context_ids: Vec::new(),
+        frameworks: Vec::new(),
+        runtime_profile: None,
+        classification_reason: "sync_test".to_string(),
+        context_fingerprint: None,
+        extraction_fingerprint: format!("sync-test::{language}::{content_id}"),
         head_content_id: Some(content_id.to_string()),
         index_content_id: Some(content_id.to_string()),
         worktree_content_id: Some(content_id.to_string()),
@@ -141,7 +153,6 @@ pub(super) fn seed_workspace_repo() -> tempfile::TempDir {
         "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
     )
     .expect("write rust source");
-    fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
 
     crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
     crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
@@ -162,10 +173,25 @@ pub(super) fn seed_full_sync_repo() -> tempfile::TempDir {
     fs::create_dir_all(dir.path().join("scripts")).expect("create scripts dir");
 
     fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"sync-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo manifest");
+    fs::write(
         dir.path().join("src/lib.rs"),
         "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
     )
     .expect("write rust source");
+    fs::write(
+        dir.path().join("web/package.json"),
+        "{\n  \"name\": \"web\",\n  \"private\": true,\n  \"dependencies\": {\n    \"next\": \"14.0.0\",\n    \"react\": \"18.2.0\"\n  },\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        dir.path().join("web/tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"jsx\": \"react-jsx\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
     fs::write(
         dir.path().join("web/app.ts"),
         "import { helper } from \"./util\";\n\nexport function run(): number {\n  return helper();\n}\n",
@@ -181,7 +207,11 @@ pub(super) fn seed_full_sync_repo() -> tempfile::TempDir {
         "def helper() -> int:\n    return 1\n\n\ndef run() -> int:\n    return helper()\n",
     )
     .expect("write Python source");
-    fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
+    fs::write(
+        dir.path().join("scripts/pyproject.toml"),
+        "[project]\nname = \"scripts\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
+    )
+    .expect("write pyproject.toml");
 
     crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
     crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);

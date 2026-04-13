@@ -56,6 +56,14 @@ fn validate_materialization_inputs(
             extraction.language
         ));
     }
+    if desired.extraction_fingerprint != extraction.extraction_fingerprint {
+        return Err(anyhow!(
+            "extraction fingerprint mismatch for `{}`: desired `{}` != cached `{}`",
+            desired.path,
+            desired.extraction_fingerprint,
+            extraction.extraction_fingerprint
+        ));
+    }
     if extraction.parser_version != parser_version {
         return Err(anyhow!(
             "parser version mismatch for `{}`: expected `{}` != cached `{}`",

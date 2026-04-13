@@ -8,7 +8,8 @@ use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipel
 use crate::cli::embeddings::{enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings};
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
-    DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings_with_daemon_binding,
+    DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
+    write_project_bootstrap_settings_with_daemon_binding,
 };
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
@@ -17,8 +18,8 @@ use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
     detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
-    reconcile_agent_hooks, should_install_embeddings_during_init, should_run_initial_ingest,
-    should_run_initial_sync,
+    normalize_cli_exclusions, normalize_exclude_from_paths, reconcile_agent_hooks,
+    should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
 };
 
 pub(super) async fn run_for_project_root(
@@ -86,6 +87,8 @@ pub(super) async fn run_for_project_root(
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
+    let scope_exclude = normalize_cli_exclusions(&args.exclude);
+    let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
     write_project_bootstrap_settings_with_daemon_binding(
         &local_policy_path,
@@ -93,6 +96,9 @@ pub(super) async fn run_for_project_root(
         &selected_agents,
         Some(&daemon_config_path),
     )?;
+    if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
+        set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
+    }
 
     let settings = load_settings(project_root).unwrap_or_default();
     let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(

@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -88,6 +88,14 @@ pub struct InitArgs {
         value_parser = parse_backfill_value
     )]
     pub backfill: Option<usize>,
+
+    /// Exclude repo-relative paths/globs from DevQL indexing (repeatable).
+    #[arg(long = "exclude")]
+    pub exclude: Vec<String>,
+
+    /// Load additional exclusion globs from files under the repo-policy root (repeatable).
+    #[arg(long = "exclude-from")]
+    pub exclude_from: Vec<String>,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {
@@ -248,6 +256,71 @@ fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {
         return Err("`--backfill` must be greater than zero".to_string());
     }
     Ok(parsed)
+}
+
+fn normalize_cli_exclusions(values: &[String]) -> Vec<String> {
+    let mut normalized = values
+        .iter()
+        .map(|value| value.trim().replace('\\', "/"))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn normalize_exclude_from_paths(policy_root: &Path, values: &[String]) -> Result<Vec<String>> {
+    let policy_root = policy_root
+        .canonicalize()
+        .unwrap_or_else(|_| policy_root.to_path_buf());
+    let mut normalized = Vec::new();
+
+    for raw_value in values {
+        let raw_value = raw_value.trim();
+        if raw_value.is_empty() {
+            continue;
+        }
+        let candidate = PathBuf::from(raw_value);
+        let absolute = if candidate.is_absolute() {
+            candidate
+        } else {
+            policy_root.join(candidate)
+        };
+        let absolute = normalize_lexical_path(&absolute);
+        if !absolute.starts_with(&policy_root) {
+            bail!(
+                "`--exclude-from` path `{}` must be under repo-policy root {}",
+                raw_value,
+                policy_root.display()
+            );
+        }
+        let relative = absolute
+            .strip_prefix(&policy_root)
+            .unwrap_or(absolute.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !relative.is_empty() {
+            normalized.push(relative);
+        }
+    }
+
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {

@@ -36,6 +36,8 @@ pub(crate) mod artefact_sql;
 pub(crate) mod checkpoint_file_snapshots;
 #[path = "devql/checkpoint_provenance.rs"]
 pub(crate) mod checkpoint_provenance;
+#[path = "devql/classification.rs"]
+pub(crate) mod classification;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
 #[path = "devql/commands_projection.rs"]
@@ -48,12 +50,17 @@ mod commands_refresh;
 mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+mod plain_text;
 #[path = "devql/producer_spool.rs"]
 mod producer_spool;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
 mod types;
 
+pub(crate) use self::classification::{
+    AnalysisMode, FileRole, ProjectAwareClassifier, ProjectContext, ResolvedFileClassification,
+    TextIndexMode,
+};
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
     execute_ingest_with_backfill_window, execute_ingest_with_observer,
@@ -80,6 +87,9 @@ pub use self::commands_sync::{
     run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
+pub(crate) use self::plain_text::{
+    PLAIN_TEXT_LANGUAGE_ID, indexing_language_for_path, plain_text_content_is_allowed,
+};
 pub(crate) use self::producer_spool::{
     ProducerSpoolJobPayload, ProducerSpoolJobRecord, claim_next_producer_spool_jobs,
     delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
@@ -793,6 +803,10 @@ mod ingestion_artefact_persistence;
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
+#[path = "devql/exclusion_reconcile.rs"]
+mod exclusion_reconcile;
+#[path = "devql/exclusions.rs"]
+mod exclusions;
 #[path = "devql/query/dsl_compiler.rs"]
 mod query_dsl_compiler;
 #[path = "devql/query/executor.rs"]
@@ -811,6 +825,10 @@ pub(crate) use self::db_utils::{
     sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
+pub(crate) use self::exclusion_reconcile::{
+    purge_scope_excluded_repo_data, scope_exclusion_reconcile_needed,
+};
+pub(crate) use self::exclusions::{RepoExclusionMatcher, load_repo_exclusion_matcher};
 use self::ingestion_artefact_identity::*;
 use self::ingestion_artefact_persistence::*;
 use self::ingestion_artefact_persistence_edges::*;
