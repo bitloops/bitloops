@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
@@ -195,9 +196,11 @@ async fn execute_sync_inner(
     let mut diff_collector = SyncDiffCollector::new();
     let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
         .context("loading repo policy exclusions for DevQL sync")?;
+    let internal_ignored_paths = sync_internal_ignored_paths(relational, &cfg.repo_root);
     let mut requested_paths = requested_paths(mode);
     if let Some(paths) = requested_paths.as_mut() {
         paths.retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
+        paths.retain(|path| !is_sync_internal_ignored_path(path, &internal_ignored_paths));
     }
 
     emit_progress(
@@ -214,18 +217,22 @@ async fn execute_sync_inner(
         requested_paths.as_ref(),
     )
     .context("inspecting workspace for DevQL sync")?;
-    workspace
-        .head_tree
-        .retain(|path, _| !exclusion_matcher.excludes_repo_relative_path(path));
-    workspace
-        .staged_changes
-        .retain(|path, _| !exclusion_matcher.excludes_repo_relative_path(path));
-    workspace
-        .dirty_files
-        .retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
-    workspace
-        .untracked_files
-        .retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
+    workspace.head_tree.retain(|path, _| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
+    workspace.staged_changes.retain(|path, _| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
+    workspace.dirty_files.retain(|path| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
+    workspace.untracked_files.retain(|path| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
     stats.workspace_inspection = workspace_started.elapsed();
 
     emit_progress(
@@ -237,19 +244,31 @@ async fn execute_sync_inner(
         0,
     );
     let desired_started = Instant::now();
+    let classifier = ProjectAwareClassifier::discover_for_worktree(
+        &cfg.repo_root,
+        workspace
+            .head_tree
+            .keys()
+            .cloned()
+            .chain(workspace.staged_changes.keys().cloned())
+            .chain(workspace.dirty_files.iter().cloned())
+            .chain(workspace.untracked_files.iter().cloned())
+            .collect::<Vec<_>>(),
+        parser_version,
+        extractor_version,
+    )
+    .context("building project-aware classifier for DevQL sync")?;
+    replace_project_contexts_current(relational, &cfg.repo.repo_id, &classifier.contexts())
+        .await
+        .context("persisting project context snapshot for DevQL sync")?;
     let mut desired = sync::manifest::build_desired_manifest(&workspace, &cfg.repo_root, |path| {
-        let language = indexing_language_for_path(path);
-        if language == PLAIN_TEXT_LANGUAGE_ID && should_skip_plain_text_fallback_path(path) {
-            return None;
+        let classification = classifier.classify_repo_relative_path(path, false)?;
+        if !classification.should_persist_current_state() {
+            return Ok(None);
         }
-        Some(language)
+        Ok(Some(classification))
     })
     .context("building desired manifest for DevQL sync")?;
-    desired.retain(|_, state| {
-        !(state.language == PLAIN_TEXT_LANGUAGE_ID
-            && !state.exists_in_head
-            && !state.exists_in_index)
-    });
     if let Some(requested_paths) = requested_paths.as_ref() {
         desired.retain(|path, _| requested_paths.contains(path));
     }
@@ -654,6 +673,75 @@ async fn execute_sync_inner(
     );
     let (file_diff, artefact_diff) = diff_collector.into_diffs();
     Ok((summary, stats, file_diff, artefact_diff))
+}
+
+async fn replace_project_contexts_current(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    contexts: &[ProjectContext],
+) -> Result<()> {
+    let mut statements = vec![format!(
+        "DELETE FROM project_contexts_current WHERE repo_id = '{}'",
+        esc_pg(repo_id),
+    )];
+    statements.extend(contexts.iter().map(|context| {
+        format!(
+            "INSERT INTO project_contexts_current (repo_id, context_id, root, kind, detection_source, frameworks_json, runtime_profile, config_files_json, config_fingerprint, source_versions_json) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}')",
+            esc_pg(repo_id),
+            esc_pg(&context.context_id),
+            esc_pg(&context.root),
+            esc_pg(&context.kind),
+            esc_pg(&context.detection_source),
+            esc_pg(
+                &serde_json::to_string(&context.frameworks)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            ),
+            context
+                .runtime_profile
+                .as_deref()
+                .map(|value| format!("'{}'", esc_pg(value)))
+                .unwrap_or_else(|| "NULL".to_string()),
+            esc_pg(
+                &serde_json::to_string(&context.config_files)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            ),
+            esc_pg(&context.config_fingerprint),
+            esc_pg(
+                &serde_json::to_string(&context.source_versions)
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+        )
+    }));
+    relational.exec_batch_transactional(&statements).await
+}
+
+fn sync_internal_ignored_paths(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+) -> HashSet<String> {
+    let mut ignored = HashSet::new();
+    let sqlite_path = relational.sqlite_path();
+    let Some(relative) = sqlite_path
+        .strip_prefix(repo_root)
+        .ok()
+        .map(|path| normalize_repo_path(path.to_string_lossy().as_ref()))
+        .filter(|path| !path.is_empty())
+    else {
+        return ignored;
+    };
+
+    ignored.insert(relative.clone());
+    ignored
+}
+
+fn is_sync_internal_ignored_path(path: &str, ignored: &HashSet<String>) -> bool {
+    if path.starts_with(".bitloops/stores/") {
+        return true;
+    }
+    ignored
+        .iter()
+        .any(|base| path == base || path.starts_with(&format!("{base}-")))
 }
 
 #[allow(clippy::too_many_arguments)]

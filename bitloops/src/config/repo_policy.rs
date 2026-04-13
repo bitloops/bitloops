@@ -19,6 +19,7 @@ pub struct RepoPolicySnapshot {
     pub capture: Value,
     pub watch: Value,
     pub scope: Value,
+    pub contexts: Value,
     pub agents: Value,
     pub knowledge_import_paths: Vec<String>,
     pub imported_knowledge: Vec<ImportedKnowledgeConfig>,
@@ -46,6 +47,17 @@ pub struct ImportedKnowledgeConfig {
     pub value: Value,
 }
 
+struct RepoPolicyFingerprintInputs<'a> {
+    capture: &'a Value,
+    watch: &'a Value,
+    scope: &'a Value,
+    scope_exclusions: &'a RepoPolicyScopeExclusions,
+    contexts: &'a Value,
+    agents: &'a Value,
+    knowledge_import_paths: &'a [String],
+    imported_knowledge: &'a [ImportedKnowledgeConfig],
+}
+
 #[derive(Debug, Clone)]
 struct RepoPolicyLocation {
     root: PathBuf,
@@ -62,6 +74,8 @@ struct RepoPolicyTomlFile {
     watch: Option<Value>,
     #[serde(default)]
     scope: Option<Value>,
+    #[serde(default)]
+    contexts: Option<Value>,
     #[serde(default)]
     agents: Option<Value>,
     #[serde(default)]
@@ -154,6 +168,10 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         shared.as_ref().and_then(|value| value.scope.clone()),
         local.as_ref().and_then(|value| value.scope.clone()),
     );
+    let contexts = merge_optional_values(
+        shared.as_ref().and_then(|value| value.contexts.clone()),
+        local.as_ref().and_then(|value| value.contexts.clone()),
+    );
     let agents = merge_optional_values(
         shared.as_ref().and_then(|value| value.agents.clone()),
         local.as_ref().and_then(|value| value.agents.clone()),
@@ -180,15 +198,16 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         .collect::<Result<Vec<_>>>()?;
     let scope_exclusions = resolve_repo_policy_scope_exclusions(&scope, &location.root)?;
 
-    let fingerprint = fingerprint_repo_policy(
-        &capture,
-        &watch,
-        &scope,
-        &scope_exclusions,
-        &agents,
-        &knowledge_import_paths,
-        &imported_knowledge,
-    )?;
+    let fingerprint = fingerprint_repo_policy(RepoPolicyFingerprintInputs {
+        capture: &capture,
+        watch: &watch,
+        scope: &scope,
+        scope_exclusions: &scope_exclusions,
+        contexts: &contexts,
+        agents: &agents,
+        knowledge_import_paths: &knowledge_import_paths,
+        imported_knowledge: &imported_knowledge,
+    })?;
 
     Ok(RepoPolicySnapshot {
         root: Some(location.root),
@@ -198,6 +217,7 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         capture,
         watch,
         scope,
+        contexts,
         agents,
         knowledge_import_paths,
         imported_knowledge,
@@ -209,6 +229,7 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
     let capture = Value::Object(Map::new());
     let watch = Value::Object(Map::new());
     let scope = Value::Object(Map::new());
+    let contexts = Value::Array(Vec::new());
     let agents = Value::Object(Map::new());
     let imported_knowledge = Vec::new();
     let knowledge_import_paths = Vec::new();
@@ -217,15 +238,16 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
         exclude_from: Vec::new(),
         referenced_files: Vec::new(),
     };
-    let fingerprint = fingerprint_repo_policy(
-        &capture,
-        &watch,
-        &scope,
-        &exclusions,
-        &agents,
-        &knowledge_import_paths,
-        &imported_knowledge,
-    )
+    let fingerprint = fingerprint_repo_policy(RepoPolicyFingerprintInputs {
+        capture: &capture,
+        watch: &watch,
+        scope: &scope,
+        scope_exclusions: &exclusions,
+        contexts: &contexts,
+        agents: &agents,
+        knowledge_import_paths: &knowledge_import_paths,
+        imported_knowledge: &imported_knowledge,
+    })
     .unwrap_or_else(|_| "default".to_string());
 
     RepoPolicySnapshot {
@@ -236,6 +258,7 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
         capture,
         watch,
         scope,
+        contexts,
         agents,
         knowledge_import_paths,
         imported_knowledge,
@@ -615,15 +638,17 @@ fn deep_merge_value(base: Value, overlay: Value) -> Value {
     }
 }
 
-fn fingerprint_repo_policy(
-    capture: &Value,
-    watch: &Value,
-    scope: &Value,
-    scope_exclusions: &RepoPolicyScopeExclusions,
-    agents: &Value,
-    knowledge_import_paths: &[String],
-    imported_knowledge: &[ImportedKnowledgeConfig],
-) -> Result<String> {
+fn fingerprint_repo_policy(inputs: RepoPolicyFingerprintInputs<'_>) -> Result<String> {
+    let RepoPolicyFingerprintInputs {
+        capture,
+        watch,
+        scope,
+        scope_exclusions,
+        contexts,
+        agents,
+        knowledge_import_paths,
+        imported_knowledge,
+    } = inputs;
     let mut root = Map::new();
     root.insert("capture".into(), canonicalize_value(capture));
     root.insert("watch".into(), canonicalize_value(watch));
@@ -687,6 +712,7 @@ fn fingerprint_repo_policy(
             ),
         ])),
     );
+    root.insert("contexts".into(), canonicalize_value(contexts));
     root.insert("agents".into(), canonicalize_value(agents));
     root.insert(
         "imports".into(),

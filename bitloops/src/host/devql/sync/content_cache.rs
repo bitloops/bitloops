@@ -16,6 +16,7 @@ use crate::host::devql::ingestion_artefact_persistence_sql::{
 pub(crate) struct CachedExtraction {
     pub(crate) content_id: String,
     pub(crate) language: String,
+    pub(crate) extraction_fingerprint: String,
     pub(crate) parser_version: String,
     pub(crate) extractor_version: String,
     pub(crate) parse_status: String,
@@ -27,6 +28,7 @@ pub(crate) struct CachedExtraction {
 pub(crate) struct CacheKey {
     pub(crate) content_id: String,
     pub(crate) language: String,
+    pub(crate) extraction_fingerprint: String,
     pub(crate) parser_version: String,
     pub(crate) extractor_version: String,
 }
@@ -64,6 +66,7 @@ pub(crate) struct CachedEdge {
 struct CachedHeaderRow {
     content_id: String,
     language: String,
+    extraction_fingerprint: String,
     parser_version: String,
     extractor_version: String,
     parse_status: String,
@@ -73,16 +76,18 @@ pub(crate) async fn lookup_cached_content(
     relational: &RelationalStorage,
     content_id: &str,
     language: &str,
+    extraction_fingerprint: &str,
     parser_version: &str,
     extractor_version: &str,
 ) -> Result<Option<CachedExtraction>> {
     let header_sql = format!(
-        "SELECT content_id, language, parser_version, extractor_version, parse_status \
+        "SELECT content_id, language, extraction_fingerprint, parser_version, extractor_version, parse_status \
 FROM content_cache \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
 LIMIT 1",
         esc_pg(content_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         esc_pg(parser_version),
         esc_pg(extractor_version),
     );
@@ -98,10 +103,11 @@ LIMIT 1",
     let artefacts_sql = format!(
         "SELECT artifact_key, canonical_kind, language_kind, name, parent_artifact_key, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata \
 FROM content_cache_artefacts \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
 ORDER BY artifact_key",
         esc_pg(content_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         esc_pg(parser_version),
         esc_pg(extractor_version),
     );
@@ -115,10 +121,11 @@ ORDER BY artifact_key",
     let edges_sql = format!(
         "SELECT edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata \
 FROM content_cache_edges \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
 ORDER BY edge_key",
         esc_pg(content_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         esc_pg(parser_version),
         esc_pg(extractor_version),
     );
@@ -132,10 +139,11 @@ ORDER BY edge_key",
     let update_last_accessed_sql = format!(
         "UPDATE content_cache \
 SET last_accessed_at = {} \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}'",
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}'",
         sql_now(relational),
         esc_pg(content_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         esc_pg(parser_version),
         esc_pg(extractor_version),
     );
@@ -144,6 +152,7 @@ WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extrac
     Ok(Some(CachedExtraction {
         content_id: header.content_id,
         language: header.language,
+        extraction_fingerprint: header.extraction_fingerprint,
         parser_version: header.parser_version,
         extractor_version: header.extractor_version,
         parse_status: header.parse_status,
@@ -156,27 +165,35 @@ pub(crate) fn lookup_cached_content_with_connection(
     conn: &Connection,
     content_id: &str,
     language: &str,
+    extraction_fingerprint: &str,
     parser_version: &str,
     extractor_version: &str,
 ) -> Result<Option<CachedExtraction>> {
     let header = {
         let mut stmt = conn
             .prepare(
-                "SELECT content_id, language, parser_version, extractor_version, parse_status \
+                "SELECT content_id, language, extraction_fingerprint, parser_version, extractor_version, parse_status \
                  FROM content_cache \
-                 WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4 \
+                 WHERE content_id = ?1 AND language = ?2 AND extraction_fingerprint = ?3 AND parser_version = ?4 AND extractor_version = ?5 \
                  LIMIT 1",
             )
             .context("preparing content cache header lookup")?;
         stmt.query_row(
-            params![content_id, language, parser_version, extractor_version],
+            params![
+                content_id,
+                language,
+                extraction_fingerprint,
+                parser_version,
+                extractor_version
+            ],
             |row| {
                 Ok(CachedHeaderRow {
                     content_id: row.get(0)?,
                     language: row.get(1)?,
-                    parser_version: row.get(2)?,
-                    extractor_version: row.get(3)?,
-                    parse_status: row.get(4)?,
+                    extraction_fingerprint: row.get(2)?,
+                    parser_version: row.get(3)?,
+                    extractor_version: row.get(4)?,
+                    parse_status: row.get(5)?,
                 })
             },
         )
@@ -193,12 +210,18 @@ pub(crate) fn lookup_cached_content_with_connection(
                 "SELECT artifact_key, canonical_kind, language_kind, name, parent_artifact_key, \
                         start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata \
                  FROM content_cache_artefacts \
-                 WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4 \
+                 WHERE content_id = ?1 AND language = ?2 AND extraction_fingerprint = ?3 AND parser_version = ?4 AND extractor_version = ?5 \
                  ORDER BY artifact_key",
             )
             .context("preparing content cache artefact lookup")?;
         stmt.query_map(
-            params![content_id, language, parser_version, extractor_version],
+            params![
+                content_id,
+                language,
+                extraction_fingerprint,
+                parser_version,
+                extractor_version
+            ],
             |row| {
                 Ok(CachedArtefact {
                     artifact_key: row.get(0)?,
@@ -235,12 +258,18 @@ pub(crate) fn lookup_cached_content_with_connection(
             .prepare(
                 "SELECT edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata \
                  FROM content_cache_edges \
-                 WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4 \
+                 WHERE content_id = ?1 AND language = ?2 AND extraction_fingerprint = ?3 AND parser_version = ?4 AND extractor_version = ?5 \
                  ORDER BY edge_key",
             )
             .context("preparing content cache edge lookup")?;
         stmt.query_map(
-            params![content_id, language, parser_version, extractor_version],
+            params![
+                content_id,
+                language,
+                extraction_fingerprint,
+                parser_version,
+                extractor_version
+            ],
             |row| {
                 Ok(CachedEdge {
                     edge_key: row.get(0)?,
@@ -266,6 +295,7 @@ pub(crate) fn lookup_cached_content_with_connection(
     Ok(Some(CachedExtraction {
         content_id: header.content_id,
         language: header.language,
+        extraction_fingerprint: header.extraction_fingerprint,
         parser_version: header.parser_version,
         extractor_version: header.extractor_version,
         parse_status: header.parse_status,
@@ -312,9 +342,9 @@ pub(crate) fn persist_cached_content_tx(
 
     affected_rows += tx
         .execute(
-            "INSERT INTO content_cache (content_id, language, parser_version, extractor_version, retention_class, parse_status, parsed_at, last_accessed_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now')) \
-             ON CONFLICT (content_id, language, parser_version, extractor_version) DO UPDATE SET \
+            "INSERT INTO content_cache (content_id, language, extraction_fingerprint, parser_version, extractor_version, retention_class, parse_status, parsed_at, last_accessed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now')) \
+             ON CONFLICT (content_id, language, extraction_fingerprint, parser_version, extractor_version) DO UPDATE SET \
                  retention_class = excluded.retention_class, \
                  parse_status = excluded.parse_status, \
                  parsed_at = excluded.parsed_at, \
@@ -322,6 +352,7 @@ pub(crate) fn persist_cached_content_tx(
             params![
                 extraction.content_id,
                 extraction.language,
+                extraction.extraction_fingerprint,
                 extraction.parser_version,
                 extraction.extractor_version,
                 retention_class,
@@ -332,10 +363,11 @@ pub(crate) fn persist_cached_content_tx(
 
     affected_rows += tx
         .execute(
-            "DELETE FROM content_cache_edges WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            "DELETE FROM content_cache_edges WHERE content_id = ?1 AND language = ?2 AND extraction_fingerprint = ?3 AND parser_version = ?4 AND extractor_version = ?5",
             params![
                 extraction.content_id,
                 extraction.language,
+                extraction.extraction_fingerprint,
                 extraction.parser_version,
                 extraction.extractor_version,
             ],
@@ -343,10 +375,11 @@ pub(crate) fn persist_cached_content_tx(
         .context("deleting cached content edges before rewrite")?;
     affected_rows += tx
         .execute(
-            "DELETE FROM content_cache_artefacts WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            "DELETE FROM content_cache_artefacts WHERE content_id = ?1 AND language = ?2 AND extraction_fingerprint = ?3 AND parser_version = ?4 AND extractor_version = ?5",
             params![
                 extraction.content_id,
                 extraction.language,
+                extraction.extraction_fingerprint,
                 extraction.parser_version,
                 extraction.extractor_version,
             ],
@@ -357,8 +390,8 @@ pub(crate) fn persist_cached_content_tx(
         let mut stmt = tx
             .prepare(
                 "INSERT INTO content_cache_artefacts \
-                 (content_id, language, parser_version, extractor_version, artifact_key, canonical_kind, language_kind, name, parent_artifact_key, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 (content_id, language, extraction_fingerprint, parser_version, extractor_version, artifact_key, canonical_kind, language_kind, name, parent_artifact_key, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             )
             .context("preparing content cache artefact insert")?;
         for artefact in &artefacts {
@@ -370,6 +403,7 @@ pub(crate) fn persist_cached_content_tx(
                 .execute(params![
                     extraction.content_id,
                     extraction.language,
+                    extraction.extraction_fingerprint,
                     extraction.parser_version,
                     extraction.extractor_version,
                     artefact.artifact_key,
@@ -394,8 +428,8 @@ pub(crate) fn persist_cached_content_tx(
         let mut stmt = tx
             .prepare(
                 "INSERT INTO content_cache_edges \
-                 (content_id, language, parser_version, extractor_version, edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 (content_id, language, extraction_fingerprint, parser_version, extractor_version, edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )
             .context("preparing content cache edge insert")?;
         for edge in &edges {
@@ -405,6 +439,7 @@ pub(crate) fn persist_cached_content_tx(
                 .execute(params![
                     extraction.content_id,
                     extraction.language,
+                    extraction.extraction_fingerprint,
                     extraction.parser_version,
                     extraction.extractor_version,
                     edge.edge_key,
@@ -435,9 +470,9 @@ pub(crate) fn touch_cache_entries_tx(
     let mut stmt = tx
         .prepare(
             "UPDATE content_cache \
-             SET retention_class = CASE WHEN ?5 <> 0 THEN 'git_backed' ELSE retention_class END, \
+             SET retention_class = CASE WHEN ?6 <> 0 THEN 'git_backed' ELSE retention_class END, \
                  last_accessed_at = datetime('now') \
-             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+             WHERE content_id = ?1 AND language = ?2 AND extraction_fingerprint = ?3 AND parser_version = ?4 AND extractor_version = ?5",
         )
         .context("preparing content cache touch update")?;
     for (key, promote_to_git_backed) in touches {
@@ -445,6 +480,7 @@ pub(crate) fn touch_cache_entries_tx(
             .execute(params![
                 key.content_id,
                 key.language,
+                key.extraction_fingerprint,
                 key.parser_version,
                 key.extractor_version,
                 if *promote_to_git_backed { 1 } else { 0 },
@@ -458,16 +494,18 @@ pub(crate) async fn promote_cached_content_to_git_backed(
     relational: &RelationalStorage,
     content_id: &str,
     language: &str,
+    extraction_fingerprint: &str,
     parser_version: &str,
     extractor_version: &str,
 ) -> Result<()> {
     let sql = format!(
         "UPDATE content_cache \
 SET retention_class = 'git_backed' \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
 AND retention_class = 'worktree_only'",
         esc_pg(content_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         esc_pg(parser_version),
         esc_pg(extractor_version),
     );
@@ -478,6 +516,7 @@ pub(crate) async fn promote_to_git_backed(
     relational: &RelationalStorage,
     content_id: &str,
     language: &str,
+    extraction_fingerprint: &str,
     parser_version: &str,
     extractor_version: &str,
 ) -> Result<()> {
@@ -485,6 +524,7 @@ pub(crate) async fn promote_to_git_backed(
         relational,
         content_id,
         language,
+        extraction_fingerprint,
         parser_version,
         extractor_version,
     )
@@ -505,6 +545,11 @@ fn cached_header_from_row(row: &Map<String, Value>) -> Option<CachedHeaderRow> {
         content_id,
         language: row
             .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        extraction_fingerprint: row
+            .get("extraction_fingerprint")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
@@ -616,11 +661,12 @@ fn build_upsert_cached_header_sql(
     retention_class: &str,
 ) -> String {
     format!(
-        "INSERT INTO content_cache (content_id, language, parser_version, extractor_version, retention_class, parse_status, parsed_at, last_accessed_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, {}) \
-ON CONFLICT (content_id, language, parser_version, extractor_version) DO UPDATE SET retention_class = EXCLUDED.retention_class, parse_status = EXCLUDED.parse_status, parsed_at = EXCLUDED.parsed_at, last_accessed_at = EXCLUDED.last_accessed_at",
+        "INSERT INTO content_cache (content_id, language, extraction_fingerprint, parser_version, extractor_version, retention_class, parse_status, parsed_at, last_accessed_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}) \
+ON CONFLICT (content_id, language, extraction_fingerprint, parser_version, extractor_version) DO UPDATE SET retention_class = EXCLUDED.retention_class, parse_status = EXCLUDED.parse_status, parsed_at = EXCLUDED.parsed_at, last_accessed_at = EXCLUDED.last_accessed_at",
         esc_pg(&extraction.content_id),
         esc_pg(&extraction.language),
+        esc_pg(&extraction.extraction_fingerprint),
         esc_pg(&extraction.parser_version),
         esc_pg(&extraction.extractor_version),
         esc_pg(retention_class),
@@ -633,9 +679,10 @@ ON CONFLICT (content_id, language, parser_version, extractor_version) DO UPDATE 
 fn build_delete_cached_artefacts_sql(extraction: &CachedExtraction) -> String {
     format!(
         "DELETE FROM content_cache_artefacts \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}'",
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}'",
         esc_pg(&extraction.content_id),
         esc_pg(&extraction.language),
+        esc_pg(&extraction.extraction_fingerprint),
         esc_pg(&extraction.parser_version),
         esc_pg(&extraction.extractor_version),
     )
@@ -644,9 +691,10 @@ WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extrac
 fn build_delete_cached_edges_sql(extraction: &CachedExtraction) -> String {
     format!(
         "DELETE FROM content_cache_edges \
-WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}'",
+WHERE content_id = '{}' AND language = '{}' AND extraction_fingerprint = '{}' AND parser_version = '{}' AND extractor_version = '{}'",
         esc_pg(&extraction.content_id),
         esc_pg(&extraction.language),
+        esc_pg(&extraction.extraction_fingerprint),
         esc_pg(&extraction.parser_version),
         esc_pg(&extraction.extractor_version),
     )
@@ -658,10 +706,11 @@ fn build_insert_cached_artefact_sql(
     artefact: &CachedArtefact,
 ) -> String {
     format!(
-        "INSERT INTO content_cache_artefacts (content_id, language, parser_version, extractor_version, artifact_key, canonical_kind, language_kind, name, parent_artifact_key, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata) \
-VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, '{}', {}, {}, {})",
+        "INSERT INTO content_cache_artefacts (content_id, language, extraction_fingerprint, parser_version, extractor_version, artifact_key, canonical_kind, language_kind, name, parent_artifact_key, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, metadata) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, '{}', {}, {}, {})",
         esc_pg(&extraction.content_id),
         esc_pg(&extraction.language),
+        esc_pg(&extraction.extraction_fingerprint),
         esc_pg(&extraction.parser_version),
         esc_pg(&extraction.extractor_version),
         esc_pg(&artefact.artifact_key),
@@ -696,10 +745,11 @@ fn build_insert_cached_edge_sql(
     edge: &CachedEdge,
 ) -> String {
     format!(
-        "INSERT INTO content_cache_edges (content_id, language, parser_version, extractor_version, edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, {}, '{}', {}, {}, {})",
+        "INSERT INTO content_cache_edges (content_id, language, extraction_fingerprint, parser_version, extractor_version, edge_key, from_artifact_key, to_artifact_key, to_symbol_ref, edge_kind, start_line, end_line, metadata) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, '{}', {}, {}, {})",
         esc_pg(&extraction.content_id),
         esc_pg(&extraction.language),
+        esc_pg(&extraction.extraction_fingerprint),
         esc_pg(&extraction.parser_version),
         esc_pg(&extraction.extractor_version),
         esc_pg(&edge.edge_key),
@@ -814,6 +864,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
         let extraction = CachedExtraction {
             content_id: "abc123".to_string(),
             language: "rust".to_string(),
+            extraction_fingerprint: "fingerprint-v1".to_string(),
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
             parse_status: "ok".to_string(),
@@ -835,6 +886,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             &relational,
             &extraction.content_id,
             &extraction.language,
+            &extraction.extraction_fingerprint,
             &extraction.parser_version,
             &extraction.extractor_version,
         )
@@ -855,6 +907,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
         let extraction = CachedExtraction {
             content_id: "abc123".to_string(),
             language: "rust".to_string(),
+            extraction_fingerprint: "fingerprint-v1".to_string(),
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
             parse_status: "ok".to_string(),
@@ -936,6 +989,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             &relational,
             &extraction.content_id,
             &extraction.language,
+            &extraction.extraction_fingerprint,
             &extraction.parser_version,
             &extraction.extractor_version,
         )

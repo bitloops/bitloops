@@ -57,10 +57,22 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
         .context("rebuilding SQLite sync repo_sync_state table")?;
         sqlite_exec_path_allow_create(
             sqlite_path,
+            crate::host::devql::sync::schema::sync_project_contexts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite sync project_contexts_current table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
             crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
         )
         .await
         .context("rebuilding SQLite sync current_file_state table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_content_cache_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite sync content cache tables")?;
         sqlite_exec_path_allow_create(
             sqlite_path,
             crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
@@ -100,9 +112,32 @@ fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Res
 
 fn sync_tables_need_rebuild(conn: &rusqlite::Connection) -> Result<bool> {
     Ok(!repo_sync_state_matches_new_shape(conn)?
+        || !project_contexts_current_matches_new_shape(conn)?
         || !current_file_state_matches_new_shape(conn)?
+        || !content_cache_matches_new_shape(conn)?
         || !artefacts_current_matches_new_shape(conn)?
         || !artefact_edges_current_matches_new_shape(conn)?)
+}
+
+fn project_contexts_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "context_id",
+        "root",
+        "kind",
+        "detection_source",
+        "frameworks_json",
+        "runtime_profile",
+        "config_files_json",
+        "config_fingerprint",
+        "source_versions_json",
+    ];
+    Ok(
+        sqlite_table_columns(conn, "project_contexts_current")? == expected_columns
+            && sqlite_table_pk_columns(conn, "project_contexts_current")?
+                == vec!["repo_id".to_string(), "context_id".to_string()]
+            && sqlite_table_has_repo_catalog_fk(conn, "project_contexts_current")?,
+    )
 }
 
 fn repo_sync_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
@@ -130,7 +165,19 @@ fn current_file_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<b
     let expected_columns = [
         "repo_id",
         "path",
+        "analysis_mode",
+        "file_role",
+        "text_index_mode",
         "language",
+        "resolved_language",
+        "dialect",
+        "primary_context_id",
+        "secondary_context_ids_json",
+        "frameworks_json",
+        "runtime_profile",
+        "classification_reason",
+        "context_fingerprint",
+        "extraction_fingerprint",
         "head_content_id",
         "index_content_id",
         "worktree_content_id",
@@ -151,6 +198,86 @@ fn current_file_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<b
     )
 }
 
+fn content_cache_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
+    let cache_expected = [
+        "content_id",
+        "language",
+        "extraction_fingerprint",
+        "parser_version",
+        "extractor_version",
+        "retention_class",
+        "parse_status",
+        "parsed_at",
+        "last_accessed_at",
+    ];
+    let artefacts_expected = [
+        "content_id",
+        "language",
+        "extraction_fingerprint",
+        "parser_version",
+        "extractor_version",
+        "artifact_key",
+        "canonical_kind",
+        "language_kind",
+        "name",
+        "parent_artifact_key",
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte",
+        "signature",
+        "modifiers",
+        "docstring",
+        "metadata",
+    ];
+    let edges_expected = [
+        "content_id",
+        "language",
+        "extraction_fingerprint",
+        "parser_version",
+        "extractor_version",
+        "edge_key",
+        "from_artifact_key",
+        "to_artifact_key",
+        "to_symbol_ref",
+        "edge_kind",
+        "start_line",
+        "end_line",
+        "metadata",
+    ];
+    Ok(
+        sqlite_table_columns(conn, "content_cache")? == cache_expected
+            && sqlite_table_pk_columns(conn, "content_cache")?
+                == vec![
+                    "content_id".to_string(),
+                    "language".to_string(),
+                    "extraction_fingerprint".to_string(),
+                    "parser_version".to_string(),
+                    "extractor_version".to_string(),
+                ]
+            && sqlite_table_columns(conn, "content_cache_artefacts")? == artefacts_expected
+            && sqlite_table_pk_columns(conn, "content_cache_artefacts")?
+                == vec![
+                    "content_id".to_string(),
+                    "language".to_string(),
+                    "extraction_fingerprint".to_string(),
+                    "parser_version".to_string(),
+                    "extractor_version".to_string(),
+                    "artifact_key".to_string(),
+                ]
+            && sqlite_table_columns(conn, "content_cache_edges")? == edges_expected
+            && sqlite_table_pk_columns(conn, "content_cache_edges")?
+                == vec![
+                    "content_id".to_string(),
+                    "language".to_string(),
+                    "extraction_fingerprint".to_string(),
+                    "parser_version".to_string(),
+                    "extractor_version".to_string(),
+                    "edge_key".to_string(),
+                ],
+    )
+}
+
 fn artefacts_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
     let expected_columns = [
         "repo_id",
@@ -159,6 +286,7 @@ fn artefacts_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bo
         "symbol_id",
         "artefact_id",
         "language",
+        "extraction_fingerprint",
         "canonical_kind",
         "language_kind",
         "symbol_fqn",
@@ -363,10 +491,24 @@ async fn init_postgres_schema_with_policy(
 
         postgres_exec(
             pg_client,
+            crate::host::devql::sync::schema::sync_project_contexts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding Postgres sync project_contexts_current table")?;
+
+        postgres_exec(
+            pg_client,
             crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
         )
         .await
         .context("rebuilding Postgres sync current_file_state table")?;
+
+        postgres_exec(
+            pg_client,
+            crate::host::devql::sync::schema::sync_content_cache_migration_sql(),
+        )
+        .await
+        .context("rebuilding Postgres sync content cache tables")?;
 
         postgres_exec(
             pg_client,
@@ -409,7 +551,9 @@ async fn init_postgres_schema_with_policy(
 async fn postgres_sync_tables_need_rebuild(pg_client: &tokio_postgres::Client) -> Result<bool> {
     Ok(
         !postgres_repo_sync_state_matches_new_shape(pg_client).await?
+            || !postgres_project_contexts_current_matches_new_shape(pg_client).await?
             || !postgres_current_file_state_matches_new_shape(pg_client).await?
+            || !postgres_content_cache_matches_new_shape(pg_client).await?
             || !postgres_artefacts_current_matches_new_shape(pg_client).await?
             || !postgres_artefact_edges_current_matches_new_shape(pg_client).await?,
     )
@@ -459,7 +603,19 @@ async fn postgres_current_file_state_matches_new_shape(
     let expected_columns = [
         "repo_id",
         "path",
+        "analysis_mode",
+        "file_role",
+        "text_index_mode",
         "language",
+        "resolved_language",
+        "dialect",
+        "primary_context_id",
+        "secondary_context_ids_json",
+        "frameworks_json",
+        "runtime_profile",
+        "classification_reason",
+        "context_fingerprint",
+        "extraction_fingerprint",
         "head_content_id",
         "index_content_id",
         "worktree_content_id",
@@ -480,6 +636,112 @@ async fn postgres_current_file_state_matches_new_shape(
     )
 }
 
+async fn postgres_project_contexts_current_matches_new_shape(
+    pg_client: &tokio_postgres::Client,
+) -> Result<bool> {
+    let expected_columns = [
+        "repo_id",
+        "context_id",
+        "root",
+        "kind",
+        "detection_source",
+        "frameworks_json",
+        "runtime_profile",
+        "config_files_json",
+        "config_fingerprint",
+        "source_versions_json",
+    ];
+    Ok(
+        postgres_table_columns(pg_client, "project_contexts_current").await? == expected_columns
+            && postgres_table_pk_columns(pg_client, "project_contexts_current").await?
+                == vec!["repo_id".to_string(), "context_id".to_string()]
+            && postgres_table_has_repo_catalog_fk(pg_client, "project_contexts_current").await?,
+    )
+}
+
+async fn postgres_content_cache_matches_new_shape(
+    pg_client: &tokio_postgres::Client,
+) -> Result<bool> {
+    let cache_expected = [
+        "content_id",
+        "language",
+        "extraction_fingerprint",
+        "parser_version",
+        "extractor_version",
+        "retention_class",
+        "parse_status",
+        "parsed_at",
+        "last_accessed_at",
+    ];
+    let artefacts_expected = [
+        "content_id",
+        "language",
+        "extraction_fingerprint",
+        "parser_version",
+        "extractor_version",
+        "artifact_key",
+        "canonical_kind",
+        "language_kind",
+        "name",
+        "parent_artifact_key",
+        "start_line",
+        "end_line",
+        "start_byte",
+        "end_byte",
+        "signature",
+        "modifiers",
+        "docstring",
+        "metadata",
+    ];
+    let edges_expected = [
+        "content_id",
+        "language",
+        "extraction_fingerprint",
+        "parser_version",
+        "extractor_version",
+        "edge_key",
+        "from_artifact_key",
+        "to_artifact_key",
+        "to_symbol_ref",
+        "edge_kind",
+        "start_line",
+        "end_line",
+        "metadata",
+    ];
+    Ok(
+        postgres_table_columns(pg_client, "content_cache").await? == cache_expected
+            && postgres_table_pk_columns(pg_client, "content_cache").await?
+                == vec![
+                    "content_id".to_string(),
+                    "language".to_string(),
+                    "extraction_fingerprint".to_string(),
+                    "parser_version".to_string(),
+                    "extractor_version".to_string(),
+                ]
+            && postgres_table_columns(pg_client, "content_cache_artefacts").await?
+                == artefacts_expected
+            && postgres_table_pk_columns(pg_client, "content_cache_artefacts").await?
+                == vec![
+                    "content_id".to_string(),
+                    "language".to_string(),
+                    "extraction_fingerprint".to_string(),
+                    "parser_version".to_string(),
+                    "extractor_version".to_string(),
+                    "artifact_key".to_string(),
+                ]
+            && postgres_table_columns(pg_client, "content_cache_edges").await? == edges_expected
+            && postgres_table_pk_columns(pg_client, "content_cache_edges").await?
+                == vec![
+                    "content_id".to_string(),
+                    "language".to_string(),
+                    "extraction_fingerprint".to_string(),
+                    "parser_version".to_string(),
+                    "extractor_version".to_string(),
+                    "edge_key".to_string(),
+                ],
+    )
+}
+
 async fn postgres_artefacts_current_matches_new_shape(
     pg_client: &tokio_postgres::Client,
 ) -> Result<bool> {
@@ -490,6 +752,7 @@ async fn postgres_artefacts_current_matches_new_shape(
         "symbol_id",
         "artefact_id",
         "language",
+        "extraction_fingerprint",
         "canonical_kind",
         "language_kind",
         "symbol_fqn",

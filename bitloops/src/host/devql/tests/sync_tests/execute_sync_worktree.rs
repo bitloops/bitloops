@@ -74,7 +74,7 @@ async fn sync_detects_file_edit() {
     assert_eq!(result.paths_changed, 1);
     assert_eq!(result.paths_added, 0);
     assert_eq!(result.paths_removed, 0);
-    assert_eq!(result.paths_unchanged, 3);
+    assert_eq!(result.paths_unchanged, 7);
     assert_eq!(current_state.0, edited_blob);
     assert_eq!(current_state.1, "worktree");
     assert!(!artefact_content_ids.is_empty());

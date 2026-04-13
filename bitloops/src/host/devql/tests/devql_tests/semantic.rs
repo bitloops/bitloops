@@ -309,6 +309,16 @@ duckdb_path = ".bitloops/stores/events.duckdb"
     rusqlite::Connection::open(&sqlite_path).expect("create checkpoint sqlite file");
     let src_dir = repo.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        repo.path().join("package.json"),
+        "{\n  \"name\": \"semantic-direct-ingest-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        repo.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
 
     fs::write(
         src_dir.join("invoice.ts"),
@@ -319,7 +329,10 @@ duckdb_path = ".bitloops/stores/events.duckdb"
 "#,
     )
     .expect("write invoice source");
-    git_ok(repo.path(), &["add", "src/invoice.ts"]);
+    git_ok(
+        repo.path(),
+        &["add", "package.json", "tsconfig.json", "src/invoice.ts"],
+    );
     git_ok(repo.path(), &["commit", "-m", "add invoice source"]);
     let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     write_committed(

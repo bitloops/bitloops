@@ -13,6 +13,8 @@ pub(super) fn discover_baseline_files_at_revision(
     repo_root: &Path,
     revision: &str,
 ) -> Result<Vec<String>> {
+    let (parser_version, extractor_version) = resolve_pack_versions_for_baseline()
+        .context("resolving language pack versions for baseline discovery")?;
     let exclusion_matcher = load_repo_exclusion_matcher(repo_root)
         .context("loading repo policy exclusions for baseline discovery")?;
     let tree_output = match run_git(repo_root, &["ls-tree", "-r", "--full-tree", revision]) {
@@ -23,6 +25,22 @@ pub(super) fn discover_baseline_files_at_revision(
                 .with_context(|| format!("listing tracked files at revision `{revision}`"));
         }
     };
+    let tracked_paths = tree_output
+        .lines()
+        .filter_map(|line| {
+            line.split_once('\t')
+                .map(|(_, raw_path)| normalize_repo_path(raw_path))
+        })
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    let classifier = ProjectAwareClassifier::discover_for_revision(
+        repo_root,
+        revision,
+        tracked_paths.clone(),
+        &parser_version,
+        &extractor_version,
+    )
+    .with_context(|| format!("building classifier for baseline revision `{revision}`"))?;
 
     let mut files = tree_output
         .lines()
@@ -37,14 +55,13 @@ pub(super) fn discover_baseline_files_at_revision(
             let normalized_path = normalize_repo_path(raw_path);
             if normalized_path.is_empty()
                 || exclusion_matcher.excludes_repo_relative_path(&normalized_path)
-                || !is_supported_baseline_file(&normalized_path)
             {
                 return None;
             }
-            let language = indexing_language_for_path(&normalized_path);
-            if language == PLAIN_TEXT_LANGUAGE_ID
-                && should_skip_plain_text_fallback_path(&normalized_path)
-            {
+            let classification = classifier
+                .classify_repo_relative_path(&normalized_path, false)
+                .ok()?;
+            if !classification.should_persist_current_state() {
                 return None;
             }
             Some(normalized_path)
@@ -55,9 +72,21 @@ pub(super) fn discover_baseline_files_at_revision(
     Ok(files)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn is_supported_baseline_file(path: &str) -> bool {
-    !path.trim().is_empty()
+fn resolve_pack_versions_for_baseline() -> Result<(String, String)> {
+    let host = core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -235,20 +264,4 @@ ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name =
         committed_at_sql,
     );
     relational.exec(&sql).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn supported_baseline_file_extensions_are_whitelisted() {
-        assert!(is_supported_baseline_file("src/lib.rs"));
-        assert!(is_supported_baseline_file("src/main.ts"));
-        assert!(is_supported_baseline_file("src/main.tsx"));
-        assert!(is_supported_baseline_file("src/main.js"));
-        assert!(is_supported_baseline_file("src/main.jsx"));
-        assert!(is_supported_baseline_file("README.md"));
-        assert!(is_supported_baseline_file("src/main.py"));
-    }
 }

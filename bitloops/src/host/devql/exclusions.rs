@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -7,7 +7,6 @@ use crate::config::{discover_repo_policy_optional, resolve_repo_policy_scope_exc
 
 #[derive(Debug, Clone)]
 pub(crate) struct RepoExclusionMatcher {
-    policy_root: PathBuf,
     #[cfg_attr(not(test), allow(dead_code))]
     patterns: Vec<String>,
     compiled_patterns: Vec<Regex>,
@@ -44,7 +43,6 @@ impl RepoExclusionMatcher {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
-            policy_root,
             patterns,
             compiled_patterns,
         })
@@ -67,22 +65,6 @@ impl RepoExclusionMatcher {
             .iter()
             .any(|pattern| pattern.is_match(&normalized_path))
     }
-
-    pub(crate) fn excludes_path(&self, path: &Path) -> bool {
-        let normalized = if path.is_absolute() {
-            let normalized_absolute = normalize_lexical_path(path);
-            if let Ok(relative) = normalized_absolute.strip_prefix(&self.policy_root) {
-                relative.to_string_lossy().to_string()
-            } else {
-                return false;
-            }
-        } else {
-            path.to_string_lossy().to_string()
-        };
-
-        self.excludes_repo_relative_path(&normalized)
-    }
-
     #[cfg(test)]
     pub(crate) fn patterns(&self) -> &[String] {
         &self.patterns
@@ -143,20 +125,6 @@ fn normalize_relative_path(path: &str) -> String {
     }
 
     segments.join("/")
-}
-
-fn normalize_lexical_path(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 fn compile_exclusion_pattern(pattern: &str) -> Result<Regex> {

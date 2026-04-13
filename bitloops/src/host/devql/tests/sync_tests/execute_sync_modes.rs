@@ -223,7 +223,7 @@ async fn unborn_head_syncs_from_index_and_worktree() {
 }
 
 #[tokio::test]
-async fn unsupported_file_indexes_as_plain_text() {
+async fn unsupported_file_becomes_track_only_current_state() {
     let repo = seed_supported_and_unsupported_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());
     let sqlite_path = repo.path().join("devql.sqlite");
@@ -269,7 +269,7 @@ async fn unsupported_file_indexes_as_plain_text() {
 
     assert!(
         result.success,
-        "sync should succeed with plain-text fallback for unsupported files"
+        "sync should succeed while retaining unsupported files as track-only state"
     );
     assert_eq!(result.paths_added, 2);
     assert_eq!(result.paths_changed, 0);
@@ -280,7 +280,7 @@ async fn unsupported_file_indexes_as_plain_text() {
         vec!["docs/notes.foo".to_string(), "src/lib.rs".to_string()]
     );
     assert_eq!(unsupported_rows, 1);
-    assert_eq!(unsupported_language, "plain_text");
+    assert_eq!(unsupported_language, "track_only");
 }
 
 #[tokio::test]
@@ -293,6 +293,11 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
         "bitloops-test@example.com",
     );
     fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-utf8-sync-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
     fs::write(
         repo.path().join("src/good.rs"),
         "pub fn good() -> i32 {\n    1\n}\n",
@@ -848,7 +853,7 @@ async fn sync_removes_deleted_file() {
     assert_eq!(result.paths_removed, 1);
     assert_eq!(result.paths_added, 0);
     assert_eq!(result.paths_changed, 0);
-    assert_eq!(result.paths_unchanged, 3);
+    assert_eq!(result.paths_unchanged, 7);
     assert_eq!(artefact_count, 0);
     assert_eq!(edge_count, 0);
     assert_eq!(current_state_count, 0);

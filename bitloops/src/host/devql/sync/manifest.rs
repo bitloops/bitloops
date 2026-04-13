@@ -11,14 +11,15 @@ use super::types::{
     ClassifiedPath, DesiredFileState, DesiredManifest, EffectiveSource, PathAction, StoredManifest,
 };
 use super::workspace_state::{StagedChange, WorkspaceState};
+use crate::host::devql::ResolvedFileClassification;
 
 pub(crate) fn build_desired_manifest<F>(
     workspace: &WorkspaceState,
     repo_root: &Path,
-    language_filter: F,
+    classifier: F,
 ) -> Result<DesiredManifest>
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Result<Option<ResolvedFileClassification>>,
 {
     let dirty_paths: HashSet<&str> = workspace.dirty_files.iter().map(String::as_str).collect();
     let untracked_paths: HashSet<&str> = workspace
@@ -29,13 +30,13 @@ where
     let mut manifest = DesiredManifest::new();
 
     for path in collect_candidate_paths(workspace) {
-        let Some(language) = language_filter(&path) else {
+        let Some(classification) = classifier(&path)? else {
             continue;
         };
 
         let Some(state) = build_desired_file_state(
             &path,
-            &language,
+            &classification,
             workspace,
             repo_root,
             &dirty_paths,
@@ -76,7 +77,19 @@ pub(crate) fn classify_paths(
                 (Some(_), Some(_)) if repair => PathAction::Changed,
                 (Some(desired), Some(stored))
                     if desired.effective_content_id == stored.effective_content_id
+                        && desired.analysis_mode == stored.analysis_mode
+                        && desired.file_role == stored.file_role
+                        && desired.text_index_mode == stored.text_index_mode
                         && desired.language == stored.language
+                        && desired.resolved_language == stored.resolved_language
+                        && desired.dialect == stored.dialect
+                        && desired.primary_context_id == stored.primary_context_id
+                        && desired.secondary_context_ids == stored.secondary_context_ids
+                        && desired.frameworks == stored.frameworks
+                        && desired.runtime_profile == stored.runtime_profile
+                        && desired.classification_reason == stored.classification_reason
+                        && desired.context_fingerprint == stored.context_fingerprint
+                        && desired.extraction_fingerprint == stored.extraction_fingerprint
                         && desired.effective_source == stored.effective_source
                         && stored.parser_version == parser_version
                         && stored.extractor_version == extractor_version =>
@@ -109,7 +122,7 @@ fn collect_candidate_paths(workspace: &WorkspaceState) -> BTreeSet<String> {
 
 fn build_desired_file_state(
     path: &str,
-    language: &str,
+    classification: &ResolvedFileClassification,
     workspace: &WorkspaceState,
     repo_root: &Path,
     dirty_paths: &HashSet<&str>,
@@ -182,7 +195,19 @@ fn build_desired_file_state(
 
     Ok(Some(DesiredFileState {
         path: path.to_string(),
-        language: language.to_string(),
+        analysis_mode: classification.analysis_mode,
+        file_role: classification.file_role,
+        text_index_mode: classification.text_index_mode,
+        language: classification.language.clone(),
+        resolved_language: classification.resolved_language.clone(),
+        dialect: classification.dialect.clone(),
+        primary_context_id: classification.primary_context_id.clone(),
+        secondary_context_ids: classification.secondary_context_ids.clone(),
+        frameworks: classification.frameworks.clone(),
+        runtime_profile: classification.runtime_profile.clone(),
+        classification_reason: classification.classification_reason.clone(),
+        context_fingerprint: classification.context_fingerprint.clone(),
+        extraction_fingerprint: classification.extraction_fingerprint.clone(),
         head_content_id,
         index_content_id,
         worktree_content_id,
@@ -229,6 +254,7 @@ mod tests {
     use std::fs;
 
     use super::{build_desired_file_state, classify_paths};
+    use crate::host::devql::ResolvedFileClassification;
     use crate::host::devql::sync::content_identity::compute_blob_oid;
     use crate::host::devql::sync::types::{
         ClassifiedPath, DesiredFileState, DesiredManifest, EffectiveSource, PathAction,
@@ -319,7 +345,7 @@ mod tests {
 
         let state = build_desired_file_state(
             path,
-            "rust",
+            &test_classification("rust"),
             &workspace_state_with_head(path, &content_id),
             repo.path(),
             &HashSet::new(),
@@ -354,7 +380,7 @@ mod tests {
 
         let state = build_desired_file_state(
             path,
-            "rust",
+            &test_classification("rust"),
             &workspace,
             repo.path(),
             &HashSet::new(),
@@ -380,7 +406,7 @@ mod tests {
 
         let state = build_desired_file_state(
             path,
-            "rust",
+            &test_classification("rust"),
             &workspace_state_with_head(path, &head_content_id),
             repo.path(),
             &HashSet::from([path]),
@@ -408,7 +434,7 @@ mod tests {
 
         let state = build_desired_file_state(
             path,
-            "rust",
+            &test_classification("rust"),
             &empty_workspace_state(),
             repo.path(),
             &HashSet::new(),
@@ -440,7 +466,7 @@ mod tests {
 
         let state = build_desired_file_state(
             path,
-            "rust",
+            &test_classification("rust"),
             &workspace,
             repo.path(),
             &HashSet::new(),
@@ -476,7 +502,7 @@ mod tests {
 
         let state = build_desired_file_state(
             path,
-            "rust",
+            &test_classification("rust"),
             &workspace,
             repo.path(),
             &HashSet::new(),
@@ -503,7 +529,19 @@ mod tests {
                     path.to_string(),
                     DesiredFileState {
                         path: path.to_string(),
+                        analysis_mode: crate::host::devql::AnalysisMode::Code,
+                        file_role: crate::host::devql::FileRole::SourceCode,
+                        text_index_mode: crate::host::devql::TextIndexMode::None,
                         language: "rust".to_string(),
+                        resolved_language: "rust".to_string(),
+                        dialect: None,
+                        primary_context_id: None,
+                        secondary_context_ids: Vec::new(),
+                        frameworks: Vec::new(),
+                        runtime_profile: None,
+                        classification_reason: "test".to_string(),
+                        context_fingerprint: None,
+                        extraction_fingerprint: "fingerprint-v1".to_string(),
                         head_content_id: Some(content_id.to_string()),
                         index_content_id: Some(content_id.to_string()),
                         worktree_content_id: Some(content_id.to_string()),
@@ -544,7 +582,19 @@ mod tests {
                         path.to_string(),
                         StoredFileState {
                             path: path.to_string(),
+                            analysis_mode: crate::host::devql::AnalysisMode::Code,
+                            file_role: crate::host::devql::FileRole::SourceCode,
+                            text_index_mode: crate::host::devql::TextIndexMode::None,
                             language: "rust".to_string(),
+                            resolved_language: "rust".to_string(),
+                            dialect: None,
+                            primary_context_id: None,
+                            secondary_context_ids: Vec::new(),
+                            frameworks: Vec::new(),
+                            runtime_profile: None,
+                            classification_reason: "test".to_string(),
+                            context_fingerprint: None,
+                            extraction_fingerprint: "fingerprint-v1".to_string(),
                             effective_content_id: content_id.to_string(),
                             effective_source,
                             parser_version: parser_version.to_string(),
@@ -554,6 +604,25 @@ mod tests {
                 },
             )
             .collect()
+    }
+
+    fn test_classification(language: &str) -> ResolvedFileClassification {
+        ResolvedFileClassification {
+            analysis_mode: crate::host::devql::AnalysisMode::Code,
+            file_role: crate::host::devql::FileRole::SourceCode,
+            text_index_mode: crate::host::devql::TextIndexMode::None,
+            language: language.to_string(),
+            resolved_language: language.to_string(),
+            dialect: None,
+            primary_context_id: None,
+            secondary_context_ids: Vec::new(),
+            frameworks: Vec::new(),
+            runtime_profile: None,
+            classification_reason: "test".to_string(),
+            context_fingerprint: None,
+            extraction_fingerprint: "fingerprint-v1".to_string(),
+            excluded_by_policy: false,
+        }
     }
 
     fn workspace_state_with_head(path: &str, content_id: &str) -> WorkspaceState {

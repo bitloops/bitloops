@@ -119,6 +119,11 @@ async fn ensure_repository_row_persists_language_profile_metadata_json() {
     )
     .expect("write rust source");
     std::fs::write(
+        repo_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo manifest");
+    std::fs::write(
         repo_dir.path().join("docs/ignored.py"),
         "print('ignored')\n",
     )
@@ -159,10 +164,34 @@ exclude = ["docs/**"]
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let role_counts = metadata
+        .get("language_profile")
+        .and_then(|value| value.get("file_count_by_role"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let text_index_mode_counts = metadata
+        .get("language_profile")
+        .and_then(|value| value.get("text_file_count_by_index_mode"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
 
     assert!(
         languages.iter().any(|value| value.as_str() == Some("rust")),
         "expected rust in persisted language profile metadata: {metadata:#}"
+    );
+    assert_eq!(
+        role_counts.get("project_manifest").and_then(Value::as_u64),
+        Some(1),
+        "expected Cargo.toml to be classified as a project manifest: {metadata:#}"
+    );
+    assert_eq!(
+        text_index_mode_counts
+            .get("store_only")
+            .and_then(Value::as_u64),
+        Some(2),
+        "expected manifests and repo config to use store_only text indexing: {metadata:#}"
     );
     assert!(
         !languages

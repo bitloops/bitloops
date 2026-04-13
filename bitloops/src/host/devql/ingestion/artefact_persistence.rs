@@ -70,6 +70,7 @@ pub(super) async fn upsert_language_artefacts(
             rev.path,
             rev.blob_sha,
             &file_artefact.language,
+            &file_artefact.extraction_fingerprint,
             record,
         ));
         historical_sql_batch.push(build_upsert_historical_artefact_snapshot_sql(

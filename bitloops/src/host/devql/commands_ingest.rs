@@ -146,6 +146,8 @@ async fn execute_ingest_inner(
     ensure_repository_row(cfg, &relational).await?;
     let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
         .context("loading repo policy exclusions for `devql ingest`")?;
+    let (parser_version, extractor_version) = resolve_pack_versions_for_ingest()
+        .context("resolving language pack versions for `devql ingest`")?;
 
     let head_sha = match run_git(&cfg.repo_root, &["rev-parse", "HEAD"]) {
         Ok(sha) => sha,
@@ -256,6 +258,18 @@ async fn execute_ingest_inner(
         let commit_result: Result<()> = async {
             if !history_completed {
                 upsert_commit_metadata_row(cfg, &relational, &commit_info).await?;
+                let tracked_paths = tracked_paths_at_revision(&cfg.repo_root, &commit_sha)
+                    .with_context(|| format!("listing tracked files for commit {commit_sha}"))?;
+                let classifier = ProjectAwareClassifier::discover_for_revision(
+                    &cfg.repo_root,
+                    &commit_sha,
+                    tracked_paths,
+                    &parser_version,
+                    &extractor_version,
+                )
+                .with_context(|| {
+                    format!("building project-aware classifier for commit {commit_sha}")
+                })?;
                 let mut changed_files = crate::host::checkpoints::strategy::manual_commit::files_changed_in_commit(
                     &cfg.repo_root,
                     &commit_sha,
@@ -267,9 +281,19 @@ async fn execute_ingest_inner(
 
                 for path in changed_files {
                     let normalized_path = normalize_repo_path(&path);
-                    if normalized_path.is_empty()
-                        || exclusion_matcher.excludes_repo_relative_path(&normalized_path)
-                    {
+                    if normalized_path.is_empty() {
+                        continue;
+                    }
+                    let excluded_by_policy =
+                        exclusion_matcher.excludes_repo_relative_path(&normalized_path);
+                    let classification = classifier
+                        .classify_repo_relative_path(&normalized_path, excluded_by_policy)
+                        .with_context(|| {
+                            format!(
+                                "classifying historical ingest path `{normalized_path}` at commit {commit_sha}"
+                            )
+                        })?;
+                    if classification.analysis_mode == AnalysisMode::Excluded {
                         continue;
                     }
 
@@ -279,13 +303,6 @@ async fn execute_ingest_inner(
                         continue;
                     };
                     let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
-                    let language = indexing_language_for_path(&normalized_path);
-                    if language == PLAIN_TEXT_LANGUAGE_ID
-                        && (should_skip_plain_text_fallback_path(&normalized_path)
-                            || !plain_text_content_is_allowed(&content))
-                    {
-                        continue;
-                    }
 
                     upsert_file_state_row(
                         &cfg.repo.repo_id,
@@ -295,14 +312,28 @@ async fn execute_ingest_inner(
                         &blob_sha,
                     )
                     .await?;
+                    if !classification.should_extract() {
+                        continue;
+                    }
+                    if classification.analysis_mode == AnalysisMode::Text
+                        && !plain_text_content_is_allowed(&content)
+                    {
+                        continue;
+                    }
                     let file_artefact = upsert_file_artefact_row(
                         &cfg.repo.repo_id,
                         &cfg.repo_root,
                         &relational,
                         &normalized_path,
                         &blob_sha,
+                        &classification.language,
+                        &classification.extraction_fingerprint,
                     )
                     .await?;
+                    if classification.analysis_mode == AnalysisMode::Text {
+                        counters.artefacts_upserted += 1;
+                        continue;
+                    }
                     upsert_language_artefacts(
                         cfg,
                         &relational,
@@ -877,6 +908,36 @@ async fn rebuild_active_clone_edges(
 
 fn active_branch_name(repo_root: &Path) -> String {
     checked_out_branch_name(repo_root).unwrap_or_else(|| "main".to_string())
+}
+
+fn resolve_pack_versions_for_ingest() -> Result<(String, String)> {
+    let host = core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
+}
+
+fn tracked_paths_at_revision(repo_root: &Path, revision: &str) -> Result<Vec<String>> {
+    let output = run_git(
+        repo_root,
+        &["ls-tree", "-r", "--full-tree", "--name-only", revision],
+    )
+    .with_context(|| format!("listing tracked files at revision `{revision}`"))?;
+    Ok(output
+        .lines()
+        .map(normalize_repo_path)
+        .filter(|path| !path.is_empty())
+        .collect())
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

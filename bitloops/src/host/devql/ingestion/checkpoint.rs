@@ -48,29 +48,110 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
 fn build_repository_metadata_json(cfg: &DevqlConfig) -> Result<String> {
     let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
         .context("loading repo policy exclusions for repository metadata")?;
+    let (parser_version, extractor_version) = resolve_pack_versions_for_repository_metadata()
+        .context("resolving language pack versions for repository metadata")?;
     let tracked = run_git(&cfg.repo_root, &["ls-files", "-z"]).unwrap_or_default();
+    let tracked_paths = tracked
+        .split('\0')
+        .filter(|value| !value.is_empty())
+        .map(normalize_repo_path)
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    let classifier = ProjectAwareClassifier::discover_for_worktree(
+        &cfg.repo_root,
+        tracked_paths.clone(),
+        &parser_version,
+        &extractor_version,
+    )
+    .context("building project-aware classifier for repository metadata")?;
     let mut language_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut role_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut text_index_mode_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut text_file_count = 0usize;
+    let mut track_only_file_count = 0usize;
 
-    for raw_path in tracked.split('\0').filter(|value| !value.is_empty()) {
-        let path = normalize_repo_path(raw_path);
-        if path.is_empty() || exclusion_matcher.excludes_repo_relative_path(&path) {
-            continue;
+    for path in tracked_paths {
+        let classification = classifier
+            .classify_repo_relative_path(
+                &path,
+                exclusion_matcher.excludes_repo_relative_path(&path),
+            )
+            .with_context(|| format!("classifying repository metadata path `{path}`"))?;
+        match classification.analysis_mode {
+            AnalysisMode::Code => {
+                *role_counts
+                    .entry(classification.file_role.as_str().to_string())
+                    .or_insert(0) += 1;
+                *language_counts.entry(classification.language).or_insert(0) += 1;
+            }
+            AnalysisMode::Text => {
+                *role_counts
+                    .entry(classification.file_role.as_str().to_string())
+                    .or_insert(0) += 1;
+                *text_index_mode_counts
+                    .entry(classification.text_index_mode.as_str().to_string())
+                    .or_insert(0) += 1;
+                text_file_count += 1;
+            }
+            AnalysisMode::TrackOnly => {
+                *role_counts
+                    .entry(classification.file_role.as_str().to_string())
+                    .or_insert(0) += 1;
+                track_only_file_count += 1;
+            }
+            AnalysisMode::Excluded => {}
         }
-        let language = indexing_language_for_path(&path);
-        if language == PLAIN_TEXT_LANGUAGE_ID && should_skip_plain_text_fallback_path(&path) {
-            continue;
-        }
-        *language_counts.entry(language).or_insert(0) += 1;
     }
+
+    let contexts = classifier
+        .contexts()
+        .into_iter()
+        .map(|context| {
+            serde_json::json!({
+                "context_id": context.context_id,
+                "root": context.root,
+                "kind": context.kind,
+                "detection_source": context.detection_source,
+                "config_files": context.config_files,
+                "config_fingerprint": context.config_fingerprint,
+                "base_languages": context.base_languages,
+                "frameworks": context.frameworks,
+                "runtime_profile": context.runtime_profile,
+                "source_versions": context.source_versions,
+            })
+        })
+        .collect::<Vec<_>>();
 
     let languages = language_counts.keys().cloned().collect::<Vec<_>>();
     serde_json::to_string(&serde_json::json!({
+        "contexts": contexts,
         "language_profile": {
             "languages": languages,
             "file_count_by_language": language_counts,
+            "file_count_by_role": role_counts,
+            "text_file_count": text_file_count,
+            "text_file_count_by_index_mode": text_index_mode_counts,
+            "track_only_file_count": track_only_file_count,
         }
     }))
     .context("serialising repository metadata JSON")
+}
+
+fn resolve_pack_versions_for_repository_metadata() -> Result<(String, String)> {
+    let host = core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
 }
 
 pub(super) fn default_branch_name(repo_root: &Path) -> String {

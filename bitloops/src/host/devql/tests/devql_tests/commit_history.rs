@@ -625,6 +625,11 @@ async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_withou
  {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"commit-history-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
     std::fs::write(
         repo.path().join("src/lib.rs"),

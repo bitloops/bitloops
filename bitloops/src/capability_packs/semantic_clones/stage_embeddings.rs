@@ -637,13 +637,17 @@ fn build_current_repo_semantic_clone_coverage_sql(
     format!(
         "SELECT \
             (SELECT COUNT(*) FROM artefacts_current a \
+             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
              WHERE a.repo_id = '{repo_id}' \
+               AND cfs.analysis_mode = 'code' \
                AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import') AS eligible_current_artefacts, \
             (SELECT COUNT(DISTINCT a.artefact_id) FROM artefacts_current a \
+             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
              JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
              JOIN symbol_features sf ON sf.artefact_id = a.artefact_id \
              JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
              WHERE a.repo_id = '{repo_id}' \
+               AND cfs.analysis_mode = 'code' \
                AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
                AND {representation_predicate} \
                AND e.provider = '{provider}' \

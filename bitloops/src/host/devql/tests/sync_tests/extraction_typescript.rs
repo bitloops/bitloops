@@ -1,5 +1,7 @@
 use super::fixtures::sync_test_cfg;
 
+const TEST_EXTRACTION_FINGERPRINT: &str = "sync-test-fingerprint";
+
 #[test]
 fn sync_extraction_converts_typescript_content_to_cache_format() {
     let cfg = sync_test_cfg();
@@ -21,12 +23,15 @@ function localHelper(): number {
 
     let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        path,
-        "typescript",
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path,
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: TEST_EXTRACTION_FINGERPRINT,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract TypeScript content into cache format")
     .expect("TypeScript cache extraction should be supported");
@@ -39,12 +44,15 @@ function localHelper(): number {
 
     let repeated = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        path,
-        "typescript",
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path,
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: TEST_EXTRACTION_FINGERPRINT,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("repeat extract TypeScript content into cache format")
     .expect("repeated TypeScript cache extraction should be supported");
@@ -175,23 +183,29 @@ function localHelper(): number {
 
     let first = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        "src/sample.ts",
-        "typescript",
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path: "src/sample.ts",
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: TEST_EXTRACTION_FINGERPRINT,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract first TypeScript path")
     .expect("first TypeScript cache extraction should be supported");
     let second = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
-        "nested/other.ts",
-        "typescript",
-        &content_id,
-        "tree-sitter-ts@1",
-        "ts-language-pack@1",
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path: "nested/other.ts",
+            language: "typescript",
+            content_id: &content_id,
+            extraction_fingerprint: TEST_EXTRACTION_FINGERPRINT,
+            parser_version: "tree-sitter-ts@1",
+            extractor_version: "ts-language-pack@1",
+            content,
+        },
     )
     .expect("extract second TypeScript path")
     .expect("second TypeScript cache extraction should be supported");

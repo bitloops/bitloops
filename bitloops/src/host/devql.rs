@@ -36,6 +36,8 @@ pub(crate) mod artefact_sql;
 pub(crate) mod checkpoint_file_snapshots;
 #[path = "devql/checkpoint_provenance.rs"]
 pub(crate) mod checkpoint_provenance;
+#[path = "devql/classification.rs"]
+pub(crate) mod classification;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
 #[path = "devql/commands_projection.rs"]
@@ -55,6 +57,10 @@ mod producer_spool;
 pub(crate) mod sync;
 mod types;
 
+pub(crate) use self::classification::{
+    AnalysisMode, FileRole, ProjectAwareClassifier, ProjectContext, ResolvedFileClassification,
+    TextIndexMode,
+};
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
     execute_ingest_with_backfill_window, execute_ingest_with_observer,
@@ -83,7 +89,6 @@ pub use self::commands_sync::{
 pub use self::connection_status::run_connection_status;
 pub(crate) use self::plain_text::{
     PLAIN_TEXT_LANGUAGE_ID, indexing_language_for_path, plain_text_content_is_allowed,
-    should_skip_plain_text_fallback_path,
 };
 pub(crate) use self::producer_spool::{
     ProducerSpoolJobPayload, ProducerSpoolJobRecord, claim_next_producer_spool_jobs,

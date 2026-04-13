@@ -290,7 +290,18 @@ fn seed_daemon_embedding_repo() -> (TempDir, String, String) {
         "Bitloops Test",
         "bitloops-test@example.com",
     );
-    git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
+    fs::write(
+        dir.path().join("package.json"),
+        "{\n  \"name\": \"daemon-embedding-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
+    git_ok(dir.path(), &["add", "package.json", "tsconfig.json"]);
+    git_ok(dir.path(), &["commit", "-m", "initial"]);
 
     let src_dir = dir.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");

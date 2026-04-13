@@ -62,6 +62,8 @@ CREATE TABLE current_file_state (
     );
 
     for column in &[
+        "file_role",
+        "text_index_mode",
         "head_content_id",
         "index_content_id",
         "worktree_content_id",

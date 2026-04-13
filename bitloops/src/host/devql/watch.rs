@@ -217,9 +217,6 @@ fn run_notify_loop(
                     {
                         continue;
                     }
-                    if is_repo_policy_excluded(&cfg.repo_root, &path)? {
-                        continue;
-                    }
                     batch.insert(path);
                 }
                 if !batch.is_empty() && window_start.is_none() {
@@ -294,13 +291,6 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
         &["check-ignore", "-q", &rel_str],
     )
     .is_ok()
-}
-
-fn is_repo_policy_excluded(repo_root: &Path, path: &Path) -> Result<bool> {
-    let matcher = crate::host::devql::load_repo_exclusion_matcher(repo_root)
-        .context("loading repo policy exclusions for watcher evaluation")?;
-    let rel = path.strip_prefix(repo_root).unwrap_or(path);
-    Ok(matcher.excludes_path(rel))
 }
 
 fn build_watcher_spawn_command(repo_root: &Path, daemon_config_root: &Path) -> Result<Command> {

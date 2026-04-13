@@ -41,6 +41,7 @@ fn discover_baseline_files_keeps_all_tracked_non_excluded_files() {
     assert_eq!(
         files,
         vec![
+            ".bitloops.local.toml".to_string(),
             "README.md".to_string(),
             "config.toml".to_string(),
             "src/component.jsx".to_string(),

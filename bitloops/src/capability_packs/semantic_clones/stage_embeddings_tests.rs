@@ -58,6 +58,12 @@ CREATE TABLE artefacts_current (
     symbol_id TEXT,
     canonical_kind TEXT,
     language_kind TEXT
+);
+CREATE TABLE current_file_state (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    analysis_mode TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path)
 );",
         schema::semantic_embeddings_sqlite_schema_sql()
     ))
@@ -100,6 +106,14 @@ async fn insert_fully_indexed_current_artefact_with_stored_representation(
         ))
         .await
         .expect("insert current artefact");
+    relational
+        .exec(
+            "INSERT INTO current_file_state (repo_id, path, analysis_mode)
+             VALUES ('repo-1', 'src/a.ts', 'code')
+             ON CONFLICT (repo_id, path) DO UPDATE SET analysis_mode = excluded.analysis_mode",
+        )
+        .await
+        .expect("insert current file state");
     relational
         .exec(&format!(
             "INSERT INTO symbol_semantics (artefact_id, summary)
@@ -664,6 +678,13 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
         )
         .await
         .expect("insert uncovered current artefact");
+    relational
+        .exec(
+            "INSERT INTO current_file_state (repo_id, path, analysis_mode)
+             VALUES ('repo-1', 'src/b.ts', 'code')",
+        )
+        .await
+        .expect("insert uncovered current file state");
 
     let action = determine_repo_embedding_sync_action(
         &relational,
