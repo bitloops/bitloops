@@ -6,6 +6,7 @@ use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
+use crate::cli::inference::with_summary_generation_configured_hook;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
     with_test_assume_daemon_running, with_test_tty_override,
@@ -72,11 +73,16 @@ fn with_temp_app_dirs<T>(
     assume_daemon_running: bool,
     f: impl FnOnce() -> T,
 ) -> T {
-    with_test_platform_dir_overrides(app_dir_overrides(temp), || {
-        with_test_tty_override(tty, || {
-            with_test_assume_daemon_running(assume_daemon_running, f)
-        })
-    })
+    with_summary_generation_configured_hook(
+        |_| true,
+        || {
+            with_test_platform_dir_overrides(app_dir_overrides(temp), || {
+                with_test_tty_override(tty, || {
+                    with_test_assume_daemon_running(assume_daemon_running, f)
+                })
+            })
+        },
+    )
 }
 
 fn test_runtime() -> tokio::runtime::Runtime {

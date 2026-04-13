@@ -625,6 +625,7 @@ dependencies = [
  "async-graphql-axum",
  "axum",
  "base64",
+ "bitloops-inference-protocol",
  "chrono",
  "clap",
  "clap_complete",
@@ -676,6 +677,14 @@ dependencies = [
  "xz2",
  "zip 0.6.6",
  "zstd",
+]
+
+[[package]]
+name = "bitloops-inference-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

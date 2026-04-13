@@ -8,6 +8,7 @@ use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
+use crate::cli::inference::with_summary_generation_configured_hook;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
 };
@@ -84,7 +85,9 @@ fn with_isolated_daemon_config_process_state<T>(
         Some(data_dir_value.as_str()),
     ));
     env.extend_from_slice(extra_env);
-    with_process_state(cwd, &env, f)
+    with_process_state(cwd, &env, || {
+        with_summary_generation_configured_hook(|_| true, f)
+    })
 }
 
 fn with_isolated_daemon_config<T>(f: impl FnOnce() -> T) -> T {

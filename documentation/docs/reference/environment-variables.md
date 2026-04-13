@@ -12,8 +12,9 @@ Bitloops prefers daemon config and repo policy over environment variables. The l
 | Variable | Meaning |
 | --- | --- |
 | `BITLOOPS_TELEMETRY_OPTOUT` | Disables telemetry dispatch at runtime. It does not answer the CLI consent prompt or rewrite stored daemon-config consent. |
-| `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE` | Forces repo-scoped commands to use the specified daemon `config.toml` path. This also controls which config `bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` mutate and bootstrap. |
+| `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE` | Forces repo-scoped commands to use the specified daemon `config.toml` path. This also controls which config `bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, `bitloops inference install`, and `bitloops init --install-default-daemon` mutate and bootstrap. |
 | `BITLOOPS_EMBEDDINGS_VERSION_OVERRIDE` | Overrides the managed `bitloops-embeddings` release tag the CLI installs. When unset, the CLI resolves the latest release from GitHub on the first managed install. |
+| `BITLOOPS_INFERENCE_VERSION_OVERRIDE` | Overrides the managed `bitloops-inference` release tag the CLI installs. When unset, the CLI resolves the latest release from GitHub on the first managed install. |
 | `BITLOOPS_DISABLE_VERSION_CHECK` | Skips update checks |
 | `BITLOOPS_LOG_LEVEL` | Sets the log level for both the daemon log (`daemon.log`) and the telemetry file logger |
 | `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |
@@ -24,7 +25,7 @@ Configure embeddings and text generation through the daemon config:
 
 - `[semantic_clones]` for capability policy such as `summary_mode` and `embedding_mode`
 - `[semantic_clones.inference]` for slot bindings such as `summary_generation`, `code_embeddings`, and `summary_embeddings`
-- `[inference.runtimes.<name>]` for executable-backed runtimes such as the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases
+- `[inference.runtimes.<name>]` for executable-backed runtimes such as the standalone `bitloops-embeddings` and `bitloops-inference` binaries
 - `[inference.profiles.<name>]` for embeddings and text-generation profiles
 
 ## Watcher Overrides

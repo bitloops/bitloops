@@ -538,17 +538,24 @@ where
                 continue;
             };
 
+            let command = resolve_runtime_string_opt(
+                Some(runtime_root),
+                "command",
+                &env_lookup,
+                &mut warnings,
+                &format!("inference.runtimes.{name}.command"),
+            )
+            .unwrap_or_default();
+            if command.trim().is_empty() {
+                warnings.push(format!(
+                    "inference.runtimes.{name}.command is empty; the runtime will fail if a profile references it"
+                ));
+            }
+
             runtimes.insert(
                 name.to_string(),
                 InferenceRuntimeConfig {
-                    command: resolve_runtime_string_opt(
-                        Some(runtime_root),
-                        "command",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.runtimes.{name}.command"),
-                    )
-                    .unwrap_or_else(|| defaults.command.clone()),
+                    command,
                     args: resolve_runtime_args(
                         Some(runtime_root),
                         &env_lookup,
@@ -599,19 +606,31 @@ where
             }
             let task = parse_inference_task(&task);
 
+            let runtime = resolve_runtime_string_opt(
+                Some(profile_root),
+                "runtime",
+                &env_lookup,
+                &mut warnings,
+                &format!("inference.profiles.{name}.runtime"),
+            );
+            if task == InferenceTask::TextGeneration
+                && runtime
+                    .as_deref()
+                    .map(str::trim)
+                    .is_none_or(|value| value.is_empty())
+            {
+                warnings.push(format!(
+                    "inference.profiles.{name} uses task `text_generation` and should declare `runtime`"
+                ));
+            }
+
             profiles.insert(
                 name.to_string(),
                 InferenceProfileConfig {
                     name: name.to_string(),
                     task,
                     driver,
-                    runtime: resolve_runtime_string_opt(
-                        Some(profile_root),
-                        "runtime",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.profiles.{name}.runtime"),
-                    ),
+                    runtime,
                     model: resolve_runtime_string_opt(
                         Some(profile_root),
                         "model",
