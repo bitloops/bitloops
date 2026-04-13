@@ -329,6 +329,7 @@ jobs:
     name: Verify published release artifacts
     runs-on: self-hosted
     needs: publish
+    environment: "Production CLI"
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:

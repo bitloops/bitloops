@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-04-12
+
 ### Added
 
 - **Repo-policy DevQL exclusions from init to runtime**: added repeatable `bitloops init --exclude <glob>` and `--exclude-from <path>` flags, persisted to `.bitloops.local.toml` before any init-triggered sync/ingest work, with path normalization to the repo-policy root and rejection of outside-root `exclude_from` paths. Runtime now applies the same `[scope].exclude` / `[scope].exclude_from` policy during sync, baseline discovery, historical ingest, watcher capture, and refresh entry points.

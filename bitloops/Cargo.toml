@@ -1,6 +1,6 @@
 [package]
 name = "bitloops"
-version = "0.0.13"
+version = "0.0.14"
 edition = "2024"
 autotests = false
 
