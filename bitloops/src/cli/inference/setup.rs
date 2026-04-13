@@ -204,10 +204,7 @@ fn probe_ollama_availability() -> Result<OllamaAvailability> {
         return hook();
     }
 
-    if !command_exists("ollama") {
-        return Ok(OllamaAvailability::MissingCli);
-    }
-
+    let cli_available = command_exists("ollama");
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
@@ -217,10 +214,20 @@ fn probe_ollama_availability() -> Result<OllamaAvailability> {
         .send()
     {
         Ok(response) => response,
-        Err(_) => return Ok(OllamaAvailability::NotRunning),
+        Err(_) => {
+            return Ok(if cli_available {
+                OllamaAvailability::NotRunning
+            } else {
+                OllamaAvailability::MissingCli
+            });
+        }
     };
     if !response.status().is_success() {
-        return Ok(OllamaAvailability::NotRunning);
+        return Ok(if cli_available {
+            OllamaAvailability::NotRunning
+        } else {
+            OllamaAvailability::MissingCli
+        });
     }
     let payload = response
         .json::<OllamaTagsResponse>()

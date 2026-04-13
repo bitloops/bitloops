@@ -1,10 +1,15 @@
 mod bundle;
 mod bundle_types;
+mod dashboard_file_diffs;
 mod dashboard_git;
+mod dashboard_params;
 mod dashboard_paths;
 mod dashboard_runtime;
+pub(crate) mod dashboard_schema;
+mod dashboard_service;
+mod dashboard_types;
 mod db;
-mod dto;
+mod error;
 mod handlers;
 mod router;
 pub mod tls;
@@ -21,7 +26,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use self::dashboard_schema::dashboard_schema_sdl;
 pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
+pub(crate) use self::error::ApiError;
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
@@ -187,11 +194,16 @@ pub(crate) struct DashboardState {
     pub(super) bundle_dir: PathBuf,
     pub(super) bundle_source_overrides: DashboardBundleSourceOverrides,
     pub(super) subscription_hub: Arc<SubscriptionHub>,
+    pub(super) dashboard_graphql_schema: dashboard_schema::DashboardGraphqlSchema,
     pub(super) devql_schema: graphql::DevqlSchema,
     pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
 }
 
 impl DashboardState {
+    pub(crate) fn dashboard_graphql_schema(&self) -> &dashboard_schema::DashboardGraphqlSchema {
+        &self.dashboard_graphql_schema
+    }
+
     pub(crate) fn devql_schema(&self) -> &graphql::DevqlSchema {
         &self.devql_schema
     }

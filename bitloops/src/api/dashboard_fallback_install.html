@@ -115,32 +115,24 @@
       render();
     }
 
-    function toApiError(payload) {
-      const code = payload && payload.error && payload.error.code ? payload.error.code : 'internal';
-      const message = errorMessages[code] || errorMessages.internal;
+    function toDashboardError(payload) {
+      const first = payload && payload.errors && payload.errors.length ? payload.errors[0] : null;
+      const code = first && first.extensions && first.extensions.code ? first.extensions.code : 'internal';
+      const message = first && first.message ? first.message : (errorMessages[code] || errorMessages.internal);
       return { code, message };
     }
 
-    async function apiGetJson(path) {
-      const res = await fetch(path, { method: 'GET' });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw toApiError(payload);
-      }
-      return payload;
-    }
-
-    async function apiPostJson(path, body) {
-      const res = await fetch(path, {
+    async function dashboardGraphql(document) {
+      const res = await fetch('/devql/dashboard', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body || {}),
+        body: JSON.stringify({ query: document }),
       });
       const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw toApiError(payload);
+      if (!res.ok || (payload && payload.errors && payload.errors.length)) {
+        throw toDashboardError(payload);
       }
-      return payload;
+      return payload && payload.data ? payload.data : {};
     }
 
     function render() {
@@ -200,7 +192,17 @@
     async function checkBundleVersion() {
       setState('loading', { errorCode: null, errorMessage: null });
       try {
-        const payload = await apiGetJson('/api/check_bundle_version');
+        const data = await dashboardGraphql(`
+          query DashboardCheckBundleVersion {
+            checkBundleVersion {
+              currentVersion
+              latestApplicableVersion
+              installAvailable
+              reason
+            }
+          }
+        `);
+        const payload = data.checkBundleVersion || {};
         if (payload.installAvailable) {
           setState('install_available', {
             currentVersion: payload.currentVersion || null,
@@ -235,7 +237,13 @@
     async function installBundle() {
       setState('installing');
       try {
-        await apiPostJson('/api/fetch_bundle', {});
+        await dashboardGraphql(`
+          mutation DashboardFetchBundle {
+            fetchBundle {
+              installedVersion
+            }
+          }
+        `);
         setState('install_success');
         window.location.reload();
       } catch (error) {
