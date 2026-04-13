@@ -25,7 +25,6 @@ permissions:
 
 env:
   DUCKDB_DOWNLOAD_LIB: '1'
-  BITLOOPS_TEST_THREADS: '6'
 
 jobs:
   rust-file-size:
@@ -54,6 +53,8 @@ jobs:
     name: Clippy
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: self-hosted
+    env:
+      DUCKDB_DOWNLOAD_LIB: '0'
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -74,6 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -89,6 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -104,6 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target

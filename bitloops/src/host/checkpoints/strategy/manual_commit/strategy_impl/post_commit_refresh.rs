@@ -22,44 +22,65 @@ pub(crate) fn run_devql_post_commit_refresh(
     let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
     changed_files.sort();
 
-    run_post_commit_future(repo_root, async {
-        #[cfg(not(test))]
-        if let Err(err) =
-            crate::daemon::require_current_repo_runtime(repo_root, "post-commit DevQL refresh")
-        {
-            eprintln!("[bitloops] Warning: {err:#}");
-            return Ok(());
-        }
-        let repo = crate::host::devql::resolve_repo_identity(repo_root)
-            .context("resolving repository identity for post-commit DevQL refresh")?;
-        let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
-            .context("building DevQL config for post-commit refresh")?;
-        crate::host::devql::execute_ingest_with_backfill_window(
-            &cfg,
-            false,
-            DEFAULT_POST_COMMIT_HISTORY_BACKFILL,
-            None,
-            None,
+    #[cfg(not(test))]
+    {
+        crate::host::devql::enqueue_spooled_post_commit_refresh(
+            repo_root,
+            commit_sha,
+            &changed_files,
         )
-        .await
-        .context("catching up DevQL historical commit ingest for post-commit")?;
-        let stats =
-            crate::host::devql::run_post_commit_artefact_refresh(&cfg, commit_sha, &changed_files)
-                .await
-                .context("refreshing DevQL artefacts for post-commit files")?;
+        .context("queueing post-commit DevQL refresh in repo-local spool")?;
+        Ok(())
+    }
 
-        if stats.completed_with_failures() {
-            eprintln!(
-                "[bitloops] Warning: DevQL post-commit artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
-                commit_sha,
-                stats.files_seen,
-                stats.files_indexed,
-                stats.files_deleted,
-                stats.files_failed
-            );
-        }
-        Ok::<(), anyhow::Error>(())
-    })
+    #[cfg(test)]
+    {
+        run_post_commit_future(repo_root, async {
+            let repo = crate::host::devql::resolve_repo_identity(repo_root)
+                .context("resolving repository identity for post-commit DevQL refresh")?;
+            let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
+                .context("building DevQL config for post-commit refresh")?;
+            execute_devql_post_commit_refresh(&cfg, commit_sha, &changed_files).await
+        })
+    }
+}
+
+pub(crate) async fn execute_devql_post_commit_refresh(
+    cfg: &crate::host::devql::DevqlConfig,
+    commit_sha: &str,
+    changed_files: &[String],
+) -> Result<()> {
+    let commit_sha = commit_sha.trim();
+    if commit_sha.is_empty() {
+        return Ok(());
+    }
+
+    crate::host::devql::execute_ingest_with_backfill_window(
+        cfg,
+        false,
+        DEFAULT_POST_COMMIT_HISTORY_BACKFILL,
+        None,
+        None,
+    )
+    .await
+    .context("catching up DevQL historical commit ingest for post-commit")?;
+    let stats =
+        crate::host::devql::run_post_commit_artefact_refresh(cfg, commit_sha, changed_files)
+            .await
+            .context("refreshing DevQL artefacts for post-commit files")?;
+
+    if stats.completed_with_failures() {
+        log::warn!(
+            "DevQL post-commit artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
+            commit_sha,
+            stats.files_seen,
+            stats.files_indexed,
+            stats.files_deleted,
+            stats.files_failed
+        );
+    }
+
+    Ok(())
 }
 
 pub(crate) fn run_devql_post_commit_checkpoint_projection_refresh(

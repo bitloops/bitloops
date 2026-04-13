@@ -660,6 +660,117 @@ async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
 }
 
 #[tokio::test]
+async fn devql_graphql_artefact_clones_neighbors_runs_on_demand_without_persisting_edges() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open graphql sqlite");
+    let before_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbol_clone_edges", [], |row| {
+            row.get(0)
+        })
+        .expect("count clone edges before query");
+
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "packages/api/src/caller.ts") {
+                  artefacts(filter: { symbolFqn: "packages/api/src/caller.ts::caller" }, first: 10) {
+                    edges {
+                      node {
+                        clones(filter: { neighbors: 5, minScore: 0.40 }, first: 10) {
+                          totalCount
+                          edges {
+                            node {
+                              relationKind
+                              score
+                              metadata
+                              targetArtefact {
+                                symbolFqn
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let clones = &json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"];
+    assert!(
+        clones["totalCount"]
+            .as_i64()
+            .map(|value| value > 0)
+            .unwrap_or(false),
+        "expected non-empty on-demand clone rows, got: {clones}",
+    );
+
+    let first = &clones["edges"][0]["node"];
+    let relation_kind = first["relationKind"]
+        .as_str()
+        .expect("relation kind string");
+    assert!(matches!(
+        relation_kind,
+        "exact_duplicate"
+            | "similar_implementation"
+            | "shared_logic_candidate"
+            | "diverged_implementation"
+            | "weak_clone_candidate"
+    ));
+    assert!(first["score"].is_number());
+    assert!(!first["targetArtefact"]["symbolFqn"].is_null());
+    let metadata = first["metadata"]
+        .as_object()
+        .expect("clone metadata object");
+    assert!(
+        metadata
+            .get("semanticScore")
+            .is_some_and(|value| value.is_number())
+    );
+    assert!(
+        metadata
+            .get("lexicalScore")
+            .is_some_and(|value| value.is_number())
+    );
+    assert!(
+        metadata
+            .get("structuralScore")
+            .is_some_and(|value| value.is_number())
+    );
+    assert!(
+        metadata
+            .get("explanation")
+            .is_some_and(|value| value.is_object())
+    );
+
+    let after_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbol_clone_edges", [], |row| {
+            row.get(0)
+        })
+        .expect("count clone edges after query");
+    assert_eq!(after_count, before_count);
+}
+
+#[tokio::test]
 async fn devql_graphql_clone_summary_queries_resolve_grouped_counts() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_clone_data(repo.path());
@@ -915,6 +1026,49 @@ async fn devql_graphql_same_file_method_clone_summaries_match_across_repo_file_a
         json["repo"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]["targetArtefact"]
             ["symbolFqn"],
         "packages/api/src/change-path.ts::ChangePathOfCodeFileCommandHandler::command"
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_project_clones_rejects_neighbors_override_with_validation_error() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  clones(filter: { neighbors: 5 }, first: 10) {
+                    totalCount
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(
+        response.errors.len(),
+        1,
+        "expected one graphql validation error"
+    );
+    let error = &response.errors[0];
+    assert_eq!(
+        error.message,
+        "`neighbors` override is only supported for artefact-scoped `clones` queries"
+    );
+    assert_eq!(
+        error
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
     );
 }
 

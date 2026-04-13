@@ -79,6 +79,30 @@ fn emit_build_metadata() {
     println!("cargo:rustc-env=BITLOOPS_BUILD_DATE={build_date}");
 }
 
+fn target_os() -> Option<String> {
+    env::var("CARGO_CFG_TARGET_OS").ok()
+}
+
+fn emit_macos_runtime_rpaths() {
+    if target_os().as_deref() != Some("macos") {
+        return;
+    }
+
+    // `libduckdb-sys` can place the downloaded runtime in `target/<profile>/deps`,
+    // but its own linker args do not propagate to the final `bitloops` binary on
+    // macOS. Teach the executable to look in both the Cargo build layout and the
+    // installed layout (`cargo dev-install` stages the dylib next to the binary).
+    for rpath in ["@executable_path", "@executable_path/deps"] {
+        println!("cargo:rustc-link-arg-bin=bitloops=-rpath");
+        println!("cargo:rustc-link-arg-bin=bitloops={rpath}");
+    }
+
+    // Test executables live under `target/<profile>/deps`, alongside the copied
+    // DuckDB dylib, so the executable directory itself is sufficient there.
+    println!("cargo:rustc-link-arg-tests=-rpath");
+    println!("cargo:rustc-link-arg-tests=@executable_path");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed={DASHBOARD_CONFIG_PATH}");
     println!("cargo:rerun-if-changed=build.rs");
@@ -90,6 +114,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_DATE");
 
     emit_build_metadata();
+    emit_macos_runtime_rpaths();
 
     let raw = fs::read_to_string(DASHBOARD_CONFIG_PATH).unwrap_or_else(|err| {
         panic!(

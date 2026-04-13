@@ -7,11 +7,13 @@ use crate::capability_packs::knowledge::storage::{
 };
 use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::RepoIdentity;
+use crate::host::inference::{EmptyInferenceGateway, InferenceGateway};
 
 use super::config_view::CapabilityConfigView;
 use super::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, ConnectorRegistry, EmptyLanguageServicesGateway,
-    LanguageServicesGateway, ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
+    BlobPayloadGateway, CanonicalGraphGateway, CapabilityWorkplaneGateway, ConnectorRegistry,
+    EmptyLanguageServicesGateway, LanguageServicesGateway, ProvenanceBuilder, RelationalGateway,
+    StoreHealthGateway,
 };
 
 pub trait CapabilityExecutionContext: Send {
@@ -19,6 +21,10 @@ pub trait CapabilityExecutionContext: Send {
     fn repo_root(&self) -> &Path;
     fn graph(&self) -> &dyn CanonicalGraphGateway;
     fn host_relational(&self) -> &dyn RelationalGateway;
+    fn inference(&self) -> &dyn InferenceGateway {
+        static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
+        &EMPTY
+    }
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
         static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
@@ -39,6 +45,10 @@ pub trait CapabilityIngestContext: Send {
     fn connector_context(&self) -> &dyn super::gateways::ConnectorContext;
     fn provenance(&self) -> &dyn ProvenanceBuilder;
     fn host_relational(&self) -> &dyn RelationalGateway;
+    fn inference(&self) -> &dyn InferenceGateway {
+        static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
+        &EMPTY
+    }
     fn languages(&self) -> &dyn LanguageServicesGateway {
         static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
         &EMPTY
@@ -57,6 +67,10 @@ pub trait CapabilityIngestContext: Send {
     }
 
     fn devql_relational(&self) -> Option<&crate::host::devql::RelationalStorage> {
+        None
+    }
+
+    fn workplane(&self) -> Option<&dyn CapabilityWorkplaneGateway> {
         None
     }
 
@@ -117,4 +131,8 @@ pub trait CapabilityHealthContext: Send + Sync {
     fn config_view(&self, capability_id: &str) -> Result<CapabilityConfigView>;
     fn connectors(&self) -> &dyn ConnectorRegistry;
     fn stores(&self) -> &dyn StoreHealthGateway;
+    fn inference(&self) -> &dyn InferenceGateway {
+        static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
+        &EMPTY
+    }
 }

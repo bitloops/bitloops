@@ -29,6 +29,7 @@ pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
 
 #[allow(dead_code)]
 pub fn write_test_daemon_config(repo: &Path) {
+    let config_path = repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
     let daemon_state_root = repo
         .parent()
         .map(Path::to_path_buf)
@@ -49,7 +50,7 @@ pub fn write_test_daemon_config(repo: &Path) {
         .join("events.duckdb");
     let blob_path = daemon_state_root.join("stores").join("blob");
     fs::write(
-        repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        &config_path,
         format!(
             r#"[runtime]
 local_dev = false
@@ -66,6 +67,11 @@ local_path = {blob_path:?}
         ),
     )
     .expect("write repo daemon config");
+    bitloops::config::settings::write_repo_daemon_binding(
+        &repo.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
 }
 
 #[allow(dead_code)]

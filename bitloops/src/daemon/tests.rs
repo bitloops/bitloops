@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::config::{
-    bootstrap_default_daemon_environment, load_daemon_settings, persist_dashboard_tls_hint,
-    update_daemon_telemetry_consent,
+    ENV_DAEMON_CONFIG_PATH_OVERRIDE, bootstrap_default_daemon_environment, load_daemon_settings,
+    persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
 use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
@@ -198,6 +198,39 @@ fn resolve_daemon_config_requires_bootstrapped_default_global_config() {
 
     assert!(message.contains(&expected_path.display().to_string()));
     assert!(message.contains("--create-default-config"));
+}
+
+#[test]
+fn resolve_daemon_config_uses_env_override_when_explicit_path_is_missing() {
+    let config_root = TempDir::new().expect("temp dir");
+    let other_cwd = TempDir::new().expect("temp dir");
+    let config_path = write_daemon_test_config(config_root.path());
+    let config_path_str = config_path.to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(other_cwd.path()),
+        &[(
+            ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+            Some(config_path_str.as_str()),
+        )],
+    );
+
+    let resolved = resolve_daemon_config(None).expect("resolve daemon config");
+    let canonical_root = config_root
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| config_root.path().to_path_buf());
+
+    assert_eq!(
+        resolved.config_path,
+        config_path
+            .canonicalize()
+            .unwrap_or_else(|_| config_path.clone())
+    );
+    assert_eq!(resolved.config_root, canonical_root);
+    assert_eq!(
+        resolved.relational_db_path,
+        canonical_root.join(".bitloops/stores/daemon.sqlite")
+    );
 }
 
 #[test]

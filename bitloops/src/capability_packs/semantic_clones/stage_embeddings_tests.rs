@@ -1,18 +1,22 @@
 use super::*;
-use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
 use crate::host::devql::{sqlite_exec_path_allow_create, sqlite_query_rows_path};
+use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 use serde_json::json;
 use tempfile::tempdir;
 
+const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
+const TEST_EMBEDDINGS_MODEL: &str = "bge-m3";
+const ALT_TEST_EMBEDDINGS_MODEL: &str = "bge-large-en-v1.5";
+
 struct TestEmbeddingProvider;
 
-impl EmbeddingProvider for TestEmbeddingProvider {
+impl EmbeddingService for TestEmbeddingProvider {
     fn provider_name(&self) -> &str {
-        "local_fastembed"
+        TEST_EMBEDDINGS_DRIVER
     }
 
     fn model_name(&self) -> &str {
-        "jinaai/jina-embeddings-v2-base-code"
+        TEST_EMBEDDINGS_MODEL
     }
 
     fn output_dimension(&self) -> Option<usize> {
@@ -20,10 +24,10 @@ impl EmbeddingProvider for TestEmbeddingProvider {
     }
 
     fn cache_key(&self) -> String {
-        "provider=local_fastembed:model=jinaai/jina-embeddings-v2-base-code".to_string()
+        format!("provider={TEST_EMBEDDINGS_DRIVER}:model={TEST_EMBEDDINGS_MODEL}")
     }
 
-    fn embed(&self, input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+    fn embed(&self, input: &str, _input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
         Ok(vec![input.len() as f32, 0.5, 0.25])
     }
 }
@@ -354,7 +358,7 @@ async fn current_embedding_upsert_reuses_matching_rows_and_keeps_summary_variant
             content_hash: Some("blob-1".to_string()),
         },
     ];
-    let provider: Arc<dyn EmbeddingProvider> = Arc::new(TestEmbeddingProvider);
+    let provider: Arc<dyn EmbeddingService> = Arc::new(TestEmbeddingProvider);
 
     let code_first = upsert_current_symbol_embedding_rows(
         &relational,
@@ -401,6 +405,131 @@ async fn current_embedding_upsert_reuses_matching_rows_and_keeps_summary_variant
         )
         .await
         .expect("read current embedding rows");
+    let rendered = rows
+        .into_iter()
+        .map(|row| {
+            (
+                row["artefact_id"].as_str().unwrap_or_default().to_string(),
+                row["representation_kind"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            ("artefact-1".to_string(), "code".to_string()),
+            ("artefact-1".to_string(), "summary".to_string()),
+            ("artefact-2".to_string(), "code".to_string()),
+            ("artefact-2".to_string(), "summary".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn historical_embedding_upsert_persists_code_and_summary_variants() {
+    let relational = sqlite_relational_with_schema(&format!(
+        "{}\nCREATE TABLE symbol_semantics (
+                artefact_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                symbol_id TEXT,
+                semantic_features_input_hash TEXT NOT NULL,
+                docstring_summary TEXT,
+                llm_summary TEXT,
+                template_summary TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source_model TEXT
+            );",
+        schema::semantic_embeddings_sqlite_schema_sql()
+    ))
+    .await;
+    relational
+        .exec(
+            "INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, symbol_id, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES
+                ('artefact-1', 'repo-1', 'blob-1', 'sym-1', 'semantic-hash-1', NULL, 'Loads invoice data.', 'Function load invoice.', 'Loads invoice data.', 0.9, 'test-model'),
+                ('artefact-2', 'repo-1', 'blob-1', 'sym-2', 'semantic-hash-2', NULL, NULL, 'Function save invoice.', 'Function save invoice.', 0.9, NULL)",
+        )
+        .await
+        .expect("insert historical semantics");
+
+    let inputs = vec![
+        semantic::SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("sym-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/a.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "src/a.ts::loadInvoice".to_string(),
+            name: "loadInvoice".to_string(),
+            signature: Some("function loadInvoice(id: string)".to_string()),
+            modifiers: Vec::new(),
+            body: "return loadInvoiceData(id);".to_string(),
+            docstring: None,
+            parent_kind: None,
+            dependency_signals: vec!["loadInvoiceData".to_string()],
+            content_hash: Some("blob-1".to_string()),
+        },
+        semantic::SemanticFeatureInput {
+            artefact_id: "artefact-2".to_string(),
+            symbol_id: Some("sym-2".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/a.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "src/a.ts::saveInvoice".to_string(),
+            name: "saveInvoice".to_string(),
+            signature: Some("function saveInvoice(id: string)".to_string()),
+            modifiers: Vec::new(),
+            body: "return persistInvoice(id);".to_string(),
+            docstring: None,
+            parent_kind: None,
+            dependency_signals: vec!["persistInvoice".to_string()],
+            content_hash: Some("blob-1".to_string()),
+        },
+    ];
+    let provider: Arc<dyn EmbeddingService> = Arc::new(TestEmbeddingProvider);
+
+    let code = upsert_symbol_embedding_rows(
+        &relational,
+        &inputs,
+        embeddings::EmbeddingRepresentationKind::Code,
+        Arc::clone(&provider),
+    )
+    .await
+    .expect("upsert historical code embeddings");
+    let summary = upsert_symbol_embedding_rows(
+        &relational,
+        &inputs,
+        embeddings::EmbeddingRepresentationKind::Summary,
+        provider,
+    )
+    .await
+    .expect("upsert historical summary embeddings");
+
+    assert_eq!(code.upserted, 2);
+    assert_eq!(summary.upserted, 2);
+
+    let rows = relational
+        .query_rows(
+            "SELECT artefact_id, representation_kind
+             FROM symbol_embeddings
+             WHERE repo_id = 'repo-1'
+             ORDER BY artefact_id, representation_kind",
+        )
+        .await
+        .expect("read historical embedding rows");
     let rendered = rows
         .into_iter()
         .map(|row| {
@@ -498,8 +627,8 @@ async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
         &relational,
         "artefact-1",
         embeddings::EmbeddingRepresentationKind::Code,
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
     )
     .await;
@@ -508,11 +637,7 @@ async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
         &relational,
         "repo-1",
         embeddings::EmbeddingRepresentationKind::Code,
-        &embeddings::EmbeddingSetup::new(
-            "local_fastembed",
-            "jinaai/jina-embeddings-v2-base-code",
-            3,
-        ),
+        &embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
     )
     .await
     .expect("sync action");
@@ -527,8 +652,8 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
         &relational,
         "artefact-1",
         embeddings::EmbeddingRepresentationKind::Code,
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
     )
     .await;
@@ -544,11 +669,7 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
         &relational,
         "repo-1",
         embeddings::EmbeddingRepresentationKind::Code,
-        &embeddings::EmbeddingSetup::new(
-            "local_fastembed",
-            "jinaai/jina-embeddings-v2-base-code",
-            3,
-        ),
+        &embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
     )
     .await
     .expect("sync action");
@@ -563,8 +684,8 @@ async fn semantic_embedding_sync_action_adopts_existing_when_legacy_representati
         &relational,
         "artefact-1",
         "enriched",
-        "local_fastembed",
-        "jinaai/jina-embeddings-v2-base-code",
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
         3,
     )
     .await;
@@ -573,11 +694,7 @@ async fn semantic_embedding_sync_action_adopts_existing_when_legacy_representati
         &relational,
         "repo-1",
         embeddings::EmbeddingRepresentationKind::Code,
-        &embeddings::EmbeddingSetup::new(
-            "local_fastembed",
-            "jinaai/jina-embeddings-v2-base-code",
-            3,
-        ),
+        &embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
     )
     .await
     .expect("sync action");
@@ -593,11 +710,7 @@ async fn semantic_embedding_sync_action_refreshes_when_active_setup_changes() {
         "repo-1",
         &embeddings::ActiveEmbeddingRepresentationState::new(
             embeddings::EmbeddingRepresentationKind::Code,
-            embeddings::EmbeddingSetup::new(
-                "local_fastembed",
-                "jinaai/jina-embeddings-v2-base-code",
-                3,
-            ),
+            embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
         ),
     )
     .await
@@ -607,7 +720,7 @@ async fn semantic_embedding_sync_action_refreshes_when_active_setup_changes() {
         &relational,
         "repo-1",
         embeddings::EmbeddingRepresentationKind::Code,
-        &embeddings::EmbeddingSetup::new("voyage", "voyage-code-3", 1024),
+        &embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, ALT_TEST_EMBEDDINGS_MODEL, 1024),
     )
     .await
     .expect("sync action");

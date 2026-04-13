@@ -34,6 +34,65 @@ pub fn ensure_bitloops_repo_name(repo_name: &str) -> Result<()> {
     Ok(())
 }
 
+const QAT_EVENTUAL_TIMEOUT_ENV: &str = "BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS";
+const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 15;
+const QAT_EVENTUAL_POLL_INTERVAL_MILLIS: u64 = 250;
+
+fn qat_eventual_timeout() -> StdDuration {
+    parse_timeout_seconds(
+        std::env::var(QAT_EVENTUAL_TIMEOUT_ENV).ok().as_deref(),
+        DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS,
+    )
+}
+
+fn qat_eventual_poll_interval() -> StdDuration {
+    StdDuration::from_millis(QAT_EVENTUAL_POLL_INTERVAL_MILLIS)
+}
+
+fn wait_for_qat_condition<T, Observe, Ready, Describe>(
+    timeout: StdDuration,
+    poll_interval: StdDuration,
+    expected: &str,
+    mut observe: Observe,
+    is_ready: Ready,
+    describe: Describe,
+) -> Result<T>
+where
+    Observe: FnMut() -> Result<T>,
+    Ready: Fn(&T) -> bool,
+    Describe: Fn(&T) -> String,
+{
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+    let mut last_observation: String;
+
+    loop {
+        attempts += 1;
+        match observe() {
+            Ok(value) => {
+                let summary = describe(&value);
+                if is_ready(&value) {
+                    return Ok(value);
+                }
+                last_observation = format!("value: {summary}");
+            }
+            Err(err) => {
+                last_observation = format!("error: {err:#}");
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out after {}s waiting for {expected}; attempts={attempts}; last observation={}",
+                timeout.as_secs(),
+                last_observation
+            );
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
 pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     stop_daemon_for_scenario(world).ok();
 
@@ -88,6 +147,14 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     );
 }
 
+fn error_chain_contains_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
 pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     if world.run_dir.is_none() || world.repo_dir.is_none() || world.terminal_log_path.is_none() {
         return Ok(());
@@ -117,6 +184,12 @@ pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
                 stop_error = Some(anyhow!(
                     "bitloops daemon stop returned non-zero\nstdout:\n{stdout}\nstderr:\n{stderr}"
                 ));
+            }
+            Err(err) if error_chain_contains_not_found(&err) => {
+                append_world_log(
+                    world,
+                    "Daemon stop skipped because the bitloops binary is no longer present.\n",
+                )?;
             }
             Err(err) => {
                 append_world_log(world, &format!("Daemon stop failed: {err:#}\n"))?;
@@ -510,13 +583,16 @@ pub fn run_devql_ingest_for_repo(world: &mut QatWorld, repo_name: &str) -> Resul
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
         world,
-        "bitloops devql ingest",
-        build_bitloops_command(world, &["devql", "ingest"])?,
+        "bitloops devql tasks enqueue --kind ingest --status",
+        build_bitloops_command(
+            world,
+            &["devql", "tasks", "enqueue", "--kind", "ingest", "--status"],
+        )?,
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout);
-    ensure_success(&output, "bitloops devql ingest")
+    ensure_success(&output, "bitloops devql tasks enqueue --kind ingest --status")
 }
 
 pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
@@ -1064,15 +1140,7 @@ const DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS: u64 = 250;
 
 pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
-        world,
-        "bitloops devql sync --status",
-        build_bitloops_command(world, &["devql", "sync", "--status"])?,
-    )?;
-    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    world.last_command_stdout = Some(stdout);
-    ensure_success(&output, "bitloops devql sync --status")
+    run_devql_sync_with_flags(world, repo_name, &[])
 }
 
 pub fn run_devql_sync_with_flags(
@@ -1081,7 +1149,7 @@ pub fn run_devql_sync_with_flags(
     flags: &[&str],
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mut args = vec!["devql", "sync"];
+    let mut args = vec!["devql", "tasks", "enqueue", "--kind", "sync"];
     args.extend_from_slice(flags);
     if !args.contains(&"--status") {
         args.push("--status");
@@ -1098,8 +1166,8 @@ pub fn attempt_devql_sync(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
         world,
-        "bitloops devql sync (expect failure)",
-        build_bitloops_command(world, &["devql", "sync"])?,
+        "bitloops devql tasks enqueue --kind sync (expect failure)",
+        build_bitloops_command(world, &["devql", "tasks", "enqueue", "--kind", "sync"])?,
     )?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1228,15 +1296,7 @@ pub fn create_branch_with_additional_files(world: &mut QatWorld) -> Result<()> {
 
 pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
-        world,
-        "bitloops devql sync --validate --status",
-        build_bitloops_command(world, &["devql", "sync", "--validate", "--status"])?,
-    )?;
-    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    world.last_command_stdout = Some(stdout);
-    ensure_success(&output, "bitloops devql sync --validate --status")
+    run_devql_sync_with_flags(world, repo_name, &["--validate"])
 }
 
 pub fn wait_for_test_harness_capability_event_completion_for_repo(
@@ -1308,6 +1368,22 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
             }
         }
 
+        if let Some((_, persisted_run)) = load_latest_test_harness_capability_event_run(world)? {
+            match persisted_run.status {
+                bitloops::daemon::CapabilityEventRunStatus::Completed => return Ok(()),
+                bitloops::daemon::CapabilityEventRunStatus::Failed => {
+                    let run_id = persisted_run.run_id;
+                    let handler_id = persisted_run.handler_id;
+                    let event_kind = persisted_run.event_kind;
+                    let error = persisted_run.error.unwrap_or_else(|| "<no error>".to_string());
+                    bail!(
+                        "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
+                    );
+                }
+                _ => {}
+            }
+        }
+
         last_payload = payload;
         if started.elapsed() >= timeout {
             let last_payload = serde_json::to_string(&last_payload)
@@ -1324,11 +1400,108 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
     }
 }
 
+fn load_latest_test_harness_capability_event_run(
+    world: &QatWorld,
+) -> Result<Option<(std::path::PathBuf, bitloops::daemon::CapabilityEventRunRecord)>> {
+    let candidates = daemon_runtime_store_candidate_paths(world.run_dir());
+
+    let mut latest: Option<(std::path::PathBuf, bitloops::daemon::CapabilityEventRunRecord)> =
+        None;
+    for path in &candidates {
+        if !path.exists() {
+            continue;
+        }
+        use rusqlite::OptionalExtension;
+
+        let store = bitloops::host::runtime_store::DaemonSqliteRuntimeStore::open_at(path.clone())
+            .with_context(|| format!("opening daemon runtime store {}", path.display()))?;
+
+        let Some(run) = store.with_connection(|conn| {
+            conn.query_row(
+                "SELECT run_id, repo_id, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
+                 FROM pack_reconcile_runs \
+                 WHERE capability_id = ?1 AND consumer_id = ?2 \
+                 ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
+                 LIMIT 1",
+                rusqlite::params!["test_harness", "test_harness.current_state"],
+                |row| {
+                    let as_u64 = |index| -> rusqlite::Result<u64> {
+                        row.get::<_, i64>(index)
+                            .map(|value| u64::try_from(value).unwrap_or_default())
+                    };
+                    let opt_u64 = |index| -> rusqlite::Result<Option<u64>> {
+                        row.get::<_, Option<i64>>(index).map(|value| {
+                            value.map(|value| u64::try_from(value).unwrap_or_default())
+                        })
+                    };
+                    let consumer_id = row.get::<_, String>(3)?;
+                    let status = match row.get::<_, String>(7)?.as_str() {
+                        "queued" => bitloops::daemon::CapabilityEventRunStatus::Queued,
+                        "running" => bitloops::daemon::CapabilityEventRunStatus::Running,
+                        "completed" => bitloops::daemon::CapabilityEventRunStatus::Completed,
+                        "failed" => bitloops::daemon::CapabilityEventRunStatus::Failed,
+                        "cancelled" => bitloops::daemon::CapabilityEventRunStatus::Cancelled,
+                        other => {
+                            return Err(rusqlite::Error::FromSqlConversionFailure(
+                                11,
+                                rusqlite::types::Type::Text,
+                                Box::new(std::io::Error::other(format!(
+                                    "unknown capability-event run status `{other}`"
+                                ))),
+                            ));
+                        }
+                    };
+
+                    Ok(bitloops::daemon::CapabilityEventRunRecord {
+                        run_id: row.get(0)?,
+                        repo_id: row.get(1)?,
+                        capability_id: row.get(2)?,
+                        consumer_id: consumer_id.clone(),
+                        handler_id: consumer_id.clone(),
+                        from_generation_seq: as_u64(4)?,
+                        to_generation_seq: as_u64(5)?,
+                        reconcile_mode: row.get(6)?,
+                        event_kind: String::new(),
+                        lane_key: format!("{}:{consumer_id}", row.get::<_, String>(1)?),
+                        event_payload_json: String::new(),
+                        status,
+                        attempts: row.get(8)?,
+                        submitted_at_unix: as_u64(9)?,
+                        started_at_unix: opt_u64(10)?,
+                        updated_at_unix: as_u64(11)?,
+                        completed_at_unix: opt_u64(12)?,
+                        error: row.get(13)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })?
+        else {
+            continue;
+        };
+
+        let replace = latest.as_ref().is_none_or(|(_, current)| {
+            (run.updated_at_unix, run.completed_at_unix.unwrap_or_default(), run.submitted_at_unix)
+                > (
+                    current.updated_at_unix,
+                    current.completed_at_unix.unwrap_or_default(),
+                    current.submitted_at_unix,
+                )
+        });
+        if replace {
+            latest = Some((path.clone(), run));
+        }
+    }
+
+    Ok(latest)
+}
+
 fn resolve_qat_sync_state_path(
     world: &QatWorld,
 ) -> Result<(
     std::path::PathBuf,
-    bitloops::host::runtime_store::PersistedSyncQueueState,
+    bitloops::host::runtime_store::PersistedDevqlTaskQueueState,
 )> {
     let candidates = daemon_runtime_store_candidate_paths(world.run_dir());
 
@@ -1339,15 +1512,15 @@ fn resolve_qat_sync_state_path(
         let store = bitloops::host::runtime_store::DaemonSqliteRuntimeStore::open_at(path.clone())
             .with_context(|| format!("opening daemon runtime store {}", path.display()))?;
         if let Some(state) = store
-            .load_sync_queue_state()
-            .with_context(|| format!("loading sync queue state from {}", path.display()))?
+            .load_devql_task_queue_state()
+            .with_context(|| format!("loading DevQL task queue state from {}", path.display()))?
         {
             return Ok((path.clone(), state));
         }
     }
 
     bail!(
-        "could not find daemon sync queue state in runtime store; looked in: {}",
+        "could not find daemon DevQL task queue state in runtime store; looked in: {}",
         candidates
             .iter()
             .map(|path| path.display().to_string())
@@ -1387,10 +1560,11 @@ fn completed_tasks_for_current_head(
     let head_tasks: Vec<(String, bitloops::host::devql::SyncSummary)> = snapshot
         .tasks
         .into_iter()
-        .filter(|task| task.status == bitloops::daemon::SyncTaskStatus::Completed)
+        .filter(|task| task.kind == bitloops::daemon::DevqlTaskKind::Sync)
+        .filter(|task| task.status == bitloops::daemon::DevqlTaskStatus::Completed)
         .filter_map(|task| {
             let source = task.source.to_string();
-            task.summary.map(|summary| (source, summary))
+            task.sync_result().cloned().map(|summary| (source, summary))
         })
         .filter(|(_, summary)| summary.head_commit_sha.as_deref() == Some(head_sha.as_str()))
         .collect();
@@ -1567,20 +1741,24 @@ pub fn assert_bitloops_stores_exist_for_repo(world: &QatWorld, repo_name: &str) 
             repo_stores_dir.join("event").join("events.duckdb"),
         )
     } else {
-        let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
-            .context("resolving store backend config for QAT store assertions")?;
-        let relational = resolve_sqlite_db_path_for_repo(
-            world.repo_dir(),
-            cfg.relational.sqlite_path.as_deref(),
-        )
-        .context("resolving relational store path for QAT store assertions")?;
-        let events =
-            resolve_duckdb_db_path_for_repo(world.repo_dir(), cfg.events.duckdb_path.as_deref());
-        let stores_dir = relational
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
-        (stores_dir, relational, events)
+        with_scenario_app_env(world, || {
+            let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
+                .context("resolving store backend config for QAT store assertions")?;
+            let relational = resolve_sqlite_db_path_for_repo(
+                world.repo_dir(),
+                cfg.relational.sqlite_path.as_deref(),
+            )
+            .context("resolving relational store path for QAT store assertions")?;
+            let events = resolve_duckdb_db_path_for_repo(
+                world.repo_dir(),
+                cfg.events.duckdb_path.as_deref(),
+            );
+            let stores_dir = relational
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
+            Ok::<_, anyhow::Error>((stores_dir, relational, events))
+        })?
     };
     ensure!(
         stores_dir.exists(),
@@ -1677,9 +1855,17 @@ pub fn assert_agent_session_exists_for_repo(
 
 pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading Bitloops checkpoint mappings")?;
+    let mappings = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        "Bitloops checkpoint mappings to be persisted",
+        || {
+            with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+                .context("reading Bitloops checkpoint mappings")
+        },
+        |mappings| !mappings.is_empty(),
+        |mappings| format!("mappings={}", mappings.len()),
+    )?;
     if mappings.is_empty() && claude_fallback_marker_exists(world) {
         append_world_log(
             world,
@@ -1706,9 +1892,17 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading Bitloops checkpoint mappings")?;
+    let mappings = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("at least {min_count} Bitloops checkpoint mappings"),
+        || {
+            with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+                .context("reading Bitloops checkpoint mappings")
+        },
+        |mappings| mappings.len() >= min_count,
+        |mappings| format!("mappings={}", mappings.len()),
+    )?;
     if mappings.len() < min_count && claude_fallback_marker_exists(world) {
         append_world_log(
             world,
@@ -1783,7 +1977,14 @@ pub fn assert_devql_artefacts_query_returns_results(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let count = count_artefacts_across_source_files(world)?;
+    let count = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        "DevQL artefacts query to return results",
+        || count_artefacts_across_source_files(world),
+        |count| *count >= 1,
+        |count| format!("artefacts={count}"),
+    )?;
     world.last_query_result_count = Some(count);
     ensure!(
         count >= 1,

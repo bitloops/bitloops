@@ -547,23 +547,31 @@ pub fn run_testlens_query(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<serde_json::Value> {
     ensure_bitloops_repo_name(repo_name)?;
     let symbol_fqn = resolve_symbol_fqn_alias(world, artefact)?;
-    let commit_scope = world
-        .captured_commit_shas
-        .last()
-        .cloned()
-        .ok_or_else(|| anyhow!("no latest commit SHA captured for TestHarness query"))?;
+    let temporal_prefix = match state_scope {
+        "current workspace state" => String::new(),
+        "latest commit" => {
+            let commit_scope = world
+                .captured_commit_shas
+                .last()
+                .cloned()
+                .ok_or_else(|| anyhow!("no latest commit SHA captured for TestHarness query"))?;
+            format!(r#"->asOf(commit:"{}")"#, escape_devql_string(&commit_scope))
+        }
+        _ => bail!("unsupported TestHarness state scope `{state_scope}`"),
+    };
     let query = match view {
         "summary" | "tests" => format!(
-            r#"repo("bitloops")->asOf(commit:"{}")->artefacts(symbol_fqn:"{}")->tests()->limit(200)"#,
-            escape_devql_string(&commit_scope),
+            r#"repo("bitloops"){}->artefacts(symbol_fqn:"{}")->tests()->limit(200)"#,
+            temporal_prefix,
             escape_devql_string(&symbol_fqn),
         ),
         "coverage" => format!(
-            r#"repo("bitloops")->asOf(commit:"{}")->artefacts(symbol_fqn:"{}")->coverage()->limit(200)"#,
-            escape_devql_string(&commit_scope),
+            r#"repo("bitloops"){}->artefacts(symbol_fqn:"{}")->coverage()->limit(200)"#,
+            temporal_prefix,
             escape_devql_string(&symbol_fqn),
         ),
         _ => bail!("unsupported TestHarness view `{view}`"),
@@ -708,6 +716,7 @@ fn run_testlens_query_eventually(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
     expected: &str,
     condition: impl Fn(&serde_json::Value) -> bool,
 ) -> Result<serde_json::Value> {
@@ -721,7 +730,7 @@ fn run_testlens_query_eventually(
 
     loop {
         attempts += 1;
-        let value = run_testlens_query(world, repo_name, artefact, view)?;
+        let value = run_testlens_query(world, repo_name, artefact, view, state_scope)?;
         if condition(&value) {
             return Ok(value);
         }
@@ -745,12 +754,14 @@ pub fn assert_testlens_query_returns_results(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<()> {
     let value = run_testlens_query_eventually(
         world,
         repo_name,
         artefact,
         view,
+        state_scope,
         "return results",
         |value| count_testlens_payload_rows(value) >= 1,
     )?;
@@ -811,12 +822,14 @@ pub fn assert_testlens_query_empty_or_zero(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<()> {
     let value = run_testlens_query_eventually(
         world,
         repo_name,
         artefact,
         view,
+        state_scope,
         "become empty or zero-count",
         testlens_payload_is_empty_or_zero,
     )?;
@@ -833,8 +846,9 @@ pub fn assert_testlens_includes_failing_test(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<()> {
-    let value = run_testlens_query(world, repo_name, artefact, view)?;
+    let value = run_testlens_query(world, repo_name, artefact, view, state_scope)?;
     let tests = value
         .get("covering_tests")
         .and_then(serde_json::Value::as_array)

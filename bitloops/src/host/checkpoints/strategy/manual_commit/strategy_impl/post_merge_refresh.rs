@@ -18,54 +18,74 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -
         return Ok(());
     }
 
-    let refresh_future = async {
-        #[cfg(not(test))]
-        if let Err(err) =
-            crate::daemon::require_current_repo_runtime(repo_root, "post-merge DevQL refresh")
-        {
-            eprintln!("[bitloops] Warning: {err:#}");
-            return Ok(());
-        }
-        let repo = crate::host::devql::resolve_repo_identity(repo_root)
-            .context("resolving repository identity for post-merge DevQL refresh")?;
-        let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
-            .context("building DevQL config for post-merge refresh")?;
-        crate::host::devql::execute_ingest_with_backfill_window(
-            &cfg,
-            false,
-            DEFAULT_POST_MERGE_HISTORY_BACKFILL,
-            None,
-            None,
+    #[cfg(not(test))]
+    {
+        crate::host::devql::enqueue_spooled_post_merge_refresh(
+            repo_root,
+            &head_sha,
+            &changed_files,
         )
-        .await
-        .context("catching up DevQL historical commit ingest for post-merge")?;
-        let stats =
-            crate::host::devql::run_post_merge_artefact_refresh(&cfg, &head_sha, &changed_files)
-                .await
-                .context("refreshing DevQL artefacts for post-merge files")?;
-
-        if stats.completed_with_failures() {
-            eprintln!(
-                "[bitloops] Warning: DevQL post-merge artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
-                head_sha,
-                stats.files_seen,
-                stats.files_indexed,
-                stats.files_deleted,
-                stats.files_failed
-            );
-        }
-        Ok::<(), anyhow::Error>(())
-    };
-
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return tokio::task::block_in_place(|| handle.block_on(refresh_future));
+        .context("queueing post-merge DevQL refresh in repo-local spool")?;
+        Ok(())
     }
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime for post-merge DevQL refresh")?;
-    runtime.block_on(refresh_future)
+    #[cfg(test)]
+    {
+        let refresh_future = async {
+            let repo = crate::host::devql::resolve_repo_identity(repo_root)
+                .context("resolving repository identity for post-merge DevQL refresh")?;
+            let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
+                .context("building DevQL config for post-merge refresh")?;
+            execute_devql_post_merge_refresh(&cfg, &head_sha, &changed_files).await
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return tokio::task::block_in_place(|| handle.block_on(refresh_future));
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("building tokio runtime for post-merge DevQL refresh")?;
+        runtime.block_on(refresh_future)
+    }
+}
+
+pub(crate) async fn execute_devql_post_merge_refresh(
+    cfg: &crate::host::devql::DevqlConfig,
+    head_sha: &str,
+    changed_files: &[String],
+) -> Result<()> {
+    let head_sha = head_sha.trim();
+    if head_sha.is_empty() {
+        return Ok(());
+    }
+
+    crate::host::devql::execute_ingest_with_backfill_window(
+        cfg,
+        false,
+        DEFAULT_POST_MERGE_HISTORY_BACKFILL,
+        None,
+        None,
+    )
+    .await
+    .context("catching up DevQL historical commit ingest for post-merge")?;
+    let stats = crate::host::devql::run_post_merge_artefact_refresh(cfg, head_sha, changed_files)
+        .await
+        .context("refreshing DevQL artefacts for post-merge files")?;
+
+    if stats.completed_with_failures() {
+        log::warn!(
+            "DevQL post-merge artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
+            head_sha,
+            stats.files_seen,
+            stats.files_indexed,
+            stats.files_deleted,
+            stats.files_failed
+        );
+    }
+
+    Ok(())
 }
 
 fn files_changed_since_previous_head(repo_root: &Path) -> Result<Vec<String>> {

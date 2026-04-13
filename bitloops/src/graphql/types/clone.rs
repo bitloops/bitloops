@@ -3,6 +3,9 @@ use async_graphql::{ComplexObject, Context, ID, InputObject, Result, SimpleObjec
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+use crate::capability_packs::semantic_clones::scoring::{
+    CloneScoringOptions, MAX_ANN_NEIGHBORS, MIN_ANN_NEIGHBORS,
+};
 use crate::graphql::{
     DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error, loaders::DataLoaders,
 };
@@ -13,6 +16,7 @@ use super::{Artefact, ArtefactFilterInput, JsonScalar};
 pub struct ClonesFilterInput {
     pub relation_kind: Option<String>,
     pub min_score: Option<f64>,
+    pub neighbors: Option<i32>,
 }
 
 impl ClonesFilterInput {
@@ -31,6 +35,21 @@ impl ClonesFilterInput {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+    }
+
+    pub(crate) fn neighbors_override(&self) -> Option<CloneScoringOptions> {
+        self.neighbors
+            .map(|value| value.clamp(MIN_ANN_NEIGHBORS as i32, MAX_ANN_NEIGHBORS as i32))
+            .map(|value| CloneScoringOptions::new(value as usize))
+    }
+
+    pub(crate) fn validate_project_scope(&self) -> Result<()> {
+        if self.neighbors_override().is_some() {
+            return Err(bad_user_input_error(
+                "`neighbors` override is only supported for artefact-scoped `clones` queries",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -189,6 +208,7 @@ mod tests {
         let valid = ClonesFilterInput {
             relation_kind: Some("  similar_implementation  ".to_string()),
             min_score: Some(0.75),
+            neighbors: None,
         };
         valid.validate().expect("expected valid clone filter");
         assert_eq!(valid.relation_kind(), Some("similar_implementation"));
@@ -196,18 +216,53 @@ mod tests {
         let blank = ClonesFilterInput {
             relation_kind: Some("   ".to_string()),
             min_score: None,
+            neighbors: None,
         };
         assert_eq!(blank.relation_kind(), None);
 
         let invalid = ClonesFilterInput {
             relation_kind: None,
             min_score: Some(1.1),
+            neighbors: None,
         };
         let err = invalid.validate().expect_err("expected invalid minScore");
         assert!(
             format!("{err:?}").contains("`minScore` must be between 0 and 1"),
             "unexpected error: {err:#?}"
         );
+    }
+
+    #[test]
+    fn neighbors_override_is_clamped_to_scoring_bounds() {
+        let low = ClonesFilterInput {
+            neighbors: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            low.neighbors_override().map(|opts| opts.ann_neighbors),
+            Some(MIN_ANN_NEIGHBORS)
+        );
+
+        let high = ClonesFilterInput {
+            neighbors: Some(999),
+            ..Default::default()
+        };
+        assert_eq!(
+            high.neighbors_override().map(|opts| opts.ann_neighbors),
+            Some(MAX_ANN_NEIGHBORS)
+        );
+    }
+
+    #[test]
+    fn project_scope_validation_rejects_neighbors_override() {
+        let filter = ClonesFilterInput {
+            neighbors: Some(5),
+            ..Default::default()
+        };
+        let err = filter
+            .validate_project_scope()
+            .expect_err("must reject neighbors");
+        assert!(format!("{err:?}").contains("only supported for artefact-scoped `clones` queries"));
     }
 
     #[test]

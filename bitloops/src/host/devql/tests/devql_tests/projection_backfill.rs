@@ -32,9 +32,6 @@ sqlite_path = {sqlite_path:?}
 
 [stores.events]
 duckdb_path = {duckdb_path:?}
-
-[semantic]
-provider = "disabled"
 "#,
         ),
     );

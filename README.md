@@ -115,6 +115,8 @@ curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del
 brew install bitloops/tap/bitloops
 ```
 
+The `bitloops-embeddings` binary is released separately in `bitloops/bitloops-embeddings`. Explicit embeddings setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the managed binary for you. If you are building from source or using a custom runtime, install that binary separately; no Python installation is required.
+
 ## Getting Started
 
 1. Start the daemon and create the global daemon config:

@@ -17,33 +17,19 @@ fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let script = r#"#!/bin/sh
-profile_name=fake
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --profile)
-      profile_name=$2
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
-  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
-    *'"type":"describe"'*)
-      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"sync-test","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"sync-test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id" "$profile_name"
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"sync-test-model"}\n' "$req_id"
       ;;
-    *'"type":"embed_batch"'*)
-      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
-      ;;
-    *'"type":"shutdown"'*)
-      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"sync-test-model"}\n' "$req_id"
       exit 0
       ;;
     *)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
       ;;
   esac
 done
@@ -64,65 +50,41 @@ fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let script = r#"
-$profileName = "fake"
-for ($i = 0; $i -lt $args.Length; $i++) {
-  if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
-    $profileName = $args[$i + 1]
-    break
-  }
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
 }
+$ready | ConvertTo-Json -Compress
 $stdin = [Console]::In
 while (($line = $stdin.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $request = $line | ConvertFrom-Json
-  switch ($request.type) {
-    "describe" {
+  switch ($request.cmd) {
+    "embed" {
       $response = @{
-        type = "describe"
-        request_id = $request.request_id
-        protocol_version = 1
-        runtime = @{
-          protocol_version = 1
-          runtime_name = "bitloops-embeddings"
-          runtime_version = "sync-test"
-          profile_name = $profileName
-          provider = @{
-            kind = "local_fastembed"
-            provider_name = "local_fastembed"
-            model_name = "sync-test-model"
-            output_dimension = 3
-            cache_dir = $null
-          }
-        }
-      }
-    }
-    "embed_batch" {
-      $response = @{
-        type = "embed_batch"
-        request_id = $request.request_id
-        protocol_version = 1
-        vectors = @(@{
-          index = 0
-          values = @(0.1, 0.2, 0.3)
-        })
+        id = $request.id
+        ok = $true
+        vectors = @(@(0.1, 0.2, 0.3))
+        model = "sync-test-model"
       }
     }
     "shutdown" {
       $response = @{
-        type = "shutdown"
-        request_id = $request.request_id
-        protocol_version = 1
-        accepted = $true
+        id = $request.id
+        ok = $true
+        model = "sync-test-model"
       }
       $response | ConvertTo-Json -Compress
       break
     }
     default {
       $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "unexpected request"
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
       }
     }
   }
@@ -156,21 +118,24 @@ fn write_sync_semantic_clone_config(repo_root: &Path) {
     fs::write(
         config_path,
         format!(
-            r#"[semantic]
-provider = "disabled"
-
-[semantic_clones]
+            r#"[semantic_clones]
 summary_mode = "off"
-embedding_profile = "alpha"
+embedding_mode = "deterministic"
 
-[embeddings.runtime]
+[semantic_clones.inference]
+code_embeddings = "alpha"
+summary_embeddings = "alpha"
+
+[inference.runtimes.bitloops_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
 request_timeout_secs = 5
 
-[embeddings.profiles.alpha]
-kind = "local_fastembed"
+[inference.profiles.alpha]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
 model = "sync-test-model"
 "#
         ),
@@ -890,7 +855,7 @@ async fn sync_removes_deleted_file() {
 }
 
 #[tokio::test]
-async fn sync_populates_current_semantic_and_embedding_tables() {
+async fn sync_populates_current_semantic_tables_without_inline_embeddings() {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
@@ -937,8 +902,8 @@ async fn sync_populates_current_semantic_and_embedding_tables() {
         feature_rows > 0,
         "current semantic features should be populated"
     );
-    assert!(
-        embedding_rows > 0,
-        "current code embeddings should be populated"
+    assert_eq!(
+        embedding_rows, 0,
+        "current code embeddings should no longer be populated inline during sync"
     );
 }

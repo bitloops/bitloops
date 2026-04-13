@@ -354,8 +354,9 @@ fn write_post_commit_test_config(
             duckdb_path = duckdb_path.to_string_lossy()
         ),
     };
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
     fs::write(
-        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        &config_path,
         format!(
             "[stores.relational]\nsqlite_path = {sqlite_path:?}\n{postgres_line}\n[stores.event]\n{clickhouse_lines}\n[stores.blob]\nlocal_path = {blob_local_path:?}\n",
             sqlite_path = sqlite_path.to_string_lossy(),
@@ -364,4 +365,9 @@ fn write_post_commit_test_config(
         ),
     )
     .expect("write repo-local store config for post-commit tests");
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding for post-commit tests");
 }

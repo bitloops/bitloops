@@ -1,49 +1,49 @@
 use super::*;
 
 #[test]
-fn parse_sync_source_accepts_default_and_aliases() {
+fn parse_task_source_accepts_default_and_aliases() {
     assert_eq!(
-        parse_sync_source(None).expect("default source"),
-        crate::daemon::SyncTaskSource::ManualCli
+        parse_task_source(None).expect("default source"),
+        crate::daemon::DevqlTaskSource::ManualCli
     );
     assert_eq!(
-        parse_sync_source(Some("   ")).expect("blank source"),
-        crate::daemon::SyncTaskSource::ManualCli
+        parse_task_source(Some("   ")).expect("blank source"),
+        crate::daemon::DevqlTaskSource::ManualCli
     );
     assert_eq!(
-        parse_sync_source(Some("manual")).expect("manual alias"),
-        crate::daemon::SyncTaskSource::ManualCli
+        parse_task_source(Some("manual")).expect("manual alias"),
+        crate::daemon::DevqlTaskSource::ManualCli
     );
     assert_eq!(
-        parse_sync_source(Some("manual-cli")).expect("manual-cli alias"),
-        crate::daemon::SyncTaskSource::ManualCli
+        parse_task_source(Some("manual-cli")).expect("manual-cli alias"),
+        crate::daemon::DevqlTaskSource::ManualCli
     );
     assert_eq!(
-        parse_sync_source(Some("init")).expect("init source"),
-        crate::daemon::SyncTaskSource::Init
+        parse_task_source(Some("init")).expect("init source"),
+        crate::daemon::DevqlTaskSource::Init
     );
     assert_eq!(
-        parse_sync_source(Some("watcher")).expect("watcher source"),
-        crate::daemon::SyncTaskSource::Watcher
+        parse_task_source(Some("watcher")).expect("watcher source"),
+        crate::daemon::DevqlTaskSource::Watcher
     );
     assert_eq!(
-        parse_sync_source(Some("post-commit")).expect("post-commit source"),
-        crate::daemon::SyncTaskSource::PostCommit
+        parse_task_source(Some("post-commit")).expect("post-commit source"),
+        crate::daemon::DevqlTaskSource::PostCommit
     );
     assert_eq!(
-        parse_sync_source(Some("post_merge")).expect("post_merge source"),
-        crate::daemon::SyncTaskSource::PostMerge
+        parse_task_source(Some("post_merge")).expect("post_merge source"),
+        crate::daemon::DevqlTaskSource::PostMerge
     );
     assert_eq!(
-        parse_sync_source(Some("post_checkout")).expect("post_checkout source"),
-        crate::daemon::SyncTaskSource::PostCheckout
+        parse_task_source(Some("post_checkout")).expect("post_checkout source"),
+        crate::daemon::DevqlTaskSource::PostCheckout
     );
 }
 
 #[test]
-fn parse_sync_source_rejects_unknown_values() {
-    let err = parse_sync_source(Some("cronjob")).expect_err("unknown source should fail");
-    assert!(err.contains("unsupported sync source `cronjob`"));
+fn parse_task_source_rejects_unknown_values() {
+    let err = parse_task_source(Some("cronjob")).expect_err("unknown source should fail");
+    assert!(err.contains("unsupported task source `cronjob`"));
     assert!(err.contains("manual_cli"));
 }
 
@@ -60,7 +60,7 @@ fn resolve_sync_mode_input_rejects_conflicting_selectors() {
         Some(vec!["src/lib.rs".to_string()]),
         false,
         false,
-        "enqueueSync",
+        "enqueueTask",
     )
     .expect_err("conflicting selectors should fail");
     assert!(

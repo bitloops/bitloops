@@ -2,8 +2,71 @@ use super::*;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
 use crate::host::interactions::interaction_repository::create_interaction_repository;
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
+};
 
 // ── Strategy trait impl ───────────────────────────────────────────────────────
+
+struct SpoolBackedInteractionRepository<'a> {
+    spool: &'a dyn InteractionSpool,
+}
+
+impl InteractionEventRepository for SpoolBackedInteractionRepository<'_> {
+    fn repo_id(&self) -> &str {
+        self.spool.repo_id()
+    }
+
+    fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
+        self.spool.record_session(session)
+    }
+
+    fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
+        self.spool.record_turn(turn)
+    }
+
+    fn append_event(&self, event: &InteractionEvent) -> Result<()> {
+        self.spool.record_event(event)
+    }
+
+    fn assign_checkpoint_to_turns(
+        &self,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
+    ) -> Result<()> {
+        self.spool
+            .assign_checkpoint_to_turns(turn_ids, checkpoint_id, assigned_at)
+    }
+
+    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>> {
+        self.spool.list_sessions(agent, limit)
+    }
+
+    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        self.spool.load_session(session_id)
+    }
+
+    fn list_turns_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<InteractionTurn>> {
+        self.spool.list_turns_for_session(session_id, limit)
+    }
+
+    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
+        self.spool.list_uncheckpointed_turns()
+    }
+
+    fn list_events(
+        &self,
+        filter: &InteractionEventFilter,
+        limit: usize,
+    ) -> Result<Vec<InteractionEvent>> {
+        self.spool.list_events(filter, limit)
+    }
+}
 
 impl Strategy for ManualCommitStrategy {
     fn name(&self) -> &str {
@@ -362,44 +425,46 @@ impl Strategy for ManualCommitStrategy {
             .as_ref()
             .map(|spool| spool as &dyn InteractionSpool);
         let spool_pending_work = interaction_spool_ref.is_some_and(spool_has_pending_work);
-        let interaction_repository = match resolve_interaction_repository_for_post_commit(
-            &self.repo_root,
-        ) {
-            Ok(repository) => repository,
-            Err(err) => {
-                let context = format_post_commit_derivation_context(
-                    &head,
-                    None,
-                    None,
-                    &[],
-                    Some(spool_pending_work),
-                );
-                if spool_pending_work {
-                    eprintln!(
-                        "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
+        let (interaction_repository, derivation_spool) =
+            match resolve_interaction_repository_for_post_commit(&self.repo_root) {
+                Ok(repository) => (repository, interaction_spool_ref),
+                Err(err) => {
+                    let context = format_post_commit_derivation_context(
+                        &head,
+                        None,
+                        None,
+                        &[],
+                        Some(spool_pending_work),
                     );
-                    return Err(err).context(format!(
-                        "resolving interaction event repository ({context})"
-                    ));
+                    if spool_pending_work && let Some(spool) = interaction_spool_ref {
+                        eprintln!(
+                            "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}\n[bitloops] Warning: falling back to the local interaction spool for post_commit derivation"
+                        );
+                        (
+                            Box::new(SpoolBackedInteractionRepository { spool })
+                                as Box<dyn InteractionEventRepository>,
+                            None,
+                        )
+                    } else {
+                        eprintln!(
+                            "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
+                        );
+                        update_active_session_base_commits(
+                            self.backend.as_ref(),
+                            &head,
+                            &std::collections::HashSet::new(),
+                        );
+                        return Ok(());
+                    }
                 }
-                eprintln!(
-                    "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
-                );
-                update_active_session_base_commits(
-                    self.backend.as_ref(),
-                    &head,
-                    &std::collections::HashSet::new(),
-                );
-                return Ok(());
-            }
-        };
+            };
 
         if let Some(checkpoint_id) = self.derive_post_commit_from_interaction_sources(
             &head,
             &committed_files_set,
             is_rebase_in_progress,
-            &interaction_repository,
-            interaction_spool_ref,
+            interaction_repository.as_ref(),
+            derivation_spool,
         )? {
             insert_commit_checkpoint_mapping(&self.repo_root, &head, &checkpoint_id)?;
             if let Err(err) = run_devql_post_commit_checkpoint_projection_refresh(
@@ -647,13 +712,14 @@ impl ManualCommitStrategy {
 
 fn resolve_interaction_repository_for_post_commit(
     repo_root: &Path,
-) -> Result<impl InteractionEventRepository + use<>> {
+) -> Result<Box<dyn InteractionEventRepository>> {
     let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving store backend config for interaction event repository")?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for interaction event repository")?
         .repo_id;
     create_interaction_repository(&backends.events, repo_root, repo_id)
+        .map(|repository| Box::new(repository) as Box<dyn InteractionEventRepository>)
 }
 
 fn spool_has_pending_work(spool: &dyn InteractionSpool) -> bool {

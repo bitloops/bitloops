@@ -134,6 +134,8 @@ reqwest = { version = "0.13.2", default-features = false, features = ["rustls", 
 rusqlite = { version = "0.39", features = ["bundled"] }
 semver = "1"
 tar = "0.4"
+xz2 = "0.1"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 duckdb = { version = "1", default-features = false }
 object_store = { version = "0.13.2", features = ["aws", "gcp"] }
@@ -148,9 +150,8 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 dirs = "6"
 futures-util = "0.3"
-bitloops-embeddings = { path = "../bitloops-embeddings" }
-bitloops-embeddings-protocol = { path = "../bitloops-embeddings-protocol" }
 libc = "0.2"
+hnsw_rs = "0.3.4"
 
 [dev-dependencies]
 cucumber = "0.22.1"

@@ -1,8 +1,6 @@
 [workspace]
 members = [
     "bitloops",
-    "bitloops-embeddings-protocol",
-    "bitloops-embeddings",
     "xtask",
 ]
 exclude = ["third_party/fastembed"]
@@ -10,5 +8,3 @@ resolver = "2"
 
 [patch.crates-io]
 libduckdb-sys = { path = "third_party/libduckdb-sys" }
-# Temporary local override until the FASTEMBED_THREADS patch is upstreamed.
-fastembed = { path = "third_party/fastembed" }

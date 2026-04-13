@@ -7,10 +7,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use crate::adapters::model_providers::embeddings::EmbeddingProvider;
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
+use crate::host::inference::EmbeddingService;
 
 #[path = "stage_embeddings/schema.rs"]
 mod schema;
@@ -37,7 +37,7 @@ pub(crate) async fn upsert_symbol_embedding_rows(
     relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
     representation_kind: embeddings::EmbeddingRepresentationKind,
-    embedding_provider: Arc<dyn EmbeddingProvider>,
+    embedding_provider: Arc<dyn EmbeddingService>,
 ) -> Result<embeddings::SymbolEmbeddingIngestionStats> {
     let mut stats = embeddings::SymbolEmbeddingIngestionStats::default();
     if inputs.is_empty() {
@@ -96,7 +96,7 @@ pub(crate) async fn upsert_current_symbol_embedding_rows(
     content_id: &str,
     inputs: &[semantic::SemanticFeatureInput],
     representation_kind: embeddings::EmbeddingRepresentationKind,
-    embedding_provider: Arc<dyn EmbeddingProvider>,
+    embedding_provider: Arc<dyn EmbeddingService>,
 ) -> Result<embeddings::SymbolEmbeddingIngestionStats> {
     let mut stats = embeddings::SymbolEmbeddingIngestionStats::default();
     let Some(first) = inputs.first() else {
@@ -336,7 +336,7 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
     repo_id: &str,
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
     representation_kind: embeddings::EmbeddingRepresentationKind,
-    embedding_provider: Arc<dyn EmbeddingProvider>,
+    embedding_provider: Arc<dyn EmbeddingService>,
 ) -> Result<CurrentRepoEmbeddingRefreshResult> {
     ensure_semantic_embeddings_schema(relational).await?;
     let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;

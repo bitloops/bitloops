@@ -248,6 +248,7 @@ impl ArtefactSelection {
         let filter = ClonesFilterInput {
             relation_kind,
             min_score,
+            neighbors: None,
         };
         Ok(self
             .resolve_clone_stage_data(ctx, Some(&filter))

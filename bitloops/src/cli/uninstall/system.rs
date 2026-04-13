@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::{BinaryCandidatesFn, ServiceUninstaller};
+use crate::cli::embeddings::{
+    managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
+};
 use crate::config::settings::SETTINGS_DIR;
 use crate::utils::platform_dirs::{
     bitloops_cache_dir, bitloops_config_dir, bitloops_data_dir, bitloops_home_dir,
@@ -108,6 +111,36 @@ pub(super) fn uninstall_binaries(
         writeln!(out, "  No recognised Bitloops binaries found.")?;
     }
 
+    let managed_bundle_dir = managed_embeddings_binary_dir()?;
+    if managed_bundle_dir.exists() {
+        fs::remove_dir_all(&managed_bundle_dir).with_context(|| {
+            format!(
+                "removing managed embeddings install directory {}",
+                managed_bundle_dir.display()
+            )
+        })?;
+        writeln!(
+            out,
+            "  Removed managed embeddings install directory {}",
+            managed_bundle_dir.display()
+        )?;
+    }
+
+    let metadata_path = managed_embeddings_metadata_path()?;
+    if metadata_path.exists() {
+        fs::remove_file(&metadata_path).with_context(|| {
+            format!(
+                "removing managed embeddings metadata {}",
+                metadata_path.display()
+            )
+        })?;
+        writeln!(
+            out,
+            "  Removed managed embeddings metadata {}",
+            metadata_path.display()
+        )?;
+    }
+
     Ok(())
 }
 
@@ -141,6 +174,9 @@ pub(super) fn known_binary_candidates() -> Result<Vec<PathBuf>> {
         candidates.insert(home.join(".local").join("bin").join(binary_name));
         candidates.insert(home.join(".cargo").join("bin").join(binary_name));
         candidates.insert(home.join(".bitloops").join("bin").join(binary_name));
+    }
+    if let Ok(managed_binary) = managed_embeddings_binary_path() {
+        candidates.insert(managed_binary);
     }
 
     candidates.insert(PathBuf::from("/usr/local/bin").join(binary_name));

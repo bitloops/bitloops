@@ -119,6 +119,28 @@ fn text_has_missing_production_artefacts_error_detects_relational_materializatio
 }
 
 #[test]
+fn error_chain_contains_not_found_detects_missing_binary_errors() {
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "No such file or directory",
+    ))
+    .context("executing bitloops daemon stop");
+
+    assert!(error_chain_contains_not_found(&err));
+}
+
+#[test]
+fn error_chain_contains_not_found_ignores_other_io_errors() {
+    let err = anyhow::Error::from(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "Permission denied",
+    ))
+    .context("executing bitloops daemon stop");
+
+    assert!(!error_chain_contains_not_found(&err));
+}
+
+#[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(
@@ -509,6 +531,44 @@ fn wait_for_semantic_clone_condition_times_out_with_last_observation() {
     let message = format!("{err:#}");
     assert!(message.contains("clone rows to become visible"));
     assert!(message.contains("last observation=value: rows=0"));
+}
+
+#[test]
+fn wait_for_qat_condition_retries_until_ready() {
+    let mut attempts = 0_usize;
+
+    let value = wait_for_qat_condition(
+        StdDuration::from_millis(25),
+        StdDuration::from_millis(1),
+        "checkpoint mappings to be persisted",
+        || {
+            attempts += 1;
+            Ok(attempts)
+        },
+        |attempt| *attempt >= 3,
+        |attempt| format!("attempt={attempt}"),
+    )
+    .expect("eventual wait should succeed");
+
+    assert_eq!(value, 3);
+    assert_eq!(attempts, 3);
+}
+
+#[test]
+fn wait_for_qat_condition_times_out_with_last_observation() {
+    let err = wait_for_qat_condition(
+        StdDuration::from_millis(5),
+        StdDuration::from_millis(1),
+        "DevQL artefacts query to return results",
+        || Ok(0_usize),
+        |count| *count > 0,
+        |count| format!("artefacts={count}"),
+    )
+    .expect_err("eventual wait should time out");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("DevQL artefacts query to return results"));
+    assert!(message.contains("last observation=value: artefacts=0"));
 }
 
 #[test]

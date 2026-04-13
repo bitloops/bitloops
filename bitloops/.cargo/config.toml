@@ -33,18 +33,17 @@ dev-check-bundled = "check --features duckdb-bundled"
 dev-build-bundled = "build --features duckdb-bundled"
 
 # Back-compat aliases (kept while docs and local usage migrate to `dev-*`).
-test-all = "test --no-fail-fast --no-default-features"
-test-core = "test --lib --no-fail-fast --no-default-features"
-test-cli = "test --bin bitloops --no-fail-fast --no-default-features"
-test-integration = "test --tests --no-fail-fast --no-default-features"
+test-all = "nextest run --no-fail-fast --no-default-features"
+test-core = "nextest run --lib --no-fail-fast --no-default-features"
+test-cli = "nextest run --bin bitloops --no-fail-fast --no-default-features"
+test-integration = "nextest run --tests --no-fail-fast --no-default-features"
 test-coverage = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --html --output-dir target/llvm-cov-html"
 test-coverage-lcov = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path target/llvm-cov.info"
 
 # QAT aliases
-qat = "test --features qat-tests --test qat_acceptance -- --exact qat --ignored"
-qat-smoke = "test --features qat-tests --test qat_acceptance qat_smoke -- --ignored --exact"
-qat-devql-sync = "test --features qat-tests --test qat_acceptance qat_devql_sync -- --ignored --exact"
-qat-onboarding = "test --features qat-tests --test qat_acceptance qat_onboarding -- --ignored --exact"
-qat-devql-capabilities = "test --features qat-tests --test qat_acceptance qat_devql_capabilities -- --ignored --exact"
-qat-devql-ingest = "test --features qat-tests --test qat_acceptance qat_devql_ingest -- --ignored --exact"
-
+qat = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat --exact"
+qat-smoke = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_smoke --exact"
+qat-devql-sync = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_sync --exact"
+qat-onboarding = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_onboarding --exact"
+qat-devql-capabilities = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_capabilities --exact"
+qat-devql-ingest = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_ingest --exact"

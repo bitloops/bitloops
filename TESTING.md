@@ -2,6 +2,15 @@
 
 Run commands from the repository root.
 
+Install `cargo-nextest` before using the test lanes. On macOS, prefer:
+
+```bash
+brew install cargo-nextest
+```
+
+For other platforms, follow the official installation guide:
+[https://nexte.st/docs/installation/](https://nexte.st/docs/installation/)
+
 ## Default commands (Cargo aliases)
 
 | Goal                                             | Command                      |
@@ -29,20 +38,22 @@ Run commands from the repository root.
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
-The checked-in default fast-lane concurrency is `8` test threads.
-CI is pinned to `BITLOOPS_TEST_THREADS=6`.
+`cargo-nextest` is the default runner behind `dev-test-*`, `test-*`, and `qat*`.
+That default does not ban `cargo test`: use the checked-in aliases for the standard lanes, and use `cargo test` only where this guide explicitly calls for it or where `cargo-nextest` cannot cover the case.
+The checked-in local `nextest` default is `8` test threads.
+CI uses the `ci` `nextest` profile, pinned to `6` test threads.
 `cargo dev-test-merge` runs the fast lane plus a curated set of slow smoke suites and is the blocking gate for pull requests into `develop`.
 `cargo dev-test-slow` runs all slow targets only.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
-`dev-test-*` aliases run with terse test output (`.` style) by default.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
 `cargo qat` runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite.
+`cargo qat` forces `--no-capture` so the bundled ignored QAT journey streams progress reliably during long daemon-backed runs.
 `cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
 `cargo qat-devql-sync` is the focused DevQL sync alias.
 
 ### Fast-lane thread tuning
 
-- Override the local default with `BITLOOPS_TEST_THREADS=<n> cargo dev-test-fast`.
+- Override the local fast-lane default with `BITLOOPS_TEST_THREADS=<n> cargo dev-test-fast`.
 - For a persistent per-machine override, export `BITLOOPS_TEST_THREADS` from your shell profile, for example `~/.zshrc`.
 - Recommended starting points:
   - Apple Silicon laptops with more headroom: try `8` to `10`
@@ -123,6 +134,8 @@ The `postgres-tests` Cargo feature is **not** enabled by `slow-tests`, `dev-test
 ```bash
 cargo test -p bitloops --lib --no-default-features --features postgres-tests
 ```
+
+If the repo gains doctests in future, keep running those through `cargo test --doc`; `cargo-nextest` does not support doctests. This is another explicit exception to the default `nextest`-backed lanes above.
 
 ## Checklist before opening a PR
 
