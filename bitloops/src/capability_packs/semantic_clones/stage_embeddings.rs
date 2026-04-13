@@ -365,7 +365,7 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
         &embeddings::ActiveEmbeddingRepresentationState::new(representation_kind, setup),
     )
     .await?;
-    let clone_build = if representation_kind == embeddings::EmbeddingRepresentationKind::Code {
+    let clone_build = if representation_updates_clone_scoring(representation_kind) {
         crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
             relational, repo_id,
         )
@@ -379,6 +379,16 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
         embedding_stats,
         clone_build,
     })
+}
+
+fn representation_updates_clone_scoring(
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> bool {
+    matches!(
+        representation_kind,
+        embeddings::EmbeddingRepresentationKind::Code
+            | embeddings::EmbeddingRepresentationKind::Summary
+    )
 }
 
 async fn current_repo_semantic_clone_rows_are_complete(

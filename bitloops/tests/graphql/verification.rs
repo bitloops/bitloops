@@ -1,4 +1,4 @@
-use crate::fixtures::{run_query_json, seeded_rust_graphql_workspace};
+use crate::fixtures::{run_query_json_until, seeded_rust_graphql_workspace};
 use serde_json::Value;
 
 const FIXTURE_FILE_PATH: &str = "src/repositories/user_repository.rs";
@@ -25,7 +25,7 @@ fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
         return;
     }
     let seeded = seeded_rust_graphql_workspace("graphql-cli-parity");
-    let dsl_output = run_query_json(
+    let dsl_output = run_query_json_until(
         &seeded,
         &[
             "devql",
@@ -33,6 +33,8 @@ fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
             "--compact",
             r#"file("src/repositories/user_repository.rs")->artefacts()->select(path,canonical_kind,symbol_fqn)->limit(10)"#,
         ],
+        "DSL artefact rows",
+        |payload| payload.as_array().is_some_and(|rows| !rows.is_empty()),
     );
 
     let raw_query = r#"
@@ -50,9 +52,11 @@ fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
           }
         }
     "#;
-    let raw_output = run_query_json(
+    let raw_output = run_query_json_until(
         &seeded,
         &["devql", "query", "--graphql", "--compact", raw_query],
+        "raw GraphQL artefact rows",
+        |payload| !extract_file_connection_nodes(payload).is_empty(),
     );
 
     let raw_nodes = Value::Array(extract_file_connection_nodes(&raw_output));
@@ -90,10 +94,17 @@ fn bitloops_devql_query_accepts_graphql_as_default_input_mode_end_to_end() {
         }
     "#;
 
-    let default_output = run_query_json(&seeded, &["devql", "query", "--compact", query]);
-    let explicit_output = run_query_json(
+    let default_output = run_query_json_until(
+        &seeded,
+        &["devql", "query", "--compact", query],
+        "default GraphQL artefact rows",
+        |payload| !extract_file_connection_nodes(payload).is_empty(),
+    );
+    let explicit_output = run_query_json_until(
         &seeded,
         &["devql", "query", "--graphql", "--compact", query],
+        "explicit GraphQL artefact rows",
+        |payload| !extract_file_connection_nodes(payload).is_empty(),
     );
 
     let default_nodes = extract_file_connection_nodes(&default_output);

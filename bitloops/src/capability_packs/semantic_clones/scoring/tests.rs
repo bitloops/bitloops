@@ -33,6 +33,15 @@ fn sample_input(symbol_id: &str, name: &str) -> SymbolCloneCandidateInput {
     }
 }
 
+fn attach_summary_embedding(
+    input: &mut SymbolCloneCandidateInput,
+    setup: &EmbeddingSetup,
+    embedding: Vec<f32>,
+) {
+    input.summary_embedding_setup = Some(setup.clone());
+    input.summary_embedding = embedding;
+}
+
 #[test]
 fn clone_scoring_options_clamp_neighbors() {
     assert_eq!(
@@ -88,15 +97,21 @@ fn build_symbol_clone_edges_marks_exact_duplicates() {
 
 #[test]
 fn build_symbol_clone_edges_marks_diverged_implementations() {
+    let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
+
     let mut source = sample_input("source", "validate_order_checkout");
-    source.embedding = vec![0.9, 0.2, 0.0];
+    source.embedding = vec![1.0, 0.0, 0.0];
     source.call_targets = vec!["rules.checkout".to_string()];
     source.normalized_body_tokens = vec!["validate".to_string(), "checkout".to_string()];
+    source.summary = "Function validate order checkout. Validates checkout rules.".to_string();
+    attach_summary_embedding(&mut source, &summary_setup, vec![1.0, 0.0, 0.0]);
 
     let mut target = sample_input("target", "validate_order_draft");
-    target.embedding = vec![0.7, 0.3, 0.0];
+    target.embedding = vec![0.99, 0.01, 0.0];
     target.call_targets = vec!["rules.draft".to_string()];
     target.normalized_body_tokens = vec!["validate".to_string(), "draft".to_string()];
+    target.summary = "Function validate order draft. Validates draft rules.".to_string();
+    attach_summary_embedding(&mut target, &summary_setup, vec![-1.0, 0.0, 0.0]);
 
     let result = build_symbol_clone_edges(&[source, target]);
 
@@ -158,6 +173,74 @@ fn build_symbol_clone_edges_labels_preferred_local_patterns() {
         .get("labels")
         .and_then(Value::as_array);
     assert!(labels.is_some());
+}
+
+#[test]
+fn build_symbol_clone_edges_uses_text_fallback_without_forcing_reuse_drift() {
+    let mut source = sample_input("source", "create_invoice_pdf");
+    source.path = "src/pdf.ts".to_string();
+    source.symbol_fqn = "src/pdf.ts::create_invoice_pdf".to_string();
+    source.summary =
+        "Function create invoice pdf. Generates an invoice PDF for an order.".to_string();
+    source.identifier_tokens = vec![
+        "create".to_string(),
+        "invoice".to_string(),
+        "pdf".to_string(),
+        "order".to_string(),
+        "locale".to_string(),
+    ];
+    source.normalized_body_tokens = vec![
+        "generate".to_string(),
+        "invoice".to_string(),
+        "pdf".to_string(),
+        "order".to_string(),
+        "locale".to_string(),
+    ];
+    source.context_tokens = vec!["src".to_string(), "pdf".to_string(), "invoice".to_string()];
+    source.embedding = vec![0.91, 0.09, 0.0];
+
+    let mut target = sample_input("target", "render_invoice_document");
+    target.path = "src/render.ts".to_string();
+    target.symbol_fqn = "src/render.ts::render_invoice_document".to_string();
+    target.summary =
+        "Function render invoice document. Renders the invoice document for an order.".to_string();
+    target.identifier_tokens = vec![
+        "render".to_string(),
+        "invoice".to_string(),
+        "document".to_string(),
+        "order".to_string(),
+        "locale".to_string(),
+    ];
+    target.normalized_body_tokens = vec![
+        "render".to_string(),
+        "invoice".to_string(),
+        "document".to_string(),
+        "order".to_string(),
+        "locale".to_string(),
+    ];
+    target.context_tokens = vec![
+        "src".to_string(),
+        "render".to_string(),
+        "invoice".to_string(),
+    ];
+    target.embedding = vec![0.89, 0.11, 0.0];
+
+    let result = build_symbol_clone_edges(&[source, target]);
+    let edge = result
+        .edges
+        .iter()
+        .find(|edge| edge.target_symbol_id == "target")
+        .expect("text-fallback similar implementation edge");
+
+    assert_eq!(edge.relation_kind, RELATION_KIND_SIMILAR_IMPLEMENTATION);
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["summary_signal_source"],
+        Value::String("text_fallback".to_string())
+    );
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["interpretation"],
+        Value::String("same_behaviour_similar_implementation".to_string())
+    );
 }
 
 #[test]
@@ -428,16 +511,14 @@ fn build_symbol_clone_edges_exposes_multi_view_similarity_pattern() {
     let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
 
     let mut source = sample_input("source", "normalize_checkout");
-    source.summary_embedding_setup = Some(summary_setup.clone());
-    source.summary_embedding = vec![1.0, 0.0, 0.0];
+    attach_summary_embedding(&mut source, &summary_setup, vec![1.0, 0.0, 0.0]);
 
     let mut target = sample_input("target", "normalize_checkout_copy");
     target.path = "src/services/target.ts".to_string();
     target.symbol_fqn = "src/services/target.ts::normalize_checkout_copy".to_string();
     target.summary = "Function archive draft invoice.".to_string();
     target.embedding = vec![0.99, 0.01, 0.0];
-    target.summary_embedding_setup = Some(summary_setup);
-    target.summary_embedding = vec![-1.0, 0.0, 0.0];
+    attach_summary_embedding(&mut target, &summary_setup, vec![-1.0, 0.0, 0.0]);
 
     let result = build_symbol_clone_edges(&[source, target]);
     let edge = result
@@ -450,6 +531,18 @@ fn build_symbol_clone_edges_exposes_multi_view_similarity_pattern() {
         edge.explanation_json["evidence"]["semantic_views"]["match_pattern"],
         Value::String("high_low".to_string())
     );
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["interpretation"],
+        Value::String("implementation_reuse_drift".to_string())
+    );
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["primary_driver"],
+        Value::String("code".to_string())
+    );
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["summary_signal_source"],
+        Value::String("embedding".to_string())
+    );
     assert!(
         edge.explanation_json["scores"]["code_embedding"]
             .as_f64()
@@ -458,6 +551,117 @@ fn build_symbol_clone_edges_exposes_multi_view_similarity_pattern() {
                 .as_f64()
                 .expect("summary embedding score")
     );
+}
+
+#[test]
+fn build_symbol_clone_edges_uses_summary_embedding_over_text_overlap_when_available() {
+    let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
+
+    let mut source = sample_input("source", "normalize_checkout");
+    source.embedding = vec![1.0, 0.0, 0.0];
+    source.summary = "Function archive draft invoice.".to_string();
+    attach_summary_embedding(&mut source, &summary_setup, vec![1.0, 0.0, 0.0]);
+
+    let mut target = sample_input("target", "normalize_checkout_copy");
+    target.path = "src/services/target.ts".to_string();
+    target.symbol_fqn = "src/services/target.ts::normalize_checkout_copy".to_string();
+    target.embedding = vec![0.99, 0.01, 0.0];
+    target.summary = source.summary.clone();
+    attach_summary_embedding(&mut target, &summary_setup, vec![-1.0, 0.0, 0.0]);
+
+    let result = build_symbol_clone_edges(&[source, target]);
+    let edge = result
+        .edges
+        .iter()
+        .find(|edge| edge.target_symbol_id == "target")
+        .expect("vector-first clone edge");
+
+    assert_eq!(
+        edge.explanation_json["scores"]["summary_similarity"],
+        Value::from(0.0)
+    );
+    assert_eq!(
+        edge.explanation_json["scores"]["summary_text_similarity"],
+        Value::from(1.0)
+    );
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["summary_signal_source"],
+        Value::String("embedding".to_string())
+    );
+}
+
+#[test]
+fn build_symbol_clone_edges_marks_summary_driven_behaviour_matches_as_shared_logic() {
+    let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
+
+    let mut source = sample_input("source", "normalize_checkout");
+    source.embedding = vec![1.0, 0.0, 0.0];
+    source.summary = "Validates a checkout request before final submission.".to_string();
+    attach_summary_embedding(&mut source, &summary_setup, vec![1.0, 0.0, 0.0]);
+
+    let mut target = sample_input("target", "validate_checkout_workflow");
+    target.path = "src/services/summary_neighbor.ts".to_string();
+    target.symbol_fqn = "src/services/summary_neighbor.ts::validate_checkout_workflow".to_string();
+    target.embedding = vec![-1.0, 0.0, 0.0];
+    target.summary = "Validates a checkout request before final submission.".to_string();
+    attach_summary_embedding(&mut target, &summary_setup, vec![0.99, 0.01, 0.0]);
+
+    let result = build_symbol_clone_edges(&[source, target]);
+    let edge = result
+        .edges
+        .iter()
+        .find(|edge| edge.target_symbol_id == "target")
+        .expect("summary-driven clone edge");
+
+    assert_eq!(edge.relation_kind, RELATION_KIND_SHARED_LOGIC_CANDIDATE);
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["interpretation"],
+        Value::String("same_behaviour_different_implementation".to_string())
+    );
+    assert_eq!(
+        edge.explanation_json["evidence"]["semantic_views"]["primary_driver"],
+        Value::String("summary".to_string())
+    );
+}
+
+#[test]
+fn low_code_low_summary_pairs_are_unrelated_and_do_not_emit_edges() {
+    let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
+
+    let mut source = sample_input("source", "normalize_checkout");
+    source.embedding = vec![1.0, 0.0, 0.0];
+    source.summary = "Validates a checkout request before final submission.".to_string();
+    attach_summary_embedding(&mut source, &summary_setup, vec![1.0, 0.0, 0.0]);
+
+    let mut target = sample_input("target", "archive_customer_profile");
+    target.path = "src/archive/customer.ts".to_string();
+    target.symbol_fqn = "src/archive/customer.ts::archive_customer_profile".to_string();
+    target.normalized_name = "archive_customer_profile".to_string();
+    target.normalized_signature =
+        Some("function archive_customer_profile(customerId: string)".to_string());
+    target.identifier_tokens = vec![
+        "archive".to_string(),
+        "customer".to_string(),
+        "profile".to_string(),
+    ];
+    target.normalized_body_tokens = vec![
+        "archive".to_string(),
+        "customer".to_string(),
+        "profile".to_string(),
+    ];
+    target.context_tokens = vec!["archive".to_string(), "customer".to_string()];
+    target.call_targets = vec!["archiveRepo.persist".to_string()];
+    target.dependency_targets = vec!["references:archive_repository::entity".to_string()];
+    target.embedding = vec![-1.0, 0.0, 0.0];
+    target.summary = "Archives a customer profile for retention.".to_string();
+    attach_summary_embedding(&mut target, &summary_setup, vec![-1.0, 0.0, 0.0]);
+
+    let lexical = lexical_signals(&source, &target);
+    let structural = structural_signals(&source, &target, lexical.name_match);
+    let derived = derived_clone_signals(&source, &target, 0.0, Some(0.0), &lexical, &structural);
+
+    assert_eq!(derived.interpretation, SemanticInterpretation::Unrelated);
+    assert!(build_symbol_clone_edges(&[source, target]).edges.is_empty());
 }
 
 #[test]
