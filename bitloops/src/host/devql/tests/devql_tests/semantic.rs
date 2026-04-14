@@ -390,7 +390,10 @@ fn load_current_embedding_rows(sqlite_path: &Path, repo_id: &str) -> Vec<Current
         .prepare(
             "SELECT a.symbol_fqn, a.path, e.representation_kind, e.provider, e.model, e.dimension, e.embedding_input_hash
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY a.path, a.start_line, a.symbol_fqn, e.representation_kind",
         )
@@ -432,7 +435,10 @@ fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(Stri
         .prepare(
             "SELECT DISTINCT e.provider, e.model, e.dimension
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY e.provider, e.model, e.dimension",
         )
@@ -446,7 +452,7 @@ fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(Stri
 fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
     conn.query_row(
-        "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+        "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
         [repo_id],
         |row| row.get(0),
     )

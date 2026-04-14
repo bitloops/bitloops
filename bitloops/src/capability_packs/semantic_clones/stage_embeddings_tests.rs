@@ -50,10 +50,26 @@ async fn sqlite_relational_with_embedding_state_schema() -> RelationalStorage {
     sqlite_relational_with_schema(&format!(
         "{}\nCREATE TABLE symbol_semantics (artefact_id TEXT PRIMARY KEY, summary TEXT);
 CREATE TABLE symbol_features (artefact_id TEXT PRIMARY KEY);
+CREATE TABLE symbol_semantics_current (
+    repo_id TEXT NOT NULL,
+    artefact_id TEXT PRIMARY KEY,
+    path TEXT,
+    content_id TEXT,
+    symbol_id TEXT,
+    summary TEXT
+);
+CREATE TABLE symbol_features_current (
+    repo_id TEXT NOT NULL,
+    artefact_id TEXT PRIMARY KEY,
+    path TEXT,
+    content_id TEXT,
+    symbol_id TEXT
+);
 CREATE TABLE artefacts_current (
     repo_id TEXT NOT NULL,
     artefact_id TEXT PRIMARY KEY,
     path TEXT,
+    content_id TEXT,
     start_line INTEGER,
     symbol_id TEXT,
     canonical_kind TEXT,
@@ -100,8 +116,64 @@ async fn insert_fully_indexed_current_artefact_with_stored_representation(
     let setup_fingerprint = test_setup_fingerprint(provider, model, dimension);
     relational
         .exec(&format!(
-            "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id, canonical_kind, language_kind)
-             VALUES ('repo-1', '{artefact_id}', 'src/a.ts', 1, 'sym-{artefact_id}', 'function', 'function')",
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, content_id, start_line, symbol_id, canonical_kind, language_kind)
+             VALUES ('repo-1', '{artefact_id}', 'src/a.ts', 'blob-1', 1, 'sym-{artefact_id}', 'function', 'function')",
+            artefact_id = esc_pg(artefact_id),
+        ))
+        .await
+        .expect("insert current artefact");
+    relational
+        .exec(
+            "INSERT INTO current_file_state (repo_id, path, analysis_mode)
+             VALUES ('repo-1', 'src/a.ts', 'code')
+             ON CONFLICT (repo_id, path) DO UPDATE SET analysis_mode = excluded.analysis_mode",
+        )
+        .await
+        .expect("insert current file state");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_semantics_current (repo_id, artefact_id, path, content_id, symbol_id, summary)
+             VALUES ('repo-1', '{artefact_id}', 'src/a.ts', 'blob-1', 'sym-{artefact_id}', 'Function summary.')",
+            artefact_id = esc_pg(artefact_id),
+        ))
+        .await
+        .expect("insert current semantic row");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_features_current (repo_id, artefact_id, path, content_id, symbol_id)
+             VALUES ('repo-1', '{artefact_id}', 'src/a.ts', 'blob-1', 'sym-{artefact_id}')",
+            artefact_id = esc_pg(artefact_id),
+        ))
+        .await
+        .expect("insert current feature row");
+    relational
+        .exec(&format!(
+            "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
+             VALUES ('{artefact_id}', 'repo-1', 'src/a.ts', 'blob-1', 'sym-{artefact_id}', '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, 'hash-{artefact_id}', '[0.1,0.2,0.3]')",
+            artefact_id = esc_pg(artefact_id),
+            representation_kind = esc_pg(stored_representation_kind),
+            setup_fingerprint = esc_pg(&setup_fingerprint),
+            provider = esc_pg(provider),
+            model = esc_pg(model),
+            dimension = dimension,
+        ))
+        .await
+        .expect("insert current embedding row");
+}
+
+async fn insert_fully_indexed_historical_current_artefact(
+    relational: &RelationalStorage,
+    artefact_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    provider: &str,
+    model: &str,
+    dimension: usize,
+) {
+    let setup_fingerprint = test_setup_fingerprint(provider, model, dimension);
+    relational
+        .exec(&format!(
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, content_id, start_line, symbol_id, canonical_kind, language_kind)
+             VALUES ('repo-1', '{artefact_id}', 'src/a.ts', 'blob-1', 1, 'sym-{artefact_id}', 'function', 'function')",
             artefact_id = esc_pg(artefact_id),
         ))
         .await
@@ -121,7 +193,7 @@ async fn insert_fully_indexed_current_artefact_with_stored_representation(
             artefact_id = esc_pg(artefact_id),
         ))
         .await
-        .expect("insert semantic row");
+        .expect("insert historical semantic row");
     relational
         .exec(&format!(
             "INSERT INTO symbol_features (artefact_id)
@@ -129,20 +201,20 @@ async fn insert_fully_indexed_current_artefact_with_stored_representation(
             artefact_id = esc_pg(artefact_id),
         ))
         .await
-        .expect("insert feature row");
+        .expect("insert historical feature row");
     relational
         .exec(&format!(
             "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding)
              VALUES ('{artefact_id}', 'repo-1', 'blob-1', '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, 'hash-{artefact_id}', '[0.1,0.2,0.3]')",
             artefact_id = esc_pg(artefact_id),
-            representation_kind = esc_pg(stored_representation_kind),
+            representation_kind = esc_pg(&representation_kind.to_string()),
             setup_fingerprint = esc_pg(&setup_fingerprint),
             provider = esc_pg(provider),
             model = esc_pg(model),
             dimension = dimension,
         ))
         .await
-        .expect("insert embedding row");
+        .expect("insert historical embedding row");
 }
 
 #[test]
@@ -660,6 +732,32 @@ async fn semantic_embedding_sync_action_adopts_existing_single_setup() {
 }
 
 #[tokio::test]
+async fn semantic_embedding_sync_action_refreshes_when_only_historical_rows_exist_for_current_repo()
+{
+    let relational = sqlite_relational_with_embedding_state_schema().await;
+    insert_fully_indexed_historical_current_artefact(
+        &relational,
+        "artefact-1",
+        embeddings::EmbeddingRepresentationKind::Code,
+        TEST_EMBEDDINGS_DRIVER,
+        TEST_EMBEDDINGS_MODEL,
+        3,
+    )
+    .await;
+
+    let action = determine_repo_embedding_sync_action(
+        &relational,
+        "repo-1",
+        embeddings::EmbeddingRepresentationKind::Code,
+        &embeddings::EmbeddingSetup::new(TEST_EMBEDDINGS_DRIVER, TEST_EMBEDDINGS_MODEL, 3),
+    )
+    .await
+    .expect("sync action");
+
+    assert_eq!(action, RepoEmbeddingSyncAction::RefreshCurrentRepo);
+}
+
+#[tokio::test]
 async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_partial() {
     let relational = sqlite_relational_with_embedding_state_schema().await;
     insert_fully_indexed_current_artefact(
@@ -673,8 +771,8 @@ async fn semantic_embedding_sync_action_refreshes_when_current_repo_coverage_is_
     .await;
     relational
         .exec(
-            "INSERT INTO artefacts_current (repo_id, artefact_id, path, start_line, symbol_id, canonical_kind, language_kind)
-             VALUES ('repo-1', 'artefact-2', 'src/b.ts', 2, 'sym-2', 'function', 'function')",
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, content_id, start_line, symbol_id, canonical_kind, language_kind)
+             VALUES ('repo-1', 'artefact-2', 'src/b.ts', 'blob-2', 2, 'sym-2', 'function', 'function')",
         )
         .await
         .expect("insert uncovered current artefact");

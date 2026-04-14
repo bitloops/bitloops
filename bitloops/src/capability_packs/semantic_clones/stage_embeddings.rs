@@ -1,6 +1,6 @@
 //! Stage 2: symbol embedding rows (`symbol_embeddings`) for the semantic_clones pipeline.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -345,7 +345,14 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
             .await?;
     let semantic_feature_stats =
         super::upsert_semantic_feature_rows(relational, &current_inputs, summary_provider).await?;
-    let embedding_stats = upsert_symbol_embedding_rows(
+    upsert_symbol_embedding_rows(
+        relational,
+        &current_inputs,
+        representation_kind,
+        Arc::clone(&embedding_provider),
+    )
+    .await?;
+    let embedding_stats = upsert_current_repo_symbol_embedding_rows(
         relational,
         &current_inputs,
         representation_kind,
@@ -367,6 +374,10 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
     .await?;
     let clone_build = if representation_updates_clone_scoring(representation_kind) {
         crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
+            relational, repo_id,
+        )
+        .await?;
+        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
             relational, repo_id,
         )
         .await?
@@ -621,18 +632,10 @@ fn build_current_repo_embedding_states_sql(
         })
         .unwrap_or_default();
     format!(
-        "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
-FROM ( \
-    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
-    FROM artefacts_current a \
-    JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
-    WHERE a.repo_id = '{repo_id}' {representation_filter} \
-    UNION \
-    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
-    FROM artefacts_current a \
-    JOIN symbol_embeddings e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
-    WHERE a.repo_id = '{repo_id}' {representation_filter} \
-) setups \
+        "SELECT DISTINCT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
+FROM artefacts_current a \
+JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
+WHERE a.repo_id = '{repo_id}' {representation_filter} \
 ORDER BY representation_kind, provider, model, dimension, setup_fingerprint",
         repo_id = esc_pg(repo_id),
         representation_filter = representation_filter,
@@ -653,9 +656,9 @@ fn build_current_repo_semantic_clone_coverage_sql(
                AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import') AS eligible_current_artefacts, \
             (SELECT COUNT(DISTINCT a.artefact_id) FROM artefacts_current a \
              JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
-             JOIN symbol_features sf ON sf.artefact_id = a.artefact_id \
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
+             JOIN symbol_semantics_current ss ON ss.repo_id = a.repo_id AND ss.artefact_id = a.artefact_id AND ss.content_id = a.content_id \
+             JOIN symbol_features_current sf ON sf.repo_id = a.repo_id AND sf.artefact_id = a.artefact_id AND sf.content_id = a.content_id \
+             JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
              WHERE a.repo_id = '{repo_id}' \
                AND cfs.analysis_mode = 'code' \
                AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
@@ -670,6 +673,38 @@ fn build_current_repo_semantic_clone_coverage_sql(
         model = esc_pg(&setup.model),
         dimension = setup.dimension,
     )
+}
+
+async fn upsert_current_repo_symbol_embedding_rows(
+    relational: &RelationalStorage,
+    inputs: &[semantic::SemanticFeatureInput],
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    embedding_provider: Arc<dyn EmbeddingService>,
+) -> Result<embeddings::SymbolEmbeddingIngestionStats> {
+    let mut grouped = BTreeMap::<(String, String), Vec<semantic::SemanticFeatureInput>>::new();
+    for input in inputs {
+        grouped
+            .entry((input.path.clone(), input.blob_sha.clone()))
+            .or_default()
+            .push(input.clone());
+    }
+
+    let mut stats = embeddings::SymbolEmbeddingIngestionStats::default();
+    for ((path, content_id), path_inputs) in grouped {
+        let path_stats = upsert_current_symbol_embedding_rows(
+            relational,
+            &path,
+            &content_id,
+            &path_inputs,
+            representation_kind,
+            Arc::clone(&embedding_provider),
+        )
+        .await?;
+        stats.eligible += path_stats.eligible;
+        stats.upserted += path_stats.upserted;
+        stats.skipped += path_stats.skipped;
+    }
+    Ok(stats)
 }
 
 fn build_active_embedding_setup_persist_sql(

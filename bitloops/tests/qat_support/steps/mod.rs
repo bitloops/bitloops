@@ -575,12 +575,12 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^semantic clone current projection tables are populated without inline embeddings in (\S+)$"),
+            regex(r"^semantic clone current projection tables are populated in (\S+)$"),
             step_fn(then_semantic_clone_current_tables_populated),
         )
         .then(
             None,
-            regex(r"^semantic clone historical embeddings and current artefacts expose code and summary channels in (\S+)$"),
+            regex(r"^semantic clone historical and current embeddings expose code and summary channels in (\S+)$"),
             step_fn(then_semantic_clone_representation_channels_populated),
         )
         .then(
