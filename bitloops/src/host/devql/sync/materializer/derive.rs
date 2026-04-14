@@ -221,22 +221,27 @@ pub(super) fn parse_cached_language_kind(
         CSharpKind, GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
     };
 
-    let parsed = match language {
-        "csharp" => CSharpKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::csharp),
-        "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
-        "java" => JavaKind::from_tree_sitter_kind(raw_kind)
-            .or(match raw_kind {
+    let normalized_language = language.trim().to_ascii_lowercase();
+    let normalized_kind = raw_kind.trim();
+
+    let parsed = match normalized_language.as_str() {
+        "csharp" | "c#" => {
+            CSharpKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::csharp)
+        }
+        "go" => GoKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::go),
+        "java" => JavaKind::from_tree_sitter_kind(normalized_kind)
+            .or(match normalized_kind {
                 // Historical caches may carry TS-flavoured names for Java class nodes.
                 "class_declaration" => Some(JavaKind::Class),
                 _ => None,
             })
             .map(LanguageKind::java),
-        "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
-        "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
+        "python" => PythonKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::python),
+        "rust" => RustKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::rust),
         "typescript" | "javascript" => {
-            TsJsKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::ts_js)
+            TsJsKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::ts_js)
         }
-        _ => LanguageKind::try_from(raw_kind).ok(),
+        _ => LanguageKind::try_from(normalized_kind).ok(),
     };
 
     parsed.ok_or_else(|| anyhow!("unsupported cached language_kind `{raw_kind}` for `{language}`"))

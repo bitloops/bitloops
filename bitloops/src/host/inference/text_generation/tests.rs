@@ -323,27 +323,25 @@ fn gateway_uses_same_daemon_config_path_as_host_inference_resolution() {
         .expect("create config parent");
     std::fs::write(
         &script_path,
-        format!(
-            r#"launch_log="$1"
+        r#"launch_log="$1"
 printf '%s\n' "$4" >> "$launch_log"
 
 while IFS= read -r line; do
   request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
   case "$line" in
     *'"type":"describe"'*)
-      printf '{{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}}}\n' "$request_id"
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}\n' "$request_id"
       ;;
     *'"type":"shutdown"'*)
-      printf '{{"type":"shutdown","request_id":"%s"}}\n' "$request_id"
+      printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
       exit 0
       ;;
     *'"type":"infer"'*)
-      printf '{{"type":"infer","request_id":"%s","text":"","parsed_json":{{"summary":"Summarises the symbol.","confidence":0.91}},"provider_name":"ollama","model_name":"ministral-3:3b"}}\n' "$request_id"
+      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
       ;;
   esac
 done
 "#,
-        ),
     )
     .expect("write fake runtime script");
     std::fs::write(
