@@ -1,12 +1,23 @@
 use super::*;
+use crate::capability_packs::semantic_clones::embeddings;
+use crate::capability_packs::semantic_clones::features as semantic;
+use crate::capability_packs::semantic_clones::ingesters::{
+    EmbeddingRefreshMode, SemanticFeaturesRefreshPayload, SemanticFeaturesRefreshScope,
+    SemanticSummaryRefreshMode, SymbolEmbeddingsRefreshPayload, SymbolEmbeddingsRefreshScope,
+};
+use crate::capability_packs::semantic_clones::runtime_config::{
+    EmbeddingProviderMode, SummaryProviderMode, embeddings_enabled, resolve_embedding_provider,
+    resolve_semantic_clones_config, resolve_summary_provider,
+};
+use crate::capability_packs::semantic_clones::workplane::{
+    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
+};
 use crate::capability_packs::semantic_clones::{
-    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup,
+    RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
     determine_repo_embedding_sync_action, load_active_embedding_setup,
     load_current_repo_embedding_states, load_semantic_feature_inputs_for_current_repo,
     persist_active_embedding_setup,
 };
-use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
-
 pub async fn run_ingest(cfg: &DevqlConfig) -> Result<()> {
     let summary = execute_ingest(cfg).await?;
     println!("{}", format_ingestion_summary(&summary));
@@ -59,6 +70,7 @@ async fn execute_ingest_inner(
         init_requested: init,
         ..IngestionCounters::default()
     };
+    let mut encountered_commit_failures = false;
     let mut commits_total = 0usize;
     let mut commits_processed = 0usize;
     emit_progress(
@@ -76,59 +88,43 @@ async fn execute_ingest_inner(
     let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     let knowledge_context =
         capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
             .context("resolving knowledge capability ingester owner")?;
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
-    let semantic_clones = capability.semantic_clones.clone();
-    let preferred_representation_kind = if semantic_clones.summary_mode == SemanticSummaryMode::Auto
-    {
-        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched
-    } else {
-        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline
-    };
-    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> = if enrichment.is_some()
-        || semantic_clones.summary_mode == SemanticSummaryMode::Off
-    {
-        Arc::new(semantic::NoopSemanticSummaryProvider)
-    } else {
-        match semantic_clones_pack::build_semantic_summary_provider(&semantic_provider_config(cfg)) {
-            Ok(provider) => provider,
-            Err(err) => {
-                log::warn!(
-                    "semantic_clones semantic summaries degraded; using deterministic summaries only: {err:#}"
-                );
-                Arc::new(semantic::NoopSemanticSummaryProvider)
-            }
-        }
-    };
-    let embedding_config = embedding_provider_config(cfg);
-    for warning in &embedding_config.warnings {
-        log::warn!("semantic_clones embeddings config warning: {warning}");
-    }
-    let embedding_outputs_enabled = semantic_clones.embedding_mode != SemanticCloneEmbeddingMode::Off
-        && embedding_config.embedding_profile.is_some();
-    let mut embedding_warning = None;
-    let embedding_provider = if enrichment.is_none() && embedding_outputs_enabled {
-        match semantic_clones_pack::build_symbol_embedding_provider(
-            &embedding_config,
-            Some(&cfg.repo_root),
-        ) {
-            Ok(provider) => provider,
-            Err(err) => {
-                embedding_warning = Some(format!("{err:#}"));
-                None
-            }
-        }
+    let semantic_clones = resolve_semantic_clones_config(
+        &capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID),
+    );
+    let semantic_clones_workplane = if enrichment.is_some() {
+        Some(capability_host.build_workplane_gateway(SEMANTIC_CLONES_CAPABILITY_ID)?)
     } else {
         None
     };
-
-    ensure_repository_row(cfg, &relational).await?;
-
+    let semantic_clones_workplane_intent = match semantic_clones_workplane.as_ref() {
+        Some(workplane) => Some(resolve_effective_mailbox_intent(
+            workplane.as_ref(),
+            &semantic_clones,
+        )?),
+        None => None,
+    };
+    let semantic_inference = capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
+    let preferred_representation_kind =
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code;
+    let embedding_outputs_enabled = embeddings_enabled(&semantic_clones);
+    let mut embedding_warning = None;
+    let mut direct_embedding_provider_available = false;
     let mut resolved_embedding_setup = None;
-    let direct_embedding_sync_action = if enrichment.is_none() {
-        if let Some(embedding_provider) = embedding_provider.as_ref() {
+    let direct_embedding_sync_action = if enrichment.is_none() && embedding_outputs_enabled {
+        let selection = resolve_embedding_provider(
+            &semantic_clones,
+            &semantic_inference,
+            preferred_representation_kind,
+            EmbeddingProviderMode::ConfiguredDegrade,
+        )?;
+        if selection.degraded_reason.is_some() {
+            embedding_warning = selection.degraded_reason.clone();
+        }
+        if let Some(embedding_provider) = selection.provider.as_ref() {
             let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
             let action = determine_repo_embedding_sync_action(
                 &relational,
@@ -138,6 +134,7 @@ async fn execute_ingest_inner(
             )
             .await?;
             resolved_embedding_setup = Some(setup);
+            direct_embedding_provider_available = true;
             Some(action)
         } else {
             None
@@ -146,13 +143,19 @@ async fn execute_ingest_inner(
         None
     };
 
+    ensure_repository_row(cfg, &relational).await?;
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for `devql ingest`")?;
+    let (parser_version, extractor_version) = resolve_pack_versions_for_ingest()
+        .context("resolving language pack versions for `devql ingest`")?;
+
     let head_sha = match run_git(&cfg.repo_root, &["rev-parse", "HEAD"]) {
         Ok(sha) => sha,
         Err(err) if is_missing_head_error(&err) => String::new(),
         Err(err) => return Err(err).context("resolving HEAD for commit history ingest"),
     };
     let active_branch = checked_out_branch_name(&cfg.repo_root);
-    let active_branch_for_enqueue = active_branch
+    let _active_branch_for_enqueue = active_branch
         .clone()
         .unwrap_or_else(|| active_branch_name(&cfg.repo_root));
     let mut commits = match explicit_commits {
@@ -195,7 +198,7 @@ async fn execute_ingest_inner(
     );
 
     let checkpoint_mappings = read_commit_checkpoint_mappings(&cfg.repo_root).unwrap_or_default();
-    let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
+    let mut existing_event_ids: Option<std::collections::HashSet<String>> = None;
 
     for commit_sha in commits {
         let checkpoint_id = checkpoint_mappings.get(&commit_sha).cloned();
@@ -255,6 +258,18 @@ async fn execute_ingest_inner(
         let commit_result: Result<()> = async {
             if !history_completed {
                 upsert_commit_metadata_row(cfg, &relational, &commit_info).await?;
+                let tracked_paths = tracked_paths_at_revision(&cfg.repo_root, &commit_sha)
+                    .with_context(|| format!("listing tracked files for commit {commit_sha}"))?;
+                let classifier = ProjectAwareClassifier::discover_for_revision(
+                    &cfg.repo_root,
+                    &commit_sha,
+                    tracked_paths,
+                    &parser_version,
+                    &extractor_version,
+                )
+                .with_context(|| {
+                    format!("building project-aware classifier for commit {commit_sha}")
+                })?;
                 let mut changed_files = crate::host::checkpoints::strategy::manual_commit::files_changed_in_commit(
                     &cfg.repo_root,
                     &commit_sha,
@@ -266,9 +281,19 @@ async fn execute_ingest_inner(
 
                 for path in changed_files {
                     let normalized_path = normalize_repo_path(&path);
-                    if normalized_path.is_empty()
-                        || resolve_language_id_for_file_path(&normalized_path).is_none()
-                    {
+                    if normalized_path.is_empty() {
+                        continue;
+                    }
+                    let excluded_by_policy =
+                        exclusion_matcher.excludes_repo_relative_path(&normalized_path);
+                    let classification = classifier
+                        .classify_repo_relative_path(&normalized_path, excluded_by_policy)
+                        .with_context(|| {
+                            format!(
+                                "classifying historical ingest path `{normalized_path}` at commit {commit_sha}"
+                            )
+                        })?;
+                    if classification.analysis_mode == AnalysisMode::Excluded {
                         continue;
                     }
 
@@ -287,14 +312,28 @@ async fn execute_ingest_inner(
                         &blob_sha,
                     )
                     .await?;
+                    if !classification.should_extract() {
+                        continue;
+                    }
+                    if classification.analysis_mode == AnalysisMode::Text
+                        && !plain_text_content_is_allowed(&content)
+                    {
+                        continue;
+                    }
                     let file_artefact = upsert_file_artefact_row(
                         &cfg.repo.repo_id,
                         &cfg.repo_root,
                         &relational,
                         &normalized_path,
                         &blob_sha,
+                        &classification.language,
+                        &classification.extraction_fingerprint,
                     )
                     .await?;
+                    if classification.analysis_mode == AnalysisMode::Text {
+                        counters.artefacts_upserted += 1;
+                        continue;
+                    }
                     upsert_language_artefacts(
                         cfg,
                         &relational,
@@ -328,28 +367,27 @@ async fn execute_ingest_inner(
                     )
                     .await?;
                     let semantic_feature_inputs =
-                        semantic_clones_pack::build_semantic_feature_inputs(
+                        semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
                             &pre_stage_artefacts,
                             &pre_stage_dependencies,
                             &content,
                         );
-                    let input_hashes = semantic_feature_inputs
-                        .iter()
-                        .map(|input| {
-                            (
-                                input.artefact_id.clone(),
-                                semantic::build_semantic_feature_input_hash(
-                                    input,
-                                    summary_provider.as_ref(),
-                                ),
-                            )
-                        })
-                        .collect::<std::collections::BTreeMap<_, _>>();
-                    let semantic_feature_stats = upsert_semantic_feature_rows(
-                        &relational,
-                        &semantic_feature_inputs,
-                        Arc::clone(&summary_provider),
-                    )
+                    let (semantic_feature_stats, input_hashes, _enriched) =
+                        run_semantic_features_refresh(
+                            &capability_host,
+                            &relational,
+                            SemanticFeaturesRefreshPayload {
+                                scope: SemanticFeaturesRefreshScope::Historical,
+                                path: None,
+                                content_id: None,
+                                inputs: semantic_feature_inputs.clone(),
+                                mode: if enrichment.is_some() {
+                                    SemanticSummaryRefreshMode::DeterministicOnly
+                                } else {
+                                    SemanticSummaryRefreshMode::ConfiguredDegrade
+                                },
+                            },
+                        )
                     .await
                     .with_context(|| {
                         format!(
@@ -357,54 +395,53 @@ async fn execute_ingest_inner(
                             knowledge_context.ingester_id, knowledge_context.capability_pack_id
                         )
                     })?;
-                    if let Some(enrichment) = enrichment.as_ref() {
-                        let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                            cfg.daemon_config_root.clone(),
-                            cfg.repo_root.clone(),
-                            cfg.repo.repo_id.clone(),
-                            active_branch_for_enqueue.clone(),
-                        );
-                        if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
-                            enrichment
-                                .enqueue_semantic_summaries(
-                                    enqueue_target.clone(),
-                                    semantic_feature_inputs.clone(),
-                                    input_hashes.clone(),
-                                )
-                                .await?;
+                    if let Some(workplane) = semantic_clones_workplane.as_ref() {
+                        if let Some(intent) = semantic_clones_workplane_intent.as_ref() {
+                            enqueue_summary_refresh_jobs(
+                                workplane.as_ref(),
+                                &semantic_feature_inputs,
+                                intent,
+                            )?;
+                            enqueue_embedding_jobs(
+                                workplane.as_ref(),
+                                &semantic_feature_inputs,
+                                intent,
+                            )?;
                         }
-
-                        if embedding_outputs_enabled {
-                            enrichment
-                                .enqueue_symbol_embeddings(
-                                    enqueue_target.clone(),
-                                    semantic_feature_inputs.clone(),
-                                    input_hashes.clone(),
-                                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
-                                )
-                                .await?;
-                        }
-                    } else if let Some(embedding_provider) = embedding_provider.as_ref() {
-                        let baseline_stats = upsert_symbol_embedding_rows(
+                    } else if direct_embedding_provider_available {
+                        let code_refresh = run_symbol_embeddings_refresh(
+                            &capability_host,
                             &relational,
-                            &semantic_feature_inputs,
-                            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
-                            Arc::clone(embedding_provider),
+                            SymbolEmbeddingsRefreshPayload {
+                                scope: SymbolEmbeddingsRefreshScope::Historical,
+                                path: None,
+                                content_id: None,
+                                inputs: semantic_feature_inputs.clone(),
+                                expected_input_hashes: input_hashes.clone(),
+                                representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+                                mode: EmbeddingRefreshMode::ConfiguredDegrade,
+                                manage_active_state: false,
+                            },
                         )
                         .await?;
-                        counters.symbol_embedding_rows_upserted += baseline_stats.upserted;
-                        counters.symbol_embedding_rows_skipped += baseline_stats.skipped;
-                        if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
-                            let enriched_stats = upsert_symbol_embedding_rows(
-                                &relational,
-                                &semantic_feature_inputs,
-                                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
-                                Arc::clone(embedding_provider),
-                            )
-                            .await?;
-                            counters.symbol_embedding_rows_upserted += enriched_stats.upserted;
-                            counters.symbol_embedding_rows_skipped += enriched_stats.skipped;
-                        }
+                        apply_symbol_embedding_refresh_counts(&mut counters, &code_refresh);
+
+                        let summary_refresh = run_symbol_embeddings_refresh(
+                            &capability_host,
+                            &relational,
+                            SymbolEmbeddingsRefreshPayload {
+                                scope: SymbolEmbeddingsRefreshScope::Historical,
+                                path: None,
+                                content_id: None,
+                                inputs: semantic_feature_inputs.clone(),
+                                expected_input_hashes: input_hashes.clone(),
+                                representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+                                mode: EmbeddingRefreshMode::ConfiguredDegrade,
+                                manage_active_state: false,
+                            },
+                        )
+                        .await?;
+                        apply_symbol_embedding_refresh_counts(&mut counters, &summary_refresh);
                     }
                     counters.artefacts_upserted += 1;
                     counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
@@ -432,6 +469,16 @@ async fn execute_ingest_inner(
                         checkpoint_id,
                     )?
                     .ok_or_else(|| anyhow!("checkpoint mapping exists but metadata is missing for `{checkpoint_id}`"))?;
+                    let existing_event_ids = match existing_event_ids.as_mut() {
+                        Some(ids) => ids,
+                        None => {
+                            existing_event_ids =
+                                Some(fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?);
+                            existing_event_ids
+                                .as_mut()
+                                .expect("checkpoint event ids must be initialised")
+                        }
+                    };
                     let event_id = deterministic_uuid(&format!(
                         "{}|{}|{}|checkpoint_committed",
                         cfg.repo.repo_id, checkpoint.checkpoint_id, checkpoint.session_id
@@ -496,7 +543,23 @@ async fn execute_ingest_inner(
                 &format!("{err:#}"),
             )
             .await;
-            return Err(err);
+            encountered_commit_failures = true;
+            log::warn!(
+                "devql ingest skipping failed commit `{}` and continuing: {err:#}",
+                commit_sha
+            );
+            counters.commits_processed += 1;
+            commits_processed += 1;
+            emit_progress(
+                observer,
+                IngestionProgressPhase::Persisting,
+                commits_total,
+                commits_processed,
+                checkpoint_id,
+                Some(commit_sha),
+                &counters,
+            );
+            continue;
         }
 
         counters.commits_processed += 1;
@@ -512,10 +575,16 @@ async fn execute_ingest_inner(
         );
     }
 
-    if let Some(enrichment) = enrichment.as_ref()
-        && embedding_outputs_enabled
+    if let Some(workplane) = semantic_clones_workplane.as_ref()
+        && semantic_clones_workplane_intent
+            .as_ref()
+            .is_some_and(|intent| intent.has_any_embedding_intent())
         && counters.artefacts_upserted == 0
-        && load_active_embedding_setup(&relational, &cfg.repo.repo_id)
+        && load_active_embedding_setup(
+            &relational,
+            &cfg.repo.repo_id,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        )
             .await?
             .is_none()
     {
@@ -526,41 +595,26 @@ async fn execute_ingest_inner(
         )
         .await?;
         if !bootstrap_inputs.is_empty() {
-            let bootstrap_input_hashes = bootstrap_inputs
+            let bootstrap_summary_provider = resolve_summary_provider(
+                &semantic_clones,
+                &semantic_inference,
+                SummaryProviderMode::DeterministicOnly,
+            )?;
+            let _bootstrap_input_hashes = bootstrap_inputs
                 .iter()
                 .map(|input| {
                     (
                         input.artefact_id.clone(),
                         semantic::build_semantic_feature_input_hash(
                             input,
-                            summary_provider.as_ref(),
+                            bootstrap_summary_provider.provider.as_ref(),
                         ),
                     )
                 })
                 .collect::<std::collections::BTreeMap<_, _>>();
-            let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
-                cfg.daemon_config_root.clone(),
-                cfg.repo_root.clone(),
-                cfg.repo.repo_id.clone(),
-                active_branch_for_enqueue.clone(),
-            );
-            enrichment
-                .enqueue_symbol_embeddings(
-                    enqueue_target.clone(),
-                    bootstrap_inputs.clone(),
-                    bootstrap_input_hashes.clone(),
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
-                )
-                .await?;
-            if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
-                enrichment
-                    .enqueue_symbol_embeddings(
-                        enqueue_target,
-                        bootstrap_inputs,
-                        bootstrap_input_hashes,
-                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
-                    )
-                    .await?;
+            if let Some(intent) = semantic_clones_workplane_intent.as_ref() {
+                enqueue_summary_refresh_jobs(workplane.as_ref(), &bootstrap_inputs, intent)?;
+                enqueue_embedding_jobs(workplane.as_ref(), &bootstrap_inputs, intent)?;
             }
         }
     }
@@ -571,7 +625,7 @@ async fn execute_ingest_inner(
         log::warn!("semantic_clones embeddings degraded; skipping embedding and clone stages: {warning}");
     }
 
-    if let (None, Some(embedding_provider)) = (enrichment.as_ref(), embedding_provider.as_ref()) {
+    if enrichment.is_none() && direct_embedding_provider_available {
         match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
             RepoEmbeddingSyncAction::RefreshCurrentRepo => {
                 clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
@@ -587,40 +641,53 @@ async fn execute_ingest_inner(
                     &cfg.repo.repo_id,
                 )
                 .await?;
-                let semantic_feature_stats = upsert_semantic_feature_rows(
-                    &relational,
-                    &current_inputs,
-                    Arc::clone(&summary_provider),
-                )
-                .await?;
-                counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
-                counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
-                let baseline_stats = upsert_symbol_embedding_rows(
-                    &relational,
-                    &current_inputs,
-                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline,
-                    Arc::clone(embedding_provider),
-                )
-                .await?;
-                counters.symbol_embedding_rows_upserted += baseline_stats.upserted;
-                counters.symbol_embedding_rows_skipped += baseline_stats.skipped;
-                if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
-                    let enriched_stats = upsert_symbol_embedding_rows(
+                if !current_inputs.is_empty() {
+                    let code_refresh = run_symbol_embeddings_refresh(
+                        &capability_host,
                         &relational,
-                        &current_inputs,
-                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched,
-                        Arc::clone(embedding_provider),
+                        SymbolEmbeddingsRefreshPayload {
+                            scope: SymbolEmbeddingsRefreshScope::Historical,
+                            path: None,
+                            content_id: None,
+                            inputs: current_inputs.clone(),
+                            expected_input_hashes: Default::default(),
+                            representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+                            mode: EmbeddingRefreshMode::ConfiguredDegrade,
+                            manage_active_state: true,
+                        },
                     )
                     .await?;
-                    counters.symbol_embedding_rows_upserted += enriched_stats.upserted;
-                    counters.symbol_embedding_rows_skipped += enriched_stats.skipped;
+                    apply_symbol_embedding_refresh_counts(&mut counters, &code_refresh);
+                    if code_refresh.clone_rebuild_recommended {
+                        let clone_ingest =
+                            rebuild_active_clone_edges(&capability_host, &relational).await?;
+                        counters.symbol_clone_edges_upserted += clone_ingest.0;
+                        counters.symbol_clone_sources_scored += clone_ingest.1;
+                    }
+
+                    let summary_refresh = run_symbol_embeddings_refresh(
+                        &capability_host,
+                        &relational,
+                        SymbolEmbeddingsRefreshPayload {
+                            scope: SymbolEmbeddingsRefreshScope::Historical,
+                            path: None,
+                            content_id: None,
+                            inputs: current_inputs,
+                            expected_input_hashes: Default::default(),
+                            representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+                            mode: EmbeddingRefreshMode::ConfiguredDegrade,
+                            manage_active_state: true,
+                        },
+                    )
+                    .await?;
+                    apply_symbol_embedding_refresh_counts(&mut counters, &summary_refresh);
                 }
             }
             RepoEmbeddingSyncAction::Incremental | RepoEmbeddingSyncAction::AdoptExisting => {}
         }
 
         if let Some(setup) = resolved_embedding_setup.as_ref() {
-            if let Some(active_state) = select_active_embedding_state_for_repo(
+            if let Some(active_state) = select_active_code_embedding_state_for_repo(
                 &relational,
                 &cfg.repo.repo_id,
                 setup,
@@ -629,7 +696,8 @@ async fn execute_ingest_inner(
             {
                 persist_active_embedding_setup(&relational, &cfg.repo.repo_id, &active_state)
                     .await?;
-                let clone_ingest = rebuild_active_clone_edges(cfg, &relational).await?;
+                let clone_ingest =
+                    rebuild_active_clone_edges(&capability_host, &relational).await?;
                 counters.symbol_clone_edges_upserted += clone_ingest.0;
                 counters.symbol_clone_sources_scored += clone_ingest.1;
             } else {
@@ -640,7 +708,9 @@ async fn execute_ingest_inner(
                 .await?;
             }
         }
-    } else if !embedding_outputs_enabled || (enrichment.is_none() && embedding_provider.is_none()) {
+    } else if !embedding_outputs_enabled
+        || (enrichment.is_none() && !direct_embedding_provider_available)
+    {
         clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
         clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
         crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
@@ -649,7 +719,7 @@ async fn execute_ingest_inner(
         )
         .await?;
     }
-    counters.success = true;
+    counters.success = !encountered_commit_failures;
     emit_progress(
         observer,
         IngestionProgressPhase::Complete,
@@ -680,7 +750,7 @@ async fn execute_ingest_inner(
     }
 }
 
-async fn select_active_embedding_state_for_repo(
+async fn select_active_code_embedding_state_for_repo(
     relational: &RelationalStorage,
     repo_id: &str,
     setup: &embeddings::EmbeddingSetup,
@@ -689,32 +759,129 @@ async fn select_active_embedding_state_for_repo(
         crate::capability_packs::semantic_clones::embeddings::ActiveEmbeddingRepresentationState,
     >,
 > {
-    let states = load_current_repo_embedding_states(relational, repo_id, None).await?;
-    let mut baseline = None;
-    let mut enriched = None;
+    let states = load_current_repo_embedding_states(
+        relational,
+        repo_id,
+        Some(
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        ),
+    )
+    .await?;
+    Ok(states.into_iter().find(|state| state.setup == *setup))
+}
 
-    for state in states {
-        if state.setup != *setup {
-            continue;
-        }
-        match state.representation_kind {
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Baseline => {
-                baseline = Some(state);
-            }
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Enriched => {
-                enriched = Some(state);
-            }
-        }
-    }
+async fn run_semantic_features_refresh(
+    capability_host: &crate::host::capability_host::DevqlCapabilityHost,
+    relational: &RelationalStorage,
+    payload: SemanticFeaturesRefreshPayload,
+) -> Result<(
+    semantic::SemanticFeatureIngestionStats,
+    std::collections::BTreeMap<String, String>,
+    bool,
+)> {
+    let result = capability_host
+        .invoke_ingester_with_relational(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
+            serde_json::to_value(&payload)?,
+            Some(relational),
+        )
+        .await?;
+    Ok((
+        semantic::SemanticFeatureIngestionStats {
+            upserted: result.payload["semantic_feature_rows_upserted"]
+                .as_u64()
+                .unwrap_or_default() as usize,
+            skipped: result.payload["semantic_feature_rows_skipped"]
+                .as_u64()
+                .unwrap_or_default() as usize,
+        },
+        parse_string_map(&result.payload["input_hashes"]),
+        result.payload["produced_enriched_semantics"]
+            .as_bool()
+            .unwrap_or(false),
+    ))
+}
 
-    Ok(enriched.or(baseline))
+#[derive(Debug, Clone, Default)]
+struct SymbolEmbeddingsRefreshOutcome {
+    semantic_feature_rows_upserted: usize,
+    semantic_feature_rows_skipped: usize,
+    symbol_embedding_rows_upserted: usize,
+    symbol_embedding_rows_skipped: usize,
+    clone_rebuild_recommended: bool,
+    symbol_clone_edges_upserted: usize,
+    symbol_clone_sources_scored: usize,
+}
+
+async fn run_symbol_embeddings_refresh(
+    capability_host: &crate::host::capability_host::DevqlCapabilityHost,
+    relational: &RelationalStorage,
+    payload: SymbolEmbeddingsRefreshPayload,
+) -> Result<SymbolEmbeddingsRefreshOutcome> {
+    let result = capability_host
+        .invoke_ingester_with_relational(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+            serde_json::to_value(&payload)?,
+            Some(relational),
+        )
+        .await?;
+    Ok(SymbolEmbeddingsRefreshOutcome {
+        semantic_feature_rows_upserted: result.payload["semantic_feature_rows_upserted"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+        semantic_feature_rows_skipped: result.payload["semantic_feature_rows_skipped"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+        symbol_embedding_rows_upserted: result.payload["symbol_embedding_rows_upserted"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+        symbol_embedding_rows_skipped: result.payload["symbol_embedding_rows_skipped"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+        clone_rebuild_recommended: result.payload["clone_rebuild_recommended"]
+            .as_bool()
+            .unwrap_or(false),
+        symbol_clone_edges_upserted: result.payload["symbol_clone_edges_upserted"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+        symbol_clone_sources_scored: result.payload["symbol_clone_sources_scored"]
+            .as_u64()
+            .unwrap_or_default() as usize,
+    })
+}
+
+fn apply_symbol_embedding_refresh_counts(
+    counters: &mut IngestionCounters,
+    outcome: &SymbolEmbeddingsRefreshOutcome,
+) {
+    counters.semantic_feature_rows_upserted += outcome.semantic_feature_rows_upserted;
+    counters.semantic_feature_rows_skipped += outcome.semantic_feature_rows_skipped;
+    counters.symbol_embedding_rows_upserted += outcome.symbol_embedding_rows_upserted;
+    counters.symbol_embedding_rows_skipped += outcome.symbol_embedding_rows_skipped;
+    counters.symbol_clone_edges_upserted += outcome.symbol_clone_edges_upserted;
+    counters.symbol_clone_sources_scored += outcome.symbol_clone_sources_scored;
+}
+
+fn parse_string_map(value: &serde_json::Value) -> std::collections::BTreeMap<String, String> {
+    value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn rebuild_active_clone_edges(
-    cfg: &DevqlConfig,
+    capability_host: &crate::host::capability_host::DevqlCapabilityHost,
     relational: &RelationalStorage,
 ) -> Result<(usize, usize)> {
-    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     let clone_ingest = capability_host
         .invoke_ingester_with_relational(
             SEMANTIC_CLONES_CAPABILITY_ID,
@@ -741,6 +908,36 @@ async fn rebuild_active_clone_edges(
 
 fn active_branch_name(repo_root: &Path) -> String {
     checked_out_branch_name(repo_root).unwrap_or_else(|| "main".to_string())
+}
+
+fn resolve_pack_versions_for_ingest() -> Result<(String, String)> {
+    let host = core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
+}
+
+fn tracked_paths_at_revision(repo_root: &Path, revision: &str) -> Result<Vec<String>> {
+    let output = run_git(
+        repo_root,
+        &["ls-tree", "-r", "--full-tree", "--name-only", revision],
+    )
+    .with_context(|| format!("listing tracked files at revision `{revision}`"))?;
+    Ok(output
+        .lines()
+        .map(normalize_repo_path)
+        .filter(|path| !path.is_empty())
+        .collect())
 }
 
 async fn promote_temporary_current_rows_for_head_commit(

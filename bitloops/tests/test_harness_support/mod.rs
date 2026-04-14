@@ -60,6 +60,11 @@ local_path = {blob_path:?}
 "#,
     );
     fs::write(&config_path, config_contents).expect("write test daemon config");
+    bitloops::config::settings::write_repo_daemon_binding(
+        &config_root.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write test repo daemon binding");
     config_path
 }
 
@@ -386,6 +391,30 @@ describe("ts repo", () => {
 
 pub fn write_rust_static_link_fixture(workspace: &Workspace) {
     workspace.write_file(
+        "Cargo.toml",
+        r#"
+[package]
+name = "graphql_cli_fixture"
+version = "0.0.1"
+edition = "2021"
+"#,
+    );
+
+    workspace.write_file(
+        "src/lib.rs",
+        r#"
+pub mod repositories;
+"#,
+    );
+
+    workspace.write_file(
+        "src/repositories/mod.rs",
+        r#"
+pub mod user_repository;
+"#,
+    );
+
+    workspace.write_file(
         "src/repositories/user_repository.rs",
         r#"
 #[derive(Debug, Default)]
@@ -410,7 +439,7 @@ impl UserRepository {
     workspace.write_file(
         "tests/rust_repo_test.rs",
         r#"
-use crate::repositories::user_repository::UserRepository;
+use graphql_cli_fixture::repositories::user_repository::UserRepository;
 
 #[cfg(test)]
 mod tests {

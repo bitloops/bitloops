@@ -34,9 +34,8 @@ fn workspace_state_inspect_workspace_reads_head_tree() {
     assert_eq!(state.head_commit_sha.as_deref(), Some(head_sha.as_str()));
     assert_eq!(state.head_tree_sha.as_deref(), Some(head_tree_sha.as_str()));
     assert_eq!(state.active_branch.as_deref(), Some(active_branch.as_str()));
-    assert_eq!(state.head_tree.len(), 2);
+    assert_eq!(state.head_tree.len(), 1);
     assert_eq!(state.head_tree.get("src/lib.rs"), Some(&head_blob));
-    assert!(state.head_tree.contains_key("README.md"));
     assert!(state.staged_changes.is_empty());
     assert!(state.dirty_files.is_empty());
     assert!(state.untracked_files.is_empty());

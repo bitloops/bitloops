@@ -9,12 +9,21 @@ Capability packs add higher-level analysis and enrichment on top of Bitloops dat
 
 ## Configuration Split
 
-Capability-pack credentials and model configuration belong in the global daemon config:
+Capability-pack inference configuration belongs in the global daemon config:
 
 ```toml
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
+model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 ```
 
@@ -24,8 +33,8 @@ Repo policy belongs in `.bitloops.toml` when a repo wants to opt into shared cap
 
 Capability packs often depend on daemon-managed services such as:
 
-- semantic providers
-- embedding providers
+- text-generation profiles
+- embedding profiles
 - stored checkpoints and events
 
 That is why the daemon config, not repo policy, owns those concerns.

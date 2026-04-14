@@ -24,9 +24,11 @@ fn write_test_store_backend_config(repo_root: &Path, include_events: bool) {
     let config = format!(
         "[stores.relational]\nsqlite_path = \"stores/relational/relational.db\"\n{events_section}\n[stores.blob]\nlocal_path = \"stores/blob\"\n"
     );
-    fs::write(
-        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
-        config,
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    fs::write(&config_path, config).unwrap();
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
     )
     .unwrap();
 }
@@ -129,6 +131,16 @@ fn setup_git_repo_with_backend_initializer(
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
     fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        "{\n  \"name\": \"manual-commit-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .unwrap();
     initialize_backends(dir.path());
     fs::write(dir.path().join("README.md"), "initial content").unwrap();
     run(&["add", "."]);

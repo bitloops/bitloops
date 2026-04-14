@@ -72,6 +72,8 @@ cargo dev-test-full
 cargo dev-coverage
 ```
 
+These test lanes are executed via `cargo-nextest`.
+
 `duckdb-bundled` is now opt-in. Use `cargo dev-check-bundled`/`cargo dev-build-bundled` when you need bundled DuckDB (for example offline or unsupported targets).
 
 ## Test Coverage
@@ -82,7 +84,18 @@ We use `cargo-llvm-cov` for coverage. Install it:
 cargo install cargo-llvm-cov
 ```
 
+Install `cargo-nextest` as well. On macOS, prefer:
+
+```bash
+brew install cargo-nextest
+```
+
+For other platforms, use the official installation guide:
+[https://nexte.st/docs/installation/](https://nexte.st/docs/installation/)
+
 The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI refreshes the baseline metadata on pushes to `develop`, and coverage stays separate from the blocking pull-request gates. To enforce the 5% tolerance locally before merging, use `bash scripts/check-dev.sh --full`.
+
+If the repo gains doctests in future, keep those on `cargo test --doc`; `cargo-nextest` does not support doctests.
 
 Shell helpers in `bitloops/scripts/` are kept for CI/back-compat purposes, but local workflows should use Cargo `dev-*` commands.
 

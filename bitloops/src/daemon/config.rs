@@ -7,8 +7,11 @@ use crate::host::relational_store::DefaultRelationalStore;
 pub(super) fn resolve_daemon_config(
     explicit_config_path: Option<&Path>,
 ) -> Result<ResolvedDaemonConfig> {
-    let loaded =
-        load_daemon_settings(explicit_config_path).context("resolving Bitloops daemon config")?;
+    let config_path_override = explicit_config_path.map(Path::to_path_buf).or_else(|| {
+        std::env::var_os(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE).map(PathBuf::from)
+    });
+    let loaded = load_daemon_settings(config_path_override.as_deref())
+        .context("resolving Bitloops daemon config")?;
     let config_path = loaded
         .path
         .canonicalize()

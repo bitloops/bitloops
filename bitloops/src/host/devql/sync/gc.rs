@@ -242,6 +242,7 @@ mod tests {
         CachedExtraction {
             content_id: content_id.to_string(),
             language: "rust".to_string(),
+            extraction_fingerprint: "fingerprint-v1".to_string(),
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
             parse_status: "ok".to_string(),

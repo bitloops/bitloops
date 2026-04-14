@@ -85,7 +85,7 @@ type ArtefactSelection {
 	artefacts(first: Int! = 20): [Artefact!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 	clones(relationKind: String, minScore: Float): CloneStageResult!
-	deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false): DependencyStageResult!
+	deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }
 
@@ -268,6 +268,7 @@ type CloneSummaryGroup {
 input ClonesFilterInput {
 	relationKind: String
 	minScore: Float
+	neighbors: Int
 }
 
 type Commit {
@@ -335,7 +336,7 @@ enum DepsDirection {
 input DepsFilterInput {
 	kind: EdgeKind
 	direction: DepsDirection! = OUT
-	includeUnresolved: Boolean! = false
+	includeUnresolved: Boolean! = true
 }
 
 type DepsSummary {
@@ -369,7 +370,35 @@ enum EdgeKind {
 	EXPORTS
 }
 
-input EnqueueSyncInput {
+type EmbeddingsBootstrapProgress {
+	phase: String!
+	assetName: String
+	bytesDownloaded: Int!
+	bytesTotal: Int
+	version: String
+	message: String
+}
+
+type EmbeddingsBootstrapResult {
+	version: String
+	binaryPath: String
+	cacheDir: String
+	runtimeName: String
+	modelName: String
+	freshlyInstalled: Boolean!
+	message: String!
+}
+
+type EmbeddingsBootstrapTaskSpec {
+	configPath: String!
+	profileName: String!
+}
+
+input EnqueueIngestTaskInput {
+	backfill: Int = null
+}
+
+input EnqueueSyncTaskInput {
 	full: Boolean! = false
 	paths: [String!] = null
 	repair: Boolean! = false
@@ -377,8 +406,14 @@ input EnqueueSyncInput {
 	source: String = null
 }
 
-type EnqueueSyncResult {
-	task: SyncTask!
+input EnqueueTaskInput {
+	kind: TaskKind!
+	sync: EnqueueSyncTaskInput = null
+	ingest: EnqueueIngestTaskInput = null
+}
+
+type EnqueueTaskResult {
+	task: Task!
 	merged: Boolean!
 }
 
@@ -404,10 +439,6 @@ type HealthStatus {
 	blob: HealthBackendStatus!
 }
 
-input IngestInput {
-	backfill: Int = null
-}
-
 type IngestResult {
 	success: Boolean!
 	commitsProcessed: Int!
@@ -420,6 +451,10 @@ type IngestResult {
 	symbolEmbeddingRowsSkipped: Int!
 	symbolCloneEdgesUpserted: Int!
 	symbolCloneSourcesScored: Int!
+}
+
+type IngestTaskSpec {
+	backfill: Int
 }
 
 enum IngestionPhase {
@@ -570,8 +605,10 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest(input: IngestInput): IngestResult!
-	enqueueSync(input: EnqueueSyncInput!): EnqueueSyncResult!
+	enqueueTask(input: EnqueueTaskInput!): EnqueueTaskResult!
+	pauseTaskQueue(reason: String): TaskQueueControlResult!
+	resumeTaskQueue(repoId: String): TaskQueueControlResult!
+	cancelTask(id: String!): Task!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
@@ -626,8 +663,9 @@ type SlimQueryRoot {
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	telemetry(eventType: String, agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): TelemetryEventConnection!
 	users: [String!]!
-	syncTask(id: String!): SyncTask
-	syncTasks(limit: Int): [SyncTask!]!
+	task(id: String!): Task
+	tasks(kind: TaskKind, status: TaskStatus, limit: Int): [Task!]!
+	taskQueue: TaskQueueStatus!
 	agents: [String!]!
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
@@ -644,38 +682,7 @@ type SlimQueryRoot {
 
 type SlimSubscriptionRoot {
 	checkpointIngested: Checkpoint!
-	ingestionProgress: IngestionProgressEvent!
-	syncProgress(taskId: String!): SyncProgressEvent!
-}
-
-type SyncProgressEvent {
-	taskId: String!
-	repoId: String!
-	repoName: String!
-	repoIdentity: String!
-	source: String!
-	mode: String!
-	status: String!
-	submittedAtUnix: Int!
-	startedAtUnix: Int
-	updatedAtUnix: Int!
-	completedAtUnix: Int
-	queuePosition: Int
-	tasksAhead: Int
-	phase: String!
-	currentPath: String
-	pathsTotal: Int!
-	pathsCompleted: Int!
-	pathsRemaining: Int!
-	pathsUnchanged: Int!
-	pathsAdded: Int!
-	pathsChanged: Int!
-	pathsRemoved: Int!
-	cacheHits: Int!
-	cacheMisses: Int!
-	parseErrors: Int!
-	error: String
-	summary: SyncResult
+	taskProgress(taskId: String!): TaskProgressEvent!
 }
 
 type SyncResult {
@@ -696,20 +703,7 @@ type SyncResult {
 	validation: SyncValidationResult
 }
 
-type SyncTask {
-	taskId: String!
-	repoId: String!
-	repoName: String!
-	repoIdentity: String!
-	source: String!
-	mode: String!
-	status: String!
-	submittedAtUnix: Int!
-	startedAtUnix: Int
-	updatedAtUnix: Int!
-	completedAtUnix: Int
-	queuePosition: Int
-	tasksAhead: Int
+type SyncTaskProgress {
 	phase: String!
 	currentPath: String
 	pathsTotal: Int!
@@ -722,8 +716,11 @@ type SyncTask {
 	cacheHits: Int!
 	cacheMisses: Int!
 	parseErrors: Int!
-	error: String
-	summary: SyncResult
+}
+
+type SyncTaskSpec {
+	mode: String!
+	paths: [String!]!
 }
 
 type SyncValidationFileDriftResult {
@@ -749,6 +746,80 @@ type SyncValidationResult {
 	staleEdges: Int!
 	mismatchedEdges: Int!
 	filesWithDrift: [SyncValidationFileDriftResult!]!
+}
+
+type Task {
+	taskId: String!
+	repoId: String!
+	repoName: String!
+	repoIdentity: String!
+	kind: TaskKind!
+	source: String!
+	status: TaskStatus!
+	submittedAtUnix: Int!
+	startedAtUnix: Int
+	updatedAtUnix: Int!
+	completedAtUnix: Int
+	queuePosition: Int
+	tasksAhead: Int
+	error: String
+	syncSpec: SyncTaskSpec
+	ingestSpec: IngestTaskSpec
+	embeddingsBootstrapSpec: EmbeddingsBootstrapTaskSpec
+	syncProgress: SyncTaskProgress
+	ingestProgress: IngestionProgressEvent
+	embeddingsBootstrapProgress: EmbeddingsBootstrapProgress
+	syncResult: SyncResult
+	ingestResult: IngestResult
+	embeddingsBootstrapResult: EmbeddingsBootstrapResult
+}
+
+enum TaskKind {
+	SYNC
+	INGEST
+	EMBEDDINGS_BOOTSTRAP
+}
+
+type TaskKindCounts {
+	kind: TaskKind!
+	queuedTasks: Int!
+	runningTasks: Int!
+	failedTasks: Int!
+	completedRecentTasks: Int!
+}
+
+type TaskProgressEvent {
+	task: Task!
+}
+
+type TaskQueueControlResult {
+	message: String!
+	repoId: String!
+	paused: Boolean!
+	pausedReason: String
+	updatedAtUnix: Int!
+}
+
+type TaskQueueStatus {
+	persisted: Boolean!
+	queuedTasks: Int!
+	runningTasks: Int!
+	failedTasks: Int!
+	completedRecentTasks: Int!
+	byKind: [TaskKindCounts!]!
+	paused: Boolean!
+	pausedReason: String
+	lastAction: String
+	lastUpdatedUnix: Int!
+	currentRepoTasks: [Task!]!
+}
+
+enum TaskStatus {
+	QUEUED
+	RUNNING
+	COMPLETED
+	FAILED
+	CANCELLED
 }
 
 type TelemetryEvent {

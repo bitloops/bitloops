@@ -1,6 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+};
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE};
 use crate::host::checkpoints::session::backend::SessionBackend;
 use crate::host::checkpoints::session::state::SessionState;
@@ -30,7 +34,16 @@ local_path = "stores/blob"
 "#,
     )
     .expect("write test daemon config");
+    crate::config::settings::write_repo_daemon_binding(
+        &config_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
     config_path
+}
+
+fn canonical_root(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[test]
@@ -41,8 +54,8 @@ fn repo_runtime_store_uses_config_root_runtime_sqlite_path() {
     init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
     let config_path = write_test_daemon_config(dir.path());
     let config_path_string = config_path.to_string_lossy().to_string();
-    let expected = dir
-        .path()
+    let expected = dir.path();
+    let expected = canonical_root(expected)
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");
@@ -68,26 +81,30 @@ fn repo_runtime_store_fails_without_daemon_config() {
         let err = RepoSqliteRuntimeStore::open(dir.path()).expect_err("runtime store should fail");
         let message = format!("{err:#}");
         assert!(
-            message
-                .contains("Bitloops daemon config is required to resolve the repo runtime store"),
+            message.contains("Bitloops repo daemon binding is missing"),
             "expected missing-config runtime store failure, got: {message}"
         );
     });
 }
 
 #[test]
-fn repo_runtime_store_uses_nearest_ancestor_daemon_config_root() {
+fn repo_runtime_store_uses_repo_daemon_binding() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().join("bitloops");
     fs::create_dir_all(&repo_root).expect("create repo root");
     init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
-    let expected = dir
-        .path()
+    let expected = dir.path();
+    let expected = canonical_root(expected)
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");
 
     write_test_daemon_config(dir.path());
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &dir.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("write repo daemon binding");
 
     with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
         let actual = RepoSqliteRuntimeStore::open(&repo_root)
@@ -110,8 +127,8 @@ fn repo_runtime_store_shares_runtime_sqlite_and_fences_rows_by_repo() {
 
     let config_path = write_test_daemon_config(dir.path());
     let config_path_string = config_path.to_string_lossy().to_string();
-    let expected_db_path = dir
-        .path()
+    let expected_db_path = dir.path();
+    let expected_db_path = canonical_root(expected_db_path)
         .join("stores")
         .join("runtime")
         .join("runtime.sqlite");
@@ -351,20 +368,14 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
                         run_id: "event-run-1".to_string(),
                         repo_id: "repo-1".to_string(),
                         capability_id: "test_harness".to_string(),
-                        handler_id: "sync_completed".to_string(),
-                        event_kind: "sync_completed".to_string(),
-                        lane_key: "repo-1:test_harness:sync_completed".to_string(),
-                        event_payload_json: serde_json::json!({
-                            "repo_id": "repo-1",
-                            "repo_root": "/tmp/repo",
-                            "active_branch": "main",
-                            "head_commit_sha": "abc123",
-                            "sync_mode": "full",
-                            "sync_completed_at": "2026-04-06T00:00:00Z",
-                            "files": {},
-                            "artefacts": {},
-                        })
-                        .to_string(),
+                        consumer_id: "test_harness.current_state".to_string(),
+                        handler_id: "test_harness.current_state".to_string(),
+                        from_generation_seq: 0,
+                        to_generation_seq: 1,
+                        reconcile_mode: "merged_delta".to_string(),
+                        event_kind: "current_state_consumer".to_string(),
+                        lane_key: "repo-1:test_harness.current_state".to_string(),
+                        event_payload_json: String::new(),
                         status: crate::daemon::CapabilityEventRunStatus::Queued,
                         attempts: 0,
                         submitted_at_unix: 1,
@@ -392,10 +403,7 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
             assert_eq!(loaded.last_action.as_deref(), Some("enqueue"));
             assert_eq!(loaded.runs.len(), 1);
             assert_eq!(loaded.runs[0].run_id, "event-run-1");
-            assert_eq!(
-                loaded.runs[0].lane_key,
-                "repo-1:test_harness:sync_completed"
-            );
+            assert_eq!(loaded.runs[0].lane_key, "repo-1:test_harness.current_state");
         },
     );
 }
@@ -464,7 +472,7 @@ fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
         || {
             let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
 
-            let task = crate::daemon::SyncTaskRecord {
+            let task = crate::host::runtime_store::LegacySyncTaskRecord {
                 task_id: "sync-task-legacy".to_string(),
                 repo_id: "repo-1".to_string(),
                 repo_name: "bitloops".to_string(),
@@ -473,9 +481,9 @@ fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
                 repo_identity: "local/bitloops".to_string(),
                 daemon_config_root: PathBuf::from("/tmp/legacy-config"),
                 repo_root: PathBuf::from("/tmp/repo"),
-                source: crate::daemon::SyncTaskSource::ManualCli,
+                source: crate::daemon::DevqlTaskSource::ManualCli,
                 mode: crate::daemon::SyncTaskMode::Full,
-                status: crate::daemon::SyncTaskStatus::Queued,
+                status: crate::daemon::DevqlTaskStatus::Queued,
                 submitted_at_unix: 1,
                 started_at_unix: None,
                 updated_at_unix: 1,
@@ -559,6 +567,60 @@ fn repo_runtime_store_persists_repo_watcher_registration() {
     assert_eq!(registration.pid, 4242);
     assert_eq!(registration.restart_token, "restart-token");
     assert_eq!(registration.repo_root, repo_root);
+}
+
+#[test]
+fn repo_runtime_store_persists_capability_workplane_mailbox_intents() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .set_capability_workplane_mailbox_intents(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            [
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ],
+            true,
+            Some("test"),
+        )
+        .expect("activate mailbox intents");
+    store
+        .set_capability_workplane_mailbox_intents(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            [SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX],
+            false,
+            Some("test"),
+        )
+        .expect("persist inactive mailbox intent");
+
+    let status = store
+        .load_capability_workplane_mailbox_status(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            [
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            ],
+        )
+        .expect("load mailbox status");
+
+    assert!(
+        status[SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX].intent_active,
+        "summary refresh intent should be active"
+    );
+    assert!(
+        status[SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX].intent_active,
+        "code embedding intent should be active"
+    );
+    assert!(
+        !status[SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX].intent_active,
+        "summary embedding intent should remain inactive"
+    );
 }
 
 fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {

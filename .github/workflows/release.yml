@@ -68,43 +68,56 @@ jobs:
           DUCKDB_DOWNLOAD_LIB: "0"
         run: |
           cross build --release --target ${{ matrix.target }} -p bitloops --features duckdb-bundled
-          cross build --release --target ${{ matrix.target }} -p bitloops-embeddings
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
-        run: cargo build --release --target ${{ matrix.target }} -p bitloops -p bitloops-embeddings
+        run: cargo build --release --target ${{ matrix.target }} -p bitloops
+
+      - name: Stage DuckDB runtime (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bin_dir="target/${{ matrix.target }}/release"
+          dylib="$bin_dir/deps/libduckdb.dylib"
+          if [ ! -f "$dylib" ]; then
+            echo "Missing expected DuckDB runtime: $dylib" >&2
+            exit 1
+          fi
+          cp "$dylib" "$bin_dir/libduckdb.dylib"
+
+      - name: Stage DuckDB runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = "target/${{ matrix.target }}/release"
+          $dll = Join-Path $binDir "deps/duckdb.dll"
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
+          }
+          Copy-Item $dll (Join-Path $binDir "duckdb.dll") -Force
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
         run: ./target/${{ matrix.target }}/release/bitloops --version
 
-      - name: Smoke test embeddings runtime (Unix)
-        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: ./target/${{ matrix.target }}/release/bitloops-embeddings --help
-
       - name: Smoke test (Linux arm64 via qemu)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: qemu-aarch64 ./target/${{ matrix.target }}/release/bitloops --version
-
-      - name: Smoke test embeddings runtime (Linux arm64 via qemu)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: qemu-aarch64 ./target/${{ matrix.target }}/release/bitloops-embeddings --help
 
       - name: Smoke test (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           & "target/${{ matrix.target }}/release/bitloops.exe" --version
-          & "target/${{ matrix.target }}/release/bitloops-embeddings.exe" --help
 
       - name: Validate Windows arm64 build output
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $path = "target/${{ matrix.target }}/release/bitloops.exe"
-          if (-not (Test-Path $path)) { throw "Missing expected binary: $path" }
-          $embeddingsPath = "target/${{ matrix.target }}/release/bitloops-embeddings.exe"
-          if (-not (Test-Path $embeddingsPath)) { throw "Missing expected binary: $embeddingsPath" }
+          $binDir = "target/${{ matrix.target }}/release"
+          $exe = Join-Path $binDir "bitloops.exe"
+          $dll = Join-Path $binDir "duckdb.dll"
+          if (-not (Test-Path $exe)) { throw "Missing expected binary: $exe" }
+          if (-not (Test-Path $dll)) { throw "Missing expected DuckDB runtime: $dll" }
 
       - name: Import Apple signing certificate
         if: runner.os == 'macOS'
@@ -138,20 +151,19 @@ jobs:
         run: |
           codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" \
-            "target/${{ matrix.target }}/release/bitloops"
+            "target/${{ matrix.target }}/release/libduckdb.dylib"
           codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" \
-            "target/${{ matrix.target }}/release/bitloops-embeddings"
+            "target/${{ matrix.target }}/release/bitloops"
 
       - name: Verify macOS signature
         if: runner.os == 'macOS'
         run: |
+          codesign --verify --verbose=4 "target/${{ matrix.target }}/release/libduckdb.dylib"
           codesign --verify --verbose=4 "target/${{ matrix.target }}/release/bitloops"
+          codesign --display --verbose=4 "target/${{ matrix.target }}/release/libduckdb.dylib"
           codesign --display --verbose=4 "target/${{ matrix.target }}/release/bitloops"
           spctl -a -t exec -vv "target/${{ matrix.target }}/release/bitloops" || true
-          codesign --verify --verbose=4 "target/${{ matrix.target }}/release/bitloops-embeddings"
-          codesign --display --verbose=4 "target/${{ matrix.target }}/release/bitloops-embeddings"
-          spctl -a -t exec -vv "target/${{ matrix.target }}/release/bitloops-embeddings" || true
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -159,15 +171,14 @@ jobs:
           mkdir -p dist
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
-          cp "target/${{ matrix.target }}/release/bitloops-embeddings" dist/package/bitloops-embeddings
-          tar -C dist/package -czf dist/bitloops-${{ matrix.target }}.tar.gz bitloops bitloops-embeddings
+          tar -C dist/package -czf dist/bitloops-${{ matrix.target }}.tar.gz bitloops
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/bitloops" dist/package/bitloops
-          cp "target/${{ matrix.target }}/release/bitloops-embeddings" dist/package/bitloops-embeddings
+          cp "target/${{ matrix.target }}/release/libduckdb.dylib" dist/package/libduckdb.dylib
           ditto -c -k --keepParent dist/package "dist/bitloops-${{ matrix.target }}.zip"
 
       - name: Restore App Store Connect key
@@ -195,7 +206,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist/package -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/bitloops.exe" "dist/package/bitloops.exe" -Force
-          Copy-Item "target/${{ matrix.target }}/release/bitloops-embeddings.exe" "dist/package/bitloops-embeddings.exe" -Force
+          Copy-Item "target/${{ matrix.target }}/release/duckdb.dll" "dist/package/duckdb.dll" -Force
           Compress-Archive -Path dist/package/* -DestinationPath dist/bitloops-${{ matrix.target }}.zip
 
       - name: Upload build artifact
@@ -318,6 +329,7 @@ jobs:
     name: Verify published release artifacts
     runs-on: self-hosted
     needs: publish
+    environment: "Production CLI"
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
@@ -364,43 +376,44 @@ jobs:
           tar -xzf bitloops-aarch64-unknown-linux-musl.tar.gz -C arm64
           chmod +x arm64/bitloops
           qemu-aarch64 arm64/bitloops --version
-          - name: Generate Slack message
-          id: slack_msg
-          shell: bash
-          run: |
-            VERSION="${GITHUB_REF_NAME#v}"
 
-            PART1=(
-              "🚀 Bitloops CLI v${VERSION} just dropped"
-              "🚀 Bitloops CLI v${VERSION} is live"
-              "🚀 Bitloops CLI v${VERSION} just shipped"
-              "🚀 Bitloops CLI v${VERSION} is out in the wild"
-              "🚀 Bitloops CLI v${VERSION} just landed"
-              "🚀 Bitloops CLI v${VERSION} is now available"
-              "🚀 Bitloops CLI v${VERSION} deployed successfully"
-              "🚀 Bitloops CLI v${VERSION} rollout complete"
-              "🚀 Bitloops CLI v${VERSION} is officially out"
-              "🚀 Bitloops CLI v${VERSION} release complete"
-            )
+      - name: Generate Slack message
+        id: slack_msg
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
 
-            PART2=(
-              "— built through strong cross-team collaboration 👏"
-              "— another solid team delivery 💪"
-              "— delivered with great engineering effort ⚙️"
-              "— a result of coordinated team execution 🤝"
-              "— reflecting high-quality team craftsmanship 🛠️"
-              "— powered by focused team iteration 🔁"
-              "— showcasing strong ownership across the team 🧠"
-              "— driven by consistent team momentum 📈"
-              "— executed with precision across contributors 🎯"
-              "— backed by collective engineering excellence ✨"
-            )
+          PART1=(
+            "🚀 Bitloops CLI v${VERSION} just dropped"
+            "🚀 Bitloops CLI v${VERSION} is live"
+            "🚀 Bitloops CLI v${VERSION} just shipped"
+            "🚀 Bitloops CLI v${VERSION} is out in the wild"
+            "🚀 Bitloops CLI v${VERSION} just landed"
+            "🚀 Bitloops CLI v${VERSION} is now available"
+            "🚀 Bitloops CLI v${VERSION} deployed successfully"
+            "🚀 Bitloops CLI v${VERSION} rollout complete"
+            "🚀 Bitloops CLI v${VERSION} is officially out"
+            "🚀 Bitloops CLI v${VERSION} release complete"
+          )
 
-            P1_INDEX=$((RANDOM % ${#PART1[@]}))
-            P2_INDEX=$((RANDOM % ${#PART2[@]}))
-            MESSAGE="${PART1[$P1_INDEX]} ${PART2[$P2_INDEX]}"
+          PART2=(
+            "— built through strong cross-team collaboration 👏"
+            "— another solid team delivery 💪"
+            "— delivered with great engineering effort ⚙️"
+            "— a result of coordinated team execution 🤝"
+            "— reflecting high-quality team craftsmanship 🛠️"
+            "— powered by focused team iteration 🔁"
+            "— showcasing strong ownership across the team 🧠"
+            "— driven by consistent team momentum 📈"
+            "— executed with precision across contributors 🎯"
+            "— backed by collective engineering excellence ✨"
+          )
 
-            echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+          P1_INDEX=$((RANDOM % ${#PART1[@]}))
+          P2_INDEX=$((RANDOM % ${#PART2[@]}))
+          MESSAGE="${PART1[$P1_INDEX]} ${PART2[$P2_INDEX]}"
+
+          echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
 
       - name: Send Slack notification
         uses: slackapi/slack-github-action@v2.1.1

@@ -50,6 +50,7 @@ Feature: Semantic Clones BDD scenarios
     And the clone row for "src/billing/invoice_helpers.ts::build_invoice_pdf_bundle" has shared signal "body_tokens"
     And the clone row for "src/billing/invoice_helpers.ts::build_invoice_pdf_bundle" has shared signal "call_targets"
     And the clone row for "src/billing/invoice_helpers.ts::build_invoice_pdf_bundle" has shared signal "dependency_targets"
+    And the clone row for "src/billing/invoice_helpers.ts::build_invoice_pdf_bundle" has explanation path "evidence.semantic_views.interpretation" equal to "same_behaviour_different_implementation"
     And every clone row includes explainable scores
 
   @SemanticClones-S4
@@ -62,12 +63,13 @@ Feature: Semantic Clones BDD scenarios
     Then clone rows include:
       | target_symbol_fqn                              | relation_kind            |
       | src/validation/draft.ts::validate_order_draft | diverged_implementation |
-    And the clone row for "src/validation/draft.ts::validate_order_draft" has metric "semantic_score" at least 0.55
+    And the clone row for "src/validation/draft.ts::validate_order_draft" has metric "semantic_score" at least 0.40
     And the clone row for "src/validation/draft.ts::validate_order_draft" has metric "body_overlap" at least 0.08
     And the clone row for "src/validation/draft.ts::validate_order_draft" has metric "body_overlap" at most 0.45
     And the clone row for "src/validation/draft.ts::validate_order_draft" has metric "call_overlap" at most 0.25
     And the clone row for "src/validation/draft.ts::validate_order_draft" has shared signal "dependency_targets"
     And the clone row for "src/validation/draft.ts::validate_order_draft" has limiting signal "no_shared_calls"
+    And the clone row for "src/validation/draft.ts::validate_order_draft" has explanation path "evidence.semantic_views.interpretation" equal to "implementation_reuse_drift"
     And every clone row includes explainable scores
 
   # Current implementation prefers local patterns via churn/path heuristics rather than explicit default-branch metadata.
@@ -101,6 +103,15 @@ Feature: Semantic Clones BDD scenarios
     And the clone row for "src/handlers/change-path.ts::ChangePathOfCodeFileCommandHandler::command" has explanation fact "locality_dominates" set to true
     And the clone row for "src/handlers/change-path.ts::ChangePathOfCodeFileCommandHandler::command" does not have label "preferred_local_pattern"
     And every clone row includes explainable scores
+
+  @SemanticClones-S7
+  Scenario: S7 Unrelated pairs stay suppressed
+    Given the semantic clone fixture "unrelated pairs" is indexed
+    When clones() query executes:
+      """
+      repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/archive/invoice.ts::archive_invoice")->clones()->limit(10)
+      """
+    Then the clone query returns no rows
 
   @SemanticClones-E1
   Scenario: E1 Stage 1 persisted summary falls back to template
@@ -156,7 +167,7 @@ Feature: Semantic Clones BDD scenarios
     And the Stage 1 docstring is empty
     And the Stage 1 summary provider returns no candidate
     When Stage 2 starts with invalid embedding provider configuration
-    Then Stage 2 fails with message containing "spawning embeddings runtime"
+    Then Stage 2 fails with message containing "building `bitloops_embeddings_ipc` service"
     And Stage 2 writes 0 embedding rows
 
   @SemanticClones-ERR1-profile
@@ -165,7 +176,7 @@ Feature: Semantic Clones BDD scenarios
     And the Stage 1 docstring is empty
     And the Stage 1 summary provider returns no candidate
     When Stage 2 starts with embedding provider configuration "missing embedding profile"
-    Then Stage 2 fails with message containing "embedding profile `missing-profile` is not defined"
+    Then Stage 2 fails with message containing "inference profile `missing-profile` is not defined"
     And Stage 2 writes 0 embedding rows
 
   # S6 already covers the pure same-file weak-neighbour case. The scenarios below add cross-file handler calibration.

@@ -10,9 +10,11 @@ use clap::Args;
 use crate::adapters::agents::AgentAdapterRegistry;
 #[cfg(test)]
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
 use crate::cli::embeddings::{
-    EmbeddingsInstallState, inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
 };
+use crate::cli::inference::{configure_local_summary_generation, summary_generation_configured};
 use crate::cli::telemetry_consent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
@@ -196,16 +198,41 @@ pub(crate) async fn run_with_io(
     writeln!(out, "Updated project config: {}", target_path.display())?;
 
     if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
-        match install_or_bootstrap_embeddings(&cwd) {
-            Ok(lines) => {
-                for line in lines {
-                    writeln!(out, "{line}")?;
-                }
+        activate_embedding_pipeline_mailboxes(&git_root, "enable")
+            .context("activating semantic clones embedding mailboxes for enable")?;
+        let (scope, queued) = enqueue_embeddings_bootstrap_task(
+            &cwd,
+            None,
+            crate::daemon::DevqlTaskSource::ManualCli,
+        )
+        .await?;
+        match crate::cli::devql::graphql::watch_task_id_via_graphql(
+            &scope,
+            &queued.task.task_id,
+            false,
+        )
+        .await
+        {
+            Ok(Some(task)) => {
+                writeln!(
+                    out,
+                    "{}",
+                    crate::cli::devql::format_task_completion_summary(&task)
+                )?;
             }
+            Ok(None) => {}
             Err(err) => {
                 bail!("Bitloops capture was enabled, but embeddings installation failed: {err:#}");
             }
         }
+    }
+
+    if should_install_summaries(&cwd, out, input)? {
+        configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+            anyhow::anyhow!(
+                "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+            )
+        })?;
     }
     Ok(())
 }
@@ -249,6 +276,47 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
         input
             .read_line(&mut line)
             .context("reading embeddings install prompt response")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => writeln!(out, "Please answer yes or no.")?,
+        }
+    }
+}
+
+fn should_install_summaries(
+    repo_root: &Path,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(false);
+    }
+
+    if summary_generation_configured(repo_root) {
+        return Ok(false);
+    }
+
+    prompt_install_summaries(out, input)
+}
+
+fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
+    writeln!(out)?;
+    writeln!(out, "Configure local semantic summaries as well?")?;
+    writeln!(
+        out,
+        "Bitloops will install `bitloops-inference` and try to bind summaries to a local Ollama model."
+    )?;
+
+    loop {
+        writeln!(out, "Configure semantic summaries now? (Y/n)")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading semantic summary install prompt response")?;
         match line.trim().to_ascii_lowercase().as_str() {
             "" | "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),

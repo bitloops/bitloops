@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::host::devql::{AnalysisMode, FileRole, TextIndexMode};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncMode {
     Auto,
@@ -29,7 +31,19 @@ impl EffectiveSource {
 #[derive(Debug, Clone)]
 pub(crate) struct DesiredFileState {
     pub(crate) path: String,
+    pub(crate) analysis_mode: AnalysisMode,
+    pub(crate) file_role: FileRole,
+    pub(crate) text_index_mode: TextIndexMode,
     pub(crate) language: String,
+    pub(crate) resolved_language: String,
+    pub(crate) dialect: Option<String>,
+    pub(crate) primary_context_id: Option<String>,
+    pub(crate) secondary_context_ids: Vec<String>,
+    pub(crate) frameworks: Vec<String>,
+    pub(crate) runtime_profile: Option<String>,
+    pub(crate) classification_reason: String,
+    pub(crate) context_fingerprint: Option<String>,
+    pub(crate) extraction_fingerprint: String,
     pub(crate) head_content_id: Option<String>,
     pub(crate) index_content_id: Option<String>,
     pub(crate) worktree_content_id: Option<String>,
@@ -43,7 +57,19 @@ pub(crate) struct DesiredFileState {
 #[derive(Debug, Clone)]
 pub(crate) struct StoredFileState {
     pub(crate) path: String,
+    pub(crate) analysis_mode: AnalysisMode,
+    pub(crate) file_role: FileRole,
+    pub(crate) text_index_mode: TextIndexMode,
     pub(crate) language: String,
+    pub(crate) resolved_language: String,
+    pub(crate) dialect: Option<String>,
+    pub(crate) primary_context_id: Option<String>,
+    pub(crate) secondary_context_ids: Vec<String>,
+    pub(crate) frameworks: Vec<String>,
+    pub(crate) runtime_profile: Option<String>,
+    pub(crate) classification_reason: String,
+    pub(crate) context_fingerprint: Option<String>,
+    pub(crate) extraction_fingerprint: String,
     pub(crate) effective_content_id: String,
     pub(crate) effective_source: EffectiveSource,
     pub(crate) parser_version: String,

@@ -30,7 +30,7 @@ pub(super) fn symbol_content_hash(item: &LanguageArtefact, content: &str) -> Str
 pub(super) fn build_symbol_records(
     cfg: &DevqlConfig,
     path: &str,
-    _blob_sha: &str,
+    blob_sha: &str,
     file_artefact: &FileArtefactRow,
     items: &[LanguageArtefact],
     content: &str,
@@ -49,8 +49,7 @@ pub(super) fn build_symbol_records(
             .map(String::as_str);
         let symbol_id = structural_symbol_id_for_artefact(item, semantic_parent_symbol_id);
         let content_hash = symbol_content_hash(item, content);
-        let artefact_id =
-            historical_symbol_artefact_id(&cfg.repo.repo_id, &symbol_id, &content_hash);
+        let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
         let parent_symbol_id = item
             .parent_symbol_fqn
             .as_ref()
@@ -96,10 +95,18 @@ pub(super) async fn persist_historical_artefact(
     path: &str,
     blob_sha: &str,
     language: &str,
+    extraction_fingerprint: &str,
     record: &PersistedArtefactRecord,
 ) -> Result<()> {
-    let sql =
-        build_upsert_historical_artefact_sql(cfg, relational, path, blob_sha, language, record);
+    let sql = build_upsert_historical_artefact_sql(
+        cfg,
+        relational,
+        path,
+        blob_sha,
+        language,
+        extraction_fingerprint,
+        record,
+    );
     relational.exec(&sql).await
 }
 
@@ -109,6 +116,7 @@ pub(super) fn build_upsert_historical_artefact_sql(
     _path: &str,
     _blob_sha: &str,
     language: &str,
+    extraction_fingerprint: &str,
     record: &PersistedArtefactRecord,
 ) -> String {
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
@@ -116,13 +124,14 @@ pub(super) fn build_upsert_historical_artefact_sql(
     let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, extraction_fingerprint = EXCLUDED.extraction_fingerprint, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&record.artefact_id),
         esc_pg(&record.symbol_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(language),
+        esc_pg(extraction_fingerprint),
         canonical_kind_sql,
         esc_pg(&record.language_kind),
         esc_pg(&record.symbol_fqn),
@@ -158,10 +167,6 @@ mod tests {
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: "default".to_string(),
-            semantic_provider: None,
-            semantic_model: None,
-            semantic_api_key: None,
-            semantic_base_url: None,
         }
     }
 
@@ -195,6 +200,7 @@ mod tests {
             "src/lib.rs",
             "blob-sha",
             "rust",
+            "fingerprint",
             &sample_record(),
         );
         assert!(
@@ -204,6 +210,51 @@ mod tests {
         assert!(
             sql.contains("ON CONFLICT (artefact_id) DO UPDATE"),
             "historical builder should upsert on artefact_id"
+        );
+    }
+
+    #[test]
+    fn build_symbol_records_aligns_symbol_artefact_ids_with_revision_identity() {
+        let cfg = sample_cfg();
+        let file_artefact = FileArtefactRow {
+            artefact_id: revision_artefact_id("repo-id", "blob-sha", &file_symbol_id("src/lib.rs")),
+            symbol_id: file_symbol_id("src/lib.rs"),
+            language: "rust".to_string(),
+            extraction_fingerprint: "fingerprint".to_string(),
+            end_line: 2,
+            end_byte: 32,
+        };
+        let item = LanguageArtefact {
+            canonical_kind: Some("function".to_string()),
+            language_kind: crate::host::language_adapter::LanguageKind::rust(
+                crate::host::language_adapter::RustKind::FunctionItem,
+            ),
+            name: "name".to_string(),
+            symbol_fqn: "src/lib.rs::name".to_string(),
+            parent_symbol_fqn: None,
+            start_line: 1,
+            end_line: 2,
+            start_byte: 0,
+            end_byte: 16,
+            signature: "fn name()".to_string(),
+            modifiers: vec!["pub".to_string()],
+            docstring: Some("docs".to_string()),
+        };
+
+        let records = build_symbol_records(
+            &cfg,
+            "src/lib.rs",
+            "blob-sha",
+            &file_artefact,
+            std::slice::from_ref(&item),
+            "pub fn name() {}\n",
+        );
+        let record = records.first().expect("expected symbol record");
+        let symbol_id = structural_symbol_id_for_artefact(&item, None);
+
+        assert_eq!(
+            record.artefact_id,
+            revision_artefact_id(&cfg.repo.repo_id, "blob-sha", &symbol_id)
         );
     }
 }

@@ -406,11 +406,18 @@ pub(super) fn then_testlens_query_returns_results(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let artefact = ctx.matches[1].1.clone();
-        let view = ctx.matches[2].1.clone();
-        let repo_name = ctx.matches[3].1.clone();
+        let state_scope = ctx.matches[2].1.clone();
+        let view = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
         run_step(
             "TestHarness query returns results",
-            helpers::assert_testlens_query_returns_results(world, &repo_name, &artefact, &view),
+            helpers::assert_testlens_query_returns_results(
+                world,
+                &repo_name,
+                &artefact,
+                &view,
+                &state_scope,
+            ),
         );
     })
 }
@@ -457,11 +464,18 @@ pub(super) fn then_testlens_query_empty_or_zero(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let artefact = ctx.matches[1].1.clone();
-        let view = ctx.matches[2].1.clone();
-        let repo_name = ctx.matches[3].1.clone();
+        let state_scope = ctx.matches[2].1.clone();
+        let view = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
         run_step(
             "TestHarness query returns empty or zero-count",
-            helpers::assert_testlens_query_empty_or_zero(world, &repo_name, &artefact, &view),
+            helpers::assert_testlens_query_empty_or_zero(
+                world,
+                &repo_name,
+                &artefact,
+                &view,
+                &state_scope,
+            ),
         );
     })
 }
@@ -472,11 +486,18 @@ pub(super) fn then_testlens_includes_failing_test(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let artefact = ctx.matches[1].1.clone();
-        let view = ctx.matches[2].1.clone();
-        let repo_name = ctx.matches[3].1.clone();
+        let state_scope = ctx.matches[2].1.clone();
+        let view = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
         run_step(
             "TestHarness query includes a failing test",
-            helpers::assert_testlens_includes_failing_test(world, &repo_name, &artefact, &view),
+            helpers::assert_testlens_includes_failing_test(
+                world,
+                &repo_name,
+                &artefact,
+                &view,
+                &state_scope,
+            ),
         );
     })
 }
@@ -512,6 +533,58 @@ pub(super) fn then_devql_clones_returns_at_least(
     })
 }
 
+pub(super) fn then_semantic_clone_historical_tables_populated(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "semantic clone historical tables are populated",
+            helpers::assert_semantic_clone_historical_tables_populated(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_semantic_clone_current_tables_populated(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "semantic clone current projection tables are populated without inline embeddings",
+            helpers::assert_semantic_clone_current_tables_populated(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_semantic_clone_representation_channels_populated(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "semantic clone historical embeddings and current artefacts expose code and summary channels",
+            helpers::assert_semantic_clone_representation_channels_populated(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_semantic_clone_progress_observed(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "semantic clone enrichments show embeddings before clone-edge rebuild work fully drains",
+            helpers::observe_semantic_clone_enrichment_progress(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn then_devql_clones_have_score_and_kind(
     world: &mut QatWorld,
     _ctx: cucumber::step::Context,
@@ -520,6 +593,24 @@ pub(super) fn then_devql_clones_have_score_and_kind(
         run_step(
             "DevQL clones results include score and relation_kind fields",
             helpers::assert_devql_clones_have_score_and_kind(world),
+        );
+    })
+}
+
+pub(super) fn then_devql_clones_rank_target_above(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let higher = ctx.matches[2].1.clone();
+        let lower = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "DevQL clones query ranks a stronger target above a weaker target",
+            helpers::assert_devql_clones_rank_target_above(
+                world, &repo_name, &source, &higher, &lower,
+            ),
         );
     })
 }
@@ -538,6 +629,27 @@ pub(super) fn then_devql_clones_with_min_score(
         run_step(
             "DevQL clones query with min_score returns results",
             helpers::assert_devql_clones_with_min_score(world, &repo_name, &symbol, min_score),
+        );
+    })
+}
+
+pub(super) fn then_devql_clones_with_min_score_excludes_target(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let min_score = ctx.matches[2]
+            .1
+            .parse::<f64>()
+            .expect("min_score should parse as f64");
+        let excluded = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "DevQL clones query with min_score excludes a weaker target",
+            helpers::assert_devql_clones_with_min_score_excludes_target(
+                world, &repo_name, &source, min_score, &excluded,
+            ),
         );
     })
 }
@@ -562,6 +674,46 @@ pub(super) fn then_devql_clones_fewer_or_equal(
                 helpers::record_devql_clones_with_min_score(world, &repo_name, &symbol, min_score)?;
                 helpers::assert_last_query_fewer_or_equal(world, previous)
             })(),
+        );
+    })
+}
+
+pub(super) fn then_devql_clone_summary_grouped_counts(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let min_score = ctx.matches[2]
+            .1
+            .parse::<f64>()
+            .expect("min_score should parse as f64");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL clone summary returns grouped counts",
+            helpers::assert_devql_clone_summary_grouped_counts(
+                world, &repo_name, &source, min_score,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_graphql_clone_summary_grouped_counts(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let min_score = ctx.matches[2]
+            .1
+            .parse::<f64>()
+            .expect("min_score should parse as f64");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "GraphQL clone summary returns grouped counts",
+            helpers::assert_graphql_clone_summary_grouped_counts(
+                world, &repo_name, &source, min_score,
+            ),
         );
     })
 }

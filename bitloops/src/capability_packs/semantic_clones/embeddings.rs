@@ -2,15 +2,11 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fmt;
-use std::path::Path;
-use std::path::PathBuf;
 
-use crate::adapters::model_providers::embeddings::{
-    EmbeddingProvider, EmbeddingRuntimeClientConfig, build_embedding_provider,
-};
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, render_dependency_context,
 };
+use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 
 const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
@@ -31,62 +27,27 @@ const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
 #[serde(rename_all = "snake_case")]
 pub enum EmbeddingRepresentationKind {
     #[default]
-    Baseline,
-    Enriched,
+    #[serde(alias = "baseline", alias = "enriched")]
+    Code,
+    Summary,
 }
 
 impl fmt::Display for EmbeddingRepresentationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Baseline => write!(f, "baseline"),
-            Self::Enriched => write!(f, "enriched"),
+            Self::Code => write!(f, "code"),
+            Self::Summary => write!(f, "summary"),
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct EmbeddingProviderConfig {
-    pub daemon_config_path: PathBuf,
-    pub embedding_profile: Option<String>,
-    pub runtime_command: String,
-    pub runtime_args: Vec<String>,
-    pub startup_timeout_secs: u64,
-    pub request_timeout_secs: u64,
-    pub warnings: Vec<String>,
-}
-
-pub fn build_symbol_embedding_provider(
-    cfg: &EmbeddingProviderConfig,
-    repo_root: Option<&Path>,
-) -> Result<Option<Box<dyn EmbeddingProvider>>> {
-    let Some(profile_name) = resolve_embedding_profile(cfg) else {
-        return Ok(None);
-    };
-
-    Ok(Some(build_embedding_provider(
-        &EmbeddingRuntimeClientConfig {
-            command: cfg.runtime_command.clone(),
-            args: cfg.runtime_args.clone(),
-            startup_timeout_secs: cfg.startup_timeout_secs,
-            request_timeout_secs: cfg.request_timeout_secs,
-            config_path: cfg.daemon_config_path.clone(),
-            profile_name,
-            repo_root: repo_root.map(Path::to_path_buf),
-        },
-    )?))
-}
-
-fn resolve_embedding_profile(cfg: &EmbeddingProviderConfig) -> Option<String> {
-    let profile = cfg
-        .embedding_profile
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if profile.is_empty() {
-        return None;
+impl EmbeddingRepresentationKind {
+    pub const fn storage_values(self) -> &'static [&'static str] {
+        match self {
+            Self::Code => &["code", "baseline", "enriched"],
+            Self::Summary => &["summary"],
+        }
     }
-    Some(profile)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +76,7 @@ pub struct SymbolEmbeddingRow {
     pub repo_id: String,
     pub blob_sha: String,
     pub representation_kind: EmbeddingRepresentationKind,
+    pub setup_fingerprint: String,
     pub provider: String,
     pub model: String,
     pub dimension: usize,
@@ -185,10 +147,10 @@ pub fn build_symbol_embedding_inputs(
         })
         .filter_map(|input| {
             let summary = summary_by_artefact_id
-                .get(&input.artefact_id)?
-                .trim()
-                .to_string();
-            if summary.is_empty() {
+                .get(&input.artefact_id)
+                .map(|summary| summary.trim().to_string())
+                .unwrap_or_default();
+            if representation_kind == EmbeddingRepresentationKind::Summary && summary.is_empty() {
                 return None;
             }
 
@@ -215,59 +177,72 @@ pub fn build_symbol_embedding_inputs(
 }
 
 pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
-    let body = truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS);
-    let signature = input
-        .signature
-        .as_deref()
-        .map(normalize_whitespace)
-        .unwrap_or_default();
-    let dependencies = render_dependency_context(&input.dependency_signals);
-
-    // Keep the clone semantic basis focused on symbol behavior rather than location.
-    format!(
-        "kind: {kind}\n\
-language: {language}\n\
-language_kind: {language_kind}\n\
-name: {name}\n\
-signature: {signature}\n\
-summary: {summary}\n\
-dependencies: {dependencies}\n\
-body:\n{body}",
-        kind = input.canonical_kind,
-        language = input.language,
-        language_kind = input.language_kind,
-        name = input.name,
-        signature = signature,
-        summary = normalize_whitespace(&input.summary),
-        dependencies = dependencies,
-        body = body,
-    )
+    match input.representation_kind {
+        EmbeddingRepresentationKind::Code => build_code_embedding_text(input),
+        EmbeddingRepresentationKind::Summary => build_summary_embedding_text(input),
+    }
 }
 
 pub fn build_symbol_embedding_input_hash(
     input: &SymbolEmbeddingInput,
-    provider: &dyn EmbeddingProvider,
+    provider: &dyn EmbeddingService,
 ) -> String {
-    sha256_hex(
-        &json!({
-            "fingerprint_version": EMBEDDING_FINGERPRINT_VERSION,
-            "provider": provider.cache_key(),
-            "artefact_id": &input.artefact_id,
-            "repo_id": &input.repo_id,
-            "blob_sha": &input.blob_sha,
-            "representation_kind": input.representation_kind,
-            "language": input.language.to_ascii_lowercase(),
-            "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
-            "language_kind": input.language_kind.to_ascii_lowercase(),
-            "name": &input.name,
-            "signature": input.signature.as_deref().map(normalize_whitespace),
-            "summary": normalize_whitespace(&input.summary),
-            "dependency_signals": &input.dependency_signals,
-            "body": truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS),
-            "content_hash": &input.content_hash,
-        })
-        .to_string(),
-    )
+    let mut value = json!({
+        "fingerprint_version": EMBEDDING_FINGERPRINT_VERSION,
+        "provider": embedding_provider_hash_identity(provider),
+        "artefact_id": &input.artefact_id,
+        "repo_id": &input.repo_id,
+        "blob_sha": &input.blob_sha,
+        "representation_kind": input.representation_kind,
+        "language": input.language.to_ascii_lowercase(),
+        "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
+        "language_kind": input.language_kind.to_ascii_lowercase(),
+        "name": &input.name,
+        "content_hash": &input.content_hash,
+    });
+    if let Some(map) = value.as_object_mut() {
+        match input.representation_kind {
+            EmbeddingRepresentationKind::Code => {
+                map.insert(
+                    "signature".to_string(),
+                    json!(input.signature.as_deref().map(normalize_whitespace)),
+                );
+                map.insert(
+                    "dependency_signals".to_string(),
+                    json!(&input.dependency_signals),
+                );
+                map.insert(
+                    "body".to_string(),
+                    json!(truncate_chars(
+                        normalize_whitespace(&input.body),
+                        MAX_EMBEDDING_BODY_CHARS
+                    )),
+                );
+            }
+            EmbeddingRepresentationKind::Summary => {
+                map.insert(
+                    "summary".to_string(),
+                    json!(normalize_whitespace(&input.summary)),
+                );
+            }
+        }
+    }
+    sha256_hex(&value.to_string())
+}
+
+fn embedding_provider_hash_identity(provider: &dyn EmbeddingService) -> serde_json::Value {
+    match provider.output_dimension() {
+        Some(dimension) => json!({
+            "provider": provider.provider_name(),
+            "model": provider.model_name(),
+            "dimension": dimension,
+        }),
+        None => json!({
+            "provider": provider.provider_name(),
+            "model": provider.model_name(),
+            "cache_key": provider.cache_key(),
+        }),
+    }
 }
 
 pub fn symbol_embeddings_require_reindex(
@@ -277,7 +252,7 @@ pub fn symbol_embeddings_require_reindex(
     state.embedding_hash.as_deref() != Some(next_input_hash)
 }
 
-pub fn resolve_embedding_setup(provider: &dyn EmbeddingProvider) -> Result<EmbeddingSetup> {
+pub fn resolve_embedding_setup(provider: &dyn EmbeddingService) -> Result<EmbeddingSetup> {
     let dimension = provider
         .output_dimension()
         .ok_or_else(|| anyhow!("embedding provider did not expose an output dimension"))?;
@@ -290,11 +265,12 @@ pub fn resolve_embedding_setup(provider: &dyn EmbeddingProvider) -> Result<Embed
 
 pub fn build_symbol_embedding_row(
     input: &SymbolEmbeddingInput,
-    provider: &dyn EmbeddingProvider,
+    provider: &dyn EmbeddingService,
 ) -> Result<SymbolEmbeddingRow> {
+    let setup = resolve_embedding_setup(provider)?;
     let embedding = provider.embed(
         &build_symbol_embedding_text(input),
-        crate::adapters::model_providers::embeddings::EmbeddingInputType::Document,
+        HostEmbeddingInputType::Document,
     )?;
     if embedding.is_empty() {
         bail!("embedding provider returned an empty vector");
@@ -305,12 +281,53 @@ pub fn build_symbol_embedding_row(
         repo_id: input.repo_id.clone(),
         blob_sha: input.blob_sha.clone(),
         representation_kind: input.representation_kind,
-        provider: provider.provider_name().to_string(),
-        model: provider.model_name().to_string(),
-        dimension: embedding.len(),
+        setup_fingerprint: setup.setup_fingerprint.clone(),
+        provider: setup.provider,
+        model: setup.model,
+        dimension: setup.dimension,
         embedding_input_hash: build_symbol_embedding_input_hash(input, provider),
         embedding,
     })
+}
+
+fn build_code_embedding_text(input: &SymbolEmbeddingInput) -> String {
+    let body = truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS);
+    let signature = input
+        .signature
+        .as_deref()
+        .map(normalize_whitespace)
+        .unwrap_or_default();
+    let dependencies = render_dependency_context(&input.dependency_signals);
+
+    format!(
+        "kind: {kind}\n\
+language: {language}\n\
+language_kind: {language_kind}\n\
+name: {name}\n\
+signature: {signature}\n\
+dependencies: {dependencies}\n\
+body:\n{body}",
+        kind = input.canonical_kind,
+        language = input.language,
+        language_kind = input.language_kind,
+        name = input.name,
+        signature = signature,
+        dependencies = dependencies,
+        body = body,
+    )
+}
+
+fn build_summary_embedding_text(input: &SymbolEmbeddingInput) -> String {
+    format!(
+        "kind: {kind}\n\
+language: {language}\n\
+name: {name}\n\
+summary: {summary}",
+        kind = input.canonical_kind,
+        language = input.language,
+        name = input.name,
+        summary = normalize_whitespace(&input.summary),
+    )
 }
 
 fn truncate_chars(input: String, max_chars: usize) -> String {
@@ -335,24 +352,22 @@ fn sha256_hex(input: &str) -> String {
 }
 
 fn build_embedding_setup_fingerprint(provider: &str, model: &str, dimension: usize) -> String {
-    sha256_hex(
-        &json!({
-            "provider": provider,
-            "model": model,
-            "dimension": dimension,
-        })
-        .to_string(),
+    format!(
+        "provider={provider}|model={model}|dimension={dimension}",
+        provider = provider,
+        model = model,
+        dimension = dimension,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
+    use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 
     struct MockEmbeddingProvider;
 
-    impl EmbeddingProvider for MockEmbeddingProvider {
+    impl EmbeddingService for MockEmbeddingProvider {
         fn provider_name(&self) -> &str {
             "mock"
         }
@@ -369,8 +384,8 @@ mod tests {
             "provider=mock::model=voyage-code-3::dimension=3".to_string()
         }
 
-        fn embed(&self, _input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
-            assert_eq!(input_type, EmbeddingInputType::Document);
+        fn embed(&self, _input: &str, input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
+            assert_eq!(input_type, HostEmbeddingInputType::Document);
             Ok(vec![0.1, 0.2, 0.3])
         }
     }
@@ -379,7 +394,7 @@ mod tests {
         cache_key: String,
     }
 
-    impl EmbeddingProvider for MockEmbeddingSetupProvider {
+    impl EmbeddingService for MockEmbeddingSetupProvider {
         fn provider_name(&self) -> &str {
             "openai"
         }
@@ -396,7 +411,7 @@ mod tests {
             self.cache_key.clone()
         }
 
-        fn embed(&self, _input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+        fn embed(&self, _input: &str, _input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
             Ok(vec![0.1, 0.2, 0.3])
         }
     }
@@ -406,7 +421,7 @@ mod tests {
             artefact_id: "artefact-1".to_string(),
             repo_id: "repo-1".to_string(),
             blob_sha: "blob-1".to_string(),
-            representation_kind: EmbeddingRepresentationKind::Baseline,
+            representation_kind: EmbeddingRepresentationKind::Code,
             path: "src/services/user.ts".to_string(),
             language: "typescript".to_string(),
             canonical_kind: "function".to_string(),
@@ -476,16 +491,13 @@ mod tests {
             ("import-1".to_string(), "Import statement.".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(
-            &inputs,
-            EmbeddingRepresentationKind::Baseline,
-            &summaries,
-        );
+        let rows =
+            build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
         assert_eq!(
             rows[0].representation_kind,
-            EmbeddingRepresentationKind::Baseline
+            EmbeddingRepresentationKind::Code
         );
     }
 
@@ -539,25 +551,48 @@ mod tests {
             ("function-2".to_string(), "   ".to_string()),
         ]);
 
-        let rows = build_symbol_embedding_inputs(
+        let code_rows =
+            build_symbol_embedding_inputs(&inputs, EmbeddingRepresentationKind::Code, &summaries);
+        assert_eq!(code_rows.len(), 2);
+        assert_eq!(code_rows[0].artefact_id, "function-1");
+        assert_eq!(code_rows[1].artefact_id, "function-2");
+
+        let summary_rows = build_symbol_embedding_inputs(
             &inputs,
-            EmbeddingRepresentationKind::Baseline,
+            EmbeddingRepresentationKind::Summary,
             &summaries,
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].artefact_id, "function-1");
+        assert_eq!(summary_rows.len(), 1);
+        assert_eq!(summary_rows[0].artefact_id, "function-1");
     }
 
     #[test]
-    fn symbol_embedding_hash_changes_when_summary_changes() {
+    fn code_embedding_hash_ignores_summary_changes() {
         let provider = MockEmbeddingProvider;
         let base = sample_input();
         let mut changed = base.clone();
         changed.summary = "Function normalize email. Normalizes email for storage.".to_string();
 
-        assert_ne!(
+        assert_eq!(
             build_symbol_embedding_input_hash(&base, &provider),
             build_symbol_embedding_input_hash(&changed, &provider)
+        );
+    }
+
+    #[test]
+    fn summary_embedding_hash_changes_when_summary_changes() {
+        let provider = MockEmbeddingProvider;
+        let base = sample_input();
+        let mut changed = base.clone();
+        changed.summary = "Function normalize email. Normalizes email for storage.".to_string();
+        let mut summary_base = base.clone();
+        summary_base.representation_kind = EmbeddingRepresentationKind::Summary;
+        let mut summary_changed = changed.clone();
+        summary_changed.representation_kind = EmbeddingRepresentationKind::Summary;
+
+        assert_ne!(
+            build_symbol_embedding_input_hash(&summary_base, &provider),
+            build_symbol_embedding_input_hash(&summary_changed, &provider)
         );
     }
 
@@ -573,12 +608,12 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_text_includes_summary_and_body() {
+    fn code_embedding_text_includes_dependencies_and_body_but_omits_summary_and_metadata() {
         let text = build_symbol_embedding_text(&sample_input());
-        assert!(text.contains("summary: Function normalize email."));
         assert!(text.contains("dependencies: calls:user repo::find by id"));
         assert!(text.contains("body:"));
         assert!(text.contains("return email.trim().toLowerCase();"));
+        assert!(!text.contains("summary:"));
         assert!(!text.contains("path:"));
         assert!(!text.contains("symbol_fqn:"));
         assert!(!text.contains("parent_kind:"));
@@ -617,7 +652,7 @@ mod tests {
         let provider = MockEmbeddingProvider;
         let base = sample_input();
         let mut changed = base.clone();
-        changed.representation_kind = EmbeddingRepresentationKind::Enriched;
+        changed.representation_kind = EmbeddingRepresentationKind::Summary;
 
         assert_ne!(
             build_symbol_embedding_input_hash(&base, &provider),
@@ -626,52 +661,42 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_provider_defaults_voyage_model_and_dimension() {
-        let profile = resolve_embedding_profile(&EmbeddingProviderConfig {
-            daemon_config_path: PathBuf::from("/config.toml"),
-            embedding_profile: Some("voyage-prod".to_string()),
-            runtime_command: "bitloops-embeddings".to_string(),
-            runtime_args: Vec::new(),
-            startup_timeout_secs: 10,
-            request_timeout_secs: 60,
-            warnings: Vec::new(),
-        });
+    fn symbol_embedding_hash_ignores_profile_rename_when_runtime_setup_matches() {
+        let input = sample_input();
+        let first = MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-a::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        };
+        let second = MockEmbeddingSetupProvider {
+            cache_key: "runtime_profile=local-b::provider=openai::model=text-embedding-3-large::dimension=3072".to_string(),
+        };
 
-        assert_eq!(profile.as_deref(), Some("voyage-prod"));
+        assert_eq!(
+            build_symbol_embedding_input_hash(&input, &first),
+            build_symbol_embedding_input_hash(&input, &second)
+        );
     }
 
     #[test]
-    fn symbol_embedding_provider_returns_none_when_disabled() {
-        let provider = build_symbol_embedding_provider(
-            &EmbeddingProviderConfig {
-                daemon_config_path: PathBuf::from("/config.toml"),
-                embedding_profile: None,
-                runtime_command: "bitloops-embeddings".to_string(),
-                runtime_args: Vec::new(),
-                startup_timeout_secs: 10,
-                request_timeout_secs: 60,
-                warnings: Vec::new(),
-            },
-            None,
-        )
-        .expect("disabled provider should not error");
+    fn summary_embedding_text_omits_body_and_dependencies() {
+        let mut input = sample_input();
+        input.representation_kind = EmbeddingRepresentationKind::Summary;
 
-        assert!(provider.is_none());
+        let text = build_symbol_embedding_text(&input);
+        assert!(text.contains("summary: Function normalize email."));
+        assert!(!text.contains("dependencies:"));
+        assert!(!text.contains("body:"));
+        assert!(!text.contains("signature:"));
     }
 
     #[test]
-    fn symbol_embedding_provider_keeps_profile_name_case() {
-        let profile = resolve_embedding_profile(&EmbeddingProviderConfig {
-            daemon_config_path: PathBuf::from("/config.toml"),
-            embedding_profile: Some("Local-Code".to_string()),
-            runtime_command: "bitloops-embeddings".to_string(),
-            runtime_args: Vec::new(),
-            startup_timeout_secs: 10,
-            request_timeout_secs: 60,
-            warnings: Vec::new(),
-        });
+    fn legacy_representation_aliases_map_to_code() {
+        let baseline = serde_json::from_str::<EmbeddingRepresentationKind>("\"baseline\"")
+            .expect("baseline alias");
+        let enriched = serde_json::from_str::<EmbeddingRepresentationKind>("\"enriched\"")
+            .expect("enriched alias");
 
-        assert_eq!(profile.as_deref(), Some("Local-Code"));
+        assert_eq!(baseline, EmbeddingRepresentationKind::Code);
+        assert_eq!(enriched, EmbeddingRepresentationKind::Code);
     }
 
     #[test]

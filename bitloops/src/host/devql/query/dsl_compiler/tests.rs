@@ -504,6 +504,39 @@ fn compile_project_deps_pipeline() {
 }
 
 #[test]
+fn compile_project_deps_pipeline_preserves_explicit_include_unresolved_false() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->project("packages/api")->deps(kind:"imports",direction:"out",include_unresolved:false)->limit(100)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    project(path: "packages/api") {
+      deps(filter: { kind: IMPORTS, direction: OUT, includeUnresolved: false }, first: 100) {
+        edges {
+          node {
+            id
+            edgeKind
+            fromArtefactId
+            toArtefactId
+            toSymbolRef
+            startLine
+            endLine
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_repository_knowledge_pipeline() {
     let parsed =
         parse_devql_query(r#"repo("bitloops-cli")->knowledge()->limit(10)"#).expect("query parses");
@@ -582,7 +615,7 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
         graphql,
         r#"query {
   selectArtefacts(by: { symbolFqn: "src/main.rs::main" }) {
-    deps {
+    deps(includeUnresolved: true) {
       summary
       schema
     }
@@ -606,6 +639,29 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
     deps(direction: IN, includeUnresolved: true) {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
+    let parsed = parse_devql_query(
+        r#"deps(direction:"in",include_unresolved:false)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    deps(direction: IN, includeUnresolved: false) {
       summary
       schema
     }

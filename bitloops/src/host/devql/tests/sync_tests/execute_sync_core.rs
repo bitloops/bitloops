@@ -22,7 +22,7 @@ async fn full_sync_indexes_all_supported_files() {
     .expect("execute full sync");
 
     assert!(summary.success, "full sync should report success");
-    assert_eq!(summary.paths_added, 4);
+    assert_eq!(summary.paths_added, 8);
     assert_eq!(summary.paths_changed, 0);
     assert_eq!(summary.paths_removed, 0);
     assert_eq!(summary.paths_unchanged, 0);
@@ -52,8 +52,18 @@ async fn full_sync_indexes_all_supported_files() {
         rows,
         vec![
             (
+                "Cargo.toml".to_string(),
+                "plain_text".to_string(),
+                "head".to_string()
+            ),
+            (
                 "scripts/main.py".to_string(),
                 "python".to_string(),
+                "head".to_string()
+            ),
+            (
+                "scripts/pyproject.toml".to_string(),
+                "plain_text".to_string(),
                 "head".to_string()
             ),
             (
@@ -64,6 +74,16 @@ async fn full_sync_indexes_all_supported_files() {
             (
                 "web/app.ts".to_string(),
                 "typescript".to_string(),
+                "head".to_string()
+            ),
+            (
+                "web/package.json".to_string(),
+                "plain_text".to_string(),
+                "head".to_string()
+            ),
+            (
+                "web/tsconfig.json".to_string(),
+                "plain_text".to_string(),
                 "head".to_string()
             ),
             (
@@ -107,7 +127,10 @@ async fn full_sync_indexes_all_supported_files() {
         )
         .expect("read repositories row");
 
-    assert_eq!(cache_count, 4, "supported files should be cached once each");
+    assert_eq!(
+        cache_count, 8,
+        "code and text files should be cached once each"
+    );
     assert!(
         artefact_count >= 8,
         "full sync should materialize file and symbol artefacts"
@@ -346,7 +369,7 @@ async fn sync_twice_with_no_changes_is_noop() {
     )
     .await
     .expect("execute initial full sync");
-    assert_eq!(first.paths_added, 4);
+    assert_eq!(first.paths_added, 8);
     assert_eq!(first.paths_changed, 0);
     assert_eq!(first.paths_removed, 0);
     assert_eq!(first.paths_unchanged, 0);
@@ -376,7 +399,7 @@ async fn sync_twice_with_no_changes_is_noop() {
         )
         .expect("count artefacts after second sync");
 
-    assert_eq!(second.paths_unchanged, 4);
+    assert_eq!(second.paths_unchanged, 8);
     assert_eq!(second.paths_added, 0);
     assert_eq!(second.paths_changed, 0);
     assert_eq!(second.paths_removed, 0);

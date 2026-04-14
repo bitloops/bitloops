@@ -125,7 +125,7 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Debug(_) => None,
         crate::cli::Commands::Devql(args) => devql_action(args),
         crate::cli::Commands::Embeddings(args) => embeddings_action(args),
-        crate::cli::Commands::EmbeddingsRuntime(_) => None,
+        crate::cli::Commands::Inference(args) => inference_action(args),
         crate::cli::Commands::DevqlWatcher(_) => None,
         crate::cli::Commands::DaemonProcess(_) => None,
         crate::cli::Commands::DaemonSupervisor(_) => None,
@@ -331,6 +331,12 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     if args.skip_baseline {
         flags.push("skip_baseline");
     }
+    if !args.exclude.is_empty() {
+        flags.push("exclude");
+    }
+    if !args.exclude_from.is_empty() {
+        flags.push("exclude_from");
+    }
     insert_flags(&mut props, flags);
     insert_bool_property(&mut props, "has_agent", args.agent.is_some());
     insert_bool_property(&mut props, "has_sync_choice", args.sync.is_some());
@@ -478,36 +484,7 @@ fn devql_action(
         crate::cli::devql::DevqlCommand::Init(_) => {
             Some(new_action("bitloops devql init", HashMap::new()))
         }
-        crate::cli::devql::DevqlCommand::Ingest(_) => {
-            Some(new_action("bitloops devql ingest", HashMap::new()))
-        }
-        crate::cli::devql::DevqlCommand::Sync(args) => {
-            let mut props = HashMap::new();
-            let mut flags = Vec::new();
-            if args.status {
-                flags.push("status");
-            }
-            insert_flags(&mut props, flags);
-            let sync_mode = if args.full {
-                "full"
-            } else if args.paths.is_some() {
-                "paths"
-            } else if args.repair {
-                "repair"
-            } else if args.validate {
-                "validate"
-            } else {
-                "incremental"
-            };
-            insert_string_property(&mut props, "sync_mode", sync_mode);
-            insert_bool_property(&mut props, "status_follow", args.status);
-            insert_optional_count_property(
-                &mut props,
-                "paths_count",
-                args.paths.as_ref().map(Vec::len),
-            );
-            Some(new_action("bitloops devql sync", props))
-        }
+        crate::cli::devql::DevqlCommand::Tasks(args) => devql_tasks_action(args),
         crate::cli::devql::DevqlCommand::Projection(args) => match &args.command {
             crate::cli::devql::DevqlProjectionCommand::CheckpointFileSnapshots(args) => {
                 let mut props = HashMap::new();
@@ -649,10 +626,108 @@ fn devql_action(
     }
 }
 
+fn devql_tasks_action(
+    args: &crate::cli::devql::DevqlTasksArgs,
+) -> Option<crate::telemetry::analytics::ActionDescriptor> {
+    match &args.command {
+        crate::cli::devql::DevqlTasksCommand::Enqueue(args) => {
+            let mut props = HashMap::new();
+            let mut flags = Vec::new();
+            if args.status {
+                flags.push("status");
+            }
+            if args.require_daemon {
+                flags.push("require_daemon");
+            }
+            insert_flags(&mut props, flags);
+            insert_string_property(
+                &mut props,
+                "task_kind",
+                match args.kind {
+                    crate::cli::devql::DevqlTaskKindArg::Sync => "sync",
+                    crate::cli::devql::DevqlTaskKindArg::Ingest => "ingest",
+                },
+            );
+            if matches!(args.kind, crate::cli::devql::DevqlTaskKindArg::Sync) {
+                let sync_mode = if args.full {
+                    "full"
+                } else if args.paths.is_some() {
+                    "paths"
+                } else if args.repair {
+                    "repair"
+                } else if args.validate {
+                    "validate"
+                } else {
+                    "incremental"
+                };
+                insert_string_property(&mut props, "sync_mode", sync_mode);
+                insert_optional_count_property(
+                    &mut props,
+                    "paths_count",
+                    args.paths.as_ref().map(Vec::len),
+                );
+            }
+            insert_optional_count_property(&mut props, "backfill", args.backfill);
+            insert_bool_property(&mut props, "status_follow", args.status);
+            Some(new_action("bitloops devql tasks enqueue", props))
+        }
+        crate::cli::devql::DevqlTasksCommand::Watch(args) => {
+            let mut props = HashMap::new();
+            insert_bool_property(&mut props, "require_daemon", args.require_daemon);
+            Some(new_action("bitloops devql tasks watch", props))
+        }
+        crate::cli::devql::DevqlTasksCommand::Status(_) => {
+            Some(new_action("bitloops devql tasks status", HashMap::new()))
+        }
+        crate::cli::devql::DevqlTasksCommand::List(args) => {
+            let mut props = HashMap::new();
+            insert_optional_count_property(&mut props, "limit", args.limit);
+            if let Some(kind) = args.kind {
+                insert_string_property(
+                    &mut props,
+                    "task_kind",
+                    match kind {
+                        crate::cli::devql::DevqlTaskKindArg::Sync => "sync",
+                        crate::cli::devql::DevqlTaskKindArg::Ingest => "ingest",
+                    },
+                );
+            }
+            if let Some(status) = args.status {
+                insert_string_property(
+                    &mut props,
+                    "task_status",
+                    match status {
+                        crate::cli::devql::DevqlTaskStatusArg::Queued => "queued",
+                        crate::cli::devql::DevqlTaskStatusArg::Running => "running",
+                        crate::cli::devql::DevqlTaskStatusArg::Completed => "completed",
+                        crate::cli::devql::DevqlTaskStatusArg::Failed => "failed",
+                        crate::cli::devql::DevqlTaskStatusArg::Cancelled => "cancelled",
+                    },
+                );
+            }
+            Some(new_action("bitloops devql tasks list", props))
+        }
+        crate::cli::devql::DevqlTasksCommand::Pause(args) => {
+            let mut props = HashMap::new();
+            insert_bool_property(&mut props, "has_reason", args.reason.is_some());
+            Some(new_action("bitloops devql tasks pause", props))
+        }
+        crate::cli::devql::DevqlTasksCommand::Resume(_) => {
+            Some(new_action("bitloops devql tasks resume", HashMap::new()))
+        }
+        crate::cli::devql::DevqlTasksCommand::Cancel(_) => {
+            Some(new_action("bitloops devql tasks cancel", HashMap::new()))
+        }
+    }
+}
+
 fn embeddings_action(
     args: &crate::cli::embeddings::EmbeddingsArgs,
 ) -> Option<crate::telemetry::analytics::ActionDescriptor> {
     match args.command.as_ref()? {
+        crate::cli::embeddings::EmbeddingsCommand::Install(_) => {
+            Some(new_action("bitloops embeddings install", HashMap::new()))
+        }
         crate::cli::embeddings::EmbeddingsCommand::Pull(_) => {
             Some(new_action("bitloops embeddings pull", HashMap::new()))
         }
@@ -665,6 +740,16 @@ fn embeddings_action(
             "bitloops embeddings clear-cache",
             HashMap::new(),
         )),
+    }
+}
+
+fn inference_action(
+    args: &crate::cli::inference::InferenceArgs,
+) -> Option<crate::telemetry::analytics::ActionDescriptor> {
+    match args.command.as_ref()? {
+        crate::cli::inference::InferenceCommand::Install(_) => {
+            Some(new_action("bitloops inference install", HashMap::new()))
+        }
     }
 }
 
@@ -706,20 +791,26 @@ mod telemetry_actions_unit_tests {
     }
 
     #[test]
-    fn telemetry_action_for_devql_ingest_has_no_legacy_checkpoint_limit_property() {
-        let cli = crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest"])
-            .expect("devql ingest should parse");
+    fn telemetry_action_for_devql_tasks_enqueue_ingest_has_no_legacy_checkpoint_limit_property() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "bitloops", "devql", "tasks", "enqueue", "--kind", "ingest",
+        ])
+        .expect("devql task enqueue should parse");
         let action = telemetry_action_for_command(
             cli.command
                 .as_ref()
-                .expect("devql ingest should produce a subcommand"),
+                .expect("devql task enqueue should produce a subcommand"),
         )
-        .expect("devql ingest telemetry action should be emitted");
+        .expect("devql task enqueue telemetry action should be emitted");
 
-        assert_eq!(action.event, "bitloops devql ingest");
+        assert_eq!(action.event, "bitloops devql tasks enqueue");
+        assert_eq!(
+            action.properties.get("task_kind").and_then(Value::as_str),
+            Some("ingest")
+        );
         assert!(
-            action.properties.is_empty(),
-            "devql ingest no longer accepts legacy checkpoint limit flags"
+            !action.properties.contains_key("max_checkpoints"),
+            "devql task enqueue should not emit the removed max_checkpoints property"
         );
     }
 }

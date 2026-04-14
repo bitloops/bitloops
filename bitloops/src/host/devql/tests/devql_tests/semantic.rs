@@ -5,6 +5,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
+const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
+
 #[tokio::test]
 async fn init_sqlite_schema_creates_symbol_embeddings_table() {
     let temp = tempdir().expect("temp dir");
@@ -147,40 +149,25 @@ fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let script = r#"#!/bin/sh
-provider=${BITLOOPS_TEST_EMBED_PROVIDER:-local_fastembed}
 model=${BITLOOPS_TEST_EMBED_MODEL:-bdd-test-model}
 dimension=${BITLOOPS_TEST_EMBED_DIMENSION:-3}
-profile_name=fake
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --profile)
-      profile_name=$2
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
 case "$dimension" in
-  4) vector='[0.1,0.2,0.3,0.4]' ;;
-  *) vector='[0.1,0.2,0.3]' ;;
+  4) vector='[[0.1,0.2,0.3,0.4]]' ;;
+  *) vector='[[0.1,0.2,0.3]]' ;;
 esac
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
-  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
-    *'"type":"describe"'*)
-      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"bdd","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"%s","model_name":"%s","output_dimension":%s,"cache_dir":null}}}\n' "$req_id" "$profile_name" "$provider" "$model" "$dimension"
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":%s,"model":"%s"}\n' "$req_id" "$vector" "$model"
       ;;
-    *'"type":"embed_batch"'*)
-      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":%s}]}\n' "$req_id" "$vector"
-      ;;
-    *'"type":"shutdown"'*)
-      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"%s"}\n' "$req_id" "$model"
       exit 0
       ;;
     *)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
       ;;
   esac
 done
@@ -201,69 +188,44 @@ fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let script = r#"
-$provider = if ($env:BITLOOPS_TEST_EMBED_PROVIDER) { $env:BITLOOPS_TEST_EMBED_PROVIDER } else { "local_fastembed" }
 $model = if ($env:BITLOOPS_TEST_EMBED_MODEL) { $env:BITLOOPS_TEST_EMBED_MODEL } else { "bdd-test-model" }
 $dimension = if ($env:BITLOOPS_TEST_EMBED_DIMENSION) { [int]$env:BITLOOPS_TEST_EMBED_DIMENSION } else { 3 }
-$profileName = "fake"
-for ($i = 0; $i -lt $args.Length; $i++) {
-  if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
-    $profileName = $args[$i + 1]
-    break
-  }
+$vector = if ($dimension -eq 4) { @(@(0.1, 0.2, 0.3, 0.4)) } else { @(@(0.1, 0.2, 0.3)) }
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
 }
-$vector = if ($dimension -eq 4) { @(0.1, 0.2, 0.3, 0.4) } else { @(0.1, 0.2, 0.3) }
+$ready | ConvertTo-Json -Compress
 $stdin = [Console]::In
 while (($line = $stdin.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $request = $line | ConvertFrom-Json
-  switch ($request.type) {
-    "describe" {
+  switch ($request.cmd) {
+    "embed" {
       $response = @{
-        type = "describe"
-        request_id = $request.request_id
-        protocol_version = 1
-        runtime = @{
-          protocol_version = 1
-          runtime_name = "bitloops-embeddings"
-          runtime_version = "bdd"
-          profile_name = $profileName
-          provider = @{
-            kind = "local_fastembed"
-            provider_name = $provider
-            model_name = $model
-            output_dimension = $dimension
-            cache_dir = $null
-          }
-        }
-      }
-    }
-    "embed_batch" {
-      $response = @{
-        type = "embed_batch"
-        request_id = $request.request_id
-        protocol_version = 1
-        vectors = @(@{
-          index = 0
-          values = $vector
-        })
+        id = $request.id
+        ok = $true
+        vectors = $vector
+        model = $model
       }
     }
     "shutdown" {
       $response = @{
-        type = "shutdown"
-        request_id = $request.request_id
-        protocol_version = 1
-        accepted = $true
+        id = $request.id
+        ok = $true
+        model = $model
       }
       $response | ConvertTo-Json -Compress
       break
     }
     default {
       $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "unexpected request"
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
       }
     }
   }
@@ -283,7 +245,7 @@ while (($line = $stdin.ReadLine()) -ne $null) {
     )
 }
 
-fn write_semantic_clone_ingest_config(repo_root: &Path, profile_name: &str) {
+fn write_semantic_clone_ingest_config(repo_root: &Path, profile_name: &str, model: &str) {
     let (command, args) = fake_runtime_command_and_args(repo_root);
     let runtime_args = args
         .iter()
@@ -299,27 +261,31 @@ sqlite_path = ".bitloops/stores/relational/relational.db"
 [stores.events]
 duckdb_path = ".bitloops/stores/events.duckdb"
 
-[semantic]
-provider = "disabled"
-
 [semantic_clones]
 summary_mode = "off"
 embedding_mode = "deterministic"
-embedding_profile = "{profile_name}"
 
-[embeddings.runtime]
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+
+[inference.runtimes.bitloops_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
 request_timeout_secs = 5
 
-[embeddings.profiles.alpha]
-kind = "local_fastembed"
-model = "ignored-by-fake-runtime"
+[inference.profiles.alpha]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = {model:?}
 
-[embeddings.profiles.beta]
-kind = "local_fastembed"
-model = "ignored-by-fake-runtime"
+[inference.profiles.beta]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = {model:?}
 "#
         ),
     );
@@ -343,6 +309,16 @@ duckdb_path = ".bitloops/stores/events.duckdb"
     rusqlite::Connection::open(&sqlite_path).expect("create checkpoint sqlite file");
     let src_dir = repo.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        repo.path().join("package.json"),
+        "{\n  \"name\": \"semantic-direct-ingest-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        repo.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
 
     fs::write(
         src_dir.join("invoice.ts"),
@@ -353,7 +329,10 @@ duckdb_path = ".bitloops/stores/events.duckdb"
 "#,
     )
     .expect("write invoice source");
-    git_ok(repo.path(), &["add", "src/invoice.ts"]);
+    git_ok(
+        repo.path(),
+        &["add", "package.json", "tsconfig.json", "src/invoice.ts"],
+    );
     git_ok(repo.path(), &["commit", "-m", "add invoice source"]);
     let first_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     write_committed(
@@ -398,6 +377,7 @@ duckdb_path = ".bitloops/stores/events.duckdb"
 struct CurrentEmbeddingRow {
     symbol_fqn: String,
     path: String,
+    representation_kind: String,
     provider: String,
     model: String,
     dimension: i64,
@@ -408,21 +388,22 @@ fn load_current_embedding_rows(sqlite_path: &Path, repo_id: &str) -> Vec<Current
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
     let mut stmt = conn
         .prepare(
-            "SELECT a.symbol_fqn, a.path, e.provider, e.model, e.dimension, e.embedding_input_hash
+            "SELECT a.symbol_fqn, a.path, e.representation_kind, e.provider, e.model, e.dimension, e.embedding_input_hash
              FROM artefacts_current a
              JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
              WHERE a.repo_id = ?1
-             ORDER BY a.path, a.start_line, a.symbol_fqn",
+             ORDER BY a.path, a.start_line, a.symbol_fqn, e.representation_kind",
         )
         .expect("prepare current embeddings query");
     stmt.query_map([repo_id], |row| {
         Ok(CurrentEmbeddingRow {
             symbol_fqn: row.get(0)?,
             path: row.get(1)?,
-            provider: row.get(2)?,
-            model: row.get(3)?,
-            dimension: row.get(4)?,
-            embedding_input_hash: row.get(5)?,
+            representation_kind: row.get(2)?,
+            provider: row.get(3)?,
+            model: row.get(4)?,
+            dimension: row.get(5)?,
+            embedding_input_hash: row.get(6)?,
         })
     })
     .expect("query current embeddings")
@@ -474,19 +455,26 @@ fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
 
 fn hash_by_symbol(rows: &[CurrentEmbeddingRow]) -> BTreeMap<String, String> {
     rows.iter()
+        .filter(|row| is_code_embedding_row(row))
         .map(|row| (row.symbol_fqn.clone(), row.embedding_input_hash.clone()))
         .collect()
+}
+
+fn is_code_embedding_row(row: &CurrentEmbeddingRow) -> bool {
+    matches!(
+        row.representation_kind.as_str(),
+        "code" | "baseline" | "enriched"
+    )
 }
 
 async fn run_direct_ingest_with_env(
     repo_root: &Path,
     max_checkpoints: usize,
     profile_name: &str,
-    provider_name: &str,
     model: &str,
     dimension: &str,
 ) -> IngestionCounters {
-    write_semantic_clone_ingest_config(repo_root, profile_name);
+    write_semantic_clone_ingest_config(repo_root, profile_name, model);
     assert_eq!(
         list_committed(repo_root)
             .expect("list committed checkpoints before direct ingest")
@@ -505,7 +493,6 @@ async fn run_direct_ingest_with_env(
             ("BITLOOPS_DEVQL_CH_USER", None),
             ("BITLOOPS_DEVQL_CH_PASSWORD", None),
             ("BITLOOPS_DEVQL_CH_DATABASE", None),
-            ("BITLOOPS_TEST_EMBED_PROVIDER", Some(provider_name)),
             ("BITLOOPS_TEST_EMBED_MODEL", Some(model)),
             ("BITLOOPS_TEST_EMBED_DIMENSION", Some(dimension)),
         ],
@@ -526,17 +513,20 @@ async fn run_direct_ingest_with_env(
     )
     .await
     .expect("seed current state before direct ingest");
-    let embedding_provider = crate::capability_packs::semantic_clones::extension_descriptor::build_symbol_embedding_provider(
-        &embedding_provider_config(&cfg),
-        Some(repo_root),
-    )
-    .expect("build fake embedding provider");
-    let embedding_provider = embedding_provider.expect("expected fake embedding provider");
+    let capability = crate::config::resolve_embedding_capability_config_for_repo(repo_root);
+    let gateway = crate::host::inference::LocalInferenceGateway::new(
+        repo_root,
+        capability.inference.clone(),
+        std::collections::HashMap::new(),
+    );
+    let embedding_provider =
+        crate::host::inference::InferenceGateway::embeddings(&gateway, profile_name)
+            .expect("build fake embedding provider");
     let setup = crate::capability_packs::semantic_clones::embeddings::resolve_embedding_setup(
         embedding_provider.as_ref(),
     )
     .expect("resolve fake embedding setup");
-    assert_eq!(setup.provider, provider_name);
+    assert_eq!(setup.provider, TEST_EMBEDDINGS_DRIVER);
     assert_eq!(setup.model, model);
     assert_eq!(
         setup.dimension,
@@ -552,15 +542,8 @@ async fn run_direct_ingest_with_env(
 async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
     let repo = seed_direct_ingest_semantic_repo();
 
-    let summary = run_direct_ingest_with_env(
-        repo.path(),
-        10,
-        "alpha",
-        "local_fastembed",
-        "bootstrap-model",
-        "3",
-    )
-    .await;
+    let summary =
+        run_direct_ingest_with_env(repo.path(), 10, "alpha", "bootstrap-model", "3").await;
 
     let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
@@ -570,13 +553,13 @@ async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
     assert!(summary.success);
     assert!(summary.commits_processed >= 2);
     assert!(!current_rows.is_empty());
-    assert_eq!(setup.0, "local_fastembed");
+    assert_eq!(setup.0, TEST_EMBEDDINGS_DRIVER);
     assert_eq!(setup.1, "bootstrap-model");
     assert_eq!(setup.2, 3);
     assert_eq!(
         setup.3,
         crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-            "local_fastembed",
+            TEST_EMBEDDINGS_DRIVER,
             "bootstrap-model",
             3,
         )
@@ -585,7 +568,7 @@ async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
         vec![(
-            "local_fastembed".to_string(),
+            TEST_EMBEDDINGS_DRIVER.to_string(),
             "bootstrap-model".to_string(),
             3,
         )]
@@ -600,12 +583,11 @@ async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
     let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
 
-    run_direct_ingest_with_env(repo.path(), 10, "alpha", "local_fastembed", "model-a", "3").await;
+    run_direct_ingest_with_env(repo.path(), 10, "alpha", "model-a", "3").await;
     let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let first_hashes = hash_by_symbol(&first_rows);
 
-    let second =
-        run_direct_ingest_with_env(repo.path(), 1, "alpha", "voyage", "model-b", "3").await;
+    let second = run_direct_ingest_with_env(repo.path(), 1, "alpha", "model-b", "3").await;
     let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let second_hashes = hash_by_symbol(&second_rows);
     let active_setup =
@@ -614,16 +596,18 @@ async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
     assert_eq!(second.symbol_embedding_rows_upserted, first_rows.len());
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
-        vec![("voyage".to_string(), "model-b".to_string(), 3)]
+        vec![(TEST_EMBEDDINGS_DRIVER.to_string(), "model-b".to_string(), 3)]
     );
     assert_eq!(
         active_setup,
         (
-            "voyage".to_string(),
+            TEST_EMBEDDINGS_DRIVER.to_string(),
             "model-b".to_string(),
             3,
             crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                "voyage", "model-b", 3,
+                TEST_EMBEDDINGS_DRIVER,
+                "model-b",
+                3,
             )
             .setup_fingerprint,
         )
@@ -645,27 +629,11 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
     let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
 
-    run_direct_ingest_with_env(
-        repo.path(),
-        10,
-        "alpha",
-        "local_fastembed",
-        "stable-model",
-        "3",
-    )
-    .await;
+    run_direct_ingest_with_env(repo.path(), 10, "alpha", "stable-model", "3").await;
     let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let first_hashes = hash_by_symbol(&first_rows);
 
-    let second = run_direct_ingest_with_env(
-        repo.path(),
-        1,
-        "beta",
-        "local_fastembed",
-        "stable-model",
-        "3",
-    )
-    .await;
+    let second = run_direct_ingest_with_env(repo.path(), 1, "beta", "stable-model", "3").await;
     let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let second_hashes = hash_by_symbol(&second_rows);
     let active_setup =
@@ -674,16 +642,20 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
     assert_eq!(second.symbol_embedding_rows_upserted, 0);
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
-        vec![("local_fastembed".to_string(), "stable-model".to_string(), 3,)]
+        vec![(
+            TEST_EMBEDDINGS_DRIVER.to_string(),
+            "stable-model".to_string(),
+            3,
+        )]
     );
     assert_eq!(
         active_setup,
         (
-            "local_fastembed".to_string(),
+            TEST_EMBEDDINGS_DRIVER.to_string(),
             "stable-model".to_string(),
             3,
             crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                "local_fastembed",
+                TEST_EMBEDDINGS_DRIVER,
                 "stable-model",
                 3,
             )
@@ -692,14 +664,14 @@ async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_desc
     );
 
     let mut unchanged_symbol_count = 0usize;
-    for row in &second_rows {
+    for row in second_rows.iter().filter(|row| is_code_embedding_row(row)) {
         let first_hash = first_hashes
             .get(&row.symbol_fqn)
             .expect("symbol present after profile rename");
         assert_eq!(&row.embedding_input_hash, first_hash);
         unchanged_symbol_count += 1;
     }
-    assert_eq!(unchanged_symbol_count, second_rows.len());
+    assert_eq!(unchanged_symbol_count, first_hashes.len());
     assert_eq!(
         second_hashes
             .get("src/invoice.ts")
@@ -716,27 +688,11 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
     let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
 
-    run_direct_ingest_with_env(
-        repo.path(),
-        10,
-        "alpha",
-        "local_fastembed",
-        "dimension-model",
-        "3",
-    )
-    .await;
+    run_direct_ingest_with_env(repo.path(), 10, "alpha", "dimension-model", "3").await;
     let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let first_hashes = hash_by_symbol(&first_rows);
 
-    let second = run_direct_ingest_with_env(
-        repo.path(),
-        1,
-        "alpha",
-        "local_fastembed",
-        "dimension-model",
-        "4",
-    )
-    .await;
+    let second = run_direct_ingest_with_env(repo.path(), 1, "alpha", "dimension-model", "4").await;
     let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
     let second_hashes = hash_by_symbol(&second_rows);
     let active_setup =
@@ -746,7 +702,7 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
         vec![(
-            "local_fastembed".to_string(),
+            TEST_EMBEDDINGS_DRIVER.to_string(),
             "dimension-model".to_string(),
             4,
         )]
@@ -754,11 +710,11 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
     assert_eq!(
         active_setup,
         (
-            "local_fastembed".to_string(),
+            TEST_EMBEDDINGS_DRIVER.to_string(),
             "dimension-model".to_string(),
             4,
             crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                "local_fastembed",
+                TEST_EMBEDDINGS_DRIVER,
                 "dimension-model",
                 4,
             )

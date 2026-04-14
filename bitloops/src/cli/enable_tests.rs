@@ -4,6 +4,11 @@ use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
+use crate::cli::embeddings::{
+    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+};
+use crate::cli::inference::with_summary_generation_configured_hook;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
 };
@@ -67,14 +72,22 @@ fn with_isolated_daemon_config_process_state<T>(
     f: impl FnOnce() -> T,
 ) -> T {
     let config_dir = tempfile::tempdir().unwrap();
+    let data_dir = tempfile::tempdir().unwrap();
     let config_dir_value = config_dir.path().to_string_lossy().into_owned();
+    let data_dir_value = data_dir.path().to_string_lossy().into_owned();
     let mut env = Vec::with_capacity(extra_env.len() + 1);
     env.push((
         "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
         Some(config_dir_value.as_str()),
     ));
+    env.push((
+        "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+        Some(data_dir_value.as_str()),
+    ));
     env.extend_from_slice(extra_env);
-    with_process_state(cwd, &env, f)
+    with_process_state(cwd, &env, || {
+        with_summary_generation_configured_hook(|_| true, f)
+    })
 }
 
 fn with_isolated_daemon_config<T>(f: impl FnOnce() -> T) -> T {
@@ -133,33 +146,20 @@ fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let script = r#"#!/bin/sh
-profile_name=fake
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --profile)
-      profile_name=$2
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
+model_name="bge-m3"
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
-  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
-    *'"type":"describe"'*)
-      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime":{"protocol_version":1,"runtime_name":"bitloops-embeddings","runtime_version":"test","profile_name":"%s","provider":{"kind":"local_fastembed","provider_name":"local_fastembed","model_name":"test-model","output_dimension":3,"cache_dir":null}}}\n' "$req_id" "$profile_name"
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"%s"}\n' "$req_id" "$model_name"
       ;;
-    *'"type":"embed_batch"'*)
-      printf '{"type":"embed_batch","request_id":"%s","protocol_version":1,"vectors":[{"index":0,"values":[0.1,0.2,0.3]}]}\n' "$req_id"
-      ;;
-    *'"type":"shutdown"'*)
-      printf '{"type":"shutdown","request_id":"%s","protocol_version":1,"accepted":true}\n' "$req_id"
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"%s"}\n' "$req_id" "$model_name"
       exit 0
       ;;
     *)
-      printf '{"type":"error","request_id":"%s","code":"runtime_error","message":"unexpected request"}\n' "$req_id"
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
       ;;
   esac
 done
@@ -173,6 +173,12 @@ done
     ("sh".to_string(), vec![script_path.display().to_string()])
 }
 
+#[cfg(unix)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::path::PathBuf::from(args[0].clone())
+}
+
 #[cfg(windows)]
 fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-enable-embeddings-runtime.ps1");
@@ -180,65 +186,42 @@ fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let script = r#"
-$profileName = "fake"
-for ($i = 0; $i -lt $args.Length; $i++) {
-  if ($args[$i] -eq "--profile" -and ($i + 1) -lt $args.Length) {
-    $profileName = $args[$i + 1]
-    break
-  }
+$modelName = "bge-m3"
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
 }
+$ready | ConvertTo-Json -Compress
 $stdin = [Console]::In
 while (($line = $stdin.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
   $request = $line | ConvertFrom-Json
-  switch ($request.type) {
-    "describe" {
+  switch ($request.cmd) {
+    "embed" {
       $response = @{
-        type = "describe"
-        request_id = $request.request_id
-        protocol_version = 1
-        runtime = @{
-          protocol_version = 1
-          runtime_name = "bitloops-embeddings"
-          runtime_version = "test"
-          profile_name = $profileName
-          provider = @{
-            kind = "local_fastembed"
-            provider_name = "local_fastembed"
-            model_name = "test-model"
-            output_dimension = 3
-            cache_dir = $null
-          }
-        }
-      }
-    }
-    "embed_batch" {
-      $response = @{
-        type = "embed_batch"
-        request_id = $request.request_id
-        protocol_version = 1
-        vectors = @(@{
-          index = 0
-          values = @(0.1, 0.2, 0.3)
-        })
+        id = $request.id
+        ok = $true
+        vectors = @(@(0.1, 0.2, 0.3))
+        model = $modelName
       }
     }
     "shutdown" {
       $response = @{
-        type = "shutdown"
-        request_id = $request.request_id
-        protocol_version = 1
-        accepted = $true
+        id = $request.id
+        ok = $true
+        model = $modelName
       }
       $response | ConvertTo-Json -Compress
       break
     }
     default {
       $response = @{
-        type = "error"
-        request_id = $request.request_id
-        code = "runtime_error"
-        message = "unexpected request"
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
       }
     }
   }
@@ -258,6 +241,25 @@ while (($line = $stdin.ReadLine()) -ne $null) {
     )
 }
 
+#[cfg(windows)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let script_dir = repo_root.join(".bitloops/test-bin");
+    fs::create_dir_all(&script_dir).expect("create managed runtime dir");
+    let powershell_script = script_dir.join("fake-managed-enable-embeddings-runtime.ps1");
+    let launcher = script_dir.join("fake-managed-enable-embeddings-runtime.cmd");
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
+    fs::write(
+        &launcher,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+            powershell_script.display()
+        ),
+    )
+    .expect("write managed runtime launcher");
+    launcher
+}
+
 fn write_runtime_only_daemon_config(command: &str, args: &[String]) {
     let runtime_args = args
         .iter()
@@ -275,7 +277,7 @@ fn write_runtime_only_daemon_config(command: &str, args: &[String]) {
 [runtime]
 local_dev = false
 
-[embeddings.runtime]
+[inference.runtimes.bitloops_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -284,6 +286,89 @@ request_timeout_secs = 5
         ),
     )
     .expect("write daemon config");
+}
+
+fn completed_embeddings_bootstrap_task_graphql_json(
+    task: &crate::daemon::DevqlTaskRecord,
+    message: String,
+) -> serde_json::Value {
+    let embeddings_bootstrap_spec = task.embeddings_bootstrap_spec().map(|spec| {
+        serde_json::json!({
+            "configPath": spec.config_path.display().to_string(),
+            "profileName": spec.profile_name,
+        })
+    });
+
+    serde_json::json!({
+        "taskId": task.task_id,
+        "repoId": task.repo_id,
+        "repoName": task.repo_name,
+        "repoIdentity": task.repo_identity,
+        "kind": task.kind.to_string().to_ascii_uppercase(),
+        "source": task.source.to_string(),
+        "status": "COMPLETED",
+        "submittedAtUnix": task.submitted_at_unix,
+        "startedAtUnix": task.started_at_unix.or(Some(task.submitted_at_unix)),
+        "updatedAtUnix": task.updated_at_unix.saturating_add(1),
+        "completedAtUnix": task.completed_at_unix.or(Some(task.updated_at_unix.saturating_add(1))),
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": embeddings_bootstrap_spec,
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "complete",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Bootstrap completed"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": {
+            "version": serde_json::Value::Null,
+            "binaryPath": serde_json::Value::Null,
+            "cacheDir": serde_json::Value::Null,
+            "runtimeName": serde_json::Value::Null,
+            "modelName": serde_json::Value::Null,
+            "freshlyInstalled": false,
+            "message": message
+        },
+    })
+}
+
+fn with_embeddings_task_watch_test_hooks<T>(f: impl FnOnce() -> T) -> T {
+    with_ingest_daemon_bootstrap_hook(
+        |_repo_root| Ok(()),
+        || {
+            with_graphql_executor_hook(
+                |repo_root, query, variables| {
+                    if query.contains("task(") || query.contains("query Task") {
+                        let task_id = variables["id"].as_str().expect("task id");
+                        let task = crate::daemon::devql_task(task_id)
+                            .expect("load daemon task")
+                            .expect("queued daemon task");
+                        let lines =
+                            crate::cli::embeddings::install_or_bootstrap_embeddings(repo_root)
+                                .expect("run embeddings bootstrap");
+                        return Ok(serde_json::json!({
+                            "task": completed_embeddings_bootstrap_task_graphql_json(
+                                &task,
+                                lines.join("\n"),
+                            )
+                        }));
+                    }
+
+                    panic!("unexpected repo-scoped query: {query}");
+                },
+                f,
+            )
+        },
+    )
 }
 
 /// Sets `enabled = true` in the project settings file and prints a confirmation.
@@ -1060,8 +1145,7 @@ enabled = false
             ("BITLOOPS_TEST_TTY", Some("1")),
         ],
         || {
-            let (command, args) = fake_runtime_command_and_args(repo.path());
-            write_runtime_only_daemon_config(&command, &args);
+            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
 
             with_global_graphql_executor_hook(
                 |_runtime_root, _query, _variables| {
@@ -1073,33 +1157,49 @@ enabled = false
                     }))
                 },
                 || {
-                    let mut out = Vec::new();
-                    let mut input = Cursor::new("\n");
-                    let runtime = test_runtime();
-                    runtime
-                        .block_on(run_with_io(
-                            EnableArgs {
-                                local: false,
-                                project: false,
-                                force: false,
-                                agent: None,
-                                telemetry: None,
-                                no_telemetry: false,
-                                install_embeddings: false,
-                            },
-                            &mut out,
-                            &mut input,
-                        ))
-                        .expect("run enable");
+                    with_managed_embeddings_install_hook(
+                        move |repo_root| {
+                            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                                version: "v0.1.0".to_string(),
+                                binary_path: fake_managed_runtime_path(repo_root),
+                                freshly_installed: true,
+                            })
+                        },
+                        || {
+                            with_embeddings_task_watch_test_hooks(|| {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("\n");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io(
+                                        EnableArgs {
+                                            local: false,
+                                            project: false,
+                                            force: false,
+                                            agent: None,
+                                            telemetry: None,
+                                            no_telemetry: false,
+                                            install_embeddings: false,
+                                        },
+                                        &mut out,
+                                        &mut input,
+                                    ))
+                                    .expect("run enable");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(rendered.contains("Install embeddings now? [Y/n]"));
-                    assert!(rendered.contains("Pulled embedding profile `local`."));
-                    let daemon_config = fs::read_to_string(
-                        default_daemon_config_path().expect("daemon config path"),
-                    )
-                    .expect("read daemon config");
-                    assert!(daemon_config.contains("embedding_profile = \"local\""));
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(rendered.contains("Install embeddings now? [Y/n]"));
+                                assert!(rendered.contains("Installed managed standalone"));
+                                assert!(
+                                    rendered.contains("Pulled embedding profile `local_code`.")
+                                );
+                                let daemon_config = fs::read_to_string(
+                                    default_daemon_config_path().expect("daemon config path"),
+                                )
+                                .expect("read daemon config");
+                                assert!(daemon_config.contains("code_embeddings = \"local_code\""));
+                            });
+                        },
+                    );
                 },
             );
         },
@@ -1126,31 +1226,44 @@ enabled = false
             }
         }),
         || {
-            let (command, args) = fake_runtime_command_and_args(repo.path());
-            write_runtime_only_daemon_config(&command, &args);
+            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
 
-            let mut out = Vec::new();
-            let mut input = Cursor::new("");
-            let runtime = test_runtime();
-            runtime
-                .block_on(run_with_io(
-                    EnableArgs {
-                        local: false,
-                        project: false,
-                        force: false,
-                        agent: None,
-                        telemetry: None,
-                        no_telemetry: false,
-                        install_embeddings: true,
-                    },
-                    &mut out,
-                    &mut input,
-                ))
-                .expect("run enable");
+            with_managed_embeddings_install_hook(
+                move |repo_root| {
+                    Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                        version: "v0.1.0".to_string(),
+                        binary_path: fake_managed_runtime_path(repo_root),
+                        freshly_installed: true,
+                    })
+                },
+                || {
+                    with_embeddings_task_watch_test_hooks(|| {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io(
+                                EnableArgs {
+                                    local: false,
+                                    project: false,
+                                    force: false,
+                                    agent: None,
+                                    telemetry: None,
+                                    no_telemetry: false,
+                                    install_embeddings: true,
+                                },
+                                &mut out,
+                                &mut input,
+                            ))
+                            .expect("run enable");
 
-            let rendered = String::from_utf8(out).expect("utf8 output");
-            assert!(!rendered.contains("Install embeddings now? [Y/n]"));
-            assert!(rendered.contains("Pulled embedding profile `local`."));
+                        let rendered = String::from_utf8(out).expect("utf8 output");
+                        assert!(!rendered.contains("Install embeddings now? [Y/n]"));
+                        assert!(rendered.contains("Installed managed standalone"));
+                        assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                    });
+                },
+            );
         },
     );
 }
@@ -1183,11 +1296,12 @@ enabled = false
 [runtime]
 local_dev = false
 
-[semantic_clones]
-embedding_profile = "openai"
+[semantic_clones.inference]
+code_embeddings = "openai"
 
-[embeddings.profiles.openai]
-kind = "openai"
+[inference.profiles.openai]
+task = "embeddings"
+driver = "openai"
 model = "text-embedding-3-large"
 "#,
             )

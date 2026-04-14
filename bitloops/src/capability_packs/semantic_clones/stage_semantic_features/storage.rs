@@ -287,9 +287,24 @@ COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS c
 COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
 COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
 FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
 LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
-WHERE current.repo_id = '{repo_id}' \
+WHERE current.repo_id = '{repo_id}' AND state.analysis_mode = 'code' \
 ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
+        repo_id = esc_pg(repo_id),
+    )
+}
+
+pub(super) fn build_historical_repo_artefacts_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT historical.artefact_id, historical.symbol_id, historical.repo_id, historical.blob_sha, historical.path, historical.language, \
+COALESCE(historical.canonical_kind, COALESCE(historical.language_kind, 'symbol')) AS canonical_kind, \
+COALESCE(historical.language_kind, COALESCE(historical.canonical_kind, 'symbol')) AS language_kind, \
+COALESCE(historical.symbol_fqn, historical.path) AS symbol_fqn, historical.parent_artefact_id, historical.start_line, historical.end_line, historical.start_byte, historical.end_byte, historical.signature, historical.modifiers, historical.docstring, historical.content_hash \
+FROM artefacts_historical historical \
+JOIN symbol_semantics semantics ON semantics.artefact_id = historical.artefact_id \
+WHERE historical.repo_id = '{repo_id}' \
+ORDER BY historical.blob_sha, historical.path, coalesce(historical.start_byte, 0), coalesce(historical.start_line, 0), historical.artefact_id",
         repo_id = esc_pg(repo_id),
     )
 }

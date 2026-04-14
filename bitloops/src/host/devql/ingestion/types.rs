@@ -2,9 +2,9 @@ use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 
 // Shared types used across ingestion modules.
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub(crate) struct IngestionCounters {
+pub struct IngestionCounters {
     pub(crate) success: bool,
     #[serde(skip_serializing)]
     pub(crate) init_requested: bool,
@@ -25,8 +25,9 @@ pub(crate) struct IngestionCounters {
     pub(crate) symbol_clone_sources_scored: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IngestionProgressPhase {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestionProgressPhase {
     Initializing,
     Extracting,
     Persisting,
@@ -34,8 +35,9 @@ pub(crate) enum IngestionProgressPhase {
     Failed,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct IngestionProgressUpdate {
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestionProgressUpdate {
     pub(crate) phase: IngestionProgressPhase,
     pub(crate) commits_total: usize,
     pub(crate) commits_processed: usize,
@@ -70,6 +72,7 @@ pub(super) struct FileArtefactRow {
     pub(super) artefact_id: String,
     pub(super) symbol_id: String,
     pub(super) language: String,
+    pub(super) extraction_fingerprint: String,
     pub(super) end_line: i32,
     pub(super) end_byte: i32,
 }

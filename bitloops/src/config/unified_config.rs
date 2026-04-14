@@ -65,11 +65,9 @@ pub struct UnifiedSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub knowledge: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub semantic: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_clones: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embeddings: Option<Value>,
+    pub inference: Option<Value>,
 
     // UX / tooling
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,13 +235,13 @@ pub fn settings_from_json(value: Value) -> Result<UnifiedSettings> {
 // ---------------------------------------------------------------------------
 
 use super::resolve::{
-    resolve_embeddings_from_unified_with, resolve_provider_config_from_value_with,
+    resolve_inference_from_unified_with, resolve_provider_config_from_value_with,
     resolve_semantic_clones_from_unified_with, resolve_store_backend_config_with,
-    resolve_store_semantic_config_with, resolve_watch_runtime_config_with,
+    resolve_watch_runtime_config_with,
 };
 use super::types::{
-    DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingsConfig, ProviderConfig,
-    SemanticClonesConfig, StoreBackendConfig, StoreSemanticConfig, WatchRuntimeConfig,
+    DashboardFileConfig, InferenceCapabilityConfig, InferenceConfig, ProviderConfig,
+    SemanticClonesConfig, StoreBackendConfig, WatchRuntimeConfig,
 };
 
 /// Resolve store backend configuration (relational, events, blob) from merged
@@ -290,22 +288,6 @@ pub fn resolve_store_backend_from_unified(
     Ok(config)
 }
 
-/// Resolve semantic search configuration from merged [`UnifiedSettings`],
-/// with environment variables taking precedence where documented.
-pub fn resolve_semantic_from_unified<F: Fn(&str) -> Option<String>>(
-    settings: &UnifiedSettings,
-    env_lookup: F,
-) -> StoreSemanticConfig {
-    // Build a synthetic value with semantic at root level so
-    // StoreFileConfig::from_json_value can find it via root.get("semantic").
-    let mut map = serde_json::Map::new();
-    if let Some(semantic) = &settings.semantic {
-        map.insert("semantic".into(), semantic.clone());
-    }
-    let file_cfg = super::types::StoreFileConfig::from_json_value(&Value::Object(map));
-    resolve_store_semantic_config_with(file_cfg, env_lookup)
-}
-
 pub fn resolve_semantic_clones_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
     env_lookup: F,
@@ -313,26 +295,42 @@ pub fn resolve_semantic_clones_from_unified<F: Fn(&str) -> Option<String>>(
     resolve_semantic_clones_from_unified_with(settings, env_lookup)
 }
 
+pub fn resolve_inference_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    config_root: &Path,
+    env_lookup: F,
+) -> InferenceConfig {
+    resolve_inference_from_unified_with(settings, config_root, env_lookup)
+}
+
 pub fn resolve_embeddings_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
     config_root: &Path,
     env_lookup: F,
-) -> EmbeddingsConfig {
-    resolve_embeddings_from_unified_with(settings, config_root, env_lookup)
+) -> InferenceConfig {
+    resolve_inference_from_unified(settings, config_root, env_lookup)
+}
+
+pub fn resolve_inference_capability_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    config_root: &Path,
+    env_lookup: F,
+) -> InferenceCapabilityConfig {
+    let semantic_clones = resolve_semantic_clones_from_unified_with(settings, &env_lookup);
+    let inference = resolve_inference_from_unified_with(settings, config_root, env_lookup);
+
+    InferenceCapabilityConfig {
+        semantic_clones,
+        inference,
+    }
 }
 
 pub fn resolve_embedding_capability_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
     config_root: &Path,
     env_lookup: F,
-) -> EmbeddingCapabilityConfig {
-    let semantic_clones = resolve_semantic_clones_from_unified_with(settings, &env_lookup);
-    let embeddings = resolve_embeddings_from_unified_with(settings, config_root, env_lookup);
-
-    EmbeddingCapabilityConfig {
-        semantic_clones,
-        embeddings,
-    }
+) -> InferenceCapabilityConfig {
+    resolve_inference_capability_from_unified(settings, config_root, env_lookup)
 }
 
 /// Resolve watch runtime configuration from merged [`UnifiedSettings`] (JSON only,

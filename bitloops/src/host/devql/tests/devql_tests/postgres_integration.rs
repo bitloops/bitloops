@@ -431,6 +431,7 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_old, &file_symbol_id),
         symbol_id: file_symbol_id.clone(),
         language: "typescript".to_string(),
+        extraction_fingerprint: "test-fingerprint-old".to_string(),
         end_line: 4,
         end_byte: 48,
     };
@@ -438,6 +439,7 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_new, &file_symbol_id),
         symbol_id: file_symbol_id.clone(),
         language: "typescript".to_string(),
+        extraction_fingerprint: "test-fingerprint-new".to_string(),
         end_line: 9,
         end_byte: 112,
     };
@@ -489,6 +491,7 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         path,
         blob_old,
         &file_old.language,
+        &file_old.extraction_fingerprint,
         &old_record,
     )
     .await
@@ -499,6 +502,7 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         path,
         blob_new,
         &file_new.language,
+        &file_new.extraction_fingerprint,
         &new_record,
     )
     .await

@@ -21,6 +21,8 @@ jobs:
   publish-coverage-baseline:
     name: Publish coverage baseline metadata
     runs-on: self-hosted
+    env:
+      BITLOOPS_ACTIONS_VARIABLES_TOKEN: ${{ secrets.BITLOOPS_ACTIONS_VARIABLES_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -53,7 +55,7 @@ jobs:
           echo "lines=$lines" >> "$GITHUB_OUTPUT"
           echo "functions=$functions" >> "$GITHUB_OUTPUT"
       - name: Validate variables write token
-        if: ${{ secrets.BITLOOPS_ACTIONS_VARIABLES_TOKEN == '' }}
+        if: ${{ env.BITLOOPS_ACTIONS_VARIABLES_TOKEN == '' }}
         run: |
           echo "::error::Missing secret BITLOOPS_ACTIONS_VARIABLES_TOKEN. Configure a fine-grained PAT or GitHub App installation token with repository Variables: write access."
           exit 1
@@ -63,7 +65,7 @@ jobs:
           LINES: ${{ steps.metrics.outputs.lines }}
           FUNCTIONS: ${{ steps.metrics.outputs.functions }}
         with:
-          github-token: ${{ secrets.BITLOOPS_ACTIONS_VARIABLES_TOKEN }}
+          github-token: ${{ env.BITLOOPS_ACTIONS_VARIABLES_TOKEN }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;

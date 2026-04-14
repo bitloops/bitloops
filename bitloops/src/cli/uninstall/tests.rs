@@ -16,6 +16,9 @@ use super::{
 };
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
+use crate::cli::embeddings::{
+    managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
+};
 use crate::cli::enable::SHELL_COMPLETION_COMMENT;
 use crate::config::settings::SETTINGS_DIR;
 use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry};
@@ -357,6 +360,55 @@ fn data_target_removes_only_data() {
         assert!(bitloops_cache_dir().unwrap().exists());
         assert!(bitloops_config_dir().unwrap().exists());
         assert!(bitloops_state_dir().unwrap().exists());
+    });
+}
+
+#[test]
+fn binaries_target_removes_managed_embeddings_binary_and_metadata() {
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+
+    with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        let managed_binary = managed_embeddings_binary_path().expect("managed binary path");
+        let managed_bundle_dir = managed_embeddings_binary_dir().expect("managed bundle dir");
+        let managed_metadata = managed_embeddings_metadata_path().expect("managed metadata path");
+        if let Some(parent) = managed_binary.parent() {
+            fs::create_dir_all(parent).expect("create managed binary dir");
+        }
+        fs::write(&managed_binary, "binary").expect("write managed binary");
+        fs::create_dir_all(managed_bundle_dir.join("_internal")).expect("create support dir");
+        fs::write(
+            managed_bundle_dir.join("_internal").join("Python"),
+            "python-runtime",
+        )
+        .expect("write support file");
+        fs::write(&managed_metadata, "{}").expect("write managed metadata");
+
+        run_uninstall_for_test(
+            UninstallArgs {
+                binaries: true,
+                force: true,
+                ..UninstallArgs::default()
+            },
+            None,
+            None,
+            &|| Box::pin(async { Ok(()) }),
+            &|| Ok(()),
+            &|| {
+                Ok(vec![
+                    managed_embeddings_binary_path().expect("managed binary path from closure"),
+                ])
+            },
+        )
+        .unwrap();
+
+        assert!(!managed_binary.exists());
+        assert!(!managed_bundle_dir.exists());
+        assert!(!managed_metadata.exists());
+        assert!(bitloops_data_dir().unwrap().exists());
     });
 }
 

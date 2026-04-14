@@ -8,19 +8,14 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::capability_packs::semantic_clones::embeddings;
-use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
-use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-    clear_repo_symbol_embedding_rows, load_pre_stage_artefacts_for_blob,
-    load_pre_stage_dependencies_for_blob, upsert_semantic_feature_rows,
-    upsert_symbol_embedding_rows,
+    SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, load_pre_stage_artefacts_for_blob,
+    load_pre_stage_dependencies_for_blob,
 };
 use crate::config::{
-    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig,
-    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
-    resolve_store_backend_config, resolve_store_backend_config_for_repo,
+    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
@@ -41,6 +36,8 @@ pub(crate) mod artefact_sql;
 pub(crate) mod checkpoint_file_snapshots;
 #[path = "devql/checkpoint_provenance.rs"]
 pub(crate) mod checkpoint_provenance;
+#[path = "devql/classification.rs"]
+pub(crate) mod classification;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
 #[path = "devql/commands_projection.rs"]
@@ -53,10 +50,17 @@ mod commands_refresh;
 mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+mod plain_text;
+#[path = "devql/producer_spool.rs"]
+mod producer_spool;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
 mod types;
 
+pub(crate) use self::classification::{
+    AnalysisMode, FileRole, ProjectAwareClassifier, ProjectContext, ResolvedFileClassification,
+    TextIndexMode,
+};
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
     execute_ingest_with_backfill_window, execute_ingest_with_observer,
@@ -83,6 +87,16 @@ pub use self::commands_sync::{
     run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
+pub(crate) use self::plain_text::{
+    PLAIN_TEXT_LANGUAGE_ID, indexing_language_for_path, plain_text_content_is_allowed,
+};
+pub(crate) use self::producer_spool::{
+    ProducerSpoolJobPayload, ProducerSpoolJobRecord, claim_next_producer_spool_jobs,
+    delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
+    enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
+    enqueue_spooled_sync_task_for_repo_root, producer_spool_schema_sql_sqlite,
+    recover_running_producer_spool_jobs, requeue_producer_spool_job,
+};
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
@@ -621,29 +635,6 @@ async fn init_relational_schema_with_mode(
     Ok(outcome)
 }
 
-fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
-    semantic::SemanticSummaryProviderConfig {
-        semantic_provider: cfg.semantic_provider.clone(),
-        semantic_model: cfg.semantic_model.clone(),
-        semantic_api_key: cfg.semantic_api_key.clone(),
-        semantic_base_url: cfg.semantic_base_url.clone(),
-    }
-}
-
-fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
-    let capability = resolve_embedding_capability_config_for_repo(&cfg.daemon_config_root);
-    embeddings::EmbeddingProviderConfig {
-        daemon_config_path: resolve_daemon_config_path_for_repo(&cfg.repo_root)
-            .unwrap_or_else(|_| cfg.daemon_config_root.join("config.toml")),
-        embedding_profile: capability.semantic_clones.embedding_profile,
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    }
-}
-
 pub(crate) async fn ensure_devql_storage_current(
     cfg: &DevqlConfig,
     command: &str,
@@ -812,6 +803,10 @@ mod ingestion_artefact_persistence;
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
+#[path = "devql/exclusion_reconcile.rs"]
+mod exclusion_reconcile;
+#[path = "devql/exclusions.rs"]
+mod exclusions;
 #[path = "devql/query/dsl_compiler.rs"]
 mod query_dsl_compiler;
 #[path = "devql/query/executor.rs"]
@@ -830,6 +825,10 @@ pub(crate) use self::db_utils::{
     sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
+pub(crate) use self::exclusion_reconcile::{
+    purge_scope_excluded_repo_data, scope_exclusion_reconcile_needed,
+};
+pub(crate) use self::exclusions::{RepoExclusionMatcher, load_repo_exclusion_matcher};
 use self::ingestion_artefact_identity::*;
 use self::ingestion_artefact_persistence::*;
 use self::ingestion_artefact_persistence_edges::*;
@@ -918,18 +917,21 @@ mod mapping_tests;
 mod core_contract_tests;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/cucumber_world.rs"]
 mod cucumber_world;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/cucumber_steps/mod.rs"]
 mod cucumber_steps;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "slow-tests"))]
 #[path = "devql/tests/cucumber_bdd.rs"]
 mod cucumber_bdd;
 
 #[cfg(test)]
+#[cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;
 

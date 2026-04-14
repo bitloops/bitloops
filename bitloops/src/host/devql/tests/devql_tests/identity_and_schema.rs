@@ -293,8 +293,17 @@ fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebr
 #[test]
 fn devql_ingest_rejects_removed_init_flag() {
     assert!(
-        crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"]).is_err(),
-        "devql ingest should reject the removed --init flag"
+        crate::cli::Cli::try_parse_from([
+            "bitloops",
+            "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
+            "ingest",
+            "--init=false",
+        ])
+        .is_err(),
+        "devql task enqueue ingest should reject the removed --init flag"
     );
 }
 

@@ -358,7 +358,7 @@ Raw GraphQL note: `depsSummary.filter.unresolved` is a `Boolean` (`false` by def
 The CLI write commands are thin clients over the local daemon GraphQL surface:
 
 - `bitloops devql init` → `initSchema`
-- `bitloops devql ingest` → `ingest`
+- `bitloops devql tasks enqueue --kind ingest` → `ingest`
 - `bitloops devql knowledge add` → `addKnowledge`
 - `bitloops devql knowledge associate` → `associateKnowledge`
 - `bitloops devql knowledge refresh` → `refreshKnowledge`

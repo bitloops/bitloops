@@ -6,3 +6,6 @@ mod fixtures;
 
 #[path = "performance/devql_query.rs"]
 mod devql_query;
+
+#[path = "performance/semantic_clones_ann_ab.rs"]
+mod semantic_clones_ann_ab;

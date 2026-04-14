@@ -111,6 +111,7 @@ mod tests {
         experimental: false,
         dependencies: &[],
         required_host_features: &[],
+        inference_slots: &[],
     };
 
     static INVALID_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
@@ -123,6 +124,7 @@ mod tests {
         experimental: false,
         dependencies: &[],
         required_host_features: &[],
+        inference_slots: &[],
     };
 
     struct CollectingRegistrar {

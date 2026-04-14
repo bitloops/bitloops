@@ -24,17 +24,17 @@ Bitloops stores daemon configuration at:
 - In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
-- `bitloops init --install-default-daemon` also auto-applies the default local embeddings setup when embeddings are not configured yet.
+- `bitloops init --install-default-daemon` also auto-applies the default local embeddings setup when embeddings are not configured yet. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from the `bitloops/bitloops-embeddings` releases and writes its managed absolute path into the runtime config.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
 - `bitloops start --config /path/to/config.toml --bootstrap-local-stores` keeps that explicit config path and creates the matching local SQLite, DuckDB, and blob-store artefacts before startup.
 - `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
-- `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile.
+- `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile. When that profile uses the default local Bitloops-managed runtime, Bitloops also installs or updates the managed `bitloops-embeddings` binary.
 
 The daemon config owns:
 
 - Store backends and custom store paths
 - Provider credentials
-- Semantic and embeddings runtime settings
+- Inference runtimes, profiles, and capability bindings
 - Dashboard defaults
 - Daemon runtime defaults such as `local_dev`, logging, and telemetry
 
@@ -68,24 +68,42 @@ site_url = "https://example.atlassian.net"
 email = "${ATLASSIAN_EMAIL}"
 token = "${ATLASSIAN_TOKEN}"
 
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
-api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
-
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local"
+ann_neighbors = 5
+enrichment_workers = 1
 
-[embeddings.runtime]
-command = "bitloops-embeddings"
-startup_timeout_secs = 10
-request_timeout_secs = 60
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.bitloops_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1/chat/completions"
 
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
@@ -103,10 +121,16 @@ The current daemon parser accepts these top-level surfaces:
 - `logging`
 - `stores`
 - `knowledge`
-- `semantic`
 - `semantic_clones`
-- `embeddings`
+- `inference`
 - `dashboard`
+
+### Text-Generation Profiles
+
+- `task = "text_generation"` profiles must declare `runtime`.
+- Bitloops always routes text generation through the configured runtime, typically `bitloops_inference`.
+- `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
+- Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it.
 
 ### Telemetry Consent
 
@@ -156,19 +180,33 @@ That means:
 When Bitloops auto-enables embeddings through `bitloops enable --install-embeddings`, interactive `bitloops enable`, or `bitloops init --install-default-daemon`, it creates the minimum daemon config needed for the default local profile only when no active profile is already configured:
 
 ```toml
-[semantic_clones]
-embedding_profile = "local"
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 
-[embeddings.profiles.local]
-kind = "local_fastembed"
+[inference.runtimes.bitloops_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
 ```
 
 Notes:
 
-- `local` is the default auto-created profile name.
-- `local_fastembed` is the default auto-created profile kind.
+- `local_code` is the default auto-created local embeddings profile name.
+- `bitloops_embeddings_ipc` is the default auto-created local embeddings driver.
+- `bitloops_embeddings` is the default auto-created runtime id.
+- `bge-m3` is the default auto-created local model.
+- When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above.
+- Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
 - Existing active embedding profiles are preserved. Bitloops does not overwrite an already configured non-local active profile.
-- The same runtime warm/bootstrap path used by `bitloops embeddings pull` is reused for local-profile setup.
+- The same runtime warm/bootstrap path used by `bitloops embeddings pull local_code` is reused for local-profile setup.
 
 ## RuntimeStore And RelationalStore
 
@@ -194,11 +232,18 @@ Configured relational, events, and blob stores still come from the daemon config
 
 `bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.
 
-Interactive `bitloops init` can also ask whether you want to queue an initial DevQL current-state sync after hook setup. Use `--sync=true` or `--sync=false` when you want to make that choice explicit; non-interactive runs require one of those flags.
+Interactive `bitloops init` can also ask whether you want to install the default local embeddings setup when embeddings are still unconfigured, whether you want to queue an initial DevQL current-state sync after hook setup, and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
 
-When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup before any init-triggered sync if embeddings are not already configured.
+When you use `bitloops init --install-default-daemon`, Bitloops can also auto-apply the default local embeddings setup if embeddings are not already configured. When init also runs sync or ingest, any managed `bitloops-embeddings` download happens afterwards.
 
-Use DevQL commands separately for ingestion and for any later explicit sync or validation runs. `bitloops init` does not perform DevQL ingest.
+`bitloops init` also accepts repeatable repo-policy exclusion flags:
+
+- `--exclude <glob>` adds entries to `[scope].exclude`
+- `--exclude-from <path>` adds entries to `[scope].exclude_from`
+
+`--exclude-from` paths must stay under the discovered repo-policy root. Init persists these values to `.bitloops.local.toml` before any init-triggered sync/ingest begins.
+
+Use DevQL commands separately when you want to rerun ingest, sync, or validation after initial setup. `bitloops init` can run both initial sync and initial commit-history ingest when you opt into them.
 
 The thin CLI and hook layer resolve project policy by walking upwards from the current working directory towards the enclosing `.git` root.
 
@@ -240,6 +285,7 @@ watch_poll_fallback_ms = 2500
 project_root = "packages/app"
 include = ["src/**", "tests/**"]
 exclude = ["dist/**", "coverage/**"]
+exclude_from = [".gitignore", "config/devql.ignore"]
 
 [agents]
 default = "claude-code"
@@ -270,6 +316,43 @@ enabled = false
 [watch]
 watch_debounce_ms = 1500
 ```
+
+### Scope Exclusions
+
+`[scope]` exclusions are evaluated relative to the repo-policy root:
+
+- `exclude = ["glob/**"]` keeps inline glob patterns in policy
+- `exclude_from = ["path/to/ignore-file"]` loads additional patterns from files
+
+`exclude_from` files use one glob per line. Blank lines are ignored. Lines beginning with `#` are comments.
+
+Example:
+
+```toml title=".bitloops.local.toml"
+[scope]
+exclude = ["dist/**", "coverage/**"]
+exclude_from = [".gitignore", "config/devql.ignore"]
+```
+
+```text title="config/devql.ignore"
+# One glob per line
+**/*.generated.ts
+**/third_party/**
+docs/**
+```
+
+Notes:
+
+- `exclude_from` can reference any ignore-pattern file under the repo-policy root (for example `.gitignore` or `config/devql.ignore`)
+- paths in `exclude_from` must resolve under that same repo-policy root
+- you can list multiple files in `exclude_from`
+- missing or unreadable `exclude_from` files fail sync/ingest/watch startup before indexing begins
+
+Merge behavior for exclusions is special:
+
+- if `.bitloops.local.toml` defines either `scope.exclude` or `scope.exclude_from`, local exclusion config replaces shared exclusion config from `.bitloops.toml`
+- if local exclusion keys are absent, shared exclusion config applies
+- non-exclusion `[scope]` keys keep normal merge behavior
 
 ## Knowledge Imports
 
@@ -315,7 +398,7 @@ Use the global daemon config for:
 
 - SQLite, DuckDB, ClickHouse, PostgreSQL, and blob paths
 - Provider credentials and service defaults
-- Semantic summary settings, semantic clone settings, and embeddings runtime profiles
+- Capability policy plus inference runtimes, profiles, and slot bindings
 - Dashboard bundle overrides and TLS hints
 
 Use project policy for:

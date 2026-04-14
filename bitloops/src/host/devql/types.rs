@@ -1,5 +1,7 @@
 use super::*;
-use crate::config::{resolve_daemon_config_root_for_repo, resolve_store_semantic_config_for_repo};
+use crate::config::{
+    resolve_bound_daemon_config_root_for_repo, resolve_bound_store_backend_config_for_repo,
+};
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -20,26 +22,13 @@ pub struct DevqlConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: String,
-    pub(crate) semantic_provider: Option<String>,
-    pub(crate) semantic_model: Option<String>,
-    pub(crate) semantic_api_key: Option<String>,
-    pub(crate) semantic_base_url: Option<String>,
 }
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
-        let daemon_config_root = resolve_daemon_config_root_for_repo(&repo_root)?;
-        Self::from_roots(daemon_config_root, repo_root, repo)
-    }
-
-    pub fn from_roots(
-        daemon_config_root: PathBuf,
-        repo_root: PathBuf,
-        repo: RepoIdentity,
-    ) -> Result<Self> {
-        let backend_cfg = resolve_store_backend_config_for_repo(&daemon_config_root)
+        let daemon_config_root = resolve_bound_daemon_config_root_for_repo(&repo_root)?;
+        let backend_cfg = resolve_bound_store_backend_config_for_repo(&repo_root)
             .context("resolving backend config for DevQL runtime")?;
-        let semantic_cfg = resolve_store_semantic_config_for_repo(&daemon_config_root);
         Ok(Self {
             daemon_config_root,
             repo_root,
@@ -55,10 +44,31 @@ impl DevqlConfig {
                 .events
                 .clickhouse_database
                 .unwrap_or_else(|| "default".to_string()),
-            semantic_provider: semantic_cfg.semantic_provider,
-            semantic_model: semantic_cfg.semantic_model,
-            semantic_api_key: semantic_cfg.semantic_api_key,
-            semantic_base_url: semantic_cfg.semantic_base_url,
+        })
+    }
+
+    pub fn from_roots(
+        daemon_config_root: PathBuf,
+        repo_root: PathBuf,
+        repo: RepoIdentity,
+    ) -> Result<Self> {
+        let backend_cfg = resolve_store_backend_config_for_repo(&daemon_config_root)
+            .context("resolving backend config for DevQL runtime")?;
+        Ok(Self {
+            daemon_config_root,
+            repo_root,
+            repo,
+            pg_dsn: backend_cfg.relational.postgres_dsn,
+            clickhouse_url: backend_cfg
+                .events
+                .clickhouse_url
+                .unwrap_or_else(|| "http://localhost:8123".to_string()),
+            clickhouse_user: backend_cfg.events.clickhouse_user,
+            clickhouse_password: backend_cfg.events.clickhouse_password,
+            clickhouse_database: backend_cfg
+                .events
+                .clickhouse_database
+                .unwrap_or_else(|| "default".to_string()),
         })
     }
 
@@ -191,10 +201,6 @@ mod tests {
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: "default".to_string(),
-            semantic_provider: None,
-            semantic_model: None,
-            semantic_api_key: None,
-            semantic_base_url: None,
         }
     }
 
