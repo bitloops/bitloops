@@ -302,10 +302,15 @@ async fn execute_ingest_inner(
                     let Some(blob_sha) = blob_sha else {
                         continue;
                     };
-                    let Some(blob_content) = git_blob_decoded_content(&cfg.repo_root, &blob_sha)
-                    else {
-                        continue;
-                    };
+                    let blob_content =
+                        git_blob_decoded_content(&cfg.repo_root, &blob_sha).ok_or_else(|| {
+                            anyhow!(
+                                "failed to decode blob content for historical ingest path `{}` at commit {} (blob {})",
+                                normalized_path,
+                                commit_sha,
+                                blob_sha
+                            )
+                        })?;
 
                     upsert_file_state_row(
                         &cfg.repo.repo_id,

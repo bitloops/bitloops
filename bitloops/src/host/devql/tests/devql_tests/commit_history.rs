@@ -50,6 +50,25 @@ fn duckdb_path_for_repo(repo_root: &Path) -> std::path::PathBuf {
         .resolve_duckdb_db_path_for_repo(repo_root)
 }
 
+fn remove_loose_git_object(repo_root: &Path, object_id: &str) {
+    assert!(
+        object_id.len() > 2,
+        "expected non-empty git object id, got `{object_id}`"
+    );
+    let object_path = repo_root
+        .join(".git")
+        .join("objects")
+        .join(&object_id[..2])
+        .join(&object_id[2..]);
+    assert!(
+        object_path.is_file(),
+        "expected loose git object at {}",
+        object_path.display()
+    );
+    fs::remove_file(&object_path)
+        .unwrap_or_else(|err| panic!("remove loose git object {}: {err}", object_path.display()));
+}
+
 fn sync_state_value(conn: &rusqlite::Connection, repo_id: &str, key: &str) -> Option<String> {
     use rusqlite::OptionalExtension;
 
@@ -474,6 +493,72 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
     assert_eq!(
         edge_rows, 0,
         "ingest should not persist dependency edges for src/bad.rs"
+    );
+}
+
+#[tokio::test]
+async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn answer() -> i32 { 42 }\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add lib"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history missing-blob test")
+        .await
+        .expect("initialise local devql store for missing blob ingest test");
+
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:src/lib.rs"]);
+    remove_loose_git_object(repo.path(), &blob_sha);
+
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest with one missing blob object");
+    assert!(
+        !summary.success,
+        "historical ingest should report partial failure when git blob bytes cannot be loaded"
+    );
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let ledger_row: (String, String, Option<String>) = sqlite
+        .query_row(
+            "SELECT history_status, checkpoint_status, last_error
+             FROM commit_ingest_ledger
+             WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), commit_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read failed commit ledger row");
+    let message = ledger_row.2.as_deref().unwrap_or_default();
+
+    assert_eq!(
+        ledger_row.0, "failed",
+        "historical ingest should mark the commit as failed when blob bytes cannot be loaded"
+    );
+    assert_eq!(
+        ledger_row.1, "failed",
+        "historical ingest should record the commit as failed before checkpoint completion"
+    );
+
+    assert!(
+        message.contains("failed to decode blob content for historical ingest path `src/lib.rs`"),
+        "unexpected historical ingest error: {message}"
+    );
+    assert!(
+        message.contains(commit_sha.as_str()),
+        "historical ingest error should include commit context: {message}"
+    );
+    assert!(
+        message.contains(blob_sha.as_str()),
+        "historical ingest error should include blob context: {message}"
     );
 }
 
