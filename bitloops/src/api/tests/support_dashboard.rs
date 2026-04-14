@@ -11,6 +11,7 @@ pub(super) fn test_state(
         config_root: repo_root.clone(),
         repo_registry_path: None,
         subscription_hub: crate::graphql::SubscriptionHub::new_arc(),
+        dashboard_graphql_schema: crate::api::dashboard_schema::build_dashboard_schema_template(),
         devql_schema: crate::graphql::build_global_schema_template(),
         devql_slim_schema: crate::graphql::build_slim_schema_template(),
         repo_root,

@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::devql_transport::SlimCliRepoScope;
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
@@ -42,6 +43,40 @@ pub(super) async fn current_embedding_queue_snapshot(
         pending: enrichment.state.pending_embedding_jobs,
         running: enrichment.state.running_embedding_jobs,
         failed: enrichment.state.failed_embedding_jobs,
+        completed,
+    }))
+}
+
+pub(super) async fn current_summary_queue_snapshot(
+    repo_root: &std::path::Path,
+) -> Result<Option<EmbeddingQueueSnapshot>> {
+    let daemon_status = crate::daemon::status().await?;
+    let Some(enrichment) = daemon_status.enrichment else {
+        return Ok(None);
+    };
+
+    let completed = RepoSqliteRuntimeStore::open(repo_root)
+        .ok()
+        .and_then(|store| {
+            store
+                .load_capability_workplane_mailbox_status(
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    [SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX],
+                )
+                .ok()
+        })
+        .map(|status_by_mailbox| {
+            status_by_mailbox
+                .into_values()
+                .map(|status| status.completed_recent_jobs)
+                .sum()
+        })
+        .unwrap_or_default();
+
+    Ok(Some(EmbeddingQueueSnapshot {
+        pending: enrichment.state.pending_semantic_jobs,
+        running: enrichment.state.running_semantic_jobs,
+        failed: enrichment.state.failed_semantic_jobs,
         completed,
     }))
 }

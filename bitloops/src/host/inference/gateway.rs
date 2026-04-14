@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, InferenceConfig, InferenceProfileConfig, InferenceRuntimeConfig,
-    InferenceTask, resolve_daemon_config_path_for_repo,
+    InferenceTask, resolve_preferred_daemon_config_path_for_repo,
 };
 
 use super::embeddings::BitloopsEmbeddingsIpcService;
@@ -166,6 +166,27 @@ impl LocalInferenceGateway {
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
         let runtime = self.configured_runtime(profile_name, runtime_name)?;
+        let model = profile
+            .model
+            .as_deref()
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?;
+        let temperature = profile
+            .temperature
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
+        let max_output_tokens = profile
+            .max_output_tokens
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+        if profile
+            .base_url
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            bail!("profile `{profile_name}` requires a base_url");
+        }
         let config_path = self.resolve_runtime_config_path()?;
         let service = BitloopsInferenceTextGenerationService::new(
             profile_name,
@@ -176,6 +197,7 @@ impl LocalInferenceGateway {
         .with_context(|| {
             format!("building text-generation service for profile `{profile_name}`")
         })?;
+        let _ = (model, temperature, max_output_tokens);
         Ok(Arc::new(service))
     }
 
@@ -198,7 +220,7 @@ impl LocalInferenceGateway {
     }
 
     fn resolve_runtime_config_path(&self) -> Result<PathBuf> {
-        resolve_daemon_config_path_for_repo(&self.repo_root)
+        resolve_preferred_daemon_config_path_for_repo(&self.repo_root)
             .or_else(|_| Ok(self.repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
     }
 }

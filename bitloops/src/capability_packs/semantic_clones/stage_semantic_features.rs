@@ -24,6 +24,20 @@ use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::{RelationalStorage, postgres_exec, sqlite_exec_path_allow_create};
 
+fn ensure_required_llm_summary_output(
+    rows: &semantic::SemanticFeatureRows,
+    summary_provider: &dyn semantic::SemanticSummaryProvider,
+) -> Result<()> {
+    if !summary_provider.requires_model_output() || rows.semantics.is_llm_enriched() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "configured semantic summary provider returned no model-backed summary for artefact `{}`",
+        rows.semantics.artefact_id
+    );
+}
+
 pub(crate) async fn init_postgres_semantic_features_schema(
     pg_client: &tokio_postgres::Client,
 ) -> Result<()> {
@@ -125,12 +139,13 @@ pub(crate) async fn upsert_semantic_feature_rows(
         }
 
         let input = input.clone();
-        let summary_provider = Arc::clone(&summary_provider);
+        let summary_provider_for_row = Arc::clone(&summary_provider);
         let rows = tokio::task::spawn_blocking(move || {
-            semantic::build_semantic_feature_rows(&input, summary_provider.as_ref())
+            semantic::build_semantic_feature_rows(&input, summary_provider_for_row.as_ref())
         })
         .await
         .context("building semantic feature rows on blocking worker")?;
+        ensure_required_llm_summary_output(&rows, summary_provider.as_ref())?;
         persist_semantic_feature_rows(relational, &rows).await?;
         stats.upserted += 1;
     }
@@ -157,12 +172,13 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
     for input in inputs {
         let symbol_id = input.symbol_id.clone();
         let input = input.clone();
-        let summary_provider = Arc::clone(&summary_provider);
+        let summary_provider_for_row = Arc::clone(&summary_provider);
         let rows = tokio::task::spawn_blocking(move || {
-            semantic::build_semantic_feature_rows(&input, summary_provider.as_ref())
+            semantic::build_semantic_feature_rows(&input, summary_provider_for_row.as_ref())
         })
         .await
         .context("building current semantic feature rows on blocking worker")?;
+        ensure_required_llm_summary_output(&rows, summary_provider.as_ref())?;
         persist_current_semantic_feature_rows(
             relational,
             symbol_id.as_deref(),
@@ -460,9 +476,29 @@ mod tests {
 
     use super::{
         SemanticSummarySnapshot, current_semantic_artefact_key_from_row,
-        remap_semantic_input_to_current_artefact,
+        ensure_required_llm_summary_output, remap_semantic_input_to_current_artefact,
     };
     use crate::capability_packs::semantic_clones::features as semantic;
+    use crate::capability_packs::semantic_clones::features::SemanticSummaryCandidate;
+
+    struct StrictNoopSummaryProvider;
+
+    impl semantic::SemanticSummaryProvider for StrictNoopSummaryProvider {
+        fn cache_key(&self) -> String {
+            "strict-noop".to_string()
+        }
+
+        fn generate(
+            &self,
+            _input: &semantic::SemanticFeatureInput,
+        ) -> Option<SemanticSummaryCandidate> {
+            None
+        }
+
+        fn requires_model_output(&self) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn semantic_summary_snapshot_marks_llm_enrichment_from_summary_or_model() {
@@ -549,5 +585,97 @@ mod tests {
         assert_eq!(remapped.artefact_id, current.artefact_id);
         assert_eq!(remapped.symbol_id, current.symbol_id);
         assert_eq!(remapped.symbol_fqn, current.symbol_fqn);
+    }
+
+    #[test]
+    fn strict_summary_provider_rejects_template_only_rows() {
+        let rows = semantic::SemanticFeatureRows {
+            semantics: semantic::SymbolSemanticsRow {
+                artefact_id: "artefact-1".to_string(),
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                docstring_summary: None,
+                llm_summary: None,
+                template_summary: "Defines the rust source file.".to_string(),
+                summary: "Defines the rust source file.".to_string(),
+                confidence: 0.35,
+                source_model: None,
+            },
+            features: semantic::build_semantic_feature_rows(
+                &semantic::SemanticFeatureInput {
+                    artefact_id: "artefact-1".to_string(),
+                    symbol_id: Some("symbol-1".to_string()),
+                    repo_id: "repo-1".to_string(),
+                    blob_sha: "blob-1".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    language: "rust".to_string(),
+                    canonical_kind: "file".to_string(),
+                    language_kind: "source_file".to_string(),
+                    symbol_fqn: "src/lib.rs".to_string(),
+                    name: "lib".to_string(),
+                    signature: None,
+                    modifiers: Vec::new(),
+                    body: "fn main() {}".to_string(),
+                    docstring: None,
+                    parent_kind: None,
+                    dependency_signals: Vec::new(),
+                    content_hash: Some("hash-1".to_string()),
+                },
+                &semantic::NoopSemanticSummaryProvider,
+            )
+            .features,
+            semantic_features_input_hash: "hash-1".to_string(),
+        };
+
+        let err = ensure_required_llm_summary_output(&rows, &StrictNoopSummaryProvider)
+            .expect_err("strict provider should reject template-only summaries");
+        assert!(
+            err.to_string()
+                .contains("configured semantic summary provider returned no model-backed summary")
+        );
+    }
+
+    #[test]
+    fn strict_summary_provider_accepts_model_backed_rows() {
+        let rows = semantic::SemanticFeatureRows {
+            semantics: semantic::SymbolSemanticsRow {
+                artefact_id: "artefact-1".to_string(),
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                docstring_summary: None,
+                llm_summary: Some("Summarises the symbol.".to_string()),
+                template_summary: "Defines the rust source file.".to_string(),
+                summary: "Defines the rust source file. Summarises the symbol.".to_string(),
+                confidence: 0.91,
+                source_model: Some("ollama:ministral-3:3b".to_string()),
+            },
+            features: semantic::build_semantic_feature_rows(
+                &semantic::SemanticFeatureInput {
+                    artefact_id: "artefact-1".to_string(),
+                    symbol_id: Some("symbol-1".to_string()),
+                    repo_id: "repo-1".to_string(),
+                    blob_sha: "blob-1".to_string(),
+                    path: "src/lib.rs".to_string(),
+                    language: "rust".to_string(),
+                    canonical_kind: "file".to_string(),
+                    language_kind: "source_file".to_string(),
+                    symbol_fqn: "src/lib.rs".to_string(),
+                    name: "lib".to_string(),
+                    signature: None,
+                    modifiers: Vec::new(),
+                    body: "fn main() {}".to_string(),
+                    docstring: None,
+                    parent_kind: None,
+                    dependency_signals: Vec::new(),
+                    content_hash: Some("hash-1".to_string()),
+                },
+                &semantic::NoopSemanticSummaryProvider,
+            )
+            .features,
+            semantic_features_input_hash: "hash-1".to_string(),
+        };
+
+        ensure_required_llm_summary_output(&rows, &StrictNoopSummaryProvider)
+            .expect("strict provider should accept model-backed summaries");
     }
 }

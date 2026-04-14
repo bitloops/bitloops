@@ -136,6 +136,7 @@ pub(super) fn compact_and_prune_workplane_jobs(
 ) -> Result<()> {
     workplane_store.with_connection(|conn| {
         compact_pending_artefact_backlogs(conn)?;
+        prune_inactive_summary_refresh_jobs(conn)?;
         prune_terminal_workplane_jobs(conn)?;
         Ok(())
     })
@@ -309,6 +310,67 @@ fn ensure_pending_repo_backfill_job(
             Ok(true)
         }
     }
+}
+
+fn prune_inactive_summary_refresh_jobs(conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT repo_id, repo_root
+         FROM capability_workplane_jobs
+         WHERE capability_id = ?1
+           AND mailbox_name = ?2
+           AND status = ?3",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            WorkplaneJobStatus::Pending.as_str(),
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+
+    for row in rows {
+        let (repo_id, repo_root) = row?;
+        let repo_root = PathBuf::from(repo_root);
+        let summary_refresh_active = match summary_refresh_active_for_repo(&repo_root) {
+            Ok(active) => active,
+            Err(err) => {
+                log::warn!(
+                    "failed to resolve semantic summary mailbox intent for {}: {err:#}",
+                    repo_root.display()
+                );
+                continue;
+            }
+        };
+        if summary_refresh_active {
+            continue;
+        }
+        conn.execute(
+            "DELETE FROM capability_workplane_jobs
+             WHERE repo_id = ?1
+               AND capability_id = ?2
+               AND mailbox_name = ?3
+               AND status = ?4",
+            params![
+                repo_id,
+                SEMANTIC_CLONES_CAPABILITY_ID,
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                WorkplaneJobStatus::Pending.as_str(),
+            ],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn summary_refresh_active_for_repo(repo_root: &Path) -> Result<bool> {
+    let config = crate::config::resolve_semantic_clones_config_for_repo(repo_root);
+    let intent =
+        crate::capability_packs::semantic_clones::workplane::load_effective_mailbox_intent_for_repo(
+            repo_root,
+            &config,
+        )?;
+    Ok(intent.summary_refresh_active)
 }
 
 fn prune_terminal_workplane_jobs(conn: &rusqlite::Connection) -> Result<()> {

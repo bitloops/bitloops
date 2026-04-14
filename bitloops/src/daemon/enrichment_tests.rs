@@ -114,6 +114,42 @@ fn new_test_coordinator(temp: &TempDir) -> (EnrichmentCoordinator, EnrichmentJob
     )
 }
 
+fn configure_summary_refresh_for_repo(target: &EnrichmentJobTarget) {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    );
+    fs::write(&config_path, config).expect("write test daemon config with summary profile");
+}
+
 fn load_workplane_jobs(
     coordinator: &EnrichmentCoordinator,
     status: WorkplaneJobStatus,
@@ -369,6 +405,7 @@ async fn enqueue_symbol_embeddings_splits_large_batches_into_smaller_jobs() {
 async fn enqueue_semantic_summaries_keeps_larger_semantic_batches() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
+    configure_summary_refresh_for_repo(&target);
     let inputs = (0..(MAX_SEMANTIC_ENRICHMENT_JOB_ARTEFACTS + 1))
         .map(|index| sample_input_with_artefact_id(&format!("artefact-{index}")))
         .collect::<Vec<_>>();
@@ -484,6 +521,7 @@ fn ensure_started_recovers_stale_running_jobs_on_startup() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
     let coordinator = Arc::new(coordinator);
+    configure_summary_refresh_for_repo(&target);
 
     coordinator
         .runtime_store
@@ -640,5 +678,75 @@ fn compaction_replaces_large_old_pending_embedding_backlog_with_repo_backfill_jo
             &pending_jobs[0].payload
         ),
         "pending job should be converted to a repo backfill payload"
+    );
+}
+
+#[test]
+fn compaction_prunes_pending_summary_refresh_jobs_when_summary_provider_is_unconfigured() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to config");
+    crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes(
+        &target.repo_root,
+        "init",
+    )
+    .expect("activate deferred mailboxes");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("artefact-semantic-a"),
+            job_id: "semantic-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("artefact-embedding-a"),
+            job_id: "embedding-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    super::compact_and_prune_workplane_jobs(&coordinator.workplane_store)
+        .expect("prune inactive summary refresh jobs");
+
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
+            .count(),
+        0,
+        "summary refresh jobs should be dropped when no summary provider is configured"
+    );
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
+            .count(),
+        1,
+        "other pending work should be preserved"
     );
 }

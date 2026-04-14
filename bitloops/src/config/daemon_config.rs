@@ -74,23 +74,96 @@ impl DaemonEmbeddingsInstallPlan {
             return Ok(());
         }
 
-        let base_contents = self
-            .prepared_contents
-            .as_deref()
-            .or(self.original_contents.as_deref())
-            .unwrap_or_default();
-        let mut doc = base_contents.parse::<DocumentMut>().with_context(|| {
+        let staged_contents = self.prepared_contents.as_deref().unwrap_or_default();
+        let mut staged_doc = staged_contents.parse::<DocumentMut>().with_context(|| {
             format!(
                 "parsing staged Bitloops daemon config {}",
                 self.config_path.display()
             )
         })?;
-        let inference = ensure_table(&mut doc, "inference");
+        let inference = ensure_table(&mut staged_doc, "inference");
         let runtimes = ensure_child_table(inference, "runtimes");
         let runtime = ensure_child_table(runtimes, BITLOOPS_EMBEDDINGS_RUNTIME_ID);
         runtime["command"] = Item::Value(binary_path.to_string_lossy().to_string().into());
         runtime["args"] = Item::Value(TomlValue::Array(Array::new()));
-        self.write_prepared_contents(Some(&doc.to_string()))
+
+        let desired_runtime = staged_doc
+            .get("inference")
+            .and_then(Item::as_table)
+            .and_then(|table| table.get("runtimes"))
+            .and_then(Item::as_table)
+            .and_then(|table| table.get(BITLOOPS_EMBEDDINGS_RUNTIME_ID))
+            .cloned()
+            .context("staged embeddings runtime missing from prepared config")?;
+        let desired_profile = staged_doc
+            .get("inference")
+            .and_then(Item::as_table)
+            .and_then(|table| table.get("profiles"))
+            .and_then(Item::as_table)
+            .and_then(|table| table.get(&self.profile_name))
+            .cloned()
+            .with_context(|| {
+                format!(
+                    "staged embeddings profile `{}` missing from prepared config",
+                    self.profile_name
+                )
+            })?;
+        let desired_code_embeddings = staged_doc
+            .get("semantic_clones")
+            .and_then(Item::as_table)
+            .and_then(|table| table.get("inference"))
+            .and_then(Item::as_table)
+            .and_then(|table| table.get("code_embeddings"))
+            .cloned()
+            .context("staged code_embeddings binding missing from prepared config")?;
+        let desired_summary_embeddings = staged_doc
+            .get("semantic_clones")
+            .and_then(Item::as_table)
+            .and_then(|table| table.get("inference"))
+            .and_then(Item::as_table)
+            .and_then(|table| table.get("summary_embeddings"))
+            .cloned()
+            .context("staged summary_embeddings binding missing from prepared config")?;
+
+        let current_contents = match fs::read_to_string(&self.config_path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "reading current Bitloops daemon config {}",
+                        self.config_path.display()
+                    )
+                });
+            }
+        };
+        let mut current_doc = if current_contents.trim().is_empty() {
+            DocumentMut::new()
+        } else {
+            current_contents.parse::<DocumentMut>().with_context(|| {
+                format!(
+                    "parsing current Bitloops daemon config {}",
+                    self.config_path.display()
+                )
+            })?
+        };
+
+        {
+            let inference = ensure_table(&mut current_doc, "inference");
+            let runtimes = ensure_child_table(inference, "runtimes");
+            runtimes[BITLOOPS_EMBEDDINGS_RUNTIME_ID] = desired_runtime;
+            let profiles = ensure_child_table(inference, "profiles");
+            profiles[&self.profile_name] = desired_profile;
+        }
+
+        {
+            let semantic_clones = ensure_table(&mut current_doc, "semantic_clones");
+            let inference = ensure_child_table(semantic_clones, "inference");
+            inference["code_embeddings"] = desired_code_embeddings;
+            inference["summary_embeddings"] = desired_summary_embeddings;
+        }
+
+        self.write_prepared_contents(Some(&current_doc.to_string()))
     }
 
     pub fn rollback(&self) -> Result<()> {

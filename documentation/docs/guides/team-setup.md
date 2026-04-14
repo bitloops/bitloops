@@ -26,7 +26,15 @@ Each developer may also keep:
 
 ## Team Onboarding Flow
 
-### 1. Start the daemon once on each machine
+### 1. Fastest onboarding path
+
+The fastest way to get started from inside the repository is:
+
+```bash
+bitloops init --install-default-daemon --sync=true
+```
+
+That single command bootstraps the default daemon service if needed, creates `.bitloops.local.toml`, installs hooks, and follows the initial current-state sync. Use the explicit `bitloops start --create-default-config` path below when someone needs to inspect or customise their daemon config before bootstrapping the repo.
 
 ```bash
 bitloops start --create-default-config
@@ -54,11 +62,11 @@ token = "${GITHUB_TOKEN}"
 From the repository root or a subproject directory:
 
 ```bash
-bitloops init --sync=true
 bitloops init --install-default-daemon --sync=true
+bitloops init --sync=true
 ```
 
-Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service before continuing.
+The fastest default path is `bitloops init --install-default-daemon --sync=true`. Use plain `bitloops init` when the daemon is already running, or when a developer has already bootstrapped their daemon separately.
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 

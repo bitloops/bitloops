@@ -138,6 +138,9 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
 
     match job.mailbox_name.as_str() {
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => {
+            if !mailbox_intent.summary_refresh_active {
+                return JobExecutionOutcome::ok();
+            }
             let inputs = match load_workplane_job_inputs(&relational, job).await {
                 Ok(inputs) => inputs,
                 Err(err) => return JobExecutionOutcome::failed(err),

@@ -1,92 +1,37 @@
 use std::path::Path;
-use std::time::Instant;
 
-use axum::{
-    Json,
-    extract::{Path as AxumPath, State},
-    http::StatusCode,
+use crate::api::dashboard_file_diffs::{
+    dashboard_checkpoint_file_diff_list_from_relations, dashboard_file_diff_list_from_numstat,
+    dashboard_zeroed_file_diff_list,
 };
-use serde_json::Value;
-use std::collections::HashMap;
-
-use super::super::dto::{
-    ApiCheckpointDetailResponse, ApiCheckpointSessionDetailDto, ApiError, ApiErrorEnvelope,
-    ApiTokenUsageDto,
+use crate::api::dashboard_params::normalize_checkpoint_id;
+use crate::api::dashboard_types::{
+    DashboardCheckpointDetail, DashboardCheckpointSessionDetail, DashboardCommitFileDiff,
+    DashboardTokenUsage,
 };
-use super::super::{
-    API_GIT_SCAN_LIMIT, DashboardState, canonical_agent_key, read_checkpoint_info_for_filtering,
-    read_commit_numstat, walk_branch_commits_with_checkpoints,
+use crate::api::{
+    API_GIT_SCAN_LIMIT, ApiError, DashboardState, canonical_agent_key,
+    read_checkpoint_info_for_filtering, read_commit_numstat, walk_branch_commits_with_checkpoints,
 };
-use super::file_diffs::{
-    api_checkpoint_file_diff_list_from_relations, api_file_diff_list_from_numstat,
-    api_zeroed_file_diff_list,
-};
-use super::params::normalize_checkpoint_id;
-use super::resolve_repo_root_from_repo_id;
 use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_session_content};
 use crate::host::devql::checkpoint_provenance::{
     CheckpointFileGateway, CheckpointFileProvenanceDetailRow,
 };
 
-#[utoipa::path(
-    get,
-    path = "/api/checkpoints/{repo_id}/{checkpoint_id}",
-    params(
-        ("repo_id" = String, Path, description = "Repository id"),
-        ("checkpoint_id" = String, Path, description = "Checkpoint id (12 hex characters)")
-    ),
-    responses(
-        (status = 200, description = "Checkpoint details with session transcript payloads", body = ApiCheckpointDetailResponse),
-        (status = 400, description = "Bad request", body = ApiErrorEnvelope),
-        (status = 404, description = "Not found", body = ApiErrorEnvelope),
-        (status = 500, description = "Internal server error", body = ApiErrorEnvelope)
-    )
-)]
-pub(crate) async fn handle_api_checkpoint(
-    State(state): State<DashboardState>,
-    AxumPath((repo_id, checkpoint_id)): AxumPath<(String, String)>,
-) -> std::result::Result<Json<ApiCheckpointDetailResponse>, ApiError> {
-    let started = Instant::now();
-    let (tracked_repo_root, response) = match resolve_repo_root_from_repo_id(&state, &repo_id).await
-    {
-        Ok(repo_root) => {
-            let response = load_checkpoint_detail(&repo_root, &repo_id, checkpoint_id)
-                .await
-                .map(Json);
-            (Some(repo_root), response)
-        }
-        Err(err) => (None, Err(err)),
-    };
+use super::repository::{resolve_dashboard_repo_root, resolve_dashboard_repo_selector};
 
-    let status = match &response {
-        Ok(_) => StatusCode::OK,
-        Err(err) => err.status_code(),
-    };
-    let mut properties = HashMap::new();
-    properties.insert("http_method".to_string(), Value::String("GET".to_string()));
-    properties.insert("repo_id".to_string(), Value::String(repo_id));
-    properties.insert(
-        "status_code_class".to_string(),
-        Value::String(super::super::status_code_class(status).to_string()),
-    );
-    if let Some(repo_root) = tracked_repo_root.as_deref() {
-        super::super::track_repo_action(
-            repo_root,
-            crate::telemetry::analytics::ActionDescriptor {
-                event: "bitloops dashboard api checkpoint".to_string(),
-                surface: "dashboard",
-                properties,
-            },
-            status.is_success(),
-            started.elapsed(),
-        );
-    }
-
-    response
+pub(in crate::api) async fn load_dashboard_checkpoint(
+    state: &DashboardState,
+    repo_id: Option<String>,
+    checkpoint_id: String,
+) -> std::result::Result<DashboardCheckpointDetail, ApiError> {
+    let repo_selector = resolve_dashboard_repo_selector(state, repo_id.as_deref()).await?;
+    let repo_root = resolve_dashboard_repo_root(state, repo_id.as_deref()).await?;
+    load_checkpoint_detail(&repo_root, repo_selector.as_str(), checkpoint_id).await
 }
 
-fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageDto> {
-    info.token_usage.as_ref().map(|usage| ApiTokenUsageDto {
+fn dashboard_token_usage_from_committed(info: &CommittedInfo) -> Option<DashboardTokenUsage> {
+    info.token_usage.as_ref().map(|usage| DashboardTokenUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
@@ -99,7 +44,7 @@ async fn load_checkpoint_detail(
     repo_root: &Path,
     repo_id: &str,
     checkpoint_id: String,
-) -> std::result::Result<ApiCheckpointDetailResponse, ApiError> {
+) -> std::result::Result<DashboardCheckpointDetail, ApiError> {
     let checkpoint_id = normalize_checkpoint_id(checkpoint_id)?;
     let Some(info) =
         read_checkpoint_info_for_filtering(repo_root, &checkpoint_id).map_err(|err| {
@@ -128,7 +73,7 @@ async fn load_checkpoint_detail(
             Ok(content) => content,
             Err(err) => {
                 log::warn!(
-                    "dashboard checkpoint endpoint skipped unreadable session {}#{}: {:#}",
+                    "dashboard checkpoint query skipped unreadable session {}#{}: {:#}",
                     checkpoint_id,
                     session_index,
                     err
@@ -138,7 +83,7 @@ async fn load_checkpoint_detail(
         };
 
         let metadata = content.metadata;
-        sessions.push(ApiCheckpointSessionDetailDto {
+        sessions.push(DashboardCheckpointSessionDetail {
             session_index,
             session_id: metadata
                 .get("session_id")
@@ -179,8 +124,8 @@ async fn load_checkpoint_detail(
         &checkpoint_file_relations,
         &info.files_touched,
     );
-    let token_usage = api_token_usage_from_committed(&info);
-    Ok(ApiCheckpointDetailResponse {
+    let token_usage = dashboard_token_usage_from_committed(&info);
+    Ok(DashboardCheckpointDetail {
         checkpoint_id: info.checkpoint_id,
         strategy: info.strategy,
         branch: info.branch,
@@ -198,7 +143,7 @@ fn resolve_checkpoint_files_touched(
     checkpoint_id: &str,
     file_relations: &[CheckpointFileProvenanceDetailRow],
     fallback_files_touched: &[String],
-) -> Vec<super::super::dto::ApiCommitFileDiffDto> {
+) -> Vec<DashboardCommitFileDiff> {
     let branch_commits = match walk_branch_commits_with_checkpoints(
         repo_root,
         branch,
@@ -209,7 +154,7 @@ fn resolve_checkpoint_files_touched(
         Ok(commits) => commits,
         Err(err) => {
             log::warn!(
-                "dashboard checkpoint endpoint: failed to walk branch {} while resolving files_touched for {}: {:#}",
+                "dashboard checkpoint query: failed to walk branch {} while resolving files_touched for {}: {:#}",
                 branch,
                 checkpoint_id,
                 err
@@ -229,14 +174,14 @@ fn resolve_checkpoint_files_touched(
     match read_commit_numstat(repo_root, &commit_sha) {
         Ok(stats) => {
             if file_relations.is_empty() {
-                api_file_diff_list_from_numstat(stats)
+                dashboard_file_diff_list_from_numstat(stats)
             } else {
-                api_checkpoint_file_diff_list_from_relations(file_relations, Some(&stats))
+                dashboard_checkpoint_file_diff_list_from_relations(file_relations, Some(&stats))
             }
         }
         Err(err) => {
             log::warn!(
-                "dashboard checkpoint endpoint: failed to read numstat for {} (checkpoint {}): {:#}",
+                "dashboard checkpoint query: failed to read numstat for {} (checkpoint {}): {:#}",
                 commit_sha,
                 checkpoint_id,
                 err
@@ -249,11 +194,11 @@ fn resolve_checkpoint_files_touched(
 fn fallback_checkpoint_files_touched(
     file_relations: &[CheckpointFileProvenanceDetailRow],
     fallback_files_touched: &[String],
-) -> Vec<super::super::dto::ApiCommitFileDiffDto> {
+) -> Vec<DashboardCommitFileDiff> {
     if file_relations.is_empty() {
-        api_zeroed_file_diff_list(fallback_files_touched)
+        dashboard_zeroed_file_diff_list(fallback_files_touched)
     } else {
-        api_checkpoint_file_diff_list_from_relations(file_relations, None)
+        dashboard_checkpoint_file_diff_list_from_relations(file_relations, None)
     }
 }
 

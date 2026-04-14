@@ -826,7 +826,8 @@ pub(crate) use self::db_utils::{
 };
 use self::deps_query::*;
 pub(crate) use self::exclusion_reconcile::{
-    purge_scope_excluded_repo_data, scope_exclusion_reconcile_needed,
+    current_scope_exclusions_fingerprint, purge_scope_excluded_repo_data,
+    scope_exclusion_reconcile_needed,
 };
 pub(crate) use self::exclusions::{RepoExclusionMatcher, load_repo_exclusion_matcher};
 use self::ingestion_artefact_identity::*;

@@ -277,7 +277,11 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
     .expect("start daemon process");
     let mut guard = ChildGuard { child };
 
-    wait_until_ready(&format!("http://127.0.0.1:{port}/api"), &mut guard.child).await;
+    wait_until_ready(
+        &format!("http://127.0.0.1:{port}/devql/dashboard/playground"),
+        &mut guard.child,
+    )
+    .await;
 
     let client = reqwest::Client::new();
 
@@ -292,9 +296,9 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
     assert!(before.contains("Install dashboard bundle"));
 
     let fetch_response = client
-        .post(format!("http://127.0.0.1:{port}/api/fetch_bundle"))
+        .post(format!("http://127.0.0.1:{port}/devql/dashboard"))
         .header("content-type", "application/json")
-        .body("{}")
+        .body(r#"{"query":"mutation { fetchBundle { status installedVersion } }"}"#)
         .send()
         .await
         .expect("post fetch bundle");
@@ -303,8 +307,11 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         .json::<Value>()
         .await
         .expect("parse fetch payload");
-    assert_eq!(fetch_payload["status"], "installed");
-    assert_eq!(fetch_payload["installedVersion"], "4.0.0");
+    assert_eq!(fetch_payload["data"]["fetchBundle"]["status"], "installed");
+    assert_eq!(
+        fetch_payload["data"]["fetchBundle"]["installedVersion"],
+        "4.0.0"
+    );
 
     let after = client
         .get(format!("http://127.0.0.1:{port}/"))
@@ -316,17 +323,17 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         .expect("read after install body");
     assert!(after.contains("installed bundle"));
 
-    let api_root = client
-        .get(format!("http://127.0.0.1:{port}/api"))
+    let dashboard_playground = client
+        .get(format!("http://127.0.0.1:{port}/devql/dashboard"))
         .send()
         .await
-        .expect("get api root");
-    assert_eq!(api_root.status(), reqwest::StatusCode::OK);
-    let api_root_payload = api_root
-        .json::<Value>()
+        .expect("get dashboard playground");
+    assert_eq!(dashboard_playground.status(), reqwest::StatusCode::OK);
+    let dashboard_playground_body = dashboard_playground
+        .text()
         .await
-        .expect("parse api root payload");
-    assert_eq!(api_root_payload["name"], "bitloops-dashboard-api");
+        .expect("read dashboard playground body");
+    assert!(dashboard_playground_body.contains("DevQL Dashboard Explorer"));
 
     assert!(bundle_dir.join("index.html").is_file());
     assert!(bundle_dir.join("version.json").is_file());

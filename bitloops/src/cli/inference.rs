@@ -8,11 +8,18 @@ mod tests;
 pub use args::{InferenceArgs, InferenceCommand, InferenceInstallArgs, run};
 #[allow(unused_imports)]
 pub(crate) use managed::{
-    ensure_managed_inference_runtime, install_or_bootstrap_inference, managed_inference_binary_dir,
+    ManagedInferenceInstallPhase, ManagedInferenceInstallProgress,
+    ensure_managed_inference_runtime, install_or_bootstrap_inference,
+    install_or_bootstrap_inference_with_progress, managed_inference_binary_dir,
     managed_inference_binary_path, managed_inference_metadata_path,
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
-pub(crate) use setup::{configure_local_summary_generation, summary_generation_configured};
+pub(crate) use setup::{
+    PreparedSummarySetupPlan, SummarySetupExecutionResult, SummarySetupOutcome, SummarySetupPhase,
+    SummarySetupProgress, configure_local_summary_generation,
+    execute_prepared_summary_setup_with_progress, prepare_local_summary_generation_plan,
+    summary_generation_configured,
+};
 
 #[cfg(test)]
 pub(crate) use managed::{
@@ -20,7 +27,7 @@ pub(crate) use managed::{
 };
 
 #[cfg(test)]
-pub(crate) use setup::{OllamaAvailability, SummarySetupOutcome, with_ollama_probe_hook};
+pub(crate) use setup::{OllamaAvailability, with_ollama_probe_hook};
 
 #[cfg(test)]
 pub(crate) use setup::with_summary_generation_configured_hook;
