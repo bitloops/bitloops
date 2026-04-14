@@ -465,7 +465,7 @@ impl DevqlTaskCoordinator {
             .sync_spec()
             .is_none_or(|spec| spec.mode != effective_spec)
         {
-            self.update_sync_mode(&task.task_id, effective_spec)?;
+            self.update_sync_mode(&task.task_id, effective_spec.clone())?;
         }
         let reconcile_relational = if task.source == DevqlTaskSource::RepoPolicyChange {
             let backends = match resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
@@ -547,14 +547,11 @@ impl DevqlTaskCoordinator {
         .await
         {
             Ok((summary, file_diff, artefact_diff)) => {
-                if let (Some(relational), Some(fingerprint)) = (
-                    reconcile_relational.as_ref(),
-                    reconcile_fingerprint.as_ref(),
-                ) && let Err(err) =
-                    crate::host::devql::sync::state::write_scope_exclusions_fingerprint(
-                        relational,
-                        &cfg.repo.repo_id,
-                        fingerprint,
+                if !matches!(effective_spec, SyncTaskMode::Validate)
+                    && let Err(err) = persist_scope_exclusions_fingerprint(
+                        &cfg,
+                        reconcile_relational.as_ref(),
+                        reconcile_fingerprint.as_deref(),
                     )
                     .await
                 {
@@ -687,6 +684,42 @@ impl DevqlTaskCoordinator {
 
         Ok(())
     }
+}
+
+async fn persist_scope_exclusions_fingerprint(
+    cfg: &DevqlConfig,
+    relational: Option<&RelationalStorage>,
+    fingerprint_override: Option<&str>,
+) -> Result<()> {
+    let fingerprint = match fingerprint_override {
+        Some(fingerprint) => fingerprint.to_string(),
+        None => crate::host::devql::current_scope_exclusions_fingerprint(&cfg.repo_root)
+            .context("loading current scope exclusions fingerprint")?,
+    };
+
+    if let Some(relational) = relational {
+        return crate::host::devql::sync::state::write_scope_exclusions_fingerprint(
+            relational,
+            &cfg.repo.repo_id,
+            &fingerprint,
+        )
+        .await;
+    }
+
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
+        .context("resolving backend config for scope exclusion fingerprint persistence")?;
+    let relational = RelationalStorage::connect(
+        cfg,
+        &backends.relational,
+        "persisting queued DevQL scope exclusions fingerprint",
+    )
+    .await?;
+    crate::host::devql::sync::state::write_scope_exclusions_fingerprint(
+        &relational,
+        &cfg.repo.repo_id,
+        &fingerprint,
+    )
+    .await
 }
 
 fn git_repo_root(path: &Path) -> Option<PathBuf> {
@@ -831,6 +864,162 @@ mod tests {
         assert_eq!(
             repo_roots,
             vec![repo_root.canonicalize().expect("canonicalize repo root")]
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_scope_exclusions_fingerprint_writes_current_fingerprint_for_regular_syncs() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_root = temp.path().join("config-root");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+        crate::test_support::git_fixtures::init_test_repo(
+            &repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("bind repo root to config");
+
+        let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+        let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)
+            .expect("build devql config");
+        let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
+            .expect("resolve store backends");
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(&cfg.repo_root)
+            .expect("resolve sqlite path");
+        std::fs::create_dir_all(
+            sqlite_path
+                .parent()
+                .expect("sqlite path should have a parent directory"),
+        )
+        .expect("create sqlite parent directory");
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        conn.execute_batch(
+            "CREATE TABLE repo_sync_state (
+                repo_id TEXT PRIMARY KEY,
+                repo_root TEXT,
+                active_branch TEXT,
+                head_commit_sha TEXT,
+                head_tree_sha TEXT,
+                parser_version TEXT,
+                extractor_version TEXT,
+                last_sync_started_at TEXT,
+                last_sync_completed_at TEXT,
+                last_sync_status TEXT,
+                last_sync_reason TEXT,
+                scope_exclusions_fingerprint TEXT
+            );",
+        )
+        .expect("create repo_sync_state table");
+        drop(conn);
+        let relational = RelationalStorage::local_only(sqlite_path);
+        crate::host::devql::sync::state::write_sync_started(
+            &relational,
+            &cfg.repo.repo_id,
+            cfg.repo_root.to_string_lossy().as_ref(),
+            "full",
+            "parser-v1",
+            "extractor-v1",
+        )
+        .await
+        .expect("write sync state");
+
+        persist_scope_exclusions_fingerprint(&cfg, None, None)
+            .await
+            .expect("persist scope exclusion fingerprint");
+
+        let stored = crate::host::devql::sync::state::read_scope_exclusions_fingerprint(
+            &relational,
+            &cfg.repo.repo_id,
+        )
+        .await
+        .expect("read scope exclusion fingerprint");
+        let expected = crate::host::devql::current_scope_exclusions_fingerprint(&cfg.repo_root)
+            .expect("load current scope exclusions fingerprint");
+        assert_eq!(stored.as_deref(), Some(expected.as_str()));
+    }
+
+    #[tokio::test]
+    async fn ensure_scope_exclusion_reconcile_for_repo_skips_first_run_repo_without_sync_state() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_root = temp.path().join("config-root");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+        crate::test_support::git_fixtures::init_test_repo(
+            &repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("bind repo root to config");
+
+        let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+        let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)
+            .expect("build devql config");
+        let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
+            .expect("resolve store backends");
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(&cfg.repo_root)
+            .expect("resolve sqlite path");
+        std::fs::create_dir_all(
+            sqlite_path
+                .parent()
+                .expect("sqlite path should have a parent directory"),
+        )
+        .expect("create sqlite parent directory");
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        conn.execute_batch(
+            "CREATE TABLE repo_sync_state (
+                repo_id TEXT PRIMARY KEY,
+                repo_root TEXT,
+                active_branch TEXT,
+                head_commit_sha TEXT,
+                head_tree_sha TEXT,
+                parser_version TEXT,
+                extractor_version TEXT,
+                last_sync_started_at TEXT,
+                last_sync_completed_at TEXT,
+                last_sync_status TEXT,
+                last_sync_reason TEXT,
+                scope_exclusions_fingerprint TEXT
+            );",
+        )
+        .expect("create repo_sync_state table");
+
+        let coordinator = Arc::new(coordinator(&temp));
+        let blocked = coordinator
+            .ensure_scope_exclusion_reconcile_for_repo(&repo_root)
+            .await
+            .expect("check first-run exclusion reconcile");
+
+        assert!(
+            !blocked,
+            "first-run repos should not be blocked by an exclusion reconcile"
+        );
+        let tasks = coordinator
+            .tasks(None, None, None, None)
+            .expect("load queued tasks");
+        assert!(
+            tasks.is_empty(),
+            "first-run repos should not enqueue a repo-policy sync before the first normal sync"
         );
     }
 }

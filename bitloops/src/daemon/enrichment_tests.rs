@@ -642,3 +642,73 @@ fn compaction_replaces_large_old_pending_embedding_backlog_with_repo_backfill_jo
         "pending job should be converted to a repo backfill payload"
     );
 }
+
+#[test]
+fn compaction_prunes_pending_summary_refresh_jobs_when_summary_provider_is_unconfigured() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to config");
+    crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes(
+        &target.repo_root,
+        "init",
+    )
+    .expect("activate deferred mailboxes");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("artefact-semantic-a"),
+            job_id: "semantic-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("artefact-embedding-a"),
+            job_id: "embedding-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    super::compact_and_prune_workplane_jobs(&coordinator.workplane_store)
+        .expect("prune inactive summary refresh jobs");
+
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
+            .count(),
+        0,
+        "summary refresh jobs should be dropped when no summary provider is configured"
+    );
+    assert_eq!(
+        pending_jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
+            .count(),
+        1,
+        "other pending work should be preserved"
+    );
+}

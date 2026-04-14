@@ -20,6 +20,9 @@ pub(crate) async fn scope_exclusion_reconcile_needed(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
 ) -> Result<Option<String>> {
+    if !sync::state::repo_sync_state_exists(relational, &cfg.repo.repo_id).await? {
+        return Ok(None);
+    }
     let snapshot = load_scope_exclusion_snapshot(&cfg.repo_root)?;
     let stored =
         sync::state::read_scope_exclusions_fingerprint(relational, &cfg.repo.repo_id).await?;
@@ -83,6 +86,10 @@ pub(crate) async fn purge_scope_excluded_repo_data(
     }
 
     Ok(snapshot.fingerprint)
+}
+
+pub(crate) fn current_scope_exclusions_fingerprint(repo_root: &Path) -> Result<String> {
+    load_scope_exclusion_snapshot(repo_root).map(|snapshot| snapshot.fingerprint)
 }
 
 fn load_scope_exclusion_snapshot(repo_root: &Path) -> Result<ScopeExclusionSnapshot> {

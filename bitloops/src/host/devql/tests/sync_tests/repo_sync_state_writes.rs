@@ -2,6 +2,7 @@ use tempfile::tempdir;
 
 use super::fixtures::{
     seed_sync_repository_catalog_row, sqlite_relational_store_with_sync_schema, sync_test_cfg,
+    sync_test_cfg_for_repo,
 };
 
 #[tokio::test]
@@ -261,4 +262,74 @@ async fn repo_sync_state_scope_exclusions_fingerprint_round_trips() {
     .await
     .expect("read scope exclusions fingerprint");
     assert_eq!(stored.as_deref(), Some("fingerprint-123"));
+}
+
+#[tokio::test]
+async fn scope_exclusion_reconcile_needed_skips_repos_without_sync_state() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let cfg = sync_test_cfg_for_repo(temp.path());
+
+    let needed = crate::host::devql::scope_exclusion_reconcile_needed(&cfg, &relational)
+        .await
+        .expect("check exclusion reconcile without sync state");
+    assert_eq!(
+        needed, None,
+        "repos without sync state should not enqueue a first-run exclusion reconcile"
+    );
+
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+    crate::host::devql::sync::state::write_sync_started(
+        &relational,
+        &cfg.repo.repo_id,
+        cfg.repo_root.to_string_lossy().as_ref(),
+        "full",
+        "parser-v1",
+        "extractor-v1",
+    )
+    .await
+    .expect("write started state");
+
+    let needed = crate::host::devql::scope_exclusion_reconcile_needed(&cfg, &relational)
+        .await
+        .expect("check exclusion reconcile with sync state");
+    assert!(
+        needed.is_some(),
+        "repos with sync state but no stored fingerprint should still reconcile"
+    );
+}
+
+#[tokio::test]
+async fn repo_sync_state_exists_reflects_row_presence() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let cfg = sync_test_cfg();
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    assert!(
+        !crate::host::devql::sync::state::repo_sync_state_exists(&relational, &cfg.repo.repo_id)
+            .await
+            .expect("check missing sync state"),
+        "repo_sync_state should not exist before the first sync starts"
+    );
+
+    crate::host::devql::sync::state::write_sync_started(
+        &relational,
+        &cfg.repo.repo_id,
+        cfg.repo_root.to_string_lossy().as_ref(),
+        "full",
+        "parser-v1",
+        "extractor-v1",
+    )
+    .await
+    .expect("write started state");
+
+    assert!(
+        crate::host::devql::sync::state::repo_sync_state_exists(&relational, &cfg.repo.repo_id)
+            .await
+            .expect("check present sync state"),
+        "repo_sync_state should exist once sync state is written"
+    );
 }

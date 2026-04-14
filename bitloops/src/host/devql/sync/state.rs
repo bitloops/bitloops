@@ -101,6 +101,19 @@ pub(crate) async fn read_scope_exclusions_fingerprint(
         .map(str::to_string))
 }
 
+pub(crate) async fn repo_sync_state_exists(
+    store: &RelationalStorage,
+    repo_id: &str,
+) -> Result<bool> {
+    let rows = store
+        .query_rows(&format!(
+            "SELECT repo_id FROM repo_sync_state WHERE repo_id = '{}' LIMIT 1",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(!rows.is_empty())
+}
+
 pub(crate) async fn write_scope_exclusions_fingerprint(
     store: &RelationalStorage,
     repo_id: &str,

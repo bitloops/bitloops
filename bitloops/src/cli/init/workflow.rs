@@ -6,7 +6,9 @@ use anyhow::{Context, Result, bail};
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
 use crate::cli::embeddings::{enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings};
-use crate::cli::inference::configure_local_summary_generation;
+use crate::cli::inference::{
+    configure_local_summary_generation, prepare_local_summary_generation_plan,
+};
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
     DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
@@ -124,6 +126,7 @@ pub(super) async fn run_for_project_root(
     }
 
     let mut queued_embeddings_bootstrap = None;
+    let mut prepared_summary_setup = None;
     let should_install_embeddings = should_install_embeddings_during_init(
         project_root,
         args.install_default_daemon,
@@ -144,25 +147,43 @@ pub(super) async fn run_for_project_root(
         out,
         input,
     )? {
-        configure_local_summary_generation(
-            project_root,
-            out,
-            input,
-            telemetry_consent::can_prompt_interactively(),
-        )
-        .map_err(|err| {
-            anyhow::anyhow!("Bitloops init completed, but semantic summary setup failed: {err:#}")
-        })?;
+        if args.install_default_daemon {
+            prepared_summary_setup = Some(
+                prepare_local_summary_generation_plan(
+                    out,
+                    input,
+                    telemetry_consent::can_prompt_interactively(),
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                    )
+                })?,
+            );
+        } else {
+            configure_local_summary_generation(
+                project_root,
+                out,
+                input,
+                telemetry_consent::can_prompt_interactively(),
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                )
+            })?;
+        }
     }
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
     if args.install_default_daemon {
         write_init_setup_handoff(out).await?;
     }
-    if should_sync || should_ingest {
+    let run_concurrent_init_progress = args.install_default_daemon
+        && (prepared_summary_setup.is_some()
+            || (queued_embeddings_bootstrap.is_some() && (should_sync || should_ingest)));
+    if should_sync || should_ingest || prepared_summary_setup.is_some() {
         let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(project_root))?;
-        let run_concurrent_init_progress =
-            args.install_default_daemon && queued_embeddings_bootstrap.is_some();
         if run_concurrent_init_progress {
             let initial_top_task = if should_sync {
                 let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
@@ -191,6 +212,7 @@ pub(super) async fn run_for_project_root(
                     enqueue_ingest_after_sync: should_sync && should_ingest,
                     ingest_backfill: args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL),
                     queued_embeddings_bootstrap,
+                    prepared_summary_setup,
                 },
             )
             .await?;

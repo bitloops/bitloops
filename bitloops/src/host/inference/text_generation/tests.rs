@@ -403,6 +403,23 @@ done
     .expect("write fake runtime script");
     std::fs::write(
         &local_config_path,
+        r#"
+[semantic_clones.inference]
+summary_generation = "local_summary"
+
+[inference.profiles.local_summary]
+task = "text_generation"
+driver = "openai"
+model = "gpt-4.1-mini"
+api_key = "sk-test"
+base_url = "https://api.openai.com/v1/chat/completions"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write local daemon config");
+    std::fs::write(
+        &bound_config_path,
         format!(
             r#"
 [semantic_clones.inference]
@@ -427,8 +444,7 @@ max_output_tokens = 200
             launch_log.display(),
         ),
     )
-    .expect("write local daemon config");
-    std::fs::write(&bound_config_path, "[inference]\n").expect("write bound config");
+    .expect("write bound config");
     std::fs::write(
         repo_root.join(REPO_POLICY_LOCAL_FILE_NAME),
         format!(
@@ -442,15 +458,18 @@ config_path = "{}"
     .expect("write repo policy");
 
     let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let summary_profile = capability
+        .semantic_clones
+        .inference
+        .summary_generation
+        .clone()
+        .expect("summary profile binding");
     let gateway = LocalInferenceGateway::new(
         repo_root,
         capability.inference,
         HashMap::from([(
             "semantic_clones".to_string(),
-            BTreeMap::from([(
-                "summary_generation".to_string(),
-                "summary_local".to_string(),
-            )]),
+            BTreeMap::from([("summary_generation".to_string(), summary_profile)]),
         )]),
     );
 
@@ -470,7 +489,7 @@ config_path = "{}"
     let launched_with = std::fs::read_to_string(&launch_log).expect("read launch log");
     assert_eq!(
         launched_with.trim(),
-        local_config_path.to_string_lossy(),
+        bound_config_path.to_string_lossy(),
         "runtime should reuse the same daemon config path as the host inference config"
     );
 }
