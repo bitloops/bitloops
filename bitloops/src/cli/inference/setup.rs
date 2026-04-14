@@ -72,6 +72,7 @@ pub(crate) struct SummarySetupExecutionResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PreparedSummarySetupAction {
     InstallRuntimeOnly { message: String },
+    InstallRuntimeOnlyPendingProbe { message: String },
     Configure { model_name: String },
 }
 
@@ -214,7 +215,7 @@ pub(crate) fn prepare_local_summary_generation_plan(
             }
             OllamaAvailability::NotRunning => {
                 return Ok(PreparedSummarySetupPlan {
-                    action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                    action: PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe {
                         message: "Installed `bitloops-inference`; skipped semantic summary setup because Ollama is not running.".to_string(),
                     },
                 });
@@ -261,6 +262,24 @@ fn apply_prepared_summary_setup(
                 message,
             })
         }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            if let Some(model_name) = auto_configured_summary_model_name()? {
+                write_summary_profile(repo_root, &model_name)?;
+                return Ok(SummarySetupExecutionResult {
+                    outcome: SummarySetupOutcome::Configured {
+                        model_name: model_name.clone(),
+                    },
+                    message: format!(
+                        "Configured semantic summaries to use Ollama model `{model_name}`."
+                    ),
+                });
+            }
+
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
         PreparedSummarySetupAction::Configure { model_name } => {
             write_summary_profile(repo_root, &model_name)?;
             Ok(SummarySetupExecutionResult {
@@ -285,6 +304,34 @@ where
 {
     match plan.action {
         PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            report(SummarySetupProgress {
+                phase: SummarySetupPhase::WritingProfile,
+                message: Some("Rechecking Ollama before applying summary profile".to_string()),
+                ..Default::default()
+            })?;
+            if let Some(model_name) = auto_configured_summary_model_name()? {
+                report(SummarySetupProgress {
+                    phase: SummarySetupPhase::WritingProfile,
+                    message: Some(format!("Applying summary profile for `{model_name}`")),
+                    ..Default::default()
+                })?;
+                write_summary_profile(repo_root, &model_name)?;
+                return Ok(SummarySetupExecutionResult {
+                    outcome: SummarySetupOutcome::Configured {
+                        model_name: model_name.clone(),
+                    },
+                    message: format!(
+                        "Configured semantic summaries to use Ollama model `{model_name}`."
+                    ),
+                });
+            }
+
             Ok(SummarySetupExecutionResult {
                 outcome: SummarySetupOutcome::InstalledRuntimeOnly,
                 message,
@@ -330,17 +377,28 @@ fn summary_setup_progress_from_managed(
     }
 }
 
+fn auto_configured_summary_model_name() -> Result<Option<String>> {
+    match probe_ollama_availability()? {
+        OllamaAvailability::Running { models } => Ok(select_preferred_ollama_model(&models)),
+        OllamaAvailability::MissingCli | OllamaAvailability::NotRunning => Ok(None),
+    }
+}
+
+fn select_preferred_ollama_model(models: &[String]) -> Option<String> {
+    PREFERRED_OLLAMA_MODELS
+        .iter()
+        .find(|candidate| models.iter().any(|model| model == **candidate))
+        .map(|model| (*model).to_string())
+}
+
 fn select_ollama_model(
     models: &[String],
     out: &mut dyn Write,
     input: &mut dyn BufRead,
     interactive: bool,
 ) -> Result<Option<String>> {
-    if let Some(preferred) = PREFERRED_OLLAMA_MODELS
-        .iter()
-        .find(|candidate| models.iter().any(|model| model == **candidate))
-    {
-        return Ok(Some((*preferred).to_string()));
+    if let Some(preferred) = select_preferred_ollama_model(models) {
+        return Ok(Some(preferred));
     }
 
     if !interactive {

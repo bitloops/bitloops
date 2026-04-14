@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::rc::Rc;
 
 use tempfile::TempDir;
 use toml_edit::{DocumentMut, Item};
@@ -74,6 +75,59 @@ fn summary_setup_prefers_ministral_3_3b_when_available() {
                     Ok(OllamaAvailability::Running {
                         models: vec!["ministral-3:8b".to_string(), "ministral-3:3b".to_string()],
                     })
+                },
+                || configure_local_summary_generation(&configure_root, &mut out, &mut input, false),
+            )
+        },
+    )
+    .expect("summary setup outcome");
+
+    assert_eq!(
+        outcome,
+        SummarySetupOutcome::Configured {
+            model_name: "ministral-3:3b".to_string()
+        }
+    );
+    assert!(summary_generation_configured(&repo_root));
+}
+
+#[test]
+fn summary_setup_reprobes_ollama_after_runtime_install_when_initial_probe_misses_it() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+    let probe_attempt = Rc::new(std::cell::Cell::new(0usize));
+
+    let outcome = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            let probe_attempt = Rc::clone(&probe_attempt);
+            with_ollama_probe_hook(
+                move || {
+                    let attempt = probe_attempt.get();
+                    probe_attempt.set(attempt + 1);
+                    if attempt == 0 {
+                        Ok(OllamaAvailability::NotRunning)
+                    } else {
+                        Ok(OllamaAvailability::Running {
+                            models: vec!["ministral-3:3b".to_string()],
+                        })
+                    }
                 },
                 || configure_local_summary_generation(&configure_root, &mut out, &mut input, false),
             )
