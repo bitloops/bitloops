@@ -154,6 +154,15 @@ fn install_hooks_fresh_and_idempotent() {
             .and_then(Value::as_array)
             .and_then(|entries| entries.first())
             .expect("SessionStart hook command");
+        let user_prompt_hook = output
+            .get("hooks")
+            .and_then(|hooks| hooks.get("UserPromptSubmit"))
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("hooks"))
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .expect("UserPromptSubmit hook command");
 
         assert_eq!(
             start_hook.get("type").and_then(Value::as_str),
@@ -164,6 +173,16 @@ fn install_hooks_fresh_and_idempotent() {
             Some("Initializing session...")
         );
         assert_eq!(start_hook.get("timeout").and_then(Value::as_i64), Some(10));
+        assert_eq!(
+            user_prompt_hook
+                .get("statusMessage")
+                .and_then(Value::as_str),
+            Some("Submitting prompt...")
+        );
+        assert_eq!(
+            user_prompt_hook.get("timeout").and_then(Value::as_i64),
+            Some(30)
+        );
     });
 }
 
