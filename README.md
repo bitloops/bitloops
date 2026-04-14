@@ -119,19 +119,22 @@ The `bitloops-embeddings` binary is released separately in `bitloops/bitloops-em
 
 ## Getting Started
 
-1. Start the daemon and create the global daemon config:
+1. The fastest way to get started is to run this from inside the git repository or subproject you want to capture:
+
+   ```bash
+   bitloops init --install-default-daemon
+   ```
+
+   This bootstraps the default daemon service if needed, creates or updates `.bitloops.local.toml`, and installs Bitloops hooks for the current project. Add `--sync=true` if you want the initial current-state sync to run immediately.
+
+2. If you prefer to bootstrap the default daemon explicitly first, use:
 
    ```bash
    bitloops start --create-default-config
-   ```
-
-   On a fresh machine, interactive `bitloops start` can also prompt to create the default daemon config. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`.
-
-2. From inside the git repository or subproject you want to capture, bootstrap Bitloops:
-
-   ```bash
    bitloops init
    ```
+
+   On a fresh machine, interactive `bitloops start` can also prompt to create the default daemon config. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`. If you need a custom daemon config, bootstrap that separately before running `bitloops init`.
 
 3. Toggle capture later if needed:
 
