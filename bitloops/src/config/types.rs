@@ -46,14 +46,6 @@ pub struct AtlassianProviderConfig {
     pub token: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StoreSemanticConfig {
-    pub semantic_provider: Option<String>,
-    pub semantic_model: Option<String>,
-    pub semantic_api_key: Option<String>,
-    pub semantic_base_url: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticSummaryMode {
@@ -92,36 +84,85 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 1;
+pub const DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 5;
+pub const MIN_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 1;
+pub const MAX_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 50;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SemanticClonesInferenceBindings {
+    #[serde(default)]
+    pub summary_generation: Option<String>,
+    #[serde(default)]
+    pub code_embeddings: Option<String>,
+    #[serde(default)]
+    pub summary_embeddings: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SemanticClonesConfig {
     pub summary_mode: SemanticSummaryMode,
     pub embedding_mode: SemanticCloneEmbeddingMode,
-    pub embedding_profile: Option<String>,
+    pub ann_neighbors: usize,
+    pub enrichment_workers: usize,
+    #[serde(default)]
+    pub inference: SemanticClonesInferenceBindings,
+}
+
+impl Default for SemanticClonesConfig {
+    fn default() -> Self {
+        Self {
+            summary_mode: SemanticSummaryMode::default(),
+            embedding_mode: SemanticCloneEmbeddingMode::default(),
+            ann_neighbors: DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+            enrichment_workers: DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
+            inference: SemanticClonesInferenceBindings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceTask {
+    #[default]
+    Embeddings,
+    TextGeneration,
+}
+
+impl fmt::Display for InferenceTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Embeddings => write!(f, "embeddings"),
+            Self::TextGeneration => write!(f, "text_generation"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EmbeddingsRuntimeConfig {
+pub struct InferenceRuntimeConfig {
     pub command: String,
     pub args: Vec<String>,
     pub startup_timeout_secs: u64,
     pub request_timeout_secs: u64,
 }
 
-impl Default for EmbeddingsRuntimeConfig {
+impl Default for InferenceRuntimeConfig {
     fn default() -> Self {
         Self {
-            command: "bitloops-embeddings".to_string(),
+            command: String::new(),
             args: Vec::new(),
-            startup_timeout_secs: 10,
-            request_timeout_secs: 60,
+            startup_timeout_secs: 60,
+            request_timeout_secs: 300,
         }
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmbeddingProfileConfig {
+pub struct InferenceProfileConfig {
     pub name: String,
-    pub kind: String,
+    pub task: InferenceTask,
+    pub driver: String,
+    pub runtime: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
@@ -129,17 +170,22 @@ pub struct EmbeddingProfileConfig {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmbeddingsConfig {
-    pub runtime: EmbeddingsRuntimeConfig,
-    pub profiles: BTreeMap<String, EmbeddingProfileConfig>,
+pub struct InferenceConfig {
+    pub runtimes: BTreeMap<String, InferenceRuntimeConfig>,
+    pub profiles: BTreeMap<String, InferenceProfileConfig>,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmbeddingCapabilityConfig {
+pub struct InferenceCapabilityConfig {
     pub semantic_clones: SemanticClonesConfig,
-    pub embeddings: EmbeddingsConfig,
+    pub inference: InferenceConfig,
 }
+
+pub type EmbeddingsRuntimeConfig = InferenceRuntimeConfig;
+pub type EmbeddingProfileConfig = InferenceProfileConfig;
+pub type EmbeddingsConfig = InferenceConfig;
+pub type EmbeddingCapabilityConfig = InferenceCapabilityConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationalBackendConfig {
@@ -229,6 +275,7 @@ impl BlobStorageConfig {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct StoreFileConfig {
     pub(crate) sqlite_path: Option<String>,
@@ -238,10 +285,6 @@ pub struct StoreFileConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: Option<String>,
-    pub(crate) semantic_provider: Option<String>,
-    pub(crate) semantic_model: Option<String>,
-    pub(crate) semantic_api_key: Option<String>,
-    pub(crate) semantic_base_url: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
     pub(crate) blob_s3_region: Option<String>,

@@ -1,7 +1,5 @@
 pub(crate) use super::*;
-pub(crate) use crate::test_support::process_state::{
-    enter_process_state, with_cwd, with_process_state,
-};
+pub(crate) use crate::test_support::process_state::{enter_process_state, with_cwd};
 pub(crate) use serde_json::Value;
 pub(crate) use std::fs;
 pub(crate) use std::path::{Path, PathBuf};
@@ -13,7 +11,6 @@ mod dashboard;
 mod events;
 mod knowledge_providers;
 mod providerless;
-mod semantic;
 mod sqlite_path;
 mod watch;
 

@@ -8,6 +8,7 @@ pub(crate) struct ParsedDevqlQuery {
     pub(crate) repo: Option<String>,
     pub(crate) project_path: Option<String>,
     pub(crate) as_of: Option<AsOfSelector>,
+    pub(crate) select_artefacts: Option<SelectArtefactsFilter>,
     pub(crate) file: Option<String>,
     pub(crate) files_path: Option<String>,
     pub(crate) artefacts: ArtefactFilter,
@@ -51,9 +52,17 @@ pub(crate) struct ArtefactFilter {
 }
 
 #[derive(Debug, Clone, Default)]
+pub(crate) struct SelectArtefactsFilter {
+    pub(crate) symbol_fqn: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) lines: Option<(i32, i32)>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub(super) struct CloneFilter {
     pub(super) relation_kind: Option<String>,
     pub(super) min_score: Option<f32>,
+    pub(super) neighbors: Option<i64>,
     pub(super) raw: bool,
 }
 
@@ -144,6 +153,26 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         }
 
         if let Some(inner) = stage
+            .strip_prefix("selectArtefacts(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            if !parsed.has_deps_stage {
+                parsed.deps.direction = DepsDirection::Both;
+                parsed.deps.include_unresolved = true;
+            }
+            parsed.select_artefacts = Some(SelectArtefactsFilter {
+                symbol_fqn: args.get("symbol_fqn").cloned(),
+                path: args.get("path").cloned(),
+                lines: args
+                    .get("lines")
+                    .map(|lines| parse_lines_range(lines))
+                    .transpose()?,
+            });
+            continue;
+        }
+
+        if let Some(inner) = stage
             .strip_prefix("file(")
             .and_then(|s| s.strip_suffix(')'))
         {
@@ -193,6 +222,13 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                     min_score
                         .parse::<f32>()
                         .map_err(|_| anyhow!("invalid clones min_score value: {min_score}"))?,
+                );
+            }
+            if let Some(neighbors) = args.get("neighbors") {
+                parsed.clones.neighbors = Some(
+                    neighbors
+                        .parse::<i64>()
+                        .map_err(|_| anyhow!("invalid clones neighbors value: {neighbors}"))?,
                 );
             }
             if let Some(raw) = args.get("raw") {

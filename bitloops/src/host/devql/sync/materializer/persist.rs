@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use rusqlite::{Transaction, params, params_from_iter};
 
@@ -5,8 +7,8 @@ use super::super::content_cache::CachedExtraction;
 use super::super::types::DesiredFileState;
 use super::derive::prepare_materialization_rows;
 use super::sql::{
-    bool_sql, delete_artefacts_sql, delete_current_file_state_sql, delete_edges_sql,
-    insert_artefact_sql, insert_edge_sql, upsert_current_file_state_sql,
+    ArtefactInsertSqlInput, bool_sql, delete_artefacts_sql, delete_current_file_state_sql,
+    delete_edges_sql, insert_artefact_sql, insert_edge_sql, upsert_current_file_state_sql,
 };
 use super::types::PreparedMaterialisationRows;
 
@@ -29,12 +31,15 @@ pub(crate) async fn materialize_path(
     statements.extend(prepared.materialized_artefacts.iter().map(|artefact| {
         insert_artefact_sql(
             relational,
-            &cfg.repo.repo_id,
-            &desired.path,
-            &desired.effective_content_id,
-            &extraction.language,
-            artefact,
-            now_sql,
+            &ArtefactInsertSqlInput {
+                repo_id: &cfg.repo.repo_id,
+                path: &desired.path,
+                content_id: &desired.effective_content_id,
+                language: &extraction.language,
+                extraction_fingerprint: &desired.extraction_fingerprint,
+                artefact,
+                now_sql,
+            },
         )
     }));
     statements.extend(prepared.materialized_edges.iter().map(|edge| {
@@ -100,8 +105,8 @@ pub(crate) fn persist_prepared_materialisation_tx(
         let mut stmt = tx
             .prepare(
                 "INSERT INTO artefacts_current \
-                 (repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, datetime('now'))",
+                 (repo_id, path, content_id, symbol_id, artefact_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, datetime('now'))",
             )
             .context("preparing current artefact insert")?;
         for artefact in &prepared.materialized_artefacts {
@@ -115,6 +120,7 @@ pub(crate) fn persist_prepared_materialisation_tx(
                     artefact.symbol_id,
                     artefact.artefact_id,
                     extraction.language,
+                    desired.extraction_fingerprint,
                     artefact.canonical_kind,
                     artefact.language_kind,
                     artefact.symbol_fqn,
@@ -167,10 +173,22 @@ pub(crate) fn persist_prepared_materialisation_tx(
     affected_rows += tx
         .execute(
             "INSERT INTO current_file_state \
-             (repo_id, path, language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now')) \
+             (repo_id, path, analysis_mode, file_role, text_index_mode, language, resolved_language, dialect, primary_context_id, secondary_context_ids_json, frameworks_json, runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, datetime('now')) \
              ON CONFLICT (repo_id, path) DO UPDATE SET \
+                 analysis_mode = excluded.analysis_mode, \
+                 file_role = excluded.file_role, \
+                 text_index_mode = excluded.text_index_mode, \
                  language = excluded.language, \
+                 resolved_language = excluded.resolved_language, \
+                 dialect = excluded.dialect, \
+                 primary_context_id = excluded.primary_context_id, \
+                 secondary_context_ids_json = excluded.secondary_context_ids_json, \
+                 frameworks_json = excluded.frameworks_json, \
+                 runtime_profile = excluded.runtime_profile, \
+                 classification_reason = excluded.classification_reason, \
+                 context_fingerprint = excluded.context_fingerprint, \
+                 extraction_fingerprint = excluded.extraction_fingerprint, \
                  head_content_id = excluded.head_content_id, \
                  index_content_id = excluded.index_content_id, \
                  worktree_content_id = excluded.worktree_content_id, \
@@ -185,7 +203,21 @@ pub(crate) fn persist_prepared_materialisation_tx(
             params![
                 repo_id,
                 desired.path,
+                desired.analysis_mode.as_str(),
+                desired.file_role.as_str(),
+                desired.text_index_mode.as_str(),
                 desired.language,
+                desired.resolved_language,
+                desired.dialect,
+                desired.primary_context_id,
+                serde_json::to_string(&desired.secondary_context_ids)
+                    .unwrap_or_else(|_| "[]".to_string()),
+                serde_json::to_string(&desired.frameworks)
+                    .unwrap_or_else(|_| "[]".to_string()),
+                desired.runtime_profile,
+                desired.classification_reason,
+                desired.context_fingerprint,
+                desired.extraction_fingerprint,
                 desired.head_content_id,
                 desired.index_content_id,
                 desired.worktree_content_id,

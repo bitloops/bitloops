@@ -6,7 +6,6 @@ use crate::host::capability_host::{
 
 fn run_initial_knowledge_migration(ctx: &mut dyn KnowledgeMigrationContext) -> Result<()> {
     ctx.knowledge_relational().initialise_schema()?;
-    ctx.knowledge_documents().initialise_schema()?;
     Ok(())
 }
 

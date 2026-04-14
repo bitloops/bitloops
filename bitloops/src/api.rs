@@ -52,9 +52,11 @@ pub struct DashboardRuntimeOptions {
     pub ready_subject: String,
     pub print_ready_banner: bool,
     pub open_browser: bool,
+    pub bootstrap_devql_schema: bool,
     pub shutdown_message: Option<String>,
     pub on_ready: Option<DashboardReadyHook>,
     pub on_shutdown: Option<DashboardShutdownHook>,
+    pub config_path: Option<PathBuf>,
     pub config_root: Option<PathBuf>,
     pub repo_registry_path: Option<PathBuf>,
 }
@@ -65,9 +67,11 @@ impl Default for DashboardRuntimeOptions {
             ready_subject: "Dashboard".to_string(),
             print_ready_banner: true,
             open_browser: true,
+            bootstrap_devql_schema: true,
             shutdown_message: Some("Dashboard server stopped.".to_string()),
             on_ready: None,
             on_shutdown: None,
+            config_path: None,
             config_root: None,
             repo_registry_path: None,
         }
@@ -166,14 +170,22 @@ struct LocalDashboardDiscovery {
     tls: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DashboardBundleSourceOverrides {
+    pub(super) cdn_base_url: Option<String>,
+    pub(super) manifest_url: Option<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct DashboardState {
+    pub(super) config_path: PathBuf,
     pub(super) config_root: PathBuf,
     pub(super) repo_root: PathBuf,
     pub(super) repo_registry_path: Option<PathBuf>,
     pub(super) mode: ServeMode,
     pub(super) db: db::DashboardDbPools,
     pub(super) bundle_dir: PathBuf,
+    pub(super) bundle_source_overrides: DashboardBundleSourceOverrides,
     pub(super) subscription_hub: Arc<SubscriptionHub>,
     pub(super) devql_schema: graphql::DevqlSchema,
     pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
@@ -198,6 +210,15 @@ impl DashboardState {
 
     pub(crate) fn subscription_hub(&self) -> Arc<SubscriptionHub> {
         Arc::clone(&self.subscription_hub)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_bundle_source_overrides(
+        mut self,
+        overrides: DashboardBundleSourceOverrides,
+    ) -> Self {
+        self.bundle_source_overrides = overrides;
+        self
     }
 }
 

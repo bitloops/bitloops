@@ -58,6 +58,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(
+                r"^I run bitloops init --agent (\S+) --sync=false --ingest=true --backfill=(\d+) in (\S+)$",
+            ),
+            step_fn(given_init_bitloops_with_agent_sync_false_ingest_true_backfill),
+        )
+        .given(
+            None,
             regex(r"^I run EnableCLI for (\S+)$"),
             step_fn(given_enable_cli),
         )
@@ -93,6 +100,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I make a first change using (\S+) to (\S+)$"),
+            step_fn(given_first_agent_change),
+        )
+        .given(
+            None,
             regex(r#"^I ask Claude Code to "([^"]+)" in (\S+)$"#),
             step_fn(given_claude_code_prompt),
         )
@@ -100,6 +112,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I make a second change using Claude Code to (\S+)$"),
             step_fn(given_second_claude_change),
+        )
+        .given(
+            None,
+            regex(r"^I make a second change using (\S+) to (\S+)$"),
+            step_fn(given_second_agent_change),
         )
         .given(
             None,
@@ -120,6 +137,56 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run DevQL ingest in (\S+)$"),
             step_fn(given_devql_ingest),
+        )
+        .when(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
+        .then(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
+        .given(
+            None,
+            regex(r"^I snapshot ingest DB state in (\S+)$"),
+            step_fn(given_snapshot_ingest_db_state),
+        )
+        .given(
+            None,
+            regex(r"^I create (\d+) ingest commits in (\S+)$"),
+            step_fn(given_create_ingest_commits),
+        )
+        .given(
+            None,
+            regex(r"^I create a non-FF merge with 2 feature commits in (\S+)$"),
+            step_fn(given_non_ff_merge_with_two_feature_commits),
+        )
+        .given(
+            None,
+            regex(r"^I create an FF merge with 2 feature commits in (\S+)$"),
+            step_fn(given_ff_merge_with_two_feature_commits),
+        )
+        .given(
+            None,
+            regex(r"^I cherry-pick 2 commits in (\S+)$"),
+            step_fn(given_cherry_pick_two_commits),
+        )
+        .given(
+            None,
+            regex(r"^I capture top (\d+) reachable SHAs before rewrite in (\S+)$"),
+            step_fn(given_capture_top_reachable_before_rewrite),
+        )
+        .given(
+            None,
+            regex(r"^I rewrite last (\d+) commits with rebase edit in (\S+)$"),
+            step_fn(given_rebase_edit_rewrite_last_commits),
+        )
+        .given(
+            None,
+            regex(r"^I reset last (\d+) commits and create replacement commits in (\S+)$"),
+            step_fn(given_reset_and_rewrite_last_commits),
         )
         .given(
             None,
@@ -165,8 +232,53 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a TypeScript project with semantic clone quality fixtures in (\S+)$"),
+            step_fn(given_create_ts_semantic_clone_quality_project),
+        )
+        .given(
+            None,
+            regex(r"^I add semantic clone fixtures in (\S+)$"),
+            step_fn(given_add_semantic_clone_fixtures),
+        )
+        .given(
+            None,
+            regex(r"^I configure guide-aligned semantic clones with fake embeddings runtime in (\S+)$"),
+            step_fn(given_configure_semantic_clones_guide_aligned_fake_runtime),
+        )
+        .given(
+            None,
+            regex(r"^I configure semantic clones with fake embeddings runtime in (\S+)$"),
+            step_fn(given_configure_semantic_clones_fake_runtime),
+        )
+        .given(
+            None,
+            regex(r"^DevQL pack health for semantic clones is ready in (\S+)$"),
+            step_fn(given_devql_semantic_clones_pack_health_ready),
+        )
+        .given(
+            None,
             regex(r"^I run DevQL semantic clones rebuild in (\S+)$"),
             step_fn(given_devql_semantic_clones_rebuild),
+        )
+        .given(
+            None,
+            regex(r"^I run daemon enrichments status in (\S+)$"),
+            step_fn(given_daemon_enrichments_status),
+        )
+        .when(
+            None,
+            regex(r"^I run daemon enrichments status in (\S+)$"),
+            step_fn(given_daemon_enrichments_status),
+        )
+        .given(
+            None,
+            regex(r"^I wait for semantic clone enrichments to drain in (\S+)$"),
+            step_fn(given_wait_semantic_clone_enrichments_to_drain),
+        )
+        .when(
+            None,
+            regex(r"^I wait for semantic clone enrichments to drain in (\S+)$"),
+            step_fn(given_wait_semantic_clone_enrichments_to_drain),
         )
         .given(
             None,
@@ -178,12 +290,27 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync),
         )
+        .when(
+            None,
+            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync),
+        )
         .given(
             None,
             regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_validate),
         )
+        .when(
+            None,
+            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync_validate),
+        )
         .given(
+            None,
+            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
+            step_fn(given_devql_sync_repair),
+        )
+        .when(
             None,
             regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync_repair),
@@ -345,6 +472,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^(cursor|gemini|copilot|codex|opencode|open-code) session exists in (\S+)$"),
+            step_fn(then_agent_session_exists),
+        )
+        .then(
+            None,
             regex(r"^checkpoint mapping exists in (\S+)$"),
             step_fn(then_checkpoint_mapping_exists),
         )
@@ -391,7 +523,7 @@ pub fn collection() -> Collection<QatWorld> {
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" returns results in (\S+)$"#,
             ),
             step_fn(then_testlens_query_returns_results),
         )
@@ -415,16 +547,21 @@ pub fn collection() -> Collection<QatWorld> {
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#,
             ),
             step_fn(then_testlens_query_empty_or_zero),
         )
         .then(
             None,
             regex(
-                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (?:latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
+                r#"^(?:TestHarness|TestLens) query for \"([^\"]+)\" at (latest commit|current workspace state) with view \"([^\"]+)\" includes a failing test in (\S+)$"#,
             ),
             step_fn(then_testlens_includes_failing_test),
+        )
+        .then(
+            None,
+            regex(r"^daemon capability-event status shows TestHarness sync handler completed in (\S+)$"),
+            step_fn(then_daemon_capability_event_status_test_harness_completed),
         )
         .then(
             None,
@@ -433,8 +570,33 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^semantic clone historical tables are populated in (\S+)$"),
+            step_fn(then_semantic_clone_historical_tables_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone current projection tables are populated without inline embeddings in (\S+)$"),
+            step_fn(then_semantic_clone_current_tables_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone historical embeddings and current artefacts expose code and summary channels in (\S+)$"),
+            step_fn(then_semantic_clone_representation_channels_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in (\S+)$"),
+            step_fn(then_semantic_clone_progress_observed),
+        )
+        .then(
+            None,
             regex(r"^DevQL clones results include score and relation_kind fields in (\S+)$"),
             step_fn(then_devql_clones_have_score_and_kind),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" ranks \"([^\"]+)\" above \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_clones_rank_target_above),
         )
         .then(
             None,
@@ -443,8 +605,23 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" with min_score (\S+) excludes \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_clones_with_min_score_excludes_target),
+        )
+        .then(
+            None,
             regex(r#"^DevQL clones query for \"([^\"]+)\" with min_score (\S+) returns fewer or equal results in (\S+)$"#),
             step_fn(then_devql_clones_fewer_or_equal),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clone summary for \"([^\"]+)\" with min_score (\S+) returns grouped counts in (\S+)$"#),
+            step_fn(then_devql_clone_summary_grouped_counts),
+        )
+        .then(
+            None,
+            regex(r#"^GraphQL clone summary for \"([^\"]+)\" with min_score (\S+) returns grouped counts in (\S+)$"#),
+            step_fn(then_graphql_clone_summary_grouped_counts),
         )
         .then(
             None,
@@ -520,6 +697,83 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL sync history shows artefacts indexed for current HEAD in (\S+)$"),
             step_fn(then_sync_history_artefacts_for_current_head),
+        )
+        .then(
+            None,
+            regex(r"^all reachable SHAs are completed in commit_ingest_ledger in (\S+)$"),
+            step_fn(then_all_reachable_shas_completed_in_ledger),
+        )
+        .then(
+            None,
+            regex(r"^artefacts_current has rows in (\S+)$"),
+            step_fn(then_artefacts_current_has_rows),
+        )
+        .then(
+            None,
+            regex(r"^expected SHAs are completed in commit_ingest_ledger in (\S+)$"),
+            step_fn(then_expected_shas_completed_in_ledger),
+        )
+        .then(
+            None,
+            regex(r"^expected SHAs have file_state rows in (\S+)$"),
+            step_fn(then_expected_shas_have_file_state_rows),
+        )
+        .then(
+            None,
+            regex(r"^exact expected SHAs were newly completed since snapshot in (\S+)$"),
+            step_fn(then_exact_expected_shas_newly_completed_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^no new SHAs were completed since snapshot in (\S+)$"),
+            step_fn(then_no_new_completed_shas_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^completed ledger count is unchanged since snapshot in (\S+)$"),
+            step_fn(then_ledger_completed_count_unchanged_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^artefacts_current count is unchanged since snapshot in (\S+)$"),
+            step_fn(then_artefacts_current_count_unchanged_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^artefacts_current count increased since snapshot in (\S+)$"),
+            step_fn(then_artefacts_current_count_increased_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current contains path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_contains_path),
+        )
+        .then(
+            None,
+            regex(
+                r"^only latest (\d+) reachable SHAs are completed in commit_ingest_ledger in (\S+)$",
+            ),
+            step_fn(then_only_latest_reachable_shas_completed),
+        )
+        .then(
+            None,
+            regex(r"^DevQL ingest summary shows (\d+) ([a-z_]+) in (\S+)$"),
+            step_fn(then_ingest_summary_field_exact),
+        )
+        .then(
+            None,
+            regex(r"^rewrite introduces exactly (\d+) new reachable SHAs in (\S+)$"),
+            step_fn(then_rewrite_new_shas_count),
+        )
+        .then(
+            None,
+            regex(r"^old rewritten SHAs are absent from post-rewrite reachable segment in (\S+)$"),
+            step_fn(then_pre_rewrite_shas_absent_from_post_segment),
+        )
+        .then(
+            None,
+            regex(r"^rewritten new SHAs are completed in commit_ingest_ledger in (\S+)$"),
+            step_fn(then_rewrite_new_shas_completed_in_ledger),
         )
         .then(
             None,

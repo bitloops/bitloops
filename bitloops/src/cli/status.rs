@@ -189,7 +189,40 @@ fn truncate_prompt(input: &str, max_chars: usize) -> String {
 
 pub async fn run(args: StatusArgs) -> Result<()> {
     let mut out = std::io::stdout();
-    run_status(&mut out, args.detailed)
+    run_status(&mut out, args.detailed)?;
+
+    let start = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if find_repo_root(&start).is_ok()
+        && let Ok(scope) = crate::devql_transport::discover_slim_cli_repo_scope(Some(&start))
+        && let Ok(status) = crate::cli::devql::graphql::task_queue_status_via_graphql(&scope).await
+    {
+        writeln!(out)?;
+        writeln!(out, "DevQL Task Queue:")?;
+        writeln!(
+            out,
+            "  state: {}",
+            if status.paused { "paused" } else { "running" }
+        )?;
+        writeln!(out, "  queued: {}", status.queued_tasks)?;
+        writeln!(out, "  running: {}", status.running_tasks)?;
+        writeln!(out, "  failed: {}", status.failed_tasks)?;
+        for counts in status.by_kind {
+            writeln!(
+                out,
+                "  {}: queued={} running={} failed={} completed_recent={}",
+                counts.kind.to_ascii_lowercase(),
+                counts.queued_tasks,
+                counts.running_tasks,
+                counts.failed_tasks,
+                counts.completed_recent_tasks
+            )?;
+        }
+        if let Some(reason) = status.paused_reason {
+            writeln!(out, "  pause reason: {reason}")?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

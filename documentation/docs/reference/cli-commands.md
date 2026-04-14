@@ -31,28 +31,35 @@ bitloops init
 bitloops init --sync=true
 bitloops init --sync=false
 bitloops init --install-default-daemon
+bitloops init --install-default-daemon --sync=true
 ```
 
 Notes:
 
 - Run `bitloops start` first when the daemon is already configured.
 - Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
+- When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from `bitloops/bitloops-embeddings` automatically and writes the managed absolute path into the runtime config.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
 - `init` installs git hooks plus the selected agent hooks.
 - `init` replaces `[agents].supported` with the current selection on rerun.
+- In an interactive terminal, when embeddings are not already configured, plain `init` asks whether to install the default local embeddings setup and defaults to `Yes` with `[Y/n]`.
+- In non-interactive mode, plain `init` does not change embeddings config.
+- If embeddings are already configured, `init --install-default-daemon` leaves the active profile in place. Active `bitloops_embeddings_ipc` profiles may still be warmed; hosted or other non-local drivers are treated as already enabled.
 - `init` can queue an initial DevQL current-state sync after hook setup.
+- With `--install-default-daemon`, init-triggered sync and ingest run first. The managed embeddings runtime download then runs afterwards when the default local runtime still needs to be installed.
 - `--sync=true` queues that sync and follows it to completion.
 - `--sync=false` skips the initial sync explicitly.
 - If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
 - In non-interactive mode, `init` requires `--sync=true` or `--sync=false`.
-- `init` still does not run DevQL ingest. The `--skip-baseline` flag is accepted for compatibility only.
+- `init` can also run DevQL ingest when you opt in with `--ingest=true` or accept the interactive prompt. The `--skip-baseline` flag is accepted for compatibility only.
 - Use `--agent <name>` to pin the supported agent set.
 - `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
 - `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
 - In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag.
+- If `init` newly adds embeddings config and the runtime bootstrap fails, Bitloops reverts only those embeddings-related daemon-config changes, keeps the rest of init intact, and exits non-zero.
 
 ### `bitloops enable`
 
@@ -60,6 +67,9 @@ Enables capture in the nearest discovered project policy.
 
 ```bash
 bitloops enable
+bitloops enable --install-embeddings
+bitloops daemon enable
+bitloops daemon enable --install-embeddings
 ```
 
 Notes:
@@ -67,10 +77,16 @@ Notes:
 - `enable` edits the nearest discovered `.bitloops.local.toml` or `.bitloops.toml` in place.
 - `enable` only toggles `[capture].enabled = true`.
 - Installed hooks stay in place and resume capturing without reinstallation.
+- `bitloops daemon enable` is an alias to the same implementation and keeps the same telemetry and repo-policy behaviour.
+- `--install-embeddings` is an explicit non-interactive opt-in to configure embeddings in the effective daemon config and then run the existing runtime warm/bootstrap path. When the selected runtime is the default local Bitloops-managed runtime, Bitloops also installs or updates the standalone `bitloops-embeddings` binary automatically.
+- In an interactive terminal, when `--install-embeddings` is absent and embeddings are not already configured, `enable` asks whether to install embeddings and includes them in sync. The prompt defaults to `Yes` with `[Y/n]`; blank input, `y`, and `yes` all opt in.
+- If an active embedding profile already exists, `enable` skips daemon-config mutation. Active `bitloops_embeddings_ipc` profiles still use the existing warm/bootstrap path; hosted or other non-local profiles are treated as already enabled and do not trigger local runtime bootstrap.
+- Embeddings setup targets the effective daemon config in this order: `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, the nearest repo `config.toml`, then the default global config.
 - If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
 - `enable` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - `enable` only prompts for telemetry when the daemon config already existed and consent is unresolved.
 - In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag and Bitloops fails before editing project policy.
+- If `enable` newly adds embeddings config and the runtime bootstrap fails, Bitloops reverts only those embeddings-related daemon-config changes, leaves capture enabled, and exits non-zero.
 
 ### `bitloops disable`
 
@@ -290,10 +306,10 @@ DevQL commands now talk to the local daemon over the existing HTTP and GraphQL s
 
 ```bash
 bitloops devql init
-bitloops devql ingest
-bitloops devql sync
-bitloops devql sync --status
-bitloops devql sync --validate --status
+bitloops devql tasks enqueue --kind ingest
+bitloops devql tasks enqueue --kind sync
+bitloops devql tasks enqueue --kind sync --status
+bitloops devql tasks enqueue --kind sync --validate --status
 bitloops devql projection checkpoint-file-snapshots --dry-run
 ```
 
@@ -301,11 +317,12 @@ Highlights:
 
 - `devql init` explicitly ensures the configured relational and event schemas exist
 - daemon startup owns the normal schema bootstrap path
-- `devql ingest` performs ingestion only
-- `devql sync` queues a sync task and returns immediately by default
-- `devql sync --status` follows the queued task until it completes or fails
-- `devql sync --validate` queues a read-only validation task instead of mutating current-state tables
-- `bitloops status` and `bitloops daemon status` show global sync queue totals and the current repo sync task when you run them inside a repo
+- `devql tasks enqueue --kind ingest` queues ingestion only
+- `devql tasks enqueue --kind sync` queues a sync task and returns immediately by default
+- `devql tasks enqueue --kind sync --status` follows the queued task until it completes or fails
+- `devql tasks enqueue --kind sync --validate` queues a read-only validation task instead of mutating current-state tables
+- successful sync tasks publish current-state generations that built-in consumers process asynchronously at their own pace
+- `bitloops status` and `bitloops daemon status` show the shared DevQL task queue plus current-state consumer follow-up when you run them inside a repo
 
 ### Query and diagnostics
 
@@ -357,12 +374,13 @@ Use `devql test-harness` to ingest test-linkage, coverage, and results data for 
 ## Embeddings
 
 ```bash
-bitloops embeddings pull local
+bitloops embeddings install
+bitloops embeddings pull local_code
 bitloops embeddings doctor
-bitloops embeddings clear-cache local
+bitloops embeddings clear-cache local_code
 ```
 
-These commands inspect, warm, and clear configured embedding profiles from the current repo context.
+These commands install the managed standalone runtime, inspect configured profiles, warm local caches, and clear local model caches from the current repo context.
 
 ## Completion
 

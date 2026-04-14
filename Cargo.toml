@@ -1,10 +1,10 @@
 [workspace]
 members = [
     "bitloops",
-    "bitloops-embeddings-protocol",
-    "bitloops-embeddings",
+    "bitloops-inference-protocol",
     "xtask",
 ]
+exclude = ["third_party/fastembed"]
 resolver = "2"
 
 [patch.crates-io]

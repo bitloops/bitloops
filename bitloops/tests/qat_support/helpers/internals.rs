@@ -46,9 +46,36 @@ fn candidate_symbol_file_paths(world: &QatWorld, symbol_alias: &str) -> Vec<Stri
     candidates
 }
 
+fn candidate_symbol_fqns(world: &QatWorld, symbol_alias: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push_unique = |candidate: String| {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    };
+
+    if let Some((class_name, method_name)) = symbol_alias.split_once('.') {
+        for path in candidate_symbol_file_paths(world, symbol_alias) {
+            push_unique(format!("{path}::{class_name}::{method_name}"));
+            push_unique(format!("{path}::{method_name}"));
+        }
+    } else {
+        for path in candidate_symbol_file_paths(world, symbol_alias) {
+            push_unique(format!("{path}::{symbol_alias}"));
+        }
+    }
+
+    candidates
+}
+
 fn resolve_symbol_fqn_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<String> {
     if symbol_alias.contains("::") {
         return Ok(symbol_alias.to_string());
+    }
+
+    let candidate_fqns = candidate_symbol_fqns(world, symbol_alias);
+    if let Some(candidate) = candidate_fqns.first() {
+        return Ok(candidate.clone());
     }
 
     let mut suffixes = Vec::new();
@@ -59,61 +86,51 @@ fn resolve_symbol_fqn_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<
         suffixes.push(format!("::{symbol_alias}"));
     }
 
-    for file_path in candidate_symbol_file_paths(world, symbol_alias) {
-        let query = format!(
-            r#"repo("bitloops")->file("{}")->artefacts()->limit(500)"#,
-            escape_devql_string(&file_path)
-        );
-        let Ok(value) = run_devql_query(world, &query) else {
-            continue;
-        };
-        let Some(rows) = value.as_array() else {
-            continue;
-        };
+    let value = run_devql_graphql_query(
+        world,
+        r#"query {
+  artefacts(first: 2000) {
+    edges {
+      node {
+        path
+        symbolFqn
+      }
+    }
+  }
+}"#,
+    )?;
+    let rows = value
+        .get("artefacts")
+        .and_then(|artefacts| artefacts.get("edges"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected artefact edges in GraphQL response"))?;
+
+    let candidate_paths = candidate_symbol_file_paths(world, symbol_alias);
+    for file_path in &candidate_paths {
         for suffix in &suffixes {
             if let Some(symbol_fqn) = rows.iter().find_map(|row| {
-                row.get("symbolFqn")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|candidate| candidate.ends_with(suffix))
+                let node = row.get("node")?;
+                let path = node.get("path").and_then(serde_json::Value::as_str)?;
+                let symbol_fqn = node.get("symbolFqn").and_then(serde_json::Value::as_str)?;
+                (path == file_path && symbol_fqn.ends_with(suffix)).then_some(symbol_fqn)
             }) {
                 return Ok(symbol_fqn.to_string());
             }
         }
     }
 
-    Ok(symbol_alias.to_string())
-}
-
-fn resolve_file_path_for_symbol(world: &mut QatWorld, symbol_fqn: &str) -> Result<String> {
-    if let Some((path, _)) = symbol_fqn.split_once("::")
-        && !path.is_empty()
-    {
-        return Ok(path.to_string());
+    for suffix in &suffixes {
+        if let Some(symbol_fqn) = rows.iter().find_map(|row| {
+            row.get("node")
+                .and_then(|node| node.get("symbolFqn"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|candidate| candidate.ends_with(suffix))
+        }) {
+            return Ok(symbol_fqn.to_string());
+        }
     }
 
-    if world.repo_dir().join(symbol_fqn).exists() {
-        return Ok(symbol_fqn.to_string());
-    }
-
-    if let Some(path) = candidate_symbol_file_paths(world, symbol_fqn)
-        .into_iter()
-        .next()
-    {
-        return Ok(path);
-    }
-
-    bail!("could not resolve file path for symbol `{symbol_fqn}`")
-}
-
-fn resolve_file_path_for_symbol_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<String> {
-    if let Some(path) = candidate_symbol_file_paths(world, symbol_alias)
-        .into_iter()
-        .next()
-    {
-        return Ok(path);
-    }
-    let symbol_fqn = resolve_symbol_fqn_alias(world, symbol_alias)?;
-    resolve_file_path_for_symbol(world, &symbol_fqn)
+    bail!("unable to resolve symbol alias `{symbol_alias}` to a DevQL symbolFqn")
 }
 
 fn parse_last_command_stdout_json(world: &QatWorld) -> Result<serde_json::Value> {
@@ -188,80 +205,6 @@ fn parse_knowledge_versions_count(stdout: &str) -> Result<usize> {
     bail!("unable to parse knowledge versions count from command output")
 }
 
-fn is_knowledge_provider_config_missing(stderr: &str) -> bool {
-    stderr.contains("knowledge.providers.github")
-        || stderr.contains("knowledge.providers.jira")
-        || stderr.contains("knowledge.providers.confluence")
-        || stderr.contains("knowledge.providers.atlassian")
-}
-
-fn is_knowledge_item_not_found(stderr: &str) -> bool {
-    stderr.contains("knowledge item `") && stderr.contains("not found")
-}
-
-fn knowledge_fallback_active(world: &QatWorld) -> bool {
-    world.run_dir().join(KNOWLEDGE_FALLBACK_MARKER).exists()
-}
-
-fn activate_knowledge_fallback(world: &mut QatWorld, url: &str, with_commit: bool) -> Result<()> {
-    let knowledge_item_id = world
-        .knowledge_items_by_url
-        .get(url)
-        .cloned()
-        .unwrap_or_else(|| format!("qat-knowledge-{}", world.knowledge_items_by_url.len() + 1));
-    world
-        .knowledge_items_by_url
-        .insert(url.to_string(), knowledge_item_id.clone());
-    world
-        .knowledge_versions_by_ref
-        .entry(knowledge_item_id.clone())
-        .or_insert(1);
-    world.last_knowledge_add_had_commit_association = Some(with_commit);
-    world.last_command_exit_code = Some(0);
-    world.last_command_stdout = Some(format!("knowledge item: {knowledge_item_id}\n"));
-
-    fs::write(world.run_dir().join(KNOWLEDGE_FALLBACK_MARKER), b"1").with_context(|| {
-        format!(
-            "writing knowledge fallback marker in {}",
-            world.run_dir().display()
-        )
-    })?;
-    Ok(())
-}
-
-fn synthetic_knowledge_rows(world: &QatWorld) -> Vec<serde_json::Value> {
-    let mut urls: Vec<&String> = world.knowledge_items_by_url.keys().collect();
-    urls.sort();
-
-    urls.into_iter()
-        .filter_map(|url| {
-            let knowledge_item_id = world.knowledge_items_by_url.get(url)?;
-            let (provider, source_kind) = if url.contains("github.com") && url.contains("/issues/")
-            {
-                ("github", "issue")
-            } else if url.contains("github.com") && url.contains("/pull/") {
-                ("github", "pull_request")
-            } else {
-                ("unknown", "unknown")
-            };
-            Some(serde_json::json!({
-                "knowledgeItemId": knowledge_item_id,
-                "sourceUrl": url,
-                "provider": provider,
-                "sourceKind": source_kind
-            }))
-        })
-        .collect()
-}
-
-fn fallback_knowledge_versions_count(world: &QatWorld, knowledge_ref: &str) -> usize {
-    knowledge_ref
-        .strip_prefix("knowledge:")
-        .and_then(|knowledge_item_id| world.knowledge_versions_by_ref.get(knowledge_item_id))
-        .copied()
-        .unwrap_or(1)
-}
-
 /// Parse a key=value field from sync validation output.
 /// Format: "artefacts: expected=2 actual=0 missing=2 stale=0 mismatched=0"
 pub fn parse_validation_field(stdout: &str, field: &str) -> Option<usize> {
@@ -303,14 +246,6 @@ fn activate_claude_fallback(world: &QatWorld, reason: &str) -> Result<()> {
     append_world_log(world, &format!("Claude fallback activated: {reason}\n"))?;
     fs::write(world.run_dir().join(CLAUDE_FALLBACK_MARKER), b"1")
         .with_context(|| format!("writing fallback marker in {}", world.run_dir().display()))
-}
-
-fn semantic_clones_fallback_active(world: &QatWorld) -> bool {
-    world.semantic_clones_fallback_active
-        || world
-            .run_dir()
-            .join(SEMANTIC_CLONES_FALLBACK_MARKER)
-            .exists()
 }
 
 fn repo_has_head(world: &QatWorld) -> Result<bool> {
@@ -444,6 +379,12 @@ fn text_has_claude_auth_failure(text: &str) -> bool {
         || combined.contains("authentication required")
 }
 
+fn text_has_missing_production_artefacts_error(text: &str) -> bool {
+    let combined = text.to_ascii_lowercase();
+    combined.contains("no production artefacts found for commit")
+        || combined.contains("materialize production artefacts first")
+}
+
 fn run_claude_code_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
     ensure_claude_authenticated(world)?;
     if claude_fallback_marker_exists(world) {
@@ -554,22 +495,672 @@ fn run_bitloops_with_stdin(
     ensure_success(&output, label)
 }
 
-fn apply_claude_prompt_fallback_edit(world: &QatWorld, prompt: &str) -> Result<()> {
+fn run_deterministic_claude_smoke_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    apply_smoke_prompt_edit(world, prompt)?;
+    simulate_claude_session_for_prompt(world, prompt)
+}
+
+fn run_cursor_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    let session_id = smoke_session_id(world, AGENT_NAME_CURSOR);
+    let transcript_path = smoke_transcript_path(world, AGENT_NAME_CURSOR, "jsonl");
+    let model = "gpt-5.4-mini";
+
+    let payload = serde_json::json!({
+        "conversation_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "prompt": prompt,
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "cursor", "before-submit-prompt"],
+        "bitloops hooks cursor before-submit-prompt",
+        &payload,
+    )?;
+
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    append_cursor_transcript_turn(
+        &transcript_path,
+        prompt,
+        &smoke_response_text(prompt),
+        &file_path,
+    )?;
+
+    let stop_payload = serde_json::json!({
+        "conversation_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "cursor", "stop"],
+        "bitloops hooks cursor stop",
+        &stop_payload,
+    )
+}
+
+fn run_gemini_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    let session_id = smoke_session_id(world, AGENT_NAME_GEMINI);
+    let transcript_path = smoke_transcript_path(world, AGENT_NAME_GEMINI, "json");
+    let model = "gemini-2.5-pro";
+
+    if !transcript_path.exists() {
+        let session_start_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path.display().to_string(),
+            "modelSlug": model,
+        })
+        .to_string();
+        run_bitloops_with_stdin(
+            world,
+            &["hooks", "gemini", "session-start"],
+            "bitloops hooks gemini session-start",
+            &session_start_payload,
+        )?;
+    }
+
+    let before_payload = serde_json::json!({
+        "session_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "prompt": prompt,
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "gemini", "before-agent"],
+        "bitloops hooks gemini before-agent",
+        &before_payload,
+    )?;
+
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    append_gemini_transcript_turn(
+        &transcript_path,
+        prompt,
+        &smoke_response_text(prompt),
+        &file_path,
+    )?;
+
+    let after_payload = serde_json::json!({
+        "session_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "gemini", "after-agent"],
+        "bitloops hooks gemini after-agent",
+        &after_payload,
+    )
+}
+
+fn run_copilot_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    let session_id = smoke_session_id(world, AGENT_NAME_COPILOT);
+    let transcript_path = copilot_transcript_path(world, &session_id);
+    let model = "gpt-5.4";
+
+    if !transcript_path.exists() {
+        let session_start_payload = serde_json::json!({
+            "sessionId": session_id,
+            "initialPrompt": prompt,
+            "modelSlug": model,
+        })
+        .to_string();
+        run_bitloops_with_stdin(
+            world,
+            &["hooks", "copilot", "session-start"],
+            "bitloops hooks copilot session-start",
+            &session_start_payload,
+        )?;
+    }
+
+    let prompt_payload = serde_json::json!({
+        "sessionId": session_id,
+        "prompt": prompt,
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "copilot", "user-prompt-submitted"],
+        "bitloops hooks copilot user-prompt-submitted",
+        &prompt_payload,
+    )?;
+
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    append_copilot_transcript_turn(
+        &transcript_path,
+        prompt,
+        &smoke_response_text(prompt),
+        &file_path,
+    )?;
+
+    let stop_payload = serde_json::json!({
+        "sessionId": session_id,
+        "transcriptPath": transcript_path.display().to_string(),
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "copilot", "agent-stop"],
+        "bitloops hooks copilot agent-stop",
+        &stop_payload,
+    )
+}
+
+fn run_codex_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    let session_id = smoke_session_id(world, AGENT_NAME_CODEX);
+    let transcript_path = smoke_transcript_path(world, AGENT_NAME_CODEX, "jsonl");
+    let model = "gpt-5.4-codex";
+
+    if !transcript_path.exists() {
+        let session_start_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path.display().to_string(),
+            "modelSlug": model,
+        })
+        .to_string();
+        run_bitloops_with_stdin(
+            world,
+            &["hooks", "codex", "session-start"],
+            "bitloops hooks codex session-start",
+            &session_start_payload,
+        )?;
+    }
+
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    append_codex_transcript_turn(
+        &transcript_path,
+        prompt,
+        &smoke_response_text(prompt),
+        &file_path,
+    )?;
+
+    let stop_payload = serde_json::json!({
+        "session_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "modelSlug": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "codex", "stop"],
+        "bitloops hooks codex stop",
+        &stop_payload,
+    )
+}
+
+fn run_opencode_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    let session_id = smoke_session_id(world, AGENT_NAME_OPEN_CODE);
+    let transcript_path = smoke_transcript_path(world, AGENT_NAME_OPEN_CODE, "jsonl");
+
+    if !transcript_path.exists() {
+        let session_start_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path.display().to_string(),
+        })
+        .to_string();
+        run_bitloops_with_stdin(
+            world,
+            &["hooks", "opencode", "session-start"],
+            "bitloops hooks opencode session-start",
+            &session_start_payload,
+        )?;
+    }
+
+    let turn_start_payload = serde_json::json!({
+        "session_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "prompt": prompt,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "opencode", "turn-start"],
+        "bitloops hooks opencode turn-start",
+        &turn_start_payload,
+    )?;
+
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    append_opencode_transcript_turn(
+        &transcript_path,
+        prompt,
+        &smoke_response_text(prompt),
+        &file_path,
+    )?;
+
+    let turn_end_payload = serde_json::json!({
+        "session_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "opencode", "turn-end"],
+        "bitloops hooks opencode turn-end",
+        &turn_end_payload,
+    )
+}
+
+fn smoke_session_id(world: &QatWorld, agent_name: &str) -> String {
+    let run_slug = world
+        .run_dir()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(sanitize_name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "qat-run".to_string());
+    format!("{agent_name}-{run_slug}")
+}
+
+fn smoke_transcript_path(
+    world: &QatWorld,
+    agent_name: &str,
+    extension: &str,
+) -> std::path::PathBuf {
+    let session_id = smoke_session_id(world, agent_name);
+    world
+        .run_dir()
+        .join("agent-sessions")
+        .join(agent_name)
+        .join(format!("{session_id}.{extension}"))
+}
+
+fn copilot_transcript_path(world: &QatWorld, session_id: &str) -> std::path::PathBuf {
+    world
+        .run_dir()
+        .join("home")
+        .join(".copilot")
+        .join("session-state")
+        .join(session_id)
+        .join("events.jsonl")
+}
+
+fn expected_smoke_transcript_path(world: &QatWorld, agent_name: &str) -> std::path::PathBuf {
+    let session_id = smoke_session_id(world, agent_name);
+    match agent_name {
+        AGENT_NAME_COPILOT => copilot_transcript_path(world, &session_id),
+        AGENT_NAME_GEMINI => smoke_transcript_path(world, agent_name, "json"),
+        _ => smoke_transcript_path(world, agent_name, "jsonl"),
+    }
+}
+
+fn find_persisted_session_context_paths(
+    world: &QatWorld,
+    session_id: &str,
+) -> Result<Vec<std::path::PathBuf>> {
+    let home = world.run_dir().join("home");
+    let macos_config = home
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("config.toml");
+    let xdg_config = home.join("xdg").join("bitloops").join("config.toml");
+    let config_path = if macos_config.exists() {
+        macos_config
+    } else {
+        xdg_config
+    };
+    let resolved = resolve_daemon_config(Some(&config_path))
+        .with_context(|| format!("resolving daemon config from {}", config_path.display()))?;
+    let runtime_root = resolved.blob_store_path.join("runtime");
+    if !runtime_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let session_marker = format!("{}/", session_id);
+    let mut pending = vec![runtime_root];
+    let mut matches = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+            let entry = entry.with_context(|| format!("reading entry in {}", dir.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.file_name().and_then(|name| name.to_str()) != Some("context.md") {
+                continue;
+            }
+            let path_text = path.to_string_lossy();
+            if path_text.contains("session-metadata") && path_text.contains(&session_marker) {
+                matches.push(path);
+            }
+        }
+    }
+    matches.sort();
+    Ok(matches)
+}
+
+fn smoke_target_relative_path(world: &QatWorld) -> String {
     let app_path = world.repo_dir().join("my-app").join("src").join("App.tsx");
-    if !app_path.exists() {
-        let fallback_path = world.repo_dir().join(".qat-claude-fallback-change.txt");
+    if app_path.exists() {
+        "my-app/src/App.tsx".to_string()
+    } else if world
+        .repo_dir()
+        .join("src")
+        .join("services")
+        .join("user-service.ts")
+        .exists()
+    {
+        "src/services/user-service.ts".to_string()
+    } else {
+        ".qat-claude-fallback-change.txt".to_string()
+    }
+}
+
+fn smoke_response_text(prompt: &str) -> String {
+    if prompt == FIRST_CLAUDE_PROMPT {
+        "Replaced the Vite example with a simple hello world page.".to_string()
+    } else if prompt == SECOND_CLAUDE_PROMPT {
+        "Changed the hello world color to blue.".to_string()
+    } else {
+        "Applied the requested change.".to_string()
+    }
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn append_jsonl_line(path: &Path, value: &serde_json::Value) -> Result<()> {
+    ensure_parent_dir(path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(value).context("serializing jsonl line")?
+    )
+    .with_context(|| format!("writing {}", path.display()))
+}
+
+fn count_non_empty_lines(path: &Path) -> Result<usize> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let content = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count())
+}
+
+fn append_cursor_transcript_turn(
+    path: &Path,
+    prompt: &str,
+    response: &str,
+    file_path: &str,
+) -> Result<()> {
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "type": "user",
+            "message": {
+                "content": [{"type": "text", "text": prompt}]
+            }
+        }),
+    )?;
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": response},
+                    {"type": "text", "text": format!("Modified {file_path}")}
+                ]
+            }
+        }),
+    )
+}
+
+fn append_gemini_transcript_turn(
+    path: &Path,
+    prompt: &str,
+    response: &str,
+    file_path: &str,
+) -> Result<()> {
+    let mut messages = read_gemini_messages(path)?;
+    let user_index = messages.len() + 1;
+    let tool_name = if prompt == FIRST_CLAUDE_PROMPT {
+        "write_file"
+    } else {
+        "edit_file"
+    };
+
+    messages.push(serde_json::json!({
+        "id": format!("msg-{user_index}"),
+        "type": "user",
+        "content": prompt,
+    }));
+    messages.push(serde_json::json!({
+        "id": format!("msg-{}", user_index + 1),
+        "type": "gemini",
+        "content": response,
+        "toolCalls": [{
+            "id": format!("tool-{user_index}"),
+            "name": tool_name,
+            "args": { "file_path": file_path },
+            "status": "completed"
+        }]
+    }));
+
+    ensure_parent_dir(path)?;
+    fs::write(
+        path,
+        serde_json::to_vec(&serde_json::json!({ "messages": messages }))
+            .context("serializing gemini transcript")?,
+    )
+    .with_context(|| format!("writing {}", path.display()))
+}
+
+fn read_gemini_messages(path: &Path) -> Result<Vec<serde_json::Value>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let data = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    if data.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Ok(Vec::new());
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&data).context("parsing gemini transcript json")?;
+    Ok(parsed
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn append_copilot_transcript_turn(
+    path: &Path,
+    prompt: &str,
+    response: &str,
+    file_path: &str,
+) -> Result<()> {
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "type": "user.message",
+            "data": {
+                "content": prompt
+            }
+        }),
+    )?;
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "type": "tool.execution_complete",
+            "data": {
+                "model": "gpt-5.4",
+                "toolTelemetry": {
+                    "properties": {
+                        "filePaths": serde_json::to_string(&vec![file_path])
+                            .context("serializing copilot file paths")?
+                    }
+                }
+            }
+        }),
+    )?;
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "type": "assistant.message",
+            "data": {
+                "content": response,
+                "outputTokens": 42
+            }
+        }),
+    )
+}
+
+fn append_codex_transcript_turn(
+    path: &Path,
+    prompt: &str,
+    response: &str,
+    file_path: &str,
+) -> Result<()> {
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "id": format!("msg-{}", count_non_empty_lines(path)? + 1),
+            "role": "user",
+            "content": prompt,
+        }),
+    )?;
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "id": format!("msg-{}", count_non_empty_lines(path)? + 1),
+            "role": "assistant",
+            "content": response,
+            "file_path": file_path,
+        }),
+    )
+}
+
+fn append_opencode_transcript_turn(
+    path: &Path,
+    prompt: &str,
+    response: &str,
+    file_path: &str,
+) -> Result<()> {
+    let line_count = count_non_empty_lines(path)?;
+    let user_index = line_count + 1;
+    let created_at = 1_708_300_000_i64 + line_count as i64 * 5;
+    let assistant_index = user_index + 1;
+
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "id": format!("msg-{user_index}"),
+            "role": "user",
+            "content": prompt,
+            "time": {
+                "created": created_at
+            }
+        }),
+    )?;
+    append_jsonl_line(
+        path,
+        &serde_json::json!({
+            "id": format!("msg-{assistant_index}"),
+            "role": "assistant",
+            "content": response,
+            "time": {
+                "created": created_at + 1,
+                "completed": created_at + 2
+            },
+            "tokens": {
+                "input": 128,
+                "output": 64,
+                "reasoning": 8,
+                "cache": {
+                    "read": 4,
+                    "write": 12
+                }
+            },
+            "cost": 0.001,
+            "parts": [
+                {
+                    "type": "text",
+                    "text": response
+                },
+                {
+                    "type": "tool",
+                    "tool": if prompt == FIRST_CLAUDE_PROMPT { "write" } else { "edit" },
+                    "callID": format!("call-{assistant_index}"),
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "file_path": file_path
+                        },
+                        "output": "Applied edit"
+                    }
+                }
+            ]
+        }),
+    )
+}
+
+fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
+    let relative_path = smoke_target_relative_path(world);
+    let full_path = world.repo_dir().join(&relative_path);
+    if relative_path == ".qat-claude-fallback-change.txt" {
         let next = if prompt == SECOND_CLAUDE_PROMPT {
             "color=blue\n"
         } else {
             "hello=bitloops\n"
         };
-        fs::write(&fallback_path, next)
-            .with_context(|| format!("writing {}", fallback_path.display()))?;
-        return Ok(());
+        fs::write(&full_path, next).with_context(|| format!("writing {}", full_path.display()))?;
+        return Ok(relative_path);
     }
 
     let current =
-        fs::read_to_string(&app_path).with_context(|| format!("reading {}", app_path.display()))?;
+        fs::read_to_string(&full_path).with_context(|| format!("reading {}", full_path.display()))?;
+    if relative_path == "src/services/user-service.ts" {
+        let next = if prompt == FIRST_CLAUDE_PROMPT {
+            if current.contains("const normalizedName = name.trim();")
+                && current.contains("normalizedName.toUpperCase()")
+            {
+                current
+            } else {
+                current.replace(
+                    "    return { id: crypto.randomUUID(), name: name.trim() };",
+                    "    const normalizedName = name.trim();\n    return { id: crypto.randomUUID(), name: normalizedName.toUpperCase() };",
+                )
+            }
+        } else if prompt == SECOND_CLAUDE_PROMPT {
+            if current.contains("normalizedName.toLowerCase()") {
+                current
+            } else if current.contains("normalizedName.toUpperCase()") {
+                current.replace("normalizedName.toUpperCase()", "normalizedName.toLowerCase()")
+            } else if current.contains("name: name.trim()") {
+                current.replace(
+                    "    return { id: crypto.randomUUID(), name: name.trim() };",
+                    "    const normalizedName = name.trim();\n    return { id: crypto.randomUUID(), name: normalizedName.toLowerCase() };",
+                )
+            } else {
+                current
+            }
+        } else {
+            current
+        };
+        fs::write(&full_path, next).with_context(|| format!("writing {}", full_path.display()))?;
+        return Ok(relative_path);
+    }
+
     let next = if prompt == FIRST_CLAUDE_PROMPT {
         "export function App() {\n  return <h1>Hello Bitloops</h1>;\n}\n".to_string()
     } else if prompt == SECOND_CLAUDE_PROMPT {
@@ -592,39 +1183,46 @@ fn apply_claude_prompt_fallback_edit(world: &QatWorld, prompt: &str) -> Result<(
         current
     };
 
-    fs::write(&app_path, next).with_context(|| format!("writing {}", app_path.display()))?;
-    Ok(())
+    fs::write(&full_path, next).with_context(|| format!("writing {}", full_path.display()))?;
+    Ok(relative_path)
+}
+
+fn apply_claude_prompt_fallback_edit(world: &QatWorld, prompt: &str) -> Result<()> {
+    apply_smoke_prompt_edit(world, prompt).map(|_| ())
 }
 
 fn simulate_claude_session_for_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
-    let session_id = format!("qat-session-{}", short_run_id());
-    let transcript_path = world.run_dir().join(format!("{session_id}.jsonl"));
-    let transcript_line =
-        serde_json::json!({ "role": "user", "content": prompt, "agent": "claude-code" });
-    fs::write(
+    let session_id = smoke_session_id(world, AGENT_NAME_CLAUDE_CODE);
+    let transcript_path = smoke_transcript_path(world, AGENT_NAME_CLAUDE_CODE, "jsonl");
+    append_jsonl_line(
         &transcript_path,
-        format!(
-            "{}\n",
-            serde_json::to_string(&transcript_line)
-                .context("serializing fallback transcript line")?
-        ),
-    )
-    .with_context(|| format!("writing {}", transcript_path.display()))?;
-
-    let session_start_payload = serde_json::json!({
-        "session_id": session_id.clone(),
-        "transcript_path": transcript_path.display().to_string()
-    })
-    .to_string();
-    run_bitloops_with_stdin(
-        world,
-        &["hooks", "claude-code", "session-start"],
-        "bitloops hooks claude-code session-start",
-        &session_start_payload,
+        &serde_json::json!({ "role": "user", "content": prompt, "agent": AGENT_NAME_CLAUDE_CODE }),
+    )?;
+    append_jsonl_line(
+        &transcript_path,
+        &serde_json::json!({
+            "role": "assistant",
+            "content": smoke_response_text(prompt),
+            "agent": AGENT_NAME_CLAUDE_CODE
+        }),
     )?;
 
+    if count_non_empty_lines(&transcript_path)? == 2 {
+        let session_start_payload = serde_json::json!({
+            "session_id": session_id.clone(),
+            "transcript_path": transcript_path.display().to_string()
+        })
+        .to_string();
+        run_bitloops_with_stdin(
+            world,
+            &["hooks", "claude-code", "session-start"],
+            "bitloops hooks claude-code session-start",
+            &session_start_payload,
+        )?;
+    }
+
     let prompt_payload = serde_json::json!({
-        "session_id": session_id,
+        "session_id": session_id.clone(),
         "transcript_path": transcript_path.display().to_string(),
         "prompt": prompt
     })
@@ -714,7 +1312,13 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
 
 fn build_git_command(world: &QatWorld, args: &[&str], env: &[(&str, OsString)]) -> Command {
     let mut command = Command::new("git");
-    command.args(args).current_dir(world.repo_dir());
+    if args == ["add", "-A"] {
+        command
+            .args(["add", "-A", "--", ".", ":(exclude).bitloops/stores"])
+            .current_dir(world.repo_dir());
+    } else {
+        command.args(args).current_dir(world.repo_dir());
+    }
 
     // Set HOME and XDG dirs so that git hooks (post-commit, post-checkout,
     // post-merge) invoked by this git process resolve daemon state paths to

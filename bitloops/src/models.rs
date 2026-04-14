@@ -7,6 +7,7 @@ pub struct RepositoryRecord {
     pub organization: String,
     pub name: String,
     pub default_branch: Option<String>,
+    pub metadata_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -429,6 +430,9 @@ pub struct StageCoveringTestRecord {
     pub discovery_source: String,
     pub linkage_source: String,
     pub linkage_status: String,
+    pub classification: Option<String>,
+    pub classification_source: Option<String>,
+    pub fan_out: Option<i64>,
 }
 
 /// Per-line coverage row for the `coverage()` stage.

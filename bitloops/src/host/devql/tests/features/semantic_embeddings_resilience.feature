@@ -19,29 +19,37 @@ Feature: Semantic and embeddings resilience BDD scenarios
       """
       [semantic_clones]
       summary_mode = "off"
-      embedding_profile = "default"
 
-      [embeddings.profiles.default]
-      kind = "openai"
-      model = "text-embedding-3-small"
-      api_key = "test-key"
+      [semantic_clones.inference]
+      code_embeddings = "default"
+
+      [inference.profiles.default]
+      task = "embeddings"
+      driver = "bitloops_embeddings_ipc"
+      runtime = "bitloops_embeddings"
+      model = "bge-m3"
+      cache_dir = ".bitloops/embeddings/default"
       """
     When semantic clone health checks run
     Then semantic clone health includes:
       | check                               | healthy | message_fragment                              |
       | semantic_clones.semantic_summaries | true    | semantic summaries disabled                   |
-      | semantic_clones.profile_resolution | true    | embedding profile `default` resolved          |
-      | semantic_clones.runtime_command    | true    | runtime command available                     |
-      | semantic_clones.runtime_handshake  | true    | runtime describe succeeded for profile        |
+      | semantic_clones.profile_resolution | true    | code -> default                               |
+      | semantic_clones.runtime_command    | true    | runtime commands available                    |
+      | semantic_clones.runtime_handshake  | true    | code -> default                               |
 
   Scenario: SE3 Local pull succeeds through the standalone embeddings runtime
     Given a daemon config using the fake embeddings runtime:
       """
-      [semantic_clones]
-      embedding_profile = "local"
+      [semantic_clones.inference]
+      code_embeddings = "local"
 
-      [embeddings.profiles.local]
-      kind = "local_fastembed"
+      [inference.profiles.local]
+      task = "embeddings"
+      driver = "bitloops_embeddings_ipc"
+      runtime = "bitloops_embeddings"
+      model = "bge-m3"
+      cache_dir = ".bitloops/embeddings/local"
       """
     When bitloops embeddings pull runs for profile "local"
     Then the last operation succeeds
@@ -49,28 +57,42 @@ Feature: Semantic and embeddings resilience BDD scenarios
   Scenario: SE4 Doctor reports the active local embedding profile
     Given a daemon config:
       """
-      [semantic_clones]
-      embedding_profile = "local"
+      [semantic_clones.inference]
+      code_embeddings = "local"
 
-      [embeddings.profiles.local]
-      kind = "local_fastembed"
+      [inference.profiles.local]
+      task = "embeddings"
+      driver = "bitloops_embeddings_ipc"
+      runtime = "bitloops_embeddings"
+      model = "bge-m3"
+      cache_dir = ".bitloops/embeddings/local"
+
+      [inference.runtimes.bitloops_embeddings]
+      command = "bitloops-embeddings"
+      args = []
+      startup_timeout_secs = 5
+      request_timeout_secs = 5
       """
     When bitloops embeddings doctor runs
     Then the last operation succeeds
     And the last operation output includes:
-      | line_fragment         |
-      | Profile: local        |
-      | Kind: local_fastembed |
-      | Cache status: missing |
+      | line_fragment               |
+      | Profile: local              |
+      | Kind: bitloops_embeddings_ipc |
+      | Cache status: missing       |
 
   Scenario: SE5 Clear-cache removes the local embedding cache directory
     Given a daemon config:
       """
-      [semantic_clones]
-      embedding_profile = "local"
+      [semantic_clones.inference]
+      code_embeddings = "local"
 
-      [embeddings.profiles.local]
-      kind = "local_fastembed"
+      [inference.profiles.local]
+      task = "embeddings"
+      driver = "bitloops_embeddings_ipc"
+      runtime = "bitloops_embeddings"
+      model = "bge-m3"
+      cache_dir = ".bitloops/embeddings/local"
       """
     And the local embedding cache exists for profile "local"
     When bitloops embeddings clear-cache runs for profile "local"

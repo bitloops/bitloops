@@ -701,7 +701,10 @@ fn cursor_stop_persists_interactions_before_save_step_failure() {
 
 #[test]
 fn cursor_before_submit_prompt_creates_pre_prompt_state() {
-    let (dir, backend, strat) = setup();
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = NoOpStrategy;
 
     with_process_state(Some(dir.path()), &[], || {
         dispatch_cursor_hook(
@@ -1553,51 +1556,53 @@ fn stop_with_empty_session_id_does_not_conflate_existing_session_state() {
 fn stop_saves_step_with_detected_changes() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
-    let strat = RecordingStrategy::default();
+    with_process_state(Some(dir.path()), &[], || {
+        let backend = LocalFileBackend::new(dir.path());
+        let strat = RecordingStrategy::default();
 
-    backend
-        .save_session(&SessionState {
-            session_id: "stop-ctx".to_string(),
-            phase: SessionPhase::Active,
-            ..Default::default()
-        })
+        backend
+            .save_session(&SessionState {
+                session_id: "stop-ctx".to_string(),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .save_pre_prompt(&PrePromptState {
+                session_id: "stop-ctx".to_string(),
+                prompt: "Can you update tracked file?".to_string(),
+                transcript_path: String::new(),
+                untracked_files: vec![],
+                ..Default::default()
+            })
+            .unwrap();
+        fs::write(dir.path().join("tracked.txt"), "two\n").unwrap();
+
+        handle_stop(
+            SessionInfoInput {
+                session_id: "stop-ctx".to_string(),
+                transcript_path: String::new(),
+            },
+            &backend,
+            &strat,
+            Some(dir.path()),
+        )
         .unwrap();
-    backend
-        .save_pre_prompt(&PrePromptState {
-            session_id: "stop-ctx".to_string(),
-            prompt: "Can you update tracked file?".to_string(),
-            transcript_path: String::new(),
-            untracked_files: vec![],
-            ..Default::default()
-        })
-        .unwrap();
-    fs::write(dir.path().join("tracked.txt"), "two\n").unwrap();
 
-    handle_stop(
-        SessionInfoInput {
-            session_id: "stop-ctx".to_string(),
-            transcript_path: String::new(),
-        },
-        &backend,
-        &strat,
-        Some(dir.path()),
-    )
-    .unwrap();
-
-    let calls = strat
-        .step_calls
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert_eq!(calls.len(), 1, "expected one save_step call");
-    let call = &calls[0];
-    assert!(
-        call.modified_files.contains(&"tracked.txt".to_string()),
-        "modified files: {:?}, new files: {:?}",
-        call.modified_files,
-        call.new_files
-    );
-    assert_eq!(call.commit_message, "Update tracked file");
+        let calls = strat
+            .step_calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(calls.len(), 1, "expected one save_step call");
+        let call = &calls[0];
+        assert!(
+            call.modified_files.contains(&"tracked.txt".to_string()),
+            "modified files: {:?}, new files: {:?}",
+            call.modified_files,
+            call.new_files
+        );
+        assert_eq!(call.commit_message, "Update tracked file");
+    });
 }
 
 #[test]

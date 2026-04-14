@@ -115,6 +115,8 @@ curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del
 brew install bitloops/tap/bitloops
 ```
 
+The `bitloops-embeddings` binary is released separately in `bitloops/bitloops-embeddings`. Explicit embeddings setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the managed binary for you. If you are building from source or using a custom runtime, install that binary separately; no Python installation is required.
+
 ## Getting Started
 
 1. Start the daemon and create the global daemon config:
@@ -176,11 +178,14 @@ bitloops uninstall --full
 ## Supported Agents
 
 - [x] Claude Code
-- [x] Codex (currently supports `SessionStart` and `Stop` hooks only; richer hook parity will follow as Codex expands hook coverage)
+- [x] Codex (supports `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop`; Bitloops turn checkpoints come from the normal `UserPromptSubmit`/`Stop` lifecycle, while `PreToolUse`/`PostToolUse` are parsed but do not create separate tool checkpoints)
 - [x] Cursor
 - [x] Gemini
 - [x] Copilot
 - [x] OpenCode
+
+Codex hooks require both `.codex/hooks.json` and `.codex/config.toml` with `[features].codex_hooks = true`.
+Bitloops manages both for `bitloops init --agent codex`, but Codex only honors project-local `.codex/` config in trusted projects.
 
 ## What is DevQL?
 

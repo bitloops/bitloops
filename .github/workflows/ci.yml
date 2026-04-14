@@ -33,6 +33,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -51,9 +52,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       - name: Compile test targets
-        run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
+        run: cargo nextest run -p bitloops --no-default-features --profile ci --no-run
 
   test-full:
     name: Full test suite
@@ -64,6 +66,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -124,31 +127,47 @@ jobs:
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         env:
           DUCKDB_DOWNLOAD_LIB: '0'
-        run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }} --features duckdb-bundled
+        run: cross build --release -p bitloops --target ${{ matrix.target }} --features duckdb-bundled
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
-        run: cargo build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }}
+        run: cargo build --release -p bitloops --target ${{ matrix.target }}
+
+      - name: Stage DuckDB runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = "target/${{ matrix.target }}/release"
+          $dll = Join-Path $binDir "deps/duckdb.dll"
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
+          }
+          Copy-Item $dll (Join-Path $binDir "duckdb.dll") -Force
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: ./bitloops/target/${{ matrix.target }}/release/bitloops --version
+        run: ./target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Linux arm64 via qemu)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: qemu-aarch64 ./bitloops/target/${{ matrix.target }}/release/bitloops --version
+        run: qemu-aarch64 ./target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          & "bitloops/target/${{ matrix.target }}/release/bitloops.exe" --version
+          & "target/${{ matrix.target }}/release/bitloops.exe" --version
 
       - name: Validate Windows arm64 build output
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $path = "bitloops/target/${{ matrix.target }}/release/bitloops.exe"
-          if (-not (Test-Path $path)) {
-            throw "Missing expected binary: $path"
+          $binDir = "target/${{ matrix.target }}/release"
+          $exe = Join-Path $binDir "bitloops.exe"
+          $dll = Join-Path $binDir "duckdb.dll"
+          if (-not (Test-Path $exe)) {
+            throw "Missing expected binary: $exe"
+          }
+          if (-not (Test-Path $dll)) {
+            throw "Missing expected DuckDB runtime: $dll"
           }

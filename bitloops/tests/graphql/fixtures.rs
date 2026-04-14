@@ -15,6 +15,7 @@ use std::time::Duration;
 
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const DAEMON_READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const QUERY_RESULT_READY_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct SeededGraphqlWorkspace {
     pub workspace: Workspace,
@@ -196,7 +197,7 @@ fn wait_until_ready(workdir: &Path, child: &mut Child) -> Result<(), String> {
             "daemon server did not become ready using runtime DB {}\nexpected pid: {expected_pid}\nexpected config root: {}\nlast runtime state: {}\nchild status: {child_status}\nchild stderr:\n{child_stderr}",
             runtime_db_path.display(),
             expected_config_root.display(),
-            last_runtime_state.unwrap_or_else(|| "<none>".to_string())
+            last_runtime_state.unwrap_or_else(|| "<none>".to_string()),
         ))
     })
 }
@@ -217,6 +218,30 @@ pub fn seeded_rust_graphql_workspace(name: &str) -> SeededGraphqlWorkspace {
 pub fn run_query_json(seeded: &SeededGraphqlWorkspace, args: &[&str]) -> Value {
     serde_json::from_str(&run_bitloops_or_panic(seeded.workspace.repo_dir(), args))
         .expect("bitloops output should be valid JSON")
+}
+
+pub fn run_query_json_until(
+    seeded: &SeededGraphqlWorkspace,
+    args: &[&str],
+    ready_description: &str,
+    mut is_ready: impl FnMut(&Value) -> bool,
+) -> Value {
+    let started = std::time::Instant::now();
+    let mut last_output = None;
+
+    while started.elapsed() < QUERY_RESULT_READY_TIMEOUT {
+        let output = run_query_json(seeded, args);
+        if is_ready(&output) {
+            return output;
+        }
+        last_output = Some(output);
+        std::thread::sleep(DAEMON_READY_POLL_INTERVAL);
+    }
+
+    panic!(
+        "timed out waiting for {ready_description}; last output: {:#?}",
+        last_output
+    );
 }
 
 fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {

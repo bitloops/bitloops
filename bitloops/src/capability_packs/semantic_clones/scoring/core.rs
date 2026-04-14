@@ -1,5 +1,62 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SummarySignalSource {
+    Embedding,
+    TextFallback,
+}
+
+impl SummarySignalSource {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedding => "embedding",
+            Self::TextFallback => "text_fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PrimarySemanticDriver {
+    Code,
+    Summary,
+    Balanced,
+    None,
+}
+
+impl PrimarySemanticDriver {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Summary => "summary",
+            Self::Balanced => "balanced",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SemanticInterpretation {
+    StrongDuplicate,
+    SameBehaviourSimilarImplementation,
+    ImplementationReuseDrift,
+    SameBehaviourDifferentImplementation,
+    Unrelated,
+    Mixed,
+}
+
+impl SemanticInterpretation {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::StrongDuplicate => "strong_duplicate",
+            Self::SameBehaviourSimilarImplementation => "same_behaviour_similar_implementation",
+            Self::ImplementationReuseDrift => "implementation_reuse_drift",
+            Self::SameBehaviourDifferentImplementation => "same_behaviour_different_implementation",
+            Self::Unrelated => "unrelated",
+            Self::Mixed => "mixed",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct LexicalSignals {
     pub(super) score: f32,
@@ -31,6 +88,13 @@ pub(super) struct DerivedCloneSignals {
     pub(super) locality_score: f32,
     pub(super) clone_confidence: f32,
     pub(super) summary_similarity: f32,
+    pub(super) summary_text_similarity: f32,
+    pub(super) code_embedding_similarity: f32,
+    pub(super) summary_embedding_similarity: f32,
+    pub(super) summary_embedding_available: bool,
+    pub(super) summary_signal_source: SummarySignalSource,
+    pub(super) primary_semantic_driver: PrimarySemanticDriver,
+    pub(super) interpretation: SemanticInterpretation,
     pub(super) same_file: bool,
     pub(super) same_container: bool,
     pub(super) shared_summary_tokens: Vec<String>,
@@ -42,29 +106,74 @@ pub(super) fn semantic_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> f32 {
-    if source.embedding_setup != target.embedding_setup
-        || source.embedding.is_empty()
-        || target.embedding.is_empty()
-        || source.embedding.len() != target.embedding.len()
+    embedding_similarity(
+        Some(&source.embedding_setup),
+        &source.embedding,
+        Some(&target.embedding_setup),
+        &target.embedding,
+    )
+    .unwrap_or(0.0)
+}
+
+pub(super) fn summary_embedding_similarity(
+    source: &SymbolCloneCandidateInput,
+    target: &SymbolCloneCandidateInput,
+) -> Option<f32> {
+    embedding_similarity(
+        source.summary_embedding_setup.as_ref(),
+        &source.summary_embedding,
+        target.summary_embedding_setup.as_ref(),
+        &target.summary_embedding,
+    )
+}
+
+pub(super) fn combined_semantic_similarity(
+    code_embedding_similarity: f32,
+    summary_embedding_similarity: Option<f32>,
+) -> f32 {
+    match summary_embedding_similarity {
+        Some(summary_embedding_similarity) => ((SEMANTIC_WEIGHT_CODE_EMBEDDING
+            * code_embedding_similarity)
+            + (SEMANTIC_WEIGHT_SUMMARY_EMBEDDING * summary_embedding_similarity))
+            .clamp(0.0, 1.0),
+        None => code_embedding_similarity,
+    }
+}
+
+fn embedding_similarity(
+    left_setup: Option<&EmbeddingSetup>,
+    left_embedding: &[f32],
+    right_setup: Option<&EmbeddingSetup>,
+    right_embedding: &[f32],
+) -> Option<f32> {
+    let (Some(left_setup), Some(right_setup)) = (left_setup, right_setup) else {
+        return None;
+    };
+    if left_setup != right_setup
+        || left_embedding.is_empty()
+        || right_embedding.is_empty()
+        || left_embedding.len() != right_embedding.len()
+        || left_setup.dimension != left_embedding.len()
+        || right_setup.dimension != right_embedding.len()
     {
-        return 0.0;
+        return None;
     }
 
     let mut dot = 0.0_f32;
     let mut left_norm = 0.0_f32;
     let mut right_norm = 0.0_f32;
-    for (left, right) in source.embedding.iter().zip(target.embedding.iter()) {
+    for (left, right) in left_embedding.iter().zip(right_embedding.iter()) {
         dot += left * right;
         left_norm += left * left;
         right_norm += right * right;
     }
 
     if left_norm <= f32::EPSILON || right_norm <= f32::EPSILON {
-        return 0.0;
+        return None;
     }
 
     let cosine = dot / (left_norm.sqrt() * right_norm.sqrt());
-    ((cosine + 1.0) / 2.0).clamp(0.0, 1.0)
+    Some(((cosine + 1.0) / 2.0).clamp(0.0, 1.0))
 }
 
 pub(super) fn lexical_signals(
@@ -143,7 +252,8 @@ pub(super) fn structural_signals(
 pub(super) fn derived_clone_signals(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
-    semantic_score: f32,
+    code_embedding_similarity: f32,
+    summary_embedding_similarity: Option<f32>,
     lexical: &LexicalSignals,
     structural: &StructuralSignals,
 ) -> DerivedCloneSignals {
@@ -152,13 +262,24 @@ pub(super) fn derived_clone_signals(
         .zip(container_identity(&target.symbol_fqn))
         .map(|(left, right)| left == right)
         .unwrap_or(false);
-    let (summary_similarity, shared_summary_tokens) = summary_similarity(source, target);
+    let (summary_text_similarity, shared_summary_tokens) = summary_similarity(source, target);
+    let summary_embedding_available = summary_embedding_similarity.is_some();
+    let summary_signal_source = if summary_embedding_available {
+        SummarySignalSource::Embedding
+    } else {
+        SummarySignalSource::TextFallback
+    };
+    let summary_embedding_similarity = summary_embedding_similarity.unwrap_or(0.0);
+    let summary_similarity = match summary_signal_source {
+        SummarySignalSource::Embedding => summary_embedding_similarity,
+        SummarySignalSource::TextFallback => summary_text_similarity,
+    };
     let implementation_score = ((IMPLEMENTATION_WEIGHT_BODY_OVERLAP * lexical.body_overlap)
         + (IMPLEMENTATION_WEIGHT_CALL_OVERLAP * structural.call_score)
         + (IMPLEMENTATION_WEIGHT_DEPENDENCY_OVERLAP * structural.dependency_score)
         + (IMPLEMENTATION_WEIGHT_IDENTIFIER_OVERLAP * lexical.identifier_overlap)
         + (IMPLEMENTATION_WEIGHT_SIGNATURE_SIMILARITY * lexical.signature_similarity)
-        + (IMPLEMENTATION_WEIGHT_SEMANTIC * semantic_score))
+        + (IMPLEMENTATION_WEIGHT_SEMANTIC * code_embedding_similarity))
         .clamp(0.0, 1.0);
     let locality_score = ((LOCALITY_WEIGHT_SAME_FILE * bool_score(same_file))
         + (LOCALITY_WEIGHT_SAME_CONTAINER * bool_score(same_container))
@@ -176,12 +297,29 @@ pub(super) fn derived_clone_signals(
         clone_confidence = clone_confidence.min(LOCALITY_DOMINANCE_CLONE_CONFIDENCE_CAP);
         bias_warning = Some("same_file_bias".to_string());
     }
+    let interpretation = semantic_interpretation(
+        code_embedding_similarity,
+        summary_similarity,
+        summary_signal_source,
+    );
+    let primary_semantic_driver = primary_semantic_driver(
+        code_embedding_similarity,
+        summary_similarity,
+        interpretation,
+    );
 
     DerivedCloneSignals {
         implementation_score,
         locality_score,
         clone_confidence,
         summary_similarity,
+        summary_text_similarity,
+        code_embedding_similarity,
+        summary_embedding_similarity,
+        summary_embedding_available,
+        summary_signal_source,
+        primary_semantic_driver,
+        interpretation,
         same_file,
         same_container,
         shared_summary_tokens: filter_signal_tokens(shared_summary_tokens),
@@ -199,4 +337,64 @@ pub(super) fn penalized_candidate_score(base_score: f32, derived: &DerivedCloneS
         + (derived.clone_confidence * PENALIZED_CANDIDATE_SCORE_CLONE_CONFIDENCE_WEIGHT))
         .min(PENALIZED_CANDIDATE_SCORE_CAP)
         .clamp(0.0, 1.0)
+}
+
+fn semantic_interpretation(
+    code_embedding_similarity: f32,
+    summary_similarity: f32,
+    summary_signal_source: SummarySignalSource,
+) -> SemanticInterpretation {
+    let code_high = code_embedding_similarity >= MULTI_VIEW_HIGH_SIMILARITY_THRESHOLD;
+    let summary_high = summary_similarity >= MULTI_VIEW_HIGH_SIMILARITY_THRESHOLD;
+    let code_low = code_embedding_similarity <= MULTI_VIEW_LOW_SIMILARITY_THRESHOLD;
+    let summary_low = summary_similarity <= MULTI_VIEW_LOW_SIMILARITY_THRESHOLD;
+
+    if summary_signal_source == SummarySignalSource::TextFallback {
+        return match (code_high, summary_high, code_low, summary_low) {
+            (true, true, _, _) => SemanticInterpretation::SameBehaviourSimilarImplementation,
+            (_, _, true, true) => SemanticInterpretation::Unrelated,
+            _ => SemanticInterpretation::Mixed,
+        };
+    }
+
+    match (code_high, summary_high, code_low, summary_low) {
+        (true, true, _, _) => SemanticInterpretation::SameBehaviourSimilarImplementation,
+        (true, false, _, true)
+            if (code_embedding_similarity - summary_similarity)
+                >= MULTI_VIEW_SIMILARITY_GAP_THRESHOLD =>
+        {
+            SemanticInterpretation::ImplementationReuseDrift
+        }
+        (false, true, true, _)
+            if (summary_similarity - code_embedding_similarity)
+                >= MULTI_VIEW_SIMILARITY_GAP_THRESHOLD =>
+        {
+            SemanticInterpretation::SameBehaviourDifferentImplementation
+        }
+        (_, _, true, true) => SemanticInterpretation::Unrelated,
+        _ => SemanticInterpretation::Mixed,
+    }
+}
+
+fn primary_semantic_driver(
+    code_embedding_similarity: f32,
+    summary_similarity: f32,
+    interpretation: SemanticInterpretation,
+) -> PrimarySemanticDriver {
+    if interpretation == SemanticInterpretation::Unrelated {
+        return PrimarySemanticDriver::None;
+    }
+
+    if interpretation == SemanticInterpretation::SameBehaviourSimilarImplementation
+        || (code_embedding_similarity - summary_similarity).abs()
+            < MULTI_VIEW_SIMILARITY_GAP_THRESHOLD
+    {
+        return PrimarySemanticDriver::Balanced;
+    }
+
+    if code_embedding_similarity > summary_similarity {
+        PrimarySemanticDriver::Code
+    } else {
+        PrimarySemanticDriver::Summary
+    }
 }

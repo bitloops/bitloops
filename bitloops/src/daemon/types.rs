@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 pub(super) const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
@@ -10,7 +11,7 @@ pub(super) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops.daemon";
 pub(crate) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
 pub(super) const SUPERVISOR_SERVICE_STATE_FILE_NAME: &str = "supervisor-service.json";
 pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(20);
-pub(super) const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -221,7 +222,7 @@ pub struct SupervisorServiceMetadata {
     pub service_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DaemonHealthSummary {
     pub relational_backend: Option<String>,
     pub relational_connected: Option<bool>,
@@ -293,24 +294,207 @@ impl Default for EnrichmentQueueState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+pub struct FailedEmbeddingJobSummary {
+    pub job_id: String,
+    pub repo_id: String,
+    pub branch: String,
+    pub representation_kind: String,
+    pub artefact_count: u64,
+    pub attempts: u32,
+    pub error: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BlockedMailboxStatus {
+    pub mailbox_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct EnrichmentQueueStatus {
     pub state: EnrichmentQueueState,
     pub persisted: bool,
+    pub embeddings_gate: Option<EmbeddingsBootstrapGateStatus>,
+    pub blocked_mailboxes: Vec<BlockedMailboxStatus>,
+    pub last_failed_embedding: Option<FailedEmbeddingJobSummary>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SyncTaskSource {
+pub enum EmbeddingsBootstrapReadiness {
+    Pending,
+    Ready,
+    Failed,
+}
+
+impl fmt::Display for EmbeddingsBootstrapReadiness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Ready => write!(f, "ready"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapGateEntry {
+    pub config_path: PathBuf,
+    pub profile_name: String,
+    pub readiness: EmbeddingsBootstrapReadiness,
+    pub active_task_id: Option<String>,
+    pub last_error: Option<String>,
+    pub last_updated_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapState {
+    pub version: u8,
+    pub entries: BTreeMap<String, EmbeddingsBootstrapGateEntry>,
+    pub last_action: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+impl Default for EmbeddingsBootstrapState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            entries: BTreeMap::new(),
+            last_action: Some("initialized".to_string()),
+            updated_at_unix: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbeddingsBootstrapGateStatus {
+    pub blocked: bool,
+    pub readiness: Option<EmbeddingsBootstrapReadiness>,
+    pub reason: Option<String>,
+    pub active_task_id: Option<String>,
+    pub profile_name: Option<String>,
+    pub config_path: Option<PathBuf>,
+    pub last_error: Option<String>,
+    pub last_updated_unix: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityEventRunStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl fmt::Display for CapabilityEventRunStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityEventRunRecord {
+    pub run_id: String,
+    pub repo_id: String,
+    pub capability_id: String,
+    #[serde(default)]
+    pub consumer_id: String,
+    #[serde(default)]
+    pub handler_id: String,
+    #[serde(default)]
+    pub from_generation_seq: u64,
+    #[serde(default)]
+    pub to_generation_seq: u64,
+    #[serde(default)]
+    pub reconcile_mode: String,
+    #[serde(default)]
+    pub event_kind: String,
+    #[serde(default)]
+    pub lane_key: String,
+    #[serde(default)]
+    pub event_payload_json: String,
+    pub status: CapabilityEventRunStatus,
+    pub attempts: u32,
+    pub submitted_at_unix: u64,
+    pub started_at_unix: Option<u64>,
+    pub updated_at_unix: u64,
+    pub completed_at_unix: Option<u64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityEventQueueState {
+    pub version: u8,
+    pub pending_runs: u64,
+    pub running_runs: u64,
+    pub failed_runs: u64,
+    pub completed_recent_runs: u64,
+    pub last_action: Option<String>,
+    pub last_updated_unix: u64,
+}
+
+impl Default for CapabilityEventQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            pending_runs: 0,
+            running_runs: 0,
+            failed_runs: 0,
+            completed_recent_runs: 0,
+            last_action: Some("initialized".to_string()),
+            last_updated_unix: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilityEventQueueStatus {
+    pub state: CapabilityEventQueueState,
+    pub persisted: bool,
+    pub current_repo_run: Option<CapabilityEventRunRecord>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DevqlTaskKind {
+    Sync,
+    Ingest,
+    EmbeddingsBootstrap,
+}
+
+impl fmt::Display for DevqlTaskKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sync => write!(f, "sync"),
+            Self::Ingest => write!(f, "ingest"),
+            Self::EmbeddingsBootstrap => write!(f, "embeddings_bootstrap"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DevqlTaskSource {
     Init,
     ManualCli,
     Watcher,
     PostCommit,
     PostMerge,
     PostCheckout,
+    RepoPolicyChange,
 }
 
-impl fmt::Display for SyncTaskSource {
+impl fmt::Display for DevqlTaskSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Init => write!(f, "init"),
@@ -319,6 +503,7 @@ impl fmt::Display for SyncTaskSource {
             Self::PostCommit => write!(f, "post_commit"),
             Self::PostMerge => write!(f, "post_merge"),
             Self::PostCheckout => write!(f, "post_checkout"),
+            Self::RepoPolicyChange => write!(f, "repo_policy_change"),
         }
     }
 }
@@ -347,7 +532,7 @@ impl fmt::Display for SyncTaskMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SyncTaskStatus {
+pub enum DevqlTaskStatus {
     Queued,
     Running,
     Completed,
@@ -355,7 +540,7 @@ pub enum SyncTaskStatus {
     Cancelled,
 }
 
-impl fmt::Display for SyncTaskStatus {
+impl fmt::Display for DevqlTaskStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Queued => write!(f, "queued"),
@@ -368,7 +553,111 @@ impl fmt::Display for SyncTaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SyncTaskRecord {
+pub struct SyncTaskSpec {
+    pub mode: SyncTaskMode,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IngestTaskSpec {
+    pub backfill: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapTaskSpec {
+    pub config_path: PathBuf,
+    pub profile_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum DevqlTaskSpec {
+    Sync(SyncTaskSpec),
+    Ingest(IngestTaskSpec),
+    EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingsBootstrapPhase {
+    Queued,
+    PreparingConfig,
+    ResolvingRelease,
+    DownloadingRuntime,
+    ExtractingRuntime,
+    RewritingRuntime,
+    WarmingProfile,
+    Complete,
+    Failed,
+}
+
+impl EmbeddingsBootstrapPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::PreparingConfig => "preparing_config",
+            Self::ResolvingRelease => "resolving_release",
+            Self::DownloadingRuntime => "downloading_runtime",
+            Self::ExtractingRuntime => "extracting_runtime",
+            Self::RewritingRuntime => "rewriting_runtime",
+            Self::WarmingProfile => "warming_profile",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapProgress {
+    pub phase: EmbeddingsBootstrapPhase,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: u64,
+    pub bytes_total: Option<u64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+impl Default for EmbeddingsBootstrapProgress {
+    fn default() -> Self {
+        Self {
+            phase: EmbeddingsBootstrapPhase::Queued,
+            asset_name: None,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            version: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingsBootstrapResult {
+    pub version: Option<String>,
+    pub binary_path: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
+    pub runtime_name: Option<String>,
+    pub model_name: Option<String>,
+    pub freshly_installed: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum DevqlTaskProgress {
+    Sync(crate::host::devql::SyncProgressUpdate),
+    Ingest(crate::host::devql::IngestionProgressUpdate),
+    EmbeddingsBootstrap(EmbeddingsBootstrapProgress),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum DevqlTaskResult {
+    Sync(Box<crate::host::devql::SyncSummary>),
+    Ingest(crate::host::devql::IngestionCounters),
+    EmbeddingsBootstrap(EmbeddingsBootstrapResult),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DevqlTaskRecord {
     pub task_id: String,
     pub repo_id: String,
     pub repo_name: String,
@@ -378,68 +667,180 @@ pub struct SyncTaskRecord {
     #[serde(alias = "config_root", default)]
     pub daemon_config_root: PathBuf,
     pub repo_root: PathBuf,
-    pub source: SyncTaskSource,
-    pub mode: SyncTaskMode,
-    pub status: SyncTaskStatus,
+    pub kind: DevqlTaskKind,
+    pub source: DevqlTaskSource,
+    pub spec: DevqlTaskSpec,
+    pub status: DevqlTaskStatus,
     pub submitted_at_unix: u64,
     pub started_at_unix: Option<u64>,
     pub updated_at_unix: u64,
     pub completed_at_unix: Option<u64>,
     pub queue_position: Option<u64>,
     pub tasks_ahead: Option<u64>,
-    pub progress: crate::host::devql::SyncProgressUpdate,
+    pub progress: DevqlTaskProgress,
     pub error: Option<String>,
-    pub summary: Option<crate::host::devql::SyncSummary>,
+    pub result: Option<DevqlTaskResult>,
 }
 
-impl SyncTaskRecord {
+impl DevqlTaskRecord {
     pub fn normalise_legacy_values(&mut self) {
         if self.daemon_config_root.as_os_str().is_empty() {
             self.daemon_config_root = self.repo_root.clone();
         }
     }
+
+    pub fn sync_spec(&self) -> Option<&SyncTaskSpec> {
+        match &self.spec {
+            DevqlTaskSpec::Sync(spec) => Some(spec),
+            DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        }
+    }
+
+    pub fn ingest_spec(&self) -> Option<&IngestTaskSpec> {
+        match &self.spec {
+            DevqlTaskSpec::Sync(_) => None,
+            DevqlTaskSpec::Ingest(spec) => Some(spec),
+            DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        }
+    }
+
+    pub fn embeddings_bootstrap_spec(&self) -> Option<&EmbeddingsBootstrapTaskSpec> {
+        match &self.spec {
+            DevqlTaskSpec::EmbeddingsBootstrap(spec) => Some(spec),
+            DevqlTaskSpec::Sync(_) | DevqlTaskSpec::Ingest(_) => None,
+        }
+    }
+
+    pub fn sync_progress(&self) -> Option<&crate::host::devql::SyncProgressUpdate> {
+        match &self.progress {
+            DevqlTaskProgress::Sync(progress) => Some(progress),
+            DevqlTaskProgress::Ingest(_) | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
+        }
+    }
+
+    pub fn ingest_progress(&self) -> Option<&crate::host::devql::IngestionProgressUpdate> {
+        match &self.progress {
+            DevqlTaskProgress::Sync(_) | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
+            DevqlTaskProgress::Ingest(progress) => Some(progress),
+        }
+    }
+
+    pub fn embeddings_bootstrap_progress(&self) -> Option<&EmbeddingsBootstrapProgress> {
+        match &self.progress {
+            DevqlTaskProgress::EmbeddingsBootstrap(progress) => Some(progress),
+            DevqlTaskProgress::Sync(_) | DevqlTaskProgress::Ingest(_) => None,
+        }
+    }
+
+    pub fn sync_result(&self) -> Option<&crate::host::devql::SyncSummary> {
+        match &self.result {
+            Some(DevqlTaskResult::Sync(result)) => Some(result.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn ingest_result(&self) -> Option<&crate::host::devql::IngestionCounters> {
+        match &self.result {
+            Some(DevqlTaskResult::Ingest(result)) => Some(result),
+            _ => None,
+        }
+    }
+
+    pub fn embeddings_bootstrap_result(&self) -> Option<&EmbeddingsBootstrapResult> {
+        match &self.result {
+            Some(DevqlTaskResult::EmbeddingsBootstrap(result)) => Some(result),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncQueueState {
-    pub version: u8,
-    pub pending_tasks: u64,
+pub struct RepoTaskControlState {
+    pub repo_id: String,
+    pub paused: bool,
+    pub paused_reason: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevqlTaskKindCounts {
+    pub kind: DevqlTaskKind,
+    pub queued_tasks: u64,
     pub running_tasks: u64,
     pub failed_tasks: u64,
     pub completed_recent_tasks: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevqlTaskQueueState {
+    pub version: u8,
+    pub queued_tasks: u64,
+    pub running_tasks: u64,
+    pub failed_tasks: u64,
+    pub completed_recent_tasks: u64,
+    pub by_kind: Vec<DevqlTaskKindCounts>,
     pub last_action: Option<String>,
     pub last_updated_unix: u64,
 }
 
-impl Default for SyncQueueState {
+impl Default for DevqlTaskQueueState {
     fn default() -> Self {
         Self {
             version: 1,
-            pending_tasks: 0,
+            queued_tasks: 0,
             running_tasks: 0,
             failed_tasks: 0,
             completed_recent_tasks: 0,
+            by_kind: default_devql_task_kind_counts(),
             last_action: Some("initialized".to_string()),
             last_updated_unix: 0,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SyncQueueStatus {
-    pub state: SyncQueueState,
+#[derive(Debug, Clone, Serialize)]
+pub struct DevqlTaskQueueStatus {
+    pub state: DevqlTaskQueueState,
     pub persisted: bool,
-    pub current_repo_task: Option<SyncTaskRecord>,
+    pub current_repo_tasks: Vec<DevqlTaskRecord>,
+    pub current_repo_control: Option<RepoTaskControlState>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+pub struct DevqlTaskControlResult {
+    pub message: String,
+    pub control: RepoTaskControlState,
+}
+
+fn default_devql_task_kind_counts() -> Vec<DevqlTaskKindCounts> {
+    vec![
+        DevqlTaskKindCounts {
+            kind: DevqlTaskKind::Sync,
+            queued_tasks: 0,
+            running_tasks: 0,
+            failed_tasks: 0,
+            completed_recent_tasks: 0,
+        },
+        DevqlTaskKindCounts {
+            kind: DevqlTaskKind::Ingest,
+            queued_tasks: 0,
+            running_tasks: 0,
+            failed_tasks: 0,
+            completed_recent_tasks: 0,
+        },
+    ]
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DaemonStatusReport {
     pub runtime: Option<DaemonRuntimeState>,
     pub service: Option<DaemonServiceMetadata>,
     pub service_running: bool,
     pub health: Option<DaemonHealthSummary>,
+    pub current_state_consumers: Option<CapabilityEventQueueStatus>,
+    pub capability_events: Option<CapabilityEventQueueStatus>,
     pub enrichment: Option<EnrichmentQueueStatus>,
-    pub sync: Option<SyncQueueStatus>,
+    pub devql_tasks: Option<DevqlTaskQueueStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

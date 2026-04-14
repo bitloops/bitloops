@@ -33,6 +33,7 @@ pub(crate) struct PreparedRemoval {
 pub(crate) struct PreparedSyncItem {
     pub(crate) index: usize,
     pub(crate) desired: DesiredFileState,
+    pub(crate) effective_content: String,
     pub(crate) extraction: CachedExtraction,
     pub(crate) prepared_rows: PreparedMaterialisationRows,
     pub(crate) cache_store_retention_class: Option<&'static str>,
@@ -58,6 +59,7 @@ pub(crate) struct PreparedSyncOutcome {
     pub(crate) cache_hit: bool,
     pub(crate) cache_miss: bool,
     pub(crate) parse_error: bool,
+    pub(crate) error_message: Option<String>,
     pub(crate) stats: PreparedPathStats,
 }
 
@@ -94,9 +96,10 @@ impl SyncBatch {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct WriterCommitOutcome {
     pub(crate) materialized_paths: Vec<String>,
+    pub(crate) materialized_items: Vec<PreparedSyncItem>,
     pub(crate) removed_paths: Vec<String>,
     pub(crate) pre_artefacts: Vec<DiffArtefactRecord>,
     pub(crate) post_artefacts: Vec<DiffArtefactRecord>,
@@ -290,6 +293,7 @@ impl SqliteSyncWriter {
                 .context("committing SQLite sync writer transaction")?;
             Ok(WriterCommitOutcome {
                 materialized_paths,
+                materialized_items: batch.items,
                 removed_paths: Vec::new(),
                 pre_artefacts,
                 post_artefacts,
@@ -323,6 +327,7 @@ impl SqliteSyncWriter {
                 .context("committing SQLite sync cache touch transaction")?;
             Ok(WriterCommitOutcome {
                 materialized_paths: Vec::new(),
+                materialized_items: Vec::new(),
                 removed_paths: Vec::new(),
                 pre_artefacts: Vec::new(),
                 post_artefacts: Vec::new(),
@@ -368,6 +373,7 @@ impl SqliteSyncWriter {
                 .context("committing SQLite removal transaction")?;
             Ok(WriterCommitOutcome {
                 materialized_paths: Vec::new(),
+                materialized_items: Vec::new(),
                 removed_paths,
                 pre_artefacts,
                 post_artefacts: Vec::new(),
@@ -397,6 +403,7 @@ impl SqliteSyncWriter {
             } else {
                 WriterCommitOutcome {
                     materialized_paths: Vec::new(),
+                    materialized_items: Vec::new(),
                     removed_paths: Vec::new(),
                     pre_artefacts: Vec::new(),
                     post_artefacts: Vec::new(),
@@ -420,8 +427,9 @@ pub(crate) async fn prepare_sync_item(
     index: usize,
     parser_version: Arc<String>,
     extractor_version: Arc<String>,
-) -> Result<PreparedSyncOutcome> {
-    tokio::task::spawn_blocking(move || {
+) -> PreparedSyncOutcome {
+    let path_for_error = desired.path.clone();
+    let joined = tokio::task::spawn_blocking(move || {
         let pooled_connection = pool.checkout()?;
         prepare_sync_item_with_connection(
             pooled_connection.connection(),
@@ -432,8 +440,28 @@ pub(crate) async fn prepare_sync_item(
             extractor_version.as_str(),
         )
     })
-    .await
-    .context("joining sync prepare worker task")?
+    .await;
+
+    match joined {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(err)) => prepare_failure_outcome(path_for_error, format!("{err:#}")),
+        Err(err) => prepare_failure_outcome(
+            path_for_error,
+            format!("joining sync prepare worker task failed: {err}"),
+        ),
+    }
+}
+
+fn prepare_failure_outcome(path: String, error_message: String) -> PreparedSyncOutcome {
+    PreparedSyncOutcome {
+        path,
+        prepared_item: None,
+        cache_hit: false,
+        cache_miss: true,
+        parse_error: true,
+        error_message: Some(error_message),
+        stats: PreparedPathStats::default(),
+    }
 }
 
 fn prepare_sync_item_with_connection(
@@ -445,19 +473,78 @@ fn prepare_sync_item_with_connection(
     extractor_version: &str,
 ) -> Result<PreparedSyncOutcome> {
     let mut stats = PreparedPathStats::default();
+    let retention_class = determine_retention_class(&desired);
+    let path = desired.path.clone();
+
+    if desired.analysis_mode == crate::host::devql::AnalysisMode::TrackOnly {
+        let extraction = CachedExtraction {
+            content_id: desired.effective_content_id.clone(),
+            language: desired.language.clone(),
+            extraction_fingerprint: desired.extraction_fingerprint.clone(),
+            parser_version: parser_version.to_string(),
+            extractor_version: extractor_version.to_string(),
+            parse_status: crate::host::devql::sync::extraction::PARSE_STATUS_OK.to_string(),
+            artefacts: Vec::new(),
+            edges: Vec::new(),
+        };
+        let materialisation_prep_started = Instant::now();
+        let prepared_rows = prepare_materialization_rows(
+            cfg,
+            &desired,
+            &extraction,
+            parser_version,
+            extractor_version,
+        )?;
+        stats.materialisation_prep = materialisation_prep_started.elapsed();
+        return Ok(PreparedSyncOutcome {
+            path,
+            prepared_item: Some(PreparedSyncItem {
+                index,
+                desired,
+                effective_content: String::new(),
+                extraction,
+                prepared_rows,
+                cache_store_retention_class: None,
+                cache_touch_key: None,
+                promote_cache_entry_to_git_backed: false,
+            }),
+            cache_hit: false,
+            cache_miss: false,
+            parse_error: false,
+            error_message: None,
+            stats,
+        });
+    }
 
     let cache_lookup_started = Instant::now();
     let cached = lookup_cached_content_with_connection(
         connection,
         &desired.effective_content_id,
         &desired.language,
+        &desired.extraction_fingerprint,
         parser_version,
         extractor_version,
     )?;
     stats.cache_lookup = cache_lookup_started.elapsed();
 
-    let retention_class = determine_retention_class(&desired);
-    let path = desired.path.clone();
+    let content = match read_effective_content(cfg, &desired) {
+        Ok(content) => content,
+        Err(_err) if desired.language == crate::host::devql::PLAIN_TEXT_LANGUAGE_ID => {
+            return Ok(PreparedSyncOutcome {
+                path,
+                prepared_item: None,
+                cache_hit: false,
+                cache_miss: true,
+                parse_error: true,
+                error_message: None,
+                stats,
+            });
+        }
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("reading effective content for `{}`", desired.path));
+        }
+    };
 
     let (
         extraction,
@@ -479,22 +566,25 @@ fn prepare_sync_item_with_connection(
                 Some(CacheKey {
                     content_id: desired.effective_content_id.clone(),
                     language: desired.language.clone(),
+                    extraction_fingerprint: desired.extraction_fingerprint.clone(),
                     parser_version: parser_version.to_string(),
                     extractor_version: extractor_version.to_string(),
                 }),
             )
         }
         None => {
-            let content = read_effective_content(cfg, &desired)
-                .with_context(|| format!("reading effective content for `{}`", desired.path))?;
             let extraction_started = Instant::now();
             let Some(extraction) = crate::host::devql::sync::extraction::extract_to_cache_format(
                 cfg,
-                &desired.path,
-                &desired.effective_content_id,
-                parser_version,
-                extractor_version,
-                &content,
+                crate::host::devql::sync::extraction::CacheExtractionRequest {
+                    path: &desired.path,
+                    language: &desired.language,
+                    content_id: &desired.effective_content_id,
+                    extraction_fingerprint: &desired.extraction_fingerprint,
+                    parser_version,
+                    extractor_version,
+                    content: &content,
+                },
             )
             .with_context(|| format!("extracting `{}` into sync cache format", desired.path))?
             else {
@@ -505,6 +595,7 @@ fn prepare_sync_item_with_connection(
                     cache_hit: false,
                     cache_miss: true,
                     parse_error: true,
+                    error_message: None,
                     stats,
                 });
             };
@@ -528,6 +619,7 @@ fn prepare_sync_item_with_connection(
         prepared_item: Some(PreparedSyncItem {
             index,
             desired,
+            effective_content: content,
             extraction,
             prepared_rows,
             cache_store_retention_class,
@@ -537,6 +629,7 @@ fn prepare_sync_item_with_connection(
         cache_hit,
         cache_miss,
         parse_error,
+        error_message: None,
         stats,
     })
 }

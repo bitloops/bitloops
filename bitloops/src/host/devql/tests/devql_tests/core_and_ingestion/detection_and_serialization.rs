@@ -21,8 +21,8 @@ fn detect_language_prefers_registered_language_pack_profiles() {
     assert_eq!(detect_language("src/main.go"), "go");
     assert_eq!(detect_language("src/Main.java"), "java");
     assert_eq!(detect_language("src/main.cs"), "csharp");
-    assert_eq!(detect_language("src/readme.custom"), "custom");
-    assert_eq!(detect_language("README"), "text");
+    assert_eq!(detect_language("src/readme.custom"), "plain_text");
+    assert_eq!(detect_language("README"), "plain_text");
 }
 
 #[tokio::test]
@@ -61,7 +61,7 @@ async fn upsert_current_state_for_unregistered_language_keeps_file_level_state_o
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("read current file row");
-    assert_eq!(file_row.0, "custom");
+    assert_eq!(file_row.0, "plain_text");
     assert_eq!(file_row.1, "file");
 
     let symbol_count: i64 = conn

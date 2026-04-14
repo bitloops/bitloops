@@ -142,6 +142,8 @@ async fn sync_changed_paths(
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
+    let paths =
+        filter_paths_for_sync(cfg, &paths).context("classifying watcher capture paths for sync")?;
     if paths.is_empty() {
         return Ok(());
     }
@@ -156,14 +158,58 @@ async fn sync_changed_paths(
 
     #[cfg(not(test))]
     {
-        crate::daemon::enqueue_sync_for_config(
+        crate::host::devql::enqueue_spooled_sync_task(
             cfg,
-            crate::daemon::SyncTaskSource::Watcher,
+            crate::daemon::DevqlTaskSource::Watcher,
             crate::host::devql::SyncMode::Paths(paths),
         )
-        .context("queueing DevQL sync for watcher capture paths")?;
+        .context("queueing DevQL sync for watcher capture paths in repo-local spool")?;
         Ok(())
     }
+}
+
+fn filter_paths_for_sync(
+    cfg: &crate::host::devql::DevqlConfig,
+    paths: &[String],
+) -> Result<Vec<String>> {
+    let exclusion_matcher = crate::host::devql::load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for watcher capture sync")?;
+    let (parser_version, extractor_version) = resolve_pack_versions_for_capture()
+        .context("resolving language pack versions for watcher capture sync")?;
+    let classifier = crate::host::devql::ProjectAwareClassifier::discover_for_worktree(
+        &cfg.repo_root,
+        paths.iter().map(String::as_str),
+        &parser_version,
+        &extractor_version,
+    )
+    .context("building project-aware classifier for watcher capture sync")?;
+    let mut filtered = Vec::new();
+    for path in paths {
+        let classification = classifier
+            .classify_repo_relative_path(path, exclusion_matcher.excludes_repo_relative_path(path))
+            .with_context(|| format!("classifying watcher capture path `{path}`"))?;
+        if classification.analysis_mode != crate::host::devql::AnalysisMode::Excluded {
+            filtered.push(path.clone());
+        }
+    }
+    Ok(filtered)
+}
+
+fn resolve_pack_versions_for_capture() -> Result<(String, String)> {
+    let host = crate::host::devql::core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
 }
 
 #[cfg(test)]
@@ -201,6 +247,11 @@ mod tests {
             "bitloops-test@example.com",
         );
         write_test_daemon_config(dir.path());
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"watch-capture-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write Cargo.toml");
         fs::create_dir_all(dir.path().join("src")).expect("create src dir");
         fs::write(
             dir.path().join("src/lib.rs"),

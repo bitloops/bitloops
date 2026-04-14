@@ -6,7 +6,8 @@ pub(super) fn test_state(
     bundle_dir: PathBuf,
 ) -> DashboardState {
     let db = crate::api::DashboardDbPools::default();
-    let state = DashboardState {
+    DashboardState {
+        config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
         config_root: repo_root.clone(),
         repo_registry_path: None,
         subscription_hub: crate::graphql::SubscriptionHub::new_arc(),
@@ -16,9 +17,8 @@ pub(super) fn test_state(
         mode,
         db,
         bundle_dir,
-    };
-    crate::daemon::activate_sync_worker(state.subscription_hub());
-    state
+        bundle_source_overrides: crate::api::DashboardBundleSourceOverrides::default(),
+    }
 }
 
 pub(super) fn seed_dashboard_repo() -> TempDir {

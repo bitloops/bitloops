@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -19,6 +20,7 @@ pub struct SqliteRuntimeStore;
 
 #[derive(Debug, Clone)]
 pub struct RepoSqliteRuntimeStore {
+    pub(crate) config_root: PathBuf,
     pub(crate) repo_root: PathBuf,
     pub(crate) repo_id: String,
     pub(crate) db_path: PathBuf,
@@ -40,7 +42,49 @@ pub struct DaemonSqliteRuntimeStore {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSyncQueueState {
     pub version: u8,
-    pub tasks: Vec<crate::daemon::SyncTaskRecord>,
+    pub tasks: Vec<LegacySyncTaskRecord>,
+    pub last_action: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LegacySyncTaskRecord {
+    pub task_id: String,
+    pub repo_id: String,
+    pub repo_name: String,
+    pub repo_provider: String,
+    pub repo_organisation: String,
+    pub repo_identity: String,
+    #[serde(alias = "config_root", default)]
+    pub daemon_config_root: PathBuf,
+    pub repo_root: PathBuf,
+    pub source: crate::daemon::DevqlTaskSource,
+    pub mode: crate::daemon::SyncTaskMode,
+    pub status: crate::daemon::DevqlTaskStatus,
+    pub submitted_at_unix: u64,
+    pub started_at_unix: Option<u64>,
+    pub updated_at_unix: u64,
+    pub completed_at_unix: Option<u64>,
+    pub queue_position: Option<u64>,
+    pub tasks_ahead: Option<u64>,
+    pub progress: crate::host::devql::SyncProgressUpdate,
+    pub error: Option<String>,
+    pub summary: Option<crate::host::devql::SyncSummary>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedDevqlTaskQueueState {
+    pub version: u8,
+    pub tasks: Vec<crate::daemon::DevqlTaskRecord>,
+    pub repo_controls: BTreeMap<String, crate::daemon::RepoTaskControlState>,
+    pub last_action: Option<String>,
+    pub updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedCapabilityEventQueueState {
+    pub version: u8,
+    pub runs: Vec<crate::daemon::CapabilityEventRunRecord>,
     pub last_action: Option<String>,
     pub updated_at_unix: u64,
 }
@@ -169,7 +213,46 @@ impl Default for PersistedSyncQueueState {
     }
 }
 
+impl Default for PersistedDevqlTaskQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            tasks: Vec::new(),
+            repo_controls: BTreeMap::new(),
+            last_action: Some("initialized".to_string()),
+            updated_at_unix: 0,
+        }
+    }
+}
+
+impl Default for PersistedCapabilityEventQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            runs: Vec::new(),
+            last_action: Some("initialized".to_string()),
+            updated_at_unix: 0,
+        }
+    }
+}
+
 impl PersistedSyncQueueState {
+    pub(crate) fn normalise_legacy_values(&mut self) {
+        for task in &mut self.tasks {
+            task.normalise_legacy_values();
+        }
+    }
+}
+
+impl LegacySyncTaskRecord {
+    pub(crate) fn normalise_legacy_values(&mut self) {
+        if self.daemon_config_root.as_os_str().is_empty() {
+            self.daemon_config_root = self.repo_root.clone();
+        }
+    }
+}
+
+impl PersistedDevqlTaskQueueState {
     pub(crate) fn normalise_legacy_values(&mut self) {
         for task in &mut self.tasks {
             task.normalise_legacy_values();

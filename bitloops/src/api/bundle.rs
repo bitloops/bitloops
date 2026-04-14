@@ -25,8 +25,9 @@ pub(super) async fn check_bundle_version(
 ) -> Result<BundleCheckResult, BundleError> {
     let current_cli_version = current_cli_version()?;
     let local_version = read_local_bundle_version(&state.bundle_dir)?;
-    let manifest = fetch_manifest().await?;
-    let resolved = resolve_latest_applicable(&manifest.versions, &current_cli_version)?;
+    let manifest = fetch_manifest_for_state(state).await?;
+    let resolved =
+        resolve_latest_applicable_for_state(&manifest.versions, &current_cli_version, state)?;
 
     let result = match resolved {
         Some(latest) => match local_version.as_deref() {
@@ -64,8 +65,9 @@ pub(super) async fn fetch_bundle(
     state: &DashboardState,
 ) -> Result<BundleInstallResult, BundleError> {
     let current_cli_version = current_cli_version()?;
-    let manifest = fetch_manifest().await?;
-    let Some(resolved) = resolve_latest_applicable(&manifest.versions, &current_cli_version)?
+    let manifest = fetch_manifest_for_state(state).await?;
+    let Some(resolved) =
+        resolve_latest_applicable_for_state(&manifest.versions, &current_cli_version, state)?
     else {
         return Err(BundleError::NoCompatibleVersion);
     };
@@ -116,8 +118,10 @@ fn read_local_bundle_version(bundle_dir: &Path) -> Result<Option<String>, Bundle
     }
 }
 
-async fn fetch_manifest() -> Result<BundleVersionsManifest, BundleError> {
-    let manifest_url = manifest_url()?;
+async fn fetch_manifest_for_state(
+    state: &DashboardState,
+) -> Result<BundleVersionsManifest, BundleError> {
+    let manifest_url = manifest_url_for_state(state)?;
     let body = download_text(&manifest_url)
         .await
         .map_err(|err| match err {
@@ -129,7 +133,27 @@ async fn fetch_manifest() -> Result<BundleVersionsManifest, BundleError> {
         .map_err(|err| BundleError::ManifestParseFailed(format!("invalid manifest JSON: {err}")))
 }
 
-fn manifest_url() -> Result<String, BundleError> {
+fn manifest_url_for_state(state: &DashboardState) -> Result<String, BundleError> {
+    manifest_url_from_overrides(Some(&state.bundle_source_overrides))
+}
+
+fn manifest_url_from_overrides(
+    overrides: Option<&crate::api::DashboardBundleSourceOverrides>,
+) -> Result<String, BundleError> {
+    if let Some(explicit_manifest_url) = overrides.and_then(|item| item.manifest_url.as_deref()) {
+        let trimmed = explicit_manifest_url.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    if let Some(explicit_base_url) = overrides.and_then(|item| item.cdn_base_url.as_deref()) {
+        let trimmed = explicit_base_url.trim();
+        if !trimmed.is_empty() {
+            return join_url(trimmed, MANIFEST_FILE_NAME);
+        }
+    }
+
     if let Ok(explicit_manifest_url) = env::var(DASHBOARD_MANIFEST_URL_ENV) {
         let trimmed = explicit_manifest_url.trim();
         if !trimmed.is_empty() {
@@ -218,9 +242,22 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, BundleError> {
         })
 }
 
-fn resolve_latest_applicable(
+fn resolve_latest_applicable_for_state(
     versions: &[BundleVersionEntry],
     current_cli_version: &Version,
+    state: &DashboardState,
+) -> Result<Option<ResolvedBundleVersion>, BundleError> {
+    resolve_latest_applicable_from_overrides(
+        versions,
+        current_cli_version,
+        Some(&state.bundle_source_overrides),
+    )
+}
+
+fn resolve_latest_applicable_from_overrides(
+    versions: &[BundleVersionEntry],
+    current_cli_version: &Version,
+    overrides: Option<&crate::api::DashboardBundleSourceOverrides>,
 ) -> Result<Option<ResolvedBundleVersion>, BundleError> {
     let mut best: Option<(Version, ResolvedBundleVersion)> = None;
 
@@ -236,8 +273,8 @@ fn resolve_latest_applicable(
             ))
         })?;
 
-        let download_url = resolve_entry_url(&entry.download_url)?;
-        let checksum_url = resolve_entry_url(&entry.checksum_url)?;
+        let download_url = resolve_entry_url_from_overrides(&entry.download_url, overrides)?;
+        let checksum_url = resolve_entry_url_from_overrides(&entry.checksum_url, overrides)?;
 
         let resolved = ResolvedBundleVersion {
             version: parsed_version.to_string(),
@@ -256,9 +293,19 @@ fn resolve_latest_applicable(
     Ok(best.map(|(_, resolved)| resolved))
 }
 
-fn resolve_entry_url(raw: &str) -> Result<String, BundleError> {
+fn resolve_entry_url_from_overrides(
+    raw: &str,
+    overrides: Option<&crate::api::DashboardBundleSourceOverrides>,
+) -> Result<String, BundleError> {
     if raw.starts_with("http://") || raw.starts_with("https://") {
         return Ok(raw.to_string());
+    }
+
+    if let Some(explicit_base_url) = overrides.and_then(|item| item.cdn_base_url.as_deref()) {
+        let trimmed = explicit_base_url.trim();
+        if !trimmed.is_empty() {
+            return join_url(trimmed, raw);
+        }
     }
 
     if let Ok(explicit_base_url) = env::var(DASHBOARD_CDN_BASE_URL_ENV) {
@@ -509,6 +556,24 @@ mod tests {
     use crate::test_support::process_state::with_env_vars;
     use tempfile::TempDir;
 
+    fn state_with_bundle_overrides(
+        overrides: crate::api::DashboardBundleSourceOverrides,
+    ) -> DashboardState {
+        DashboardState {
+            config_path: PathBuf::from("."),
+            config_root: PathBuf::from("."),
+            repo_root: PathBuf::from("."),
+            repo_registry_path: None,
+            mode: crate::api::ServeMode::HelloWorld,
+            db: crate::api::DashboardDbPools::default(),
+            bundle_dir: PathBuf::from("."),
+            bundle_source_overrides: overrides,
+            subscription_hub: crate::graphql::SubscriptionHub::new_arc(),
+            devql_schema: crate::graphql::build_global_schema_template(),
+            devql_slim_schema: crate::graphql::build_slim_schema_template(),
+        }
+    }
+
     #[test]
     fn manifest_url_uses_compiled_default_when_env_missing() {
         with_env_vars(
@@ -517,7 +582,8 @@ mod tests {
                 (DASHBOARD_CDN_BASE_URL_ENV, None),
             ],
             || {
-                let actual = manifest_url().expect("manifest URL should resolve");
+                let actual =
+                    manifest_url_from_overrides(None).expect("manifest URL should resolve");
                 assert_eq!(
                     actual,
                     dashboard_env::DASHBOARD_MANIFEST_URL,
@@ -541,7 +607,8 @@ mod tests {
                 ),
             ],
             || {
-                let actual = manifest_url().expect("manifest URL should resolve");
+                let actual =
+                    manifest_url_from_overrides(None).expect("manifest URL should resolve");
                 assert_eq!(
                     actual, "https://override.example.com/bundle_versions.json",
                     "manifest env override should have highest priority"
@@ -561,14 +628,40 @@ mod tests {
                 ),
             ],
             || {
-                let actual =
-                    resolve_entry_url("bundle.tar.zst").expect("relative URL should resolve");
+                let actual = resolve_entry_url_from_overrides("bundle.tar.zst", None)
+                    .expect("relative URL should resolve");
                 assert_eq!(
                     actual, "https://cdn-override.example.com/bundle.tar.zst",
                     "relative URL should use CDN env override when present"
                 );
             },
         );
+    }
+
+    #[test]
+    fn manifest_url_for_state_prefers_state_manifest_override() {
+        let state = state_with_bundle_overrides(crate::api::DashboardBundleSourceOverrides {
+            cdn_base_url: Some("https://cdn-override.example.com/".to_string()),
+            manifest_url: Some("https://override.example.com/bundle_versions.json".to_string()),
+        });
+
+        let actual = manifest_url_for_state(&state).expect("manifest URL should resolve");
+        assert_eq!(actual, "https://override.example.com/bundle_versions.json");
+    }
+
+    #[test]
+    fn resolve_entry_url_for_state_prefers_state_cdn_override_for_relative_paths() {
+        let state = state_with_bundle_overrides(crate::api::DashboardBundleSourceOverrides {
+            cdn_base_url: Some("https://cdn-override.example.com/".to_string()),
+            manifest_url: None,
+        });
+
+        let actual = resolve_entry_url_from_overrides(
+            "bundle.tar.zst",
+            Some(&state.bundle_source_overrides),
+        )
+        .expect("relative URL should resolve");
+        assert_eq!(actual, "https://cdn-override.example.com/bundle.tar.zst");
     }
 
     #[test]
@@ -629,7 +722,8 @@ mod tests {
             entry("1.4.1", "1.0.0", "latest"),
         ];
 
-        let resolved = resolve_latest_applicable(&versions, &current).expect("resolve latest");
+        let resolved = resolve_latest_applicable_from_overrides(&versions, &current, None)
+            .expect("resolve latest");
         assert_eq!(resolved.map(|v| v.version), Some("1.4.1".to_string()));
     }
 
@@ -641,7 +735,8 @@ mod tests {
             entry("3.0.0", "3.0.0", "latest"),
         ];
 
-        let resolved = resolve_latest_applicable(&versions, &current).expect("resolve latest");
+        let resolved = resolve_latest_applicable_from_overrides(&versions, &current, None)
+            .expect("resolve latest");
         assert!(resolved.is_none());
     }
 
@@ -650,7 +745,8 @@ mod tests {
         let current = Version::parse("1.4.0").expect("parse current");
         let versions = vec![entry("not-semver", "1.0.0", "latest")];
 
-        let err = resolve_latest_applicable(&versions, &current).expect_err("should fail");
+        let err = resolve_latest_applicable_from_overrides(&versions, &current, None)
+            .expect_err("should fail");
         match err {
             BundleError::ManifestParseFailed(_) => {}
             other => panic!("unexpected error: {other:?}"),
@@ -780,7 +876,8 @@ mod tests {
         let current = Version::parse("1.2.0").expect("parse current");
         let versions = vec![entry("1.3.0", "1.0.0", "1.x.x")];
 
-        let err = resolve_latest_applicable(&versions, &current).expect_err("must fail");
+        let err = resolve_latest_applicable_from_overrides(&versions, &current, None)
+            .expect_err("must fail");
         match err {
             BundleError::ManifestParseFailed(_) => {}
             other => panic!("unexpected error: {other:?}"),

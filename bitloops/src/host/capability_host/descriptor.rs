@@ -1,3 +1,5 @@
+use crate::host::inference::InferenceSlotDescriptor;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilityDependency {
     pub capability_id: &'static str,
@@ -15,4 +17,5 @@ pub struct CapabilityDescriptor {
     pub experimental: bool,
     pub dependencies: &'static [CapabilityDependency],
     pub required_host_features: &'static [&'static str],
+    pub inference_slots: &'static [InferenceSlotDescriptor],
 }

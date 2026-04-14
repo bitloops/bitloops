@@ -56,6 +56,14 @@ fn validate_materialization_inputs(
             extraction.language
         ));
     }
+    if desired.extraction_fingerprint != extraction.extraction_fingerprint {
+        return Err(anyhow!(
+            "extraction fingerprint mismatch for `{}`: desired `{}` != cached `{}`",
+            desired.path,
+            desired.extraction_fingerprint,
+            extraction.extraction_fingerprint
+        ));
+    }
     if extraction.parser_version != parser_version {
         return Err(anyhow!(
             "parser version mismatch for `{}`: expected `{}` != cached `{}`",
@@ -216,7 +224,13 @@ pub(super) fn parse_cached_language_kind(
     let parsed = match language {
         "csharp" => CSharpKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::csharp),
         "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
-        "java" => JavaKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::java),
+        "java" => JavaKind::from_tree_sitter_kind(raw_kind)
+            .or(match raw_kind {
+                // Historical caches may carry TS-flavoured names for Java class nodes.
+                "class_declaration" => Some(JavaKind::Class),
+                _ => None,
+            })
+            .map(LanguageKind::java),
         "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
         "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
         "typescript" | "javascript" => {

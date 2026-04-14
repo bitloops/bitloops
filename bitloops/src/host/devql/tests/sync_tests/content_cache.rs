@@ -3,6 +3,8 @@ use tempfile::tempdir;
 
 use super::fixtures::sqlite_relational_store_with_sync_schema;
 
+const TEST_EXTRACTION_FINGERPRINT: &str = "sync-test-fingerprint";
+
 #[tokio::test]
 async fn content_cache_lookup_returns_none_on_cache_miss() {
     let temp = tempdir().expect("temp dir");
@@ -13,6 +15,7 @@ async fn content_cache_lookup_returns_none_on_cache_miss() {
         &relational,
         "content-1",
         "rust",
+        TEST_EXTRACTION_FINGERPRINT,
         "parser-v1",
         "extractor-v1",
     )
@@ -30,6 +33,7 @@ async fn content_cache_store_then_lookup_roundtrips_payload() {
     let expected = crate::host::devql::sync::content_cache::CachedExtraction {
         content_id: "content-1".to_string(),
         language: "rust".to_string(),
+        extraction_fingerprint: TEST_EXTRACTION_FINGERPRINT.to_string(),
         parser_version: "parser-v1".to_string(),
         extractor_version: "extractor-v1".to_string(),
         parse_status: "ok".to_string(),
@@ -68,6 +72,7 @@ async fn content_cache_store_then_lookup_roundtrips_payload() {
         &relational,
         &expected.content_id,
         &expected.language,
+        &expected.extraction_fingerprint,
         &expected.parser_version,
         &expected.extractor_version,
     )
@@ -90,6 +95,7 @@ async fn content_cache_lookup_respects_parser_and_extractor_versions() {
     let extraction = crate::host::devql::sync::content_cache::CachedExtraction {
         content_id: "content-versions".to_string(),
         language: "rust".to_string(),
+        extraction_fingerprint: TEST_EXTRACTION_FINGERPRINT.to_string(),
         parser_version: "parser-a".to_string(),
         extractor_version: "extractor-a".to_string(),
         parse_status: "ok".to_string(),
@@ -119,6 +125,7 @@ async fn content_cache_lookup_respects_parser_and_extractor_versions() {
         &relational,
         &extraction.content_id,
         &extraction.language,
+        &extraction.extraction_fingerprint,
         &extraction.parser_version,
         &extraction.extractor_version,
     )
@@ -129,6 +136,7 @@ async fn content_cache_lookup_respects_parser_and_extractor_versions() {
         &relational,
         &extraction.content_id,
         &extraction.language,
+        TEST_EXTRACTION_FINGERPRINT,
         "parser-b",
         "extractor-b",
     )

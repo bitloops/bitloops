@@ -33,7 +33,7 @@ impl PostCommitArtefactRefreshStats {
         }
     }
 
-    fn queued(files_seen: usize, queued: crate::daemon::SyncEnqueueResult) -> Self {
+    fn queued(files_seen: usize, queued: crate::daemon::DevqlTaskEnqueueResult) -> Self {
         Self {
             files_seen,
             files_indexed: 0,
@@ -100,6 +100,7 @@ async fn sync_changed_paths(
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
+    let paths = filter_refresh_paths_for_sync(cfg, &paths, source_hook)?;
 
     let stats = PostCommitArtefactRefreshStats {
         files_seen: paths.len(),
@@ -125,9 +126,9 @@ async fn sync_changed_paths(
     #[cfg(not(test))]
     {
         let source = match source_hook {
-            "post-commit" => crate::daemon::SyncTaskSource::PostCommit,
-            "post-merge" => crate::daemon::SyncTaskSource::PostMerge,
-            _ => crate::daemon::SyncTaskSource::ManualCli,
+            "post-commit" => crate::daemon::DevqlTaskSource::PostCommit,
+            "post-merge" => crate::daemon::DevqlTaskSource::PostMerge,
+            _ => crate::daemon::DevqlTaskSource::ManualCli,
         };
         let queued = crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
             .with_context(|| format!("queueing DevQL sync for {source_hook} refresh"))?;
@@ -136,6 +137,54 @@ async fn sync_changed_paths(
             queued,
         ))
     }
+}
+
+fn filter_refresh_paths_for_sync(
+    cfg: &DevqlConfig,
+    paths: &[String],
+    source_hook: &str,
+) -> Result<Vec<String>> {
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root).with_context(|| {
+        format!("loading repo policy exclusions for {source_hook} path refresh")
+    })?;
+    let (parser_version, extractor_version) =
+        resolve_pack_versions_for_refresh().with_context(|| {
+            format!("resolving language pack versions for {source_hook} path refresh")
+        })?;
+    let classifier = ProjectAwareClassifier::discover_for_worktree(
+        &cfg.repo_root,
+        paths.iter().map(String::as_str),
+        &parser_version,
+        &extractor_version,
+    )
+    .with_context(|| format!("building classifier for {source_hook} path refresh"))?;
+    let mut filtered = Vec::new();
+    for path in paths {
+        let classification = classifier
+            .classify_repo_relative_path(path, exclusion_matcher.excludes_repo_relative_path(path))
+            .with_context(|| format!("classifying {source_hook} refresh path `{path}`"))?;
+        if classification.analysis_mode != AnalysisMode::Excluded {
+            filtered.push(path.clone());
+        }
+    }
+    Ok(filtered)
+}
+
+fn resolve_pack_versions_for_refresh() -> Result<(String, String)> {
+    let host = core_extension_host()?;
+    let mut packs = host
+        .language_packs()
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| host.language_packs().resolve_pack(pack_id))
+        .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+        .collect::<Vec<_>>();
+    packs.sort();
+    let joined = packs.join("+");
+    Ok((
+        format!("devql-sync-parser@{joined}"),
+        format!("devql-sync-extractor@{joined}"),
+    ))
 }
 
 async fn refresh_checkpoint_projection_for_commit(
@@ -189,7 +238,7 @@ pub async fn run_post_checkout_branch_seed(
     {
         crate::daemon::enqueue_sync_for_config(
             cfg,
-            crate::daemon::SyncTaskSource::PostCheckout,
+            crate::daemon::DevqlTaskSource::PostCheckout,
             SyncMode::Full,
         )
         .context("queueing full DevQL sync for post-checkout branch seed")?;
@@ -205,11 +254,14 @@ fn is_zero_git_oid(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::{SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus};
+    use crate::daemon::{
+        DevqlTaskKind, DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec,
+        DevqlTaskStatus, SyncTaskMode, SyncTaskSpec,
+    };
 
-    fn sample_queued_result() -> crate::daemon::SyncEnqueueResult {
-        crate::daemon::SyncEnqueueResult {
-            task: SyncTaskRecord {
+    fn sample_queued_result() -> crate::daemon::DevqlTaskEnqueueResult {
+        crate::daemon::DevqlTaskEnqueueResult {
+            task: DevqlTaskRecord {
                 task_id: "sync-task-123".to_string(),
                 repo_id: "repo-1".to_string(),
                 repo_name: "demo".to_string(),
@@ -218,20 +270,23 @@ mod tests {
                 repo_identity: "local/demo".to_string(),
                 daemon_config_root: PathBuf::from("/tmp/repo"),
                 repo_root: PathBuf::from("/tmp/repo"),
-                source: SyncTaskSource::PostCommit,
-                mode: SyncTaskMode::Paths {
-                    paths: vec!["src/lib.rs".to_string()],
-                },
-                status: SyncTaskStatus::Queued,
+                kind: DevqlTaskKind::Sync,
+                source: DevqlTaskSource::PostCommit,
+                spec: DevqlTaskSpec::Sync(SyncTaskSpec {
+                    mode: SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                }),
+                status: DevqlTaskStatus::Queued,
                 submitted_at_unix: 1,
                 started_at_unix: None,
                 updated_at_unix: 1,
                 completed_at_unix: None,
                 queue_position: Some(3),
                 tasks_ahead: Some(2),
-                progress: SyncProgressUpdate::default(),
+                progress: DevqlTaskProgress::Sync(SyncProgressUpdate::default()),
                 error: None,
-                summary: None,
+                result: None,
             },
             merged: true,
         }

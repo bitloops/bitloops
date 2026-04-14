@@ -140,8 +140,9 @@ pub(super) async fn run(
     };
     let repo_root = config_root.clone();
 
-    // Bootstrap DevQL schema on daemon start (idempotent).
-    if let Ok(repo_identity) = crate::host::devql::resolve_repo_identity(&repo_root)
+    if options.bootstrap_devql_schema
+        // Bootstrap DevQL schema on startup (idempotent).
+        && let Ok(repo_identity) = crate::host::devql::resolve_repo_identity(&repo_root)
         && let Err(err) = crate::host::devql::ensure_relational_and_events_schema(
             &config_root,
             &repo_root,
@@ -149,7 +150,7 @@ pub(super) async fn run(
         )
         .await
     {
-        log::warn!("DevQL schema bootstrap on daemon start failed: {err:#}");
+        log::warn!("DevQL schema bootstrap on startup failed: {err:#}");
         startup_warnings.push(format!("Warning: DevQL schema bootstrap failed: {err:#}"));
     }
 
@@ -220,17 +221,26 @@ pub(super) async fn run(
     }
 
     let state = DashboardState {
+        config_path: options
+            .config_path
+            .clone()
+            .unwrap_or_else(|| config_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH)),
         config_root: config_root.clone(),
         repo_root,
         repo_registry_path: options.repo_registry_path.clone(),
         mode: serve_mode,
         db: db_init.pools,
         bundle_dir,
+        bundle_source_overrides: super::DashboardBundleSourceOverrides::default(),
         subscription_hub: graphql::SubscriptionHub::new_arc(),
         devql_schema,
         devql_slim_schema,
     };
-    crate::daemon::activate_sync_worker(state.subscription_hub());
+    crate::daemon::activate_task_worker(
+        &state.config_root,
+        state.repo_registry_path.as_deref(),
+        state.subscription_hub(),
+    );
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {

@@ -17,6 +17,30 @@ pub(super) fn compile_artefact_args(
     Ok(args)
 }
 
+pub(super) fn compile_select_artefacts_args(
+    parsed: &ParsedDevqlQuery,
+) -> Result<Vec<GraphqlArgument>> {
+    let Some(selector) = parsed.select_artefacts.as_ref() else {
+        return Ok(Vec::new());
+    };
+
+    let mut fields = Vec::new();
+    if let Some(symbol_fqn) = selector.symbol_fqn.as_deref() {
+        fields.push(format!("symbolFqn: {}", quote_graphql_string(symbol_fqn)));
+    }
+    if let Some(path) = selector.path.as_deref() {
+        fields.push(format!("path: {}", quote_graphql_string(path)));
+    }
+    if let Some((start, end)) = selector.lines {
+        fields.push(format!("lines: {{ start: {start}, end: {end} }}"));
+    }
+
+    Ok(vec![GraphqlArgument::new(
+        "by",
+        format!("{{ {} }}", fields.join(", ")),
+    )])
+}
+
 pub(super) fn compile_checkpoint_args(parsed: &ParsedDevqlQuery) -> Result<Vec<GraphqlArgument>> {
     let mut args = Vec::new();
     if let Some(agent) = parsed.checkpoints.agent.as_deref() {
@@ -29,6 +53,22 @@ pub(super) fn compile_checkpoint_args(parsed: &ParsedDevqlQuery) -> Result<Vec<G
         ));
     }
     args.extend(first_arg(parsed.has_limit_stage.then_some(parsed.limit)));
+    Ok(args)
+}
+
+pub(super) fn compile_selection_checkpoint_args(
+    parsed: &ParsedDevqlQuery,
+) -> Result<Vec<GraphqlArgument>> {
+    let mut args = Vec::new();
+    if let Some(agent) = parsed.checkpoints.agent.as_deref() {
+        args.push(GraphqlArgument::new("agent", quote_graphql_string(agent)));
+    }
+    if let Some(since) = parsed.checkpoints.since.as_deref() {
+        args.push(GraphqlArgument::new(
+            "since",
+            compile_datetime_literal(since)?,
+        ));
+    }
     Ok(args)
 }
 
@@ -65,6 +105,28 @@ pub(super) fn compile_deps_args(
     args
 }
 
+pub(super) fn compile_selection_deps_args(parsed: &ParsedDevqlQuery) -> Vec<GraphqlArgument> {
+    let mut args = Vec::new();
+    if let Some(kind) = parsed.deps.kind {
+        args.push(GraphqlArgument::new("kind", enum_literal(kind.as_str())));
+    }
+    if parsed.deps.direction != super::super::DepsDirection::Both {
+        args.push(GraphqlArgument::new(
+            "direction",
+            enum_literal(parsed.deps.direction.as_str()),
+        ));
+    }
+    args.push(GraphqlArgument::new(
+        "includeUnresolved",
+        if parsed.deps.include_unresolved {
+            "true"
+        } else {
+            "false"
+        },
+    ));
+    args
+}
+
 pub(super) fn compile_clones_args(
     parsed: &ParsedDevqlQuery,
     first: Option<usize>,
@@ -74,6 +136,20 @@ pub(super) fn compile_clones_args(
         args.push(GraphqlArgument::new("filter", filter));
     }
     args.extend(first_arg(first));
+    args
+}
+
+pub(super) fn compile_selection_clones_args(parsed: &ParsedDevqlQuery) -> Vec<GraphqlArgument> {
+    let mut args = Vec::new();
+    if let Some(relation_kind) = parsed.clones.relation_kind.as_deref() {
+        args.push(GraphqlArgument::new(
+            "relationKind",
+            quote_graphql_string(relation_kind),
+        ));
+    }
+    if let Some(min_score) = parsed.clones.min_score {
+        args.push(GraphqlArgument::new("minScore", min_score.to_string()));
+    }
     args
 }
 
@@ -164,6 +240,23 @@ pub(super) fn compile_tests_args(
     Ok(args)
 }
 
+pub(super) fn compile_selection_tests_args(stage: &RegisteredStageCall) -> Vec<GraphqlArgument> {
+    let mut args = Vec::new();
+    if let Some(min_confidence) = stage.args.get("min_confidence") {
+        args.push(GraphqlArgument::new(
+            "minConfidence",
+            min_confidence.clone(),
+        ));
+    }
+    if let Some(linkage_source) = stage.args.get("linkage_source") {
+        args.push(GraphqlArgument::new(
+            "linkageSource",
+            quote_graphql_string(linkage_source),
+        ));
+    }
+    args
+}
+
 pub(super) fn compile_coverage_args(
     parsed: &ParsedDevqlQuery,
     include_filter: bool,
@@ -207,9 +300,14 @@ pub(super) fn compile_deps_filter_input(parsed: &ParsedDevqlQuery) -> Option<Str
         "direction: {}",
         enum_literal(parsed.deps.direction.as_str())
     ));
-    if parsed.deps.include_unresolved {
-        fields.push("includeUnresolved: true".to_string());
-    }
+    fields.push(format!(
+        "includeUnresolved: {}",
+        if parsed.deps.include_unresolved {
+            "true"
+        } else {
+            "false"
+        }
+    ));
 
     (!fields.is_empty()).then(|| format!("{{ {} }}", fields.join(", ")))
 }
@@ -224,6 +322,13 @@ pub(super) fn compile_clones_filter_input(parsed: &ParsedDevqlQuery) -> Option<S
     }
     if let Some(min_score) = parsed.clones.min_score {
         fields.push(format!("minScore: {min_score}"));
+    }
+    if let Some(neighbors) = parsed.clones.neighbors {
+        let clamped = neighbors.clamp(
+            crate::capability_packs::semantic_clones::scoring::MIN_ANN_NEIGHBORS as i64,
+            crate::capability_packs::semantic_clones::scoring::MAX_ANN_NEIGHBORS as i64,
+        );
+        fields.push(format!("neighbors: {clamped}"));
     }
 
     (!fields.is_empty()).then(|| format!("{{ {} }}", fields.join(", ")))

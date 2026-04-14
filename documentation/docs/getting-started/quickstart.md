@@ -54,11 +54,15 @@ Use plain `bitloops init` when the daemon is already running. Use `bitloops init
 
 This creates or updates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
 
+When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile, installs the managed standalone `bitloops-embeddings` runtime when the default local runtime is selected, and warms that profile. If init also runs sync or ingest, the managed runtime download happens afterwards.
+
+In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
+
 `bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
 
 In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
 
-That initial sync only reconciles current workspace state. Use `bitloops devql ingest` separately when you want checkpoint, commit, and event history materialised.
+That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` separately, when you want checkpoint, commit, and event history materialised.
 
 If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 
@@ -100,7 +104,7 @@ bitloops start --until-stopped
 The daemon automatically initialises the DevQL schema on startup. You can ingest and query immediately:
 
 ```bash
-bitloops devql ingest
+bitloops devql tasks enqueue --kind ingest
 bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
 ```
 
@@ -111,16 +115,16 @@ DevQL CLI queries are DSL only when the input contains `->`. Otherwise the CLI t
 When you want to reconcile `artefacts_current`/`artefact_edges_current` with the current workspace:
 
 ```bash
-bitloops devql sync
-bitloops devql sync --status
+bitloops devql tasks enqueue --kind sync
+bitloops devql tasks enqueue --kind sync --status
 ```
 
-By default, `bitloops devql sync` queues a sync task and returns immediately after printing the task id. Use `--status` when you want the CLI to follow that task until it reaches a terminal state.
+By default, `bitloops devql tasks enqueue --kind sync` queues a sync task and returns immediately after printing the task id. Use `--status` when you want the CLI to follow that task until it reaches a terminal state.
 
 When you want to validate that current-state rows match a full-project reconciliation without writing changes:
 
 ```bash
-bitloops devql sync --validate --status
+bitloops devql tasks enqueue --kind sync --validate --status
 ```
 
 Use `--validate` as a diagnostic check when debugging drift between source files and current-state query results.
@@ -141,9 +145,15 @@ bitloops checkpoints status --detailed
 ```bash
 bitloops disable
 bitloops enable
+bitloops enable --install-embeddings
+bitloops daemon enable --install-embeddings
 ```
 
-These commands edit the nearest discovered project policy and leave installed hooks in place. If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask again before it edits project policy.
+These commands edit the nearest discovered project policy and leave installed hooks in place. `bitloops daemon enable` is an alias to the same implementation.
+
+Use `--install-embeddings` when you want Bitloops to add the default local embeddings profile to the effective daemon config and run the existing runtime warm/bootstrap path. When that path targets the default local runtime, Bitloops installs the managed standalone `bitloops-embeddings` binary automatically. In an interactive terminal, plain `bitloops enable` offers that setup automatically with a default-yes `[Y/n]` prompt when embeddings are not already configured.
+
+If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask again before it edits project policy.
 
 ## Remove Bitloops Later
 

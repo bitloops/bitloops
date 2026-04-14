@@ -164,6 +164,7 @@ where
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn resolve_optional_env_indirection<F>(
     raw: Option<String>,
     env_lookup: &F,
@@ -174,6 +175,7 @@ where
     raw.and_then(|value| resolve_optional_env_indirection_str(&value, env_lookup))
 }
 
+#[allow(dead_code)]
 fn resolve_optional_env_indirection_str<F>(raw: &str, env_lookup: &F) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,

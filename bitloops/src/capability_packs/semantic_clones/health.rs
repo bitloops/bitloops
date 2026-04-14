@@ -1,44 +1,48 @@
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, SemanticCloneEmbeddingMode, SemanticSummaryMode,
-    default_daemon_config_path, resolve_embedding_capability_config_for_repo,
-    resolve_store_semantic_config_for_repo,
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
+use crate::capability_packs::semantic_clones::runtime_config::embedding_slot_for_representation;
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
+    SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
 };
+use crate::config::{InferenceTask, SemanticSummaryMode};
 use crate::host::capability_host::CapabilityHealthContext;
 use crate::host::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
 
-use super::embeddings::{EmbeddingProviderConfig, build_symbol_embedding_provider};
-use super::extension_descriptor::build_semantic_summary_provider;
-use super::features::SemanticSummaryProviderConfig;
+use super::runtime_config::{
+    embeddings_enabled, resolve_selected_summary_slot, resolve_semantic_clones_config,
+};
+use super::types::SEMANTIC_CLONES_CAPABILITY_ID;
 
 fn check_semantic_clones_semantic_summaries(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if capability.semantic_clones.summary_mode == SemanticSummaryMode::Off {
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.semantic_summaries",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    if config.summary_mode == SemanticSummaryMode::Off {
         return CapabilityHealthResult::ok("semantic summaries disabled");
     }
 
-    let semantic_cfg = resolve_store_semantic_config_for_repo(ctx.repo_root());
-    let provider = semantic_cfg
-        .semantic_provider
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if provider.is_empty() || matches!(provider.as_str(), "none" | "disabled") {
+    let Some(slot_name) = resolve_selected_summary_slot(&config) else {
         return CapabilityHealthResult::ok("semantic summaries use deterministic fallback only");
-    }
+    };
+    let profile_name = ctx
+        .inference()
+        .describe(&slot_name)
+        .map(|slot| slot.profile_name)
+        .unwrap_or_else(|| "<unresolved>".to_string());
 
-    match build_semantic_summary_provider(&SemanticSummaryProviderConfig {
-        semantic_provider: semantic_cfg.semantic_provider,
-        semantic_model: semantic_cfg.semantic_model,
-        semantic_api_key: semantic_cfg.semantic_api_key,
-        semantic_base_url: semantic_cfg.semantic_base_url,
-    }) {
-        Ok(_) => CapabilityHealthResult::ok("semantic summary provider ready"),
+    match ctx.inference().text_generation(&slot_name) {
+        Ok(_) => CapabilityHealthResult::ok(format!(
+            "semantic summary slot `{slot_name}` ready (profile `{profile_name}`)"
+        )),
         Err(err) => {
             CapabilityHealthResult::failed("semantic_clones.semantic_summaries", format!("{err:#}"))
         }
@@ -48,102 +52,226 @@ fn check_semantic_clones_semantic_summaries(
 fn check_semantic_clones_profile_resolution(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if embeddings_disabled(&capability) {
-        return CapabilityHealthResult::ok("semantic_clones embeddings disabled");
-    }
-    if let Some(profile_name) = capability.semantic_clones.embedding_profile.as_deref() {
-        if capability.embeddings.profiles.contains_key(profile_name) {
-            CapabilityHealthResult::ok(format!(
-                "semantic_clones embedding profile `{profile_name}` resolved"
-            ))
-        } else {
-            CapabilityHealthResult::failed(
-                "semantic_clones.profile_resolution",
-                format!("embedding profile `{profile_name}` is not defined"),
-            )
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.profile_resolution",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    let configured_slots = configured_inference_slots(&config);
+    if configured_slots.is_empty() {
+        if !embeddings_enabled(&config) {
+            return CapabilityHealthResult::ok("semantic_clones embeddings disabled");
         }
-    } else {
-        CapabilityHealthResult::ok("semantic_clones embeddings disabled")
+        return CapabilityHealthResult::ok("semantic_clones inference slots not configured");
     }
+
+    let mut resolved = Vec::new();
+    for (representation, slot_name, expected_task) in configured_slots {
+        if !ctx.inference().has_slot(slot_name) {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.profile_resolution",
+                format!("{representation} slot `{slot_name}` is not bound"),
+            );
+        }
+        let Some(slot) = ctx.inference().describe(slot_name) else {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.profile_resolution",
+                format!("{representation} slot `{slot_name}` is unresolved"),
+            );
+        };
+        if slot.task != Some(expected_task) {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.profile_resolution",
+                format!(
+                    "{representation} slot `{slot_name}` points to profile `{}` with task `{}` instead of `{}`",
+                    slot.profile_name,
+                    slot.task
+                        .map(|task| task.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    expected_task
+                ),
+            );
+        }
+        resolved.push(format!("{representation} -> {}", slot.profile_name));
+    }
+
+    CapabilityHealthResult::ok(format!(
+        "semantic_clones embedding slots resolved: {}",
+        resolved.join(", ")
+    ))
 }
 
 fn check_semantic_clones_runtime_command(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if embeddings_disabled(&capability) {
-        return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime command not required)",
-        );
-    }
-    let Some(profile_name) = capability.semantic_clones.embedding_profile.as_deref() else {
-        return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime command not required)",
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.runtime_command",
+            "semantic_clones config is unavailable",
         );
     };
+    let config = resolve_semantic_clones_config(&view);
+    let configured_slots = configured_inference_slots(&config);
+    if configured_slots.is_empty() {
+        return CapabilityHealthResult::ok(
+            "semantic_clones inference slots not configured (runtime command not required)",
+        );
+    }
 
-    if command_exists(&capability.embeddings.runtime.command) {
-        CapabilityHealthResult::ok(format!(
-            "semantic_clones runtime command available for profile `{profile_name}`"
-        ))
-    } else {
-        CapabilityHealthResult::failed(
-            "semantic_clones.runtime_command",
-            format!(
-                "embedding runtime command `{}` was not found in PATH",
-                capability.embeddings.runtime.command
-            ),
+    let mut checked = Vec::new();
+    for (representation, slot_name, _) in configured_slots {
+        let Some(slot) = ctx.inference().describe(slot_name) else {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.runtime_command",
+                format!("{representation} slot `{slot_name}` is unresolved"),
+            );
+        };
+        if slot.task == Some(InferenceTask::TextGeneration) && slot.runtime.is_none() {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.runtime_command",
+                format!(
+                    "text-generation profile `{}` for slot `{slot_name}` has no runtime configured",
+                    slot.profile_name
+                ),
+            );
+        }
+        let Some(runtime_name) = slot.runtime.as_deref() else {
+            continue;
+        };
+        let Some(command) = runtime_command(view.root(), runtime_name) else {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.runtime_command",
+                format!(
+                    "runtime `{runtime_name}` for profile `{}` has no command configured",
+                    slot.profile_name
+                ),
+            );
+        };
+        if !command_exists(&command) {
+            return CapabilityHealthResult::failed(
+                "semantic_clones.runtime_command",
+                format!("{representation} runtime command `{command}` was not found in PATH"),
+            );
+        }
+        checked.push(format!("{} -> {}", slot.profile_name, command));
+    }
+
+    if checked.is_empty() {
+        CapabilityHealthResult::ok(
+            "semantic_clones embedding slots do not require a local runtime command",
         )
+    } else {
+        CapabilityHealthResult::ok(format!(
+            "semantic_clones runtime commands available: {}",
+            checked.join(", ")
+        ))
     }
 }
 
 fn check_semantic_clones_runtime_handshake(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let capability = resolve_embedding_capability_config_for_repo(ctx.repo_root());
-    if embeddings_disabled(&capability) {
+    let Ok(view) = ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID) else {
+        return CapabilityHealthResult::failed(
+            "semantic_clones.runtime_handshake",
+            "semantic_clones config is unavailable",
+        );
+    };
+    let config = resolve_semantic_clones_config(&view);
+    let configured_slots = configured_inference_slots(&config);
+    if configured_slots.is_empty() {
         return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime handshake skipped)",
+            "semantic_clones inference slots not configured (runtime handshake skipped)",
         );
     }
-    let Some(profile_name) = capability.semantic_clones.embedding_profile.clone() else {
-        return CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime handshake skipped)",
-        );
-    };
 
-    let config_path = daemon_config_path_for_health(ctx.repo_root());
-    let config = EmbeddingProviderConfig {
-        daemon_config_path: config_path,
-        embedding_profile: Some(profile_name.clone()),
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    };
-
-    match build_symbol_embedding_provider(&config, Some(ctx.repo_root())) {
-        Ok(Some(_provider)) => CapabilityHealthResult::ok(format!(
-            "semantic_clones runtime describe succeeded for profile `{profile_name}`"
-        )),
-        Ok(None) => CapabilityHealthResult::ok(
-            "semantic_clones embeddings disabled (runtime handshake skipped)",
-        ),
-        Err(err) => {
-            CapabilityHealthResult::failed("semantic_clones.runtime_handshake", format!("{err:#}"))
+    let mut ready = Vec::new();
+    for (representation, slot_name, task) in configured_slots {
+        let resolution = match task {
+            InferenceTask::Embeddings => ctx.inference().embeddings(slot_name).map(|_| ()),
+            InferenceTask::TextGeneration => ctx.inference().text_generation(slot_name).map(|_| ()),
+        };
+        match resolution {
+            Ok(_) => {
+                let profile_name = ctx
+                    .inference()
+                    .describe(slot_name)
+                    .map(|slot| slot.profile_name)
+                    .unwrap_or_else(|| "<unresolved>".to_string());
+                ready.push(format!("{representation} -> {profile_name}"));
+            }
+            Err(err) => {
+                return CapabilityHealthResult::failed(
+                    "semantic_clones.runtime_handshake",
+                    format!("{representation} slot `{slot_name}` failed: {err:#}"),
+                );
+            }
         }
     }
+
+    CapabilityHealthResult::ok(format!(
+        "semantic_clones inference slots ready: {}",
+        ready.join(", ")
+    ))
 }
 
-fn embeddings_disabled(capability: &crate::config::EmbeddingCapabilityConfig) -> bool {
-    capability.semantic_clones.embedding_mode == SemanticCloneEmbeddingMode::Off
-        || capability.semantic_clones.embedding_profile.is_none()
+fn configured_embedding_slots(
+    config: &crate::config::SemanticClonesConfig,
+) -> Vec<(&'static str, &'static str)> {
+    let mut slots = Vec::new();
+    if embedding_slot_for_representation(config, EmbeddingRepresentationKind::Code).as_deref()
+        == Some(SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT)
+    {
+        slots.push(("code", SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT));
+    }
+    if embedding_slot_for_representation(config, EmbeddingRepresentationKind::Summary).as_deref()
+        == Some(SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT)
+    {
+        slots.push(("summary", SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT));
+    }
+    slots
 }
 
-fn daemon_config_path_for_health(repo_root: &Path) -> PathBuf {
-    default_daemon_config_path().unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+fn configured_summary_slot(
+    config: &crate::config::SemanticClonesConfig,
+) -> Option<(&'static str, &'static str, InferenceTask)> {
+    (resolve_selected_summary_slot(config).as_deref()
+        == Some(SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT))
+    .then_some((
+        "summary generation",
+        SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
+        InferenceTask::TextGeneration,
+    ))
+}
+
+fn configured_inference_slots(
+    config: &crate::config::SemanticClonesConfig,
+) -> Vec<(&'static str, &'static str, InferenceTask)> {
+    let mut slots = Vec::new();
+    if let Some(summary_slot) = configured_summary_slot(config) {
+        slots.push(summary_slot);
+    }
+    slots.extend(
+        configured_embedding_slots(config)
+            .into_iter()
+            .map(|(representation, slot_name)| {
+                (representation, slot_name, InferenceTask::Embeddings)
+            }),
+    );
+    slots
+}
+
+fn runtime_command(root: &serde_json::Value, runtime_name: &str) -> Option<String> {
+    root.get("inference")?
+        .get("runtimes")?
+        .get(runtime_name)?
+        .get("command")?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn command_exists(command: &str) -> bool {

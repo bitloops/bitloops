@@ -26,6 +26,7 @@ Feature: DevQL sync workspace reconciliation
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I run DevQL sync --status in bitloops
+    Then daemon capability-event status shows TestHarness sync handler completed in bitloops
     Then TestHarness query for "createUser" at current workspace state with view "tests" returns results in bitloops
 
   @devql @sync
@@ -38,10 +39,12 @@ Feature: DevQL sync workspace reconciliation
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I run DevQL sync --status in bitloops
+    Then daemon capability-event status shows TestHarness sync handler completed in bitloops
     Then TestHarness query for "createUser" at current workspace state with view "tests" returns results in bitloops
     Given I delete a test file in bitloops
     And I commit changes without hooks in bitloops
     And I run DevQL sync --status in bitloops
+    Then daemon capability-event status shows TestHarness sync handler completed in bitloops
     Then TestHarness query for "createUser" at current workspace state with view "tests" returns empty or zero-count in bitloops
 
   @devql @sync

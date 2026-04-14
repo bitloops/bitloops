@@ -1,11 +1,147 @@
 use rusqlite::Connection;
 use std::fs;
+use std::path::Path;
 use tempfile::tempdir;
 
 use super::fixtures::{
     seed_full_sync_repo, seed_supported_and_unsupported_repo,
     sqlite_relational_store_with_sync_schema, sync_test_cfg_for_repo,
 };
+
+#[cfg(unix)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-sync-embeddings-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"#!/bin/sh
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"sync-test-model"}\n' "$req_id"
+      ;;
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"sync-test-model"}\n' "$req_id"
+      exit 0
+      ;;
+    *)
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
+      ;;
+  esac
+done
+"#;
+    fs::write(&script_path, script).expect("write fake runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod fake runtime script");
+    ("sh".to_string(), vec![script_path.display().to_string()])
+}
+
+#[cfg(windows)]
+fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-sync-embeddings-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake runtime dir");
+    }
+    let script = r#"
+$ready = @{
+  event = "ready"
+  protocol = 1
+  capabilities = @("embed", "shutdown")
+}
+$ready | ConvertTo-Json -Compress
+$stdin = [Console]::In
+while (($line = $stdin.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.cmd) {
+    "embed" {
+      $response = @{
+        id = $request.id
+        ok = $true
+        vectors = @(@(0.1, 0.2, 0.3))
+        model = "sync-test-model"
+      }
+    }
+    "shutdown" {
+      $response = @{
+        id = $request.id
+        ok = $true
+        model = "sync-test-model"
+      }
+      $response | ConvertTo-Json -Compress
+      break
+    }
+    default {
+      $response = @{
+        id = $request.id
+        ok = $false
+        error = @{
+          message = "unexpected request"
+        }
+      }
+    }
+  }
+  $response | ConvertTo-Json -Compress
+}
+"#;
+    fs::write(&script_path, script).expect("write fake runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.display().to_string(),
+        ],
+    )
+}
+
+fn write_sync_semantic_clone_config(repo_root: &Path) {
+    let (command, args) = fake_runtime_command_and_args(repo_root);
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).expect("create daemon config dir");
+    }
+    fs::write(
+        config_path,
+        format!(
+            r#"[semantic_clones]
+summary_mode = "off"
+embedding_mode = "deterministic"
+
+[semantic_clones.inference]
+code_embeddings = "alpha"
+summary_embeddings = "alpha"
+
+[inference.runtimes.bitloops_embeddings]
+command = {command:?}
+args = [{runtime_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+
+[inference.profiles.alpha]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "sync-test-model"
+"#
+        ),
+    )
+    .expect("write sync semantic clone config");
+}
 
 #[tokio::test]
 async fn unborn_head_syncs_from_index_and_worktree() {
@@ -87,7 +223,7 @@ async fn unborn_head_syncs_from_index_and_worktree() {
 }
 
 #[tokio::test]
-async fn unsupported_file_ignored_supported_file_added() {
+async fn unsupported_file_becomes_track_only_current_state() {
     let repo = seed_supported_and_unsupported_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());
     let sqlite_path = repo.path().join("devql.sqlite");
@@ -123,17 +259,293 @@ async fn unsupported_file_ignored_supported_file_added() {
             |row| row.get(0),
         )
         .expect("count unsupported current_file_state rows");
+    let unsupported_language: String = db
+        .query_row(
+            "SELECT language FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "docs/notes.foo"],
+            |row| row.get(0),
+        )
+        .expect("read unsupported current_file_state language");
 
     assert!(
         result.success,
-        "sync should succeed with ignored unsupported files"
+        "sync should succeed while retaining unsupported files as track-only state"
     );
-    assert_eq!(result.paths_added, 1);
+    assert_eq!(result.paths_added, 2);
     assert_eq!(result.paths_changed, 0);
     assert_eq!(result.paths_removed, 0);
     assert_eq!(result.paths_unchanged, 0);
-    assert_eq!(current_paths, vec!["src/lib.rs".to_string()]);
-    assert_eq!(unsupported_rows, 0);
+    assert_eq!(
+        current_paths,
+        vec!["docs/notes.foo".to_string(), "src/lib.rs".to_string()]
+    );
+    assert_eq!(unsupported_rows, 1);
+    assert_eq!(unsupported_language, "track_only");
+}
+
+#[tokio::test]
+async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-utf8-sync-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    fs::write(
+        repo.path().join("src/good.rs"),
+        "pub fn good() -> i32 {\n    1\n}\n",
+    )
+    .expect("write good rust file");
+    fs::write(
+        repo.path().join("src/bad.rs"),
+        "pub fn bad() -> i32 {\n    2\n}\n",
+    )
+    .expect("write bad rust file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed files"]);
+
+    fs::write(
+        repo.path().join("src/bad.rs"),
+        [0x66, 0x6e, 0x20, 0xff, 0x0a],
+    )
+    .expect("overwrite bad rust file with invalid UTF-8");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with one invalid UTF-8 file");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let good_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/good.rs"],
+            |row| row.get(0),
+        )
+        .expect("count good.rs rows");
+    let bad_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count bad.rs rows");
+
+    assert!(
+        result.success,
+        "sync should continue even when one supported file fails decoding"
+    );
+    assert!(
+        result.parse_errors >= 1,
+        "expected at least one parse error for invalid UTF-8 input"
+    );
+    assert_eq!(good_rows, 1, "good path should still be materialized");
+    assert_eq!(
+        bad_rows, 0,
+        "failing path should be skipped instead of aborting the sync run"
+    );
+}
+
+#[tokio::test]
+async fn full_sync_removes_current_rows_for_newly_excluded_paths() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::create_dir_all(repo.path().join("docs")).expect("create docs dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet() -> &'static str {\n    \"hi\"\n}\n",
+    )
+    .expect("write rust file");
+    fs::write(repo.path().join("docs/readme.md"), "# docs\n").expect("write docs file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[scope]
+exclude = ["docs/**"]
+"#,
+    )
+    .expect("write local exclusions");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after exclusions");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+
+    assert!(
+        result.success,
+        "sync should succeed after exclusions update"
+    );
+    assert!(
+        current_paths.iter().any(|path| path == "src/lib.rs"),
+        "expected src/lib.rs to remain indexed after exclusions update"
+    );
+    assert!(
+        !current_paths.iter().any(|path| path == "docs/readme.md"),
+        "expected excluded docs/readme.md to be removed from current state"
+    );
+}
+
+#[tokio::test]
+async fn full_sync_removes_current_rows_for_plain_folder_exclusion() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::create_dir_all(repo.path().join("docs")).expect("create docs dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet() -> &'static str {\n    \"hi\"\n}\n",
+    )
+    .expect("write rust file");
+    fs::write(repo.path().join("docs/readme.md"), "# docs\n").expect("write docs file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed"]);
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[scope]
+exclude = ["docs"]
+"#,
+    )
+    .expect("write local exclusions");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after exclusions");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+
+    assert!(
+        result.success,
+        "sync should succeed after exclusions update"
+    );
+    assert!(
+        current_paths.iter().any(|path| path == "src/lib.rs"),
+        "expected src/lib.rs to remain indexed after exclusions update"
+    );
+    assert!(
+        !current_paths.iter().any(|path| path == "docs/readme.md"),
+        "expected excluded docs/readme.md to be removed from current state"
+    );
+}
+
+#[tokio::test]
+async fn full_sync_fails_fast_when_exclude_from_file_is_missing() {
+    let repo = seed_full_sync_repo();
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_FILE_NAME),
+        r#"
+[scope]
+exclude_from = [".bitloopsignore"]
+"#,
+    )
+    .expect("write shared policy");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let err = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect_err("missing exclude_from file should fail sync");
+    let err_chain = format!("{err:#}");
+    assert!(
+        err_chain.contains("scope.exclude_from"),
+        "expected scope.exclude_from error, got: {err_chain}"
+    );
 }
 
 #[tokio::test]
@@ -441,8 +853,62 @@ async fn sync_removes_deleted_file() {
     assert_eq!(result.paths_removed, 1);
     assert_eq!(result.paths_added, 0);
     assert_eq!(result.paths_changed, 0);
-    assert_eq!(result.paths_unchanged, 3);
+    assert_eq!(result.paths_unchanged, 7);
     assert_eq!(artefact_count, 0);
     assert_eq!(edge_count, 0);
     assert_eq!(current_state_count, 0);
+}
+
+#[tokio::test]
+async fn sync_populates_current_semantic_tables_without_inline_embeddings() {
+    let repo = seed_full_sync_repo();
+    write_sync_semantic_clone_config(repo.path());
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync with current semantic clone projection");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let semantic_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_semantics_current rows");
+    let feature_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_features_current rows");
+    let embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'code'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_embeddings_current rows");
+
+    assert!(
+        result.success,
+        "sync should succeed with current clone projection"
+    );
+    assert!(semantic_rows > 0, "current semantics should be populated");
+    assert!(
+        feature_rows > 0,
+        "current semantic features should be populated"
+    );
+    assert_eq!(
+        embedding_rows, 0,
+        "current code embeddings should no longer be populated inline during sync"
+    );
 }

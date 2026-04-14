@@ -11,6 +11,7 @@ use super::contexts::{
     KnowledgeIngestContext,
 };
 use super::descriptor::CapabilityDescriptor;
+use super::events::CurrentStateConsumer;
 use super::health::CapabilityHealthCheck;
 use super::migrations::CapabilityMigration;
 
@@ -35,6 +36,10 @@ pub trait CapabilityRegistrar {
 
     fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()>;
 
+    fn register_mailbox(&mut self, _registration: CapabilityMailboxRegistration) -> Result<()> {
+        Ok(())
+    }
+
     fn register_knowledge_stage(&mut self, _stage: KnowledgeStageRegistration) -> Result<()> {
         bail!("knowledge stage registration is not supported by this registrar")
     }
@@ -49,6 +54,14 @@ pub trait CapabilityRegistrar {
     fn register_schema_module(&mut self, module: SchemaModule) -> Result<()>;
 
     fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()>;
+
+    fn register_current_state_consumer(
+        &mut self,
+        registration: CurrentStateConsumerRegistration,
+    ) -> Result<()> {
+        let _ = registration;
+        Ok(())
+    }
 
     fn register_event_handler(
         &mut self,
@@ -280,6 +293,91 @@ impl KnowledgeIngesterRegistration {
             ingester_name,
             handler,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct CurrentStateConsumerRegistration {
+    pub capability_id: &'static str,
+    pub consumer_id: &'static str,
+    pub handler: Arc<dyn CurrentStateConsumer>,
+}
+
+impl CurrentStateConsumerRegistration {
+    pub fn new(
+        capability_id: &'static str,
+        consumer_id: &'static str,
+        handler: Arc<dyn CurrentStateConsumer>,
+    ) -> Self {
+        Self {
+            capability_id,
+            consumer_id,
+            handler,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxPolicy {
+    Cursor,
+    Job,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxReadinessPolicy {
+    None,
+    TextGenerationSlot(&'static str),
+    EmbeddingsSlot(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxBacklogPolicy {
+    None,
+    ArtefactCompaction,
+    RepoCoalesced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxHandler {
+    CurrentStateConsumer(&'static str),
+    Ingester(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityMailboxRegistration {
+    pub capability_id: &'static str,
+    pub mailbox_name: &'static str,
+    pub policy: CapabilityMailboxPolicy,
+    pub handler: CapabilityMailboxHandler,
+    pub readiness_policy: CapabilityMailboxReadinessPolicy,
+    pub backlog_policy: CapabilityMailboxBacklogPolicy,
+}
+
+impl CapabilityMailboxRegistration {
+    pub const fn new(
+        capability_id: &'static str,
+        mailbox_name: &'static str,
+        policy: CapabilityMailboxPolicy,
+        handler: CapabilityMailboxHandler,
+    ) -> Self {
+        Self {
+            capability_id,
+            mailbox_name,
+            policy,
+            handler,
+            readiness_policy: CapabilityMailboxReadinessPolicy::None,
+            backlog_policy: CapabilityMailboxBacklogPolicy::None,
+        }
+    }
+
+    pub const fn readiness_policy(mut self, policy: CapabilityMailboxReadinessPolicy) -> Self {
+        self.readiness_policy = policy;
+        self
+    }
+
+    pub const fn backlog_policy(mut self, policy: CapabilityMailboxBacklogPolicy) -> Self {
+        self.backlog_policy = policy;
+        self
     }
 }
 

@@ -16,7 +16,7 @@ Bitloops has moved to a daemon-first architecture. This release intentionally br
 - `bitloops enable` and `bitloops disable` now toggle capture only.
 - `bitloops uninstall` is now the command for machine-wide cleanup.
 - `bitloops status` now reports daemon status and sync queue summary.
-- `bitloops devql sync` now queues sync tasks by default; use `--status` to follow one to completion.
+- `bitloops devql tasks enqueue --kind sync` now queues sync tasks by default; use `--status` to follow one to completion.
 - Repo/session status moved to `bitloops checkpoints status`.
 - `bitloops dashboard` is now a browser launcher instead of the server command.
 - The always-on service is now the global user-level service `com.bitloops.daemon`.
@@ -65,9 +65,9 @@ Default path categories now follow platform app directories:
 4. Run `bitloops start` interactively on each machine, or `bitloops start --create-default-config --telemetry` in non-interactive setups, to create the default daemon config and default local store files.
 5. If you use an explicit repo-scoped or test config, run `bitloops start --config /path/to/config.toml --bootstrap-local-stores` to create the matching local file-backed stores before the first start.
 6. Answer the telemetry prompt during that first `start`, or pass an explicit telemetry flag.
-7. Run `bitloops init --sync=true` or `bitloops init --sync=false` in each repo or subproject to create `.bitloops.local.toml` and install hooks. Use `bitloops init --install-default-daemon` if you want init to bootstrap the default daemon service first.
-8. Use `bitloops enable` and `bitloops disable` to toggle capture in project policy.
-9. Use `bitloops devql ingest` for checkpoint/history ingestion, and `bitloops devql sync --status` when you want to queue and follow a current-state reconciliation.
+7. Run `bitloops init --sync=true` or `bitloops init --sync=false` in each repo or subproject to create `.bitloops.local.toml` and install hooks. Use `bitloops init --install-default-daemon` if you want init to bootstrap the default daemon service first; that path also auto-configures the default local embeddings profile when embeddings are not already configured.
+8. Use `bitloops enable` and `bitloops disable` to toggle capture in project policy. Use `bitloops enable --install-embeddings` or `bitloops daemon enable --install-embeddings` when you also want the default local embeddings profile set up in the effective daemon config.
+9. Use `bitloops devql tasks enqueue --kind ingest` for checkpoint/history ingestion, and `bitloops devql tasks enqueue --kind sync --status` when you want to queue and follow a current-state reconciliation.
 10. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.
 
 ## Examples

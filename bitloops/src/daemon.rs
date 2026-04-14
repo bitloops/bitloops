@@ -24,8 +24,12 @@ use tokio::sync::Mutex;
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
+#[path = "daemon/capability_events.rs"]
+mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/embeddings_bootstrap.rs"]
+mod embeddings_bootstrap;
 #[path = "daemon/enrichment.rs"]
 mod enrichment;
 #[path = "daemon/graphql_client.rs"]
@@ -48,8 +52,8 @@ mod state_store;
 mod supervisor_api;
 #[path = "daemon/supervisor_client.rs"]
 mod supervisor_client;
-#[path = "daemon/sync.rs"]
-mod sync;
+#[path = "daemon/tasks.rs"]
+mod tasks;
 #[path = "daemon/types.rs"]
 mod types;
 
@@ -57,18 +61,27 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
 pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
-pub use self::sync::{SyncCoordinator, SyncEnqueueResult};
+pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
+pub(crate) use self::types::EmbeddingsBootstrapState as PersistedEmbeddingsBootstrapState;
 pub use self::types::{
-    DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
-    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
-    EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
+    CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
+    CapabilityEventRunStatus, DaemonHealthSummary, DaemonMode, DaemonProcessModeArg,
+    DaemonRuntimeState, DaemonServiceMetadata, DaemonStatusReport, DevqlTaskControlResult,
+    DevqlTaskKind, DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState,
+    DevqlTaskQueueStatus, DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskSpec,
+    DevqlTaskStatus, EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus,
+    EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
+    EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
+    EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
+    InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, RepoTaskControlState,
     ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
+    SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -248,6 +261,14 @@ pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
     enrichment::snapshot()
 }
 
+pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+    CapabilityEventCoordinator::try_shared()?.snapshot(repo_id)
+}
+
+pub fn current_state_consumer_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
+    capability_event_status(repo_id)
+}
+
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     enrichment::pause_enrichments(reason)
 }
@@ -264,32 +285,114 @@ pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
     EnrichmentCoordinator::shared()
 }
 
-pub fn shared_sync_coordinator() -> Arc<SyncCoordinator> {
-    SyncCoordinator::shared()
+pub fn shared_capability_event_coordinator() -> Arc<CapabilityEventCoordinator> {
+    CapabilityEventCoordinator::shared()
 }
 
-pub(crate) fn activate_sync_worker(subscription_hub: Arc<crate::graphql::SubscriptionHub>) {
-    SyncCoordinator::shared().activate_worker(Some(subscription_hub));
+pub fn shared_current_state_consumer_coordinator() -> Arc<CapabilityEventCoordinator> {
+    shared_capability_event_coordinator()
 }
 
-pub fn sync_status(repo_id: Option<&str>) -> Result<SyncQueueStatus> {
-    SyncCoordinator::shared().snapshot(repo_id)
+pub fn shared_devql_task_coordinator() -> Arc<DevqlTaskCoordinator> {
+    DevqlTaskCoordinator::shared()
 }
 
-pub fn sync_task(task_id: &str) -> Result<Option<SyncTaskRecord>> {
-    SyncCoordinator::shared().task(task_id)
+pub(crate) fn activate_task_worker(
+    config_root: &Path,
+    repo_registry_path: Option<&Path>,
+    subscription_hub: Arc<crate::graphql::SubscriptionHub>,
+) {
+    CapabilityEventCoordinator::shared().activate_worker();
+    DevqlTaskCoordinator::shared().activate_worker(
+        config_root,
+        repo_registry_path,
+        Some(subscription_hub),
+    );
 }
 
-pub fn sync_tasks(repo_id: Option<&str>, limit: Option<usize>) -> Result<Vec<SyncTaskRecord>> {
-    SyncCoordinator::shared().tasks(repo_id, limit)
+pub fn devql_task_status(repo_id: Option<&str>) -> Result<DevqlTaskQueueStatus> {
+    DevqlTaskCoordinator::shared().snapshot(repo_id)
+}
+
+pub fn devql_task(task_id: &str) -> Result<Option<DevqlTaskRecord>> {
+    DevqlTaskCoordinator::shared().task(task_id)
+}
+
+pub fn devql_tasks(
+    repo_id: Option<&str>,
+    kind: Option<DevqlTaskKind>,
+    status: Option<DevqlTaskStatus>,
+    limit: Option<usize>,
+) -> Result<Vec<DevqlTaskRecord>> {
+    DevqlTaskCoordinator::shared().tasks(repo_id, kind, status, limit)
+}
+
+pub fn enqueue_task_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: DevqlTaskSource,
+    spec: DevqlTaskSpec,
+) -> Result<DevqlTaskEnqueueResult> {
+    DevqlTaskCoordinator::shared().enqueue(cfg, source, spec)
 }
 
 pub fn enqueue_sync_for_config(
     cfg: &crate::host::devql::DevqlConfig,
-    source: SyncTaskSource,
+    source: DevqlTaskSource,
     mode: crate::host::devql::SyncMode,
-) -> Result<SyncEnqueueResult> {
-    SyncCoordinator::shared().enqueue(cfg, source, mode)
+) -> Result<DevqlTaskEnqueueResult> {
+    enqueue_task_for_config(
+        cfg,
+        source,
+        DevqlTaskSpec::Sync(SyncTaskSpec {
+            mode: match mode {
+                crate::host::devql::SyncMode::Auto => SyncTaskMode::Auto,
+                crate::host::devql::SyncMode::Full => SyncTaskMode::Full,
+                crate::host::devql::SyncMode::Paths(paths) => SyncTaskMode::Paths { paths },
+                crate::host::devql::SyncMode::Repair => SyncTaskMode::Repair,
+                crate::host::devql::SyncMode::Validate => SyncTaskMode::Validate,
+            },
+        }),
+    )
+}
+
+pub fn enqueue_ingest_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: DevqlTaskSource,
+    backfill: Option<usize>,
+) -> Result<DevqlTaskEnqueueResult> {
+    enqueue_task_for_config(
+        cfg,
+        source,
+        DevqlTaskSpec::Ingest(IngestTaskSpec { backfill }),
+    )
+}
+
+pub fn enqueue_embeddings_bootstrap_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: DevqlTaskSource,
+    config_path: PathBuf,
+    profile_name: String,
+) -> Result<DevqlTaskEnqueueResult> {
+    enqueue_task_for_config(
+        cfg,
+        source,
+        DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path,
+            profile_name,
+        }),
+    )
+}
+
+pub fn pause_devql_tasks(repo_id: &str, reason: Option<String>) -> Result<DevqlTaskControlResult> {
+    DevqlTaskCoordinator::shared().pause_repo(repo_id, reason)
+}
+
+pub fn resume_devql_tasks(repo_id: &str) -> Result<DevqlTaskControlResult> {
+    DevqlTaskCoordinator::shared().resume_repo(repo_id)
+}
+
+pub fn cancel_devql_task(task_id: &str) -> Result<DevqlTaskRecord> {
+    DevqlTaskCoordinator::shared().cancel_task(task_id)
 }
 
 pub async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeState> {
@@ -302,6 +405,14 @@ pub async fn execute_graphql<T: DeserializeOwned>(
     variables: Value,
 ) -> Result<T> {
     graphql_client::execute_graphql(repo_root, query, variables).await
+}
+
+pub async fn execute_repo_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    graphql_client::execute_repo_graphql(repo_root, query, variables).await
 }
 
 pub(crate) async fn execute_slim_graphql<T: DeserializeOwned>(

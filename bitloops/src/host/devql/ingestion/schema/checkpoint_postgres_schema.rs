@@ -106,6 +106,12 @@ ON checkpoint_artefacts (repo_id, before_artefact_id);
 CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx
 ON checkpoint_artefacts (repo_id, after_artefact_id);
 
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx
+ON checkpoint_artefacts (repo_id, before_symbol_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx
+ON checkpoint_artefacts (repo_id, after_symbol_id);
+
 CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage (
     relation_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -333,6 +339,12 @@ ON checkpoint_artefacts (repo_id, before_artefact_id);
 
 CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx
 ON checkpoint_artefacts (repo_id, after_artefact_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx
+ON checkpoint_artefacts (repo_id, before_symbol_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx
+ON checkpoint_artefacts (repo_id, after_symbol_id);
 
 CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage (
     relation_id TEXT PRIMARY KEY,

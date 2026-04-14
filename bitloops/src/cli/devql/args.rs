@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {
@@ -10,10 +10,8 @@ pub struct DevqlArgs {
 pub enum DevqlCommand {
     /// Create schema for configured relational/events backends.
     Init(DevqlInitArgs),
-    /// Ingest checkpoint/events and relational artefacts for configured backends.
-    Ingest(DevqlIngestArgs),
-    /// Synchronize current workspace artefacts into DevQL state.
-    Sync(DevqlSyncArgs),
+    /// Manage daemon-owned DevQL sync and ingest tasks.
+    Tasks(DevqlTasksArgs),
     /// Backfill or repair DevQL relational projections.
     Projection(DevqlProjectionArgs),
     /// Print the DevQL GraphQL schema SDL.
@@ -33,20 +31,56 @@ pub enum DevqlCommand {
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlInitArgs {}
 
-#[derive(Args, Debug, Clone, Default)]
-pub struct DevqlIngestArgs {
-    /// Fail immediately if the daemon is not already running.
-    #[arg(long, default_value_t = false)]
-    pub require_daemon: bool,
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTasksArgs {
+    #[command(subcommand)]
+    pub command: DevqlTasksCommand,
 }
 
-#[derive(Debug, Clone, clap::Args)]
-pub struct DevqlSyncArgs {
-    /// Run a full workspace reconciliation.
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlTasksCommand {
+    /// Enqueue a sync or ingest task.
+    Enqueue(DevqlTaskEnqueueArgs),
+    /// Watch a task until it reaches a terminal state.
+    Watch(DevqlTaskWatchArgs),
+    /// Show the current repository task queue status.
+    Status(DevqlTaskStatusArgs),
+    /// List recent tasks for the current repository.
+    List(DevqlTaskListArgs),
+    /// Pause scheduling for the current repository task queue.
+    Pause(DevqlTaskPauseArgs),
+    /// Resume scheduling for the current repository task queue.
+    Resume(DevqlTaskResumeArgs),
+    /// Cancel a queued task.
+    Cancel(DevqlTaskCancelArgs),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum DevqlTaskKindArg {
+    Sync,
+    Ingest,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum DevqlTaskStatusArg {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTaskEnqueueArgs {
+    /// Which kind of task to enqueue.
+    #[arg(long, value_enum)]
+    pub kind: DevqlTaskKindArg,
+
+    /// Run a full workspace reconciliation for sync tasks.
     #[arg(long, conflicts_with_all = ["paths", "repair", "validate"])]
     pub full: bool,
 
-    /// Reconcile only the specified workspace paths.
+    /// Reconcile only the specified workspace paths for sync tasks.
     #[arg(long, value_delimiter = ',', conflicts_with_all = ["full", "repair", "validate"])]
     pub paths: Option<Vec<String>>,
 
@@ -54,17 +88,59 @@ pub struct DevqlSyncArgs {
     #[arg(long, conflicts_with_all = ["full", "paths", "validate"])]
     pub repair: bool,
 
-    /// Validate current-state tables against a full read-only workspace reconciliation.
+    /// Validate current-state tables against a read-only full reconciliation.
     #[arg(long, conflicts_with_all = ["full", "paths", "repair"])]
     pub validate: bool,
 
-    /// Follow the queued sync task until it reaches a terminal state.
+    /// Limit ingest to the most recent N commits.
+    #[arg(long)]
+    pub backfill: Option<usize>,
+
+    /// Follow the queued task until it reaches a terminal state.
     #[arg(long, default_value_t = false)]
     pub status: bool,
 
     /// Fail immediately if the daemon is not already running.
     #[arg(long, default_value_t = false)]
     pub require_daemon: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTaskWatchArgs {
+    pub task_id: String,
+
+    /// Fail immediately if the daemon is not already running.
+    #[arg(long, default_value_t = false)]
+    pub require_daemon: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlTaskStatusArgs {}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlTaskListArgs {
+    #[arg(long, value_enum)]
+    pub kind: Option<DevqlTaskKindArg>,
+
+    #[arg(long, value_enum)]
+    pub status: Option<DevqlTaskStatusArg>,
+
+    #[arg(long)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlTaskPauseArgs {
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlTaskResumeArgs {}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlTaskCancelArgs {
+    pub task_id: String,
 }
 
 #[derive(Args, Debug, Clone)]

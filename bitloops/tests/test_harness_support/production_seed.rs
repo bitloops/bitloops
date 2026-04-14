@@ -744,6 +744,7 @@ fn resolve_repository_record(repo_dir: &Path) -> Result<RepositoryRecord> {
         organization,
         name,
         default_branch: Some(default_branch_name(repo_dir)),
+        metadata_json: None,
     })
 }
 

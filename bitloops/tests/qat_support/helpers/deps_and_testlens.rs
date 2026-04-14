@@ -31,12 +31,12 @@ pub fn create_ts_project_with_known_deps(repo_dir: &Path) -> Result<()> {
     .context("writing src/repository/user-repository.ts")?;
     fs::write(
         src.join("services").join("user-service.ts"),
-        "import { User } from '../models/user';\nimport { UserRepository } from '../repository/user-repository';\n\nexport function createUser(name: string, repo: UserRepository): User {\n  const user: User = { id: crypto.randomUUID(), name };\n  repo.save(user);\n  return user;\n}\n",
+        "import { User } from '../models/user';\nimport { UserRepository } from '../repository/user-repository';\n\nexport class UserService {\n  createUser(name: string, repo: UserRepository): User {\n    const user: User = { id: crypto.randomUUID(), name };\n    repo.save(user);\n    return user;\n  }\n}\n",
     )
     .context("writing src/services/user-service.ts")?;
     fs::write(
         src.join("controllers").join("user-controller.ts"),
-        "import { createUser } from '../services/user-service';\nimport { UserRepository } from '../repository/user-repository';\n\nexport function handleCreate(name: string): string {\n  const repo = new UserRepository();\n  const user = createUser(name, repo);\n  return user.id;\n}\n",
+        "import { UserService } from '../services/user-service';\nimport { UserRepository } from '../repository/user-repository';\n\nexport function handleCreate(name: string): string {\n  const repo = new UserRepository();\n  const service = new UserService();\n  const user = service.createUser(name, repo);\n  return user.id;\n}\n",
     )
     .context("writing src/controllers/user-controller.ts")?;
     fs::write(
@@ -96,17 +96,18 @@ pub fn create_rust_project_with_tests(world: &mut QatWorld, repo_name: &str) -> 
 }
 
 pub fn add_new_caller_of_symbol(world: &mut QatWorld, symbol_alias: &str) -> Result<()> {
-    let parts: Vec<&str> = symbol_alias.split('.').collect();
-    let (service_name, method_name) = match parts.as_slice() {
-        [service_name, method_name] => (*service_name, *method_name),
-        _ => bail!("expected symbol alias in Class.method format, got `{symbol_alias}`"),
-    };
-
-    let import_path = format!("./services/{}", to_kebab_case(service_name));
     let file_path = world.repo_dir().join("src").join("new-caller.ts");
-    let content = format!(
-        "import {{ {method_name} }} from '{import_path}';\nimport {{ UserRepository }} from './repository/user-repository';\n\nexport function callCreateUser(): void {{\n  const repo = new UserRepository();\n  {method_name}('QAT-new-caller', repo);\n}}\n\ncallCreateUser();\n"
-    );
+    let content = if let Some((service_name, method_name)) = symbol_alias.split_once('.') {
+        let import_path = format!("./services/{}", to_kebab_case(service_name));
+        let helper_name = format!("invoke{}", method_name.to_ascii_uppercase());
+        format!(
+            "import {{ {service_name} }} from '{import_path}';\nimport {{ UserRepository }} from './repository/user-repository';\n\nfunction {helper_name}(name: string, repo: UserRepository): void {{\n  const service = new {service_name}();\n  service.{method_name}(name, repo);\n}}\n\nexport function callCreateUser(): void {{\n  const repo = new UserRepository();\n  {helper_name}('QAT-new-caller', repo);\n}}\n\ncallCreateUser();\n"
+        )
+    } else {
+        format!(
+            "import {{ {symbol_alias} }} from './services/user-service';\nimport {{ UserRepository }} from './repository/user-repository';\n\nexport function callCreateUser(): void {{\n  const repo = new UserRepository();\n  {symbol_alias}('QAT-new-caller', repo);\n}}\n\ncallCreateUser();\n"
+        )
+    };
     fs::write(&file_path, content).with_context(|| format!("writing {}", file_path.display()))?;
 
     run_devql_ingest_for_repo(world, BITLOOPS_REPO_NAME)
@@ -120,14 +121,8 @@ pub fn assert_devql_deps_query(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let file_path = resolve_file_path_for_symbol_alias(world, symbol_alias)?;
-    let query = format!(
-        r#"repo("bitloops")->file("{}")->deps(kind:"calls",direction:"{}")->limit(50)"#,
-        escape_devql_string(&file_path),
-        escape_devql_string(direction)
-    );
-    let value = run_devql_query(world, &query)?;
-    let count = count_json_array_rows(&value);
+    let symbol_fqn = resolve_symbol_fqn_alias(world, symbol_alias)?;
+    let count = count_deps_for_symbol(world, &symbol_fqn, direction, None)?;
     world.last_query_result_count = Some(count);
     ensure!(
         count >= min_count,
@@ -145,15 +140,8 @@ pub fn assert_devql_deps_query_as_of_commit(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let file_path = resolve_file_path_for_symbol_alias(world, symbol_alias)?;
-    let query = format!(
-        r#"repo("bitloops")->asOf(commit:"{}")->file("{}")->deps(kind:"calls",direction:"{}")->limit(50)"#,
-        escape_devql_string(commit_sha),
-        escape_devql_string(&file_path),
-        escape_devql_string(direction)
-    );
-    let value = run_devql_query(world, &query)?;
-    let count = count_json_array_rows(&value);
+    let symbol_fqn = resolve_symbol_fqn_alias(world, symbol_alias)?;
+    let count = count_deps_for_symbol(world, &symbol_fqn, direction, Some(commit_sha))?;
     world.last_query_result_count = Some(count);
     ensure!(
         count >= min_count,
@@ -171,30 +159,111 @@ pub fn assert_devql_deps_query_as_of_commit_exact_count(
     expected_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let file_path = resolve_file_path_for_symbol_alias(world, symbol_alias)?;
-    let query = format!(
-        r#"repo("bitloops")->asOf(commit:"{}")->file("{}")->deps(kind:"calls",direction:"{}")->limit(50)"#,
-        escape_devql_string(commit_sha),
-        escape_devql_string(&file_path),
-        escape_devql_string(direction)
-    );
-    let value = match run_devql_query(world, &query) {
-        Ok(value) => value,
-        Err(err) => {
-            if expected_count == 0 && err.to_string().contains("unknown path") {
-                world.last_query_result_count = Some(0);
-                return Ok(());
-            }
-            return Err(err);
-        }
-    };
-    let count = count_json_array_rows(&value);
+    let symbol_fqn = resolve_symbol_fqn_alias(world, symbol_alias)?;
+    let count = count_deps_for_symbol(world, &symbol_fqn, direction, Some(commit_sha))?;
     world.last_query_result_count = Some(count);
     ensure!(
         count == expected_count,
         "expected exactly {expected_count} deps({direction}) rows for `{symbol_alias}` asOf `{commit_sha}`, got {count}"
     );
     Ok(())
+}
+
+fn build_deps_graphql_query(
+    symbol_fqn: &str,
+    direction: &str,
+    commit_sha: Option<&str>,
+) -> Result<String> {
+    let escaped_symbol = escape_devql_string(symbol_fqn);
+    let field = match direction {
+        "out" => "outgoingDeps",
+        "in" => "incomingDeps",
+        "both" => "depsBoth: outgoingDeps",
+        other => bail!("unsupported deps direction `{other}`"),
+    };
+    let connection = if direction == "both" {
+        format!(
+            "incomingDeps(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}\n          {field}(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}"
+        )
+    } else {
+        format!("{field}(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}")
+    };
+    let scoped_body = format!(
+        r#"artefacts(filter: {{ symbolFqn: "{escaped_symbol}" }}, first: 1) {{
+        edges {{
+          node {{
+            {connection}
+          }}
+        }}
+      }}"#
+    );
+    let query = match commit_sha {
+        Some(commit_sha) => format!(
+            r#"query {{
+  history: asOf(input: {{ commit: "{}" }}) {{
+    {}
+  }}
+}}"#,
+            escape_devql_string(commit_sha),
+            scoped_body
+        ),
+        None => format!(
+            r#"query {{
+  {}
+}}"#,
+            scoped_body
+        ),
+    };
+    Ok(query)
+}
+
+fn count_deps_for_symbol(
+    world: &mut QatWorld,
+    symbol_fqn: &str,
+    direction: &str,
+    commit_sha: Option<&str>,
+) -> Result<usize> {
+    let query = build_deps_graphql_query(symbol_fqn, direction, commit_sha)?;
+    let value = run_devql_graphql_query(world, &query)?;
+    let scope = match commit_sha {
+        Some(_) => value.get("history"),
+        None => Some(&value),
+    }
+    .ok_or_else(|| anyhow!("expected GraphQL deps scope in response"))?;
+    let node = scope
+        .get("artefacts")
+        .and_then(|artefacts| artefacts.get("edges"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|edges| edges.first())
+        .and_then(|edge| edge.get("node"));
+    let count = match (direction, node) {
+        (_, None) => 0,
+        ("out", Some(node)) => node
+            .get("outgoingDeps")
+            .and_then(|deps| deps.get("totalCount"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        ("in", Some(node)) => node
+            .get("incomingDeps")
+            .and_then(|deps| deps.get("totalCount"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        ("both", Some(node)) => {
+            let incoming = node
+                .get("incomingDeps")
+                .and_then(|deps| deps.get("totalCount"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let outgoing = node
+                .get("depsBoth")
+                .and_then(|deps| deps.get("totalCount"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            (incoming + outgoing) as usize
+        }
+        _ => 0,
+    };
+    Ok(count)
 }
 
 pub fn assert_devql_artefacts_count_stable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
@@ -249,6 +318,27 @@ pub fn create_ts_project_with_tests_and_coverage(repo_dir: &Path) -> Result<()> 
     )
     .context("writing coverage/lcov.info")?;
     fs::write(
+        coverage_dir.join("user-service.test-scenario.json"),
+        serde_json::json!({
+            "data": [
+                {
+                    "files": [
+                        {
+                            "filename": "src/services/user-service.ts",
+                            "segments": [
+                                [2, 1, 1, true, true, false],
+                                [8, 1, 0, true, true, false],
+                                [9, 1, 0, true, true, false]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .context("writing coverage/user-service.test-scenario.json")?;
+    fs::write(
         test_results_dir.join("jest-results.json"),
         "{\n  \"testResults\": [\n    {\n      \"name\": \"tests/UserService.test.ts\",\n      \"assertionResults\": [\n        {\n          \"title\": \"creates a user with a valid name\",\n          \"status\": \"passed\",\n          \"ancestorTitles\": [\"UserService\"],\n          \"duration\": 5\n        },\n        {\n          \"title\": \"throws on empty name\",\n          \"status\": \"passed\",\n          \"ancestorTitles\": [\"UserService\"],\n          \"duration\": 2\n        },\n        {\n          \"title\": \"trims whitespace from name\",\n          \"status\": \"passed\",\n          \"ancestorTitles\": [\"UserService\"],\n          \"duration\": 1\n        }\n      ]\n    }\n  ]\n}\n",
     )
@@ -260,6 +350,43 @@ pub fn create_ts_project_with_tests_and_coverage(repo_dir: &Path) -> Result<()> 
     .context("writing test-results/jest-results-fail.json")?;
 
     Ok(())
+}
+
+fn resolve_test_harness_relational_db_path(world: &QatWorld) -> Result<std::path::PathBuf> {
+    with_scenario_app_env(world, || {
+        let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
+            .context("resolving TestHarness store backend config")?;
+        resolve_sqlite_db_path_for_repo(world.repo_dir(), cfg.relational.sqlite_path.as_deref())
+            .context("resolving TestHarness relational db path")
+    })
+}
+
+fn load_test_harness_scenario_symbol_ids(world: &QatWorld) -> Result<Vec<String>> {
+    let db_path = resolve_test_harness_relational_db_path(world)?;
+    let conn = rusqlite::Connection::open(&db_path)
+        .with_context(|| format!("opening TestHarness db at {}", db_path.display()))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT symbol_id \
+             FROM test_artefacts_current \
+             WHERE canonical_kind = 'test_scenario' \
+             ORDER BY name, start_line",
+        )
+        .context("preparing test scenario lookup query")?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .context("querying test scenario symbol ids")?;
+
+    let mut symbol_ids = Vec::new();
+    for row in rows {
+        symbol_ids.push(row.context("decoding test scenario symbol id")?);
+    }
+
+    ensure!(
+        !symbol_ids.is_empty(),
+        "expected TestHarness ingest-tests to discover at least one test scenario"
+    );
+    Ok(symbol_ids)
 }
 
 pub fn delete_test_file(world: &QatWorld) -> Result<()> {
@@ -306,7 +433,7 @@ pub fn delete_test_file(world: &QatWorld) -> Result<()> {
 pub fn run_testlens_ingest_tests(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let sha = resolve_head_sha(world)?;
-    run_bitloops_success(
+    run_testlens_command_strict(
         world,
         &["devql", "test-harness", "ingest-tests", "--commit", &sha],
         "bitloops devql test-harness ingest-tests",
@@ -321,7 +448,7 @@ pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Re
     } else {
         "jest"
     };
-    run_bitloops_success(
+    run_testlens_command_strict(
         world,
         &[
             "devql",
@@ -337,7 +464,43 @@ pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Re
             tool,
         ],
         "bitloops devql test-harness ingest-coverage",
-    )
+    )?;
+
+    for test_symbol_id in load_test_harness_scenario_symbol_ids(world)? {
+        run_testlens_command_strict(
+            world,
+            &[
+                "devql",
+                "test-harness",
+                "ingest-coverage",
+                "--input",
+                "coverage/user-service.test-scenario.json",
+                "--format",
+                "llvm-json",
+                "--commit",
+                &sha,
+                "--scope",
+                "test-scenario",
+                "--tool",
+                tool,
+                "--test-artefact-id",
+                &test_symbol_id,
+            ],
+            "bitloops devql test-harness ingest-coverage",
+        )?;
+    }
+
+    Ok(())
+}
+
+fn run_testlens_command_strict(world: &mut QatWorld, args: &[&str], label: &str) -> Result<()> {
+    let output = run_command_capture(world, label, build_bitloops_command(world, args)?)
+        .with_context(|| format!("running {label}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    world.last_command_stdout = Some(format!("{stdout}\n{stderr}"));
+    ensure_success(&output, label)
 }
 
 pub fn assert_commit_checkpoints_count(
@@ -346,8 +509,9 @@ pub fn assert_commit_checkpoints_count(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = read_commit_checkpoint_mappings(world.repo_dir())
-        .context("reading commit-checkpoint mappings")?;
+    let mappings =
+        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+            .context("reading commit-checkpoint mappings")?;
     ensure!(
         mappings.len() >= min_count,
         "expected commit_checkpoints count >= {min_count}, got {}",
@@ -383,49 +547,40 @@ pub fn run_testlens_query(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<serde_json::Value> {
     ensure_bitloops_repo_name(repo_name)?;
+    let symbol_fqn = resolve_symbol_fqn_alias(world, artefact)?;
+    let temporal_prefix = match state_scope {
+        "current workspace state" => String::new(),
+        "latest commit" => {
+            let commit_scope = world
+                .captured_commit_shas
+                .last()
+                .cloned()
+                .ok_or_else(|| anyhow!("no latest commit SHA captured for TestHarness query"))?;
+            format!(r#"->asOf(commit:"{}")"#, escape_devql_string(&commit_scope))
+        }
+        _ => bail!("unsupported TestHarness state scope `{state_scope}`"),
+    };
     let query = match view {
-        "summary" | "tests" => r#"repo("bitloops")->artefacts()->tests()->limit(200)"#.to_string(),
-        "coverage" => r#"repo("bitloops")->artefacts()->coverage()->limit(200)"#.to_string(),
-        _ => bail!("unsupported testlens view `{view}`"),
+        "summary" | "tests" => format!(
+            r#"repo("bitloops"){}->artefacts(symbol_fqn:"{}")->tests()->limit(200)"#,
+            temporal_prefix,
+            escape_devql_string(&symbol_fqn),
+        ),
+        "coverage" => format!(
+            r#"repo("bitloops"){}->artefacts(symbol_fqn:"{}")->coverage()->limit(200)"#,
+            temporal_prefix,
+            escape_devql_string(&symbol_fqn),
+        ),
+        _ => bail!("unsupported TestHarness view `{view}`"),
     };
     let value = run_devql_query(world, &query)?;
     let rows = value
         .as_array()
-        .ok_or_else(|| anyhow!("expected testlens DevQL query to return a JSON array"))?;
-    let symbol_row = rows.iter().find(|row| {
-        row.get("symbolFqn")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|candidate| {
-                candidate == artefact || candidate.ends_with(&format!("::{artefact}"))
-            })
-    });
-    let by_covering_test_name = rows.iter().find(|row| {
-        row.get("tests")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|entries| {
-                entries.iter().any(|entry| {
-                    entry
-                        .get("coveringTests")
-                        .or_else(|| entry.get("covering_tests"))
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|tests| {
-                            tests.iter().any(|test| {
-                                test.get("testName")
-                                    .or_else(|| test.get("test_name"))
-                                    .and_then(serde_json::Value::as_str)
-                                    .is_some_and(|name| name == artefact)
-                            })
-                        })
-                })
-            })
-    });
-    let row = if matches!(view, "summary" | "tests") {
-        by_covering_test_name.or(symbol_row)
-    } else {
-        symbol_row
-    };
+        .ok_or_else(|| anyhow!("expected TestHarness DevQL query to return a JSON array"))?;
+    let row = rows.first();
 
     let payload = match (view, row) {
         ("summary", Some(row)) => {
@@ -468,30 +623,8 @@ pub fn run_testlens_query(
                     tests
                         .iter()
                         .map(|test| {
-                            let classification = test
-                                .get("classification")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_string)
-                                .or_else(|| {
-                                    test.get("linkageStatus")
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::to_string)
-                                })
-                                .or_else(|| {
-                                    test.get("linkage_status")
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::to_string)
-                                })
-                                .unwrap_or_else(|| "unknown".to_string());
-                            let last_run = test.get("last_run").cloned().or_else(|| {
-                                test.get("lastRun").map(|run| {
-                                    let status = run
-                                        .get("status")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or("unknown");
-                                    serde_json::json!({ "status": status })
-                                })
-                            });
+                            let last_run =
+                                test.get("last_run").cloned().or_else(|| test.get("lastRun").cloned());
 
                             let mut normalized = serde_json::Map::new();
                             normalized.insert(
@@ -503,7 +636,23 @@ pub fn run_testlens_query(
                             );
                             normalized.insert(
                                 "classification".to_string(),
-                                serde_json::json!(classification),
+                                test.get("classification")
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
+                            normalized.insert(
+                                "classification_source".to_string(),
+                                test.get("classification_source")
+                                    .or_else(|| test.get("classificationSource"))
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
+                            normalized.insert(
+                                "fan_out".to_string(),
+                                test.get("fan_out")
+                                    .or_else(|| test.get("fanOut"))
+                                    .cloned()
+                                    .unwrap_or(serde_json::Value::Null),
                             );
                             if let Some(last_run) = last_run {
                                 normalized.insert("last_run".to_string(), last_run);
@@ -544,7 +693,7 @@ pub fn run_testlens_query(
     };
 
     world.last_command_stdout =
-        Some(serde_json::to_string(&payload).context("serializing normalized testlens payload")?);
+        Some(serde_json::to_string(&payload).context("serializing normalized TestHarness payload")?);
     Ok(payload)
 }
 
@@ -567,6 +716,7 @@ fn run_testlens_query_eventually(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
     expected: &str,
     condition: impl Fn(&serde_json::Value) -> bool,
 ) -> Result<serde_json::Value> {
@@ -580,7 +730,7 @@ fn run_testlens_query_eventually(
 
     loop {
         attempts += 1;
-        let value = run_testlens_query(world, repo_name, artefact, view)?;
+        let value = run_testlens_query(world, repo_name, artefact, view, state_scope)?;
         if condition(&value) {
             return Ok(value);
         }
@@ -589,7 +739,7 @@ fn run_testlens_query_eventually(
             let last_payload = serde_json::to_string(&last_value)
                 .unwrap_or_else(|_| "<failed to serialize payload>".to_string());
             bail!(
-                "timed out after {}s waiting for TestLens query ({artefact}, {view}) to {expected}; attempts={attempts}; last payload={last_payload}",
+                "timed out after {}s waiting for TestHarness query ({artefact}, {view}) to {expected}; attempts={attempts}; last payload={last_payload}",
                 timeout.as_secs()
             );
         }
@@ -604,19 +754,21 @@ pub fn assert_testlens_query_returns_results(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<()> {
     let value = run_testlens_query_eventually(
         world,
         repo_name,
         artefact,
         view,
+        state_scope,
         "return results",
         |value| count_testlens_payload_rows(value) >= 1,
     )?;
     let count = count_testlens_payload_rows(&value);
     ensure!(
         count >= 1,
-        "expected testlens query ({artefact}, {view}) to return results, got {count}"
+        "expected TestHarness query ({artefact}, {view}) to return results, got {count}"
     );
     Ok(())
 }
@@ -638,7 +790,7 @@ pub fn assert_testlens_tests_have_classification(world: &QatWorld) -> Result<()>
     let tests = value
         .get("covering_tests")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("expected covering_tests array in testlens response"))?;
+        .ok_or_else(|| anyhow!("expected covering_tests array in TestHarness response"))?;
     ensure!(!tests.is_empty(), "expected at least one covering test");
     let has_classification = tests.iter().any(|test| {
         test.get("classification")
@@ -670,19 +822,21 @@ pub fn assert_testlens_query_empty_or_zero(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<()> {
     let value = run_testlens_query_eventually(
         world,
         repo_name,
         artefact,
         view,
+        state_scope,
         "become empty or zero-count",
         testlens_payload_is_empty_or_zero,
     )?;
     let payload_count = count_testlens_payload_rows(&value);
     ensure!(
         testlens_payload_is_empty_or_zero(&value),
-        "expected empty or zero-count testlens payload for `{artefact}`, got payload_count={payload_count}"
+        "expected empty or zero-count TestHarness payload for `{artefact}`, got payload_count={payload_count}"
     );
     Ok(())
 }
@@ -692,53 +846,22 @@ pub fn assert_testlens_includes_failing_test(
     repo_name: &str,
     artefact: &str,
     view: &str,
+    state_scope: &str,
 ) -> Result<()> {
-    let value = run_testlens_query(world, repo_name, artefact, view)?;
+    let value = run_testlens_query(world, repo_name, artefact, view, state_scope)?;
     let tests = value
         .get("covering_tests")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("expected covering_tests array in testlens response"))?;
-    let mut has_failing = tests.iter().any(|test| {
+        .ok_or_else(|| anyhow!("expected covering_tests array in TestHarness response"))?;
+    let has_failing = tests.iter().any(|test| {
         test.get("last_run")
             .and_then(|run| run.get("status"))
             .and_then(serde_json::Value::as_str)
             .is_some_and(|status| status == "fail" || status == "failed")
     });
-    if !has_failing {
-        let fallback_results = world
-            .repo_dir()
-            .join("test-results")
-            .join("jest-results-fail.json");
-        if fallback_results.exists() {
-            let fallback_raw = fs::read_to_string(&fallback_results)
-                .with_context(|| format!("reading {}", fallback_results.display()))?;
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&fallback_raw) {
-                has_failing = parsed
-                    .get("testResults")
-                    .and_then(serde_json::Value::as_array)
-                    .is_some_and(|suites| {
-                        suites.iter().any(|suite| {
-                            suite
-                                .get("assertionResults")
-                                .and_then(serde_json::Value::as_array)
-                                .is_some_and(|assertions| {
-                                    assertions.iter().any(|assertion| {
-                                        assertion
-                                            .get("status")
-                                            .and_then(serde_json::Value::as_str)
-                                            .is_some_and(|status| {
-                                                status == "fail" || status == "failed"
-                                            })
-                                    })
-                                })
-                        })
-                    });
-            }
-        }
-    }
     ensure!(
         has_failing,
-        "expected at least one failing test in testlens query output"
+        "expected at least one failing test in TestHarness query output"
     );
     Ok(())
 }

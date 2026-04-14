@@ -5,7 +5,15 @@ pub(super) async fn execute_graphql<T: DeserializeOwned>(
     query: &str,
     variables: Value,
 ) -> Result<T> {
-    execute_graphql_request(repo_root, "/devql/global", None, query, variables).await
+    execute_graphql_request(repo_root, "/devql/global", None, query, variables, false).await
+}
+
+pub(super) async fn execute_repo_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    execute_graphql_request(repo_root, "/devql/global", None, query, variables, true).await
 }
 
 pub(super) async fn execute_slim_graphql<T: DeserializeOwned>(
@@ -14,7 +22,7 @@ pub(super) async fn execute_slim_graphql<T: DeserializeOwned>(
     query: &str,
     variables: Value,
 ) -> Result<T> {
-    execute_graphql_request(repo_root, "/devql", Some(scope), query, variables).await
+    execute_graphql_request(repo_root, "/devql", Some(scope), query, variables, true).await
 }
 
 async fn execute_graphql_request<T: DeserializeOwned>(
@@ -23,6 +31,7 @@ async fn execute_graphql_request<T: DeserializeOwned>(
     scope: Option<&SlimCliRepoScope>,
     query: &str,
     variables: Value,
+    require_binding: bool,
 ) -> Result<T> {
     let timings_enabled = crate::devql_timing::timings_enabled_from_env();
     let trace = timings_enabled.then(crate::devql_timing::TimingTrace::new);
@@ -57,6 +66,9 @@ async fn execute_graphql_request<T: DeserializeOwned>(
         "query": query,
         "variables": variables,
     }));
+    if require_binding {
+        request = crate::devql_transport::attach_repo_daemon_binding_headers(request, repo_root)?;
+    }
     if let Some(scope) = scope {
         request = attach_slim_cli_scope_headers(request, scope);
     }

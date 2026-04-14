@@ -161,6 +161,8 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx"));
@@ -197,6 +199,8 @@ fn sqlite_schema_sql_includes_sync_state_table() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_artefact_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_artefact_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_before_symbol_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefacts_after_symbol_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_artefact_lineage"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_checkpoint_idx"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_artefact_lineage_source_idx"));
@@ -289,8 +293,17 @@ fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebr
 #[test]
 fn devql_ingest_rejects_removed_init_flag() {
     assert!(
-        crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"]).is_err(),
-        "devql ingest should reject the removed --init flag"
+        crate::cli::Cli::try_parse_from([
+            "bitloops",
+            "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
+            "ingest",
+            "--init=false",
+        ])
+        .is_err(),
+        "devql task enqueue ingest should reject the removed --init flag"
     );
 }
 

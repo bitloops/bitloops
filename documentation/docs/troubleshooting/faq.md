@@ -50,8 +50,29 @@ Machine-scoped settings such as:
 
 - store paths and backends
 - provider credentials
+- inference profiles, runtimes, and capability bindings
 - dashboard defaults
 - daemon runtime defaults
+
+`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create the default local embeddings profile for you when it is missing.
+
+### How do I turn on local embeddings now?
+
+Use one of these paths:
+
+```bash
+bitloops enable --install-embeddings
+bitloops daemon enable --install-embeddings
+bitloops init --install-default-daemon --sync=true
+```
+
+Interactive `bitloops enable` also offers embeddings install automatically when embeddings are not already configured, with a default-yes `[Y/n]` prompt.
+
+Bitloops writes the default local profile to the effective daemon config, using this order:
+
+1. `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`
+2. nearest repo `config.toml`
+3. default global daemon config
 
 ### Does `bitloops dashboard` still run the server?
 

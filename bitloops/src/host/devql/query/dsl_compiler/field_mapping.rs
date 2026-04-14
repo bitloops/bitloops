@@ -115,6 +115,19 @@ pub(super) fn tests_result_selections() -> Vec<GraphqlSelection> {
                 GraphqlSelection::scalar("filePath"),
                 GraphqlSelection::scalar("startLine"),
                 GraphqlSelection::scalar("endLine"),
+                GraphqlSelection::scalar("classification"),
+                GraphqlSelection::scalar("classificationSource"),
+                GraphqlSelection::scalar("fanOut"),
+                GraphqlField::new(
+                    "lastRun",
+                    Vec::new(),
+                    vec![
+                        GraphqlSelection::scalar("status"),
+                        GraphqlSelection::scalar("durationMs"),
+                        GraphqlSelection::scalar("commitSha"),
+                    ],
+                )
+                .into(),
             ],
         )
         .into(),

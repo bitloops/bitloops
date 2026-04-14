@@ -25,4 +25,4 @@ mod types;
 #[path = "pre_push_sync/tests.rs"]
 mod tests;
 
-pub(crate) use self::runtime::run_devql_pre_push_sync;
+pub(crate) use self::runtime::{execute_devql_pre_push_sync, run_devql_pre_push_sync};

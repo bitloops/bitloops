@@ -504,6 +504,39 @@ fn compile_project_deps_pipeline() {
 }
 
 #[test]
+fn compile_project_deps_pipeline_preserves_explicit_include_unresolved_false() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->project("packages/api")->deps(kind:"imports",direction:"out",include_unresolved:false)->limit(100)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  repo(name: "bitloops-cli") {
+    project(path: "packages/api") {
+      deps(filter: { kind: IMPORTS, direction: OUT, includeUnresolved: false }, first: 100) {
+        edges {
+          node {
+            id
+            edgeKind
+            fromArtefactId
+            toArtefactId
+            toSymbolRef
+            startLine
+            endLine
+          }
+        }
+      }
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_repository_knowledge_pipeline() {
     let parsed =
         parse_devql_query(r#"repo("bitloops-cli")->knowledge()->limit(10)"#).expect("query parses");
@@ -528,6 +561,147 @@ fn compile_repository_knowledge_pipeline() {
     }
   }
 }"#
+    );
+}
+
+#[test]
+fn parse_devql_pipeline_supports_select_artefacts_symbol_selector() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->checkpoints()"#)
+            .expect("query parses");
+
+    let selector = parsed
+        .select_artefacts
+        .as_ref()
+        .expect("selection should be present");
+    assert_eq!(selector.symbol_fqn.as_deref(), Some("src/main.rs::main"));
+    assert_eq!(selector.path, None);
+    assert_eq!(selector.lines, None);
+    assert!(parsed.has_checkpoints_stage);
+}
+
+#[test]
+fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(path:"src/main.rs",lines:20..25)->checkpoints()"#)
+            .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs", lines: { start: 20, end: 25 } }) {
+    checkpoints {
+      summary
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_deps_supports_schema_projection() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->deps()->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { symbolFqn: "src/main.rs::main" }) {
+    deps(includeUnresolved: true) {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector() {
+    let parsed = parse_devql_query(
+        r#"deps(direction:"in",include_unresolved:true)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    deps(direction: IN, includeUnresolved: true) {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
+    let parsed = parse_devql_query(
+        r#"deps(direction:"in",include_unresolved:false)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    deps(direction: IN, includeUnresolved: false) {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    tests(minConfidence: 0.8, linkageSource: "coverage") {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_global_select_artefacts_rejects_repo_scoped_slim_only_pipeline() {
+    let parsed = parse_devql_query(r#"selectArtefacts(path:"src/main.rs")->checkpoints()"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("global compile should fail");
+    assert!(
+        err.to_string().contains("repo-scoped slim only"),
+        "unexpected error: {err:#}"
     );
 }
 

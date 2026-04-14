@@ -2,8 +2,8 @@
 //! materialization, and `execute_sync` behaviour.
 //!
 //! Submodules live under `tests/sync_tests/`; paths are explicit because the parent `devql`
-//! module loads this file via `#[path = ".../sync_tests.rs"]`, which anchors child `mod` resolution
-//! to `tests/` rather than this file's subfolder.
+//! module loads this file via `#[path = ".../sync_tests.rs"]`, which anchors child `mod`
+//! resolution to `tests/` rather than this file's subfolder.
 
 #[path = "sync_tests/fixtures.rs"]
 mod fixtures;

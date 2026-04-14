@@ -28,9 +28,9 @@ bitloops start --create-default-config
 
 On a fresh machine, this creates the default daemon config and local default store paths. Interactive bootstrap can also ask for telemetry consent unless you pass an explicit telemetry flag.
 
-## 2) Configure stores and semantic provider
+## 2) Configure stores and inference profiles
 
-Edit the global daemon config (`config.toml`) and set the stores and semantic provider you want. Example:
+Edit the global daemon config (`config.toml`) and set the stores and inference profiles you want. Example:
 
 ```toml
 [stores.relational]
@@ -42,11 +42,25 @@ duckdb_path = "/absolute/path/to/bitloops/stores/event/events.duckdb"
 [stores.blob]
 local_path = "/absolute/path/to/bitloops/stores/blob"
 
-[semantic]
-provider = "openai_compatible"
-model = "gpt-4.1-mini"
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
+model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1/chat/completions"
+
+[semantic_clones]
+summary_mode = "auto"
+
+[semantic_clones.inference]
+summary_generation = "summary_llm"
 ```
 
 What this does:
@@ -54,7 +68,10 @@ What this does:
 - uses SQLite for relational data
 - uses DuckDB for event data
 - uses local filesystem blob storage
+- routes semantic summaries through the standalone `bitloops-inference` runtime
 - keeps all machine-specific backend configuration in the daemon config rather than in the repo
+
+For local summaries, `bitloops init --install-default-daemon` and interactive `bitloops enable` can install a managed `bitloops-inference` binary and bind summaries to Ollama automatically when it is available.
 
 To use ClickHouse for events instead, configure `[stores.events]` with `clickhouse_url` and related settings. To use Postgres for relational data instead, configure `[stores.relational]` with `postgres_dsn`.
 

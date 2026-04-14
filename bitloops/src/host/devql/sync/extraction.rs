@@ -12,6 +12,7 @@ pub(crate) const PARSE_STATUS_PARSE_ERROR: &str = "parse_error";
 struct ExtractionInput<'a> {
     path: &'a str,
     content_id: &'a str,
+    extraction_fingerprint: &'a str,
     parser_version: &'a str,
     extractor_version: &'a str,
     language: &'a str,
@@ -19,30 +20,58 @@ struct ExtractionInput<'a> {
     file_docstring: Option<String>,
 }
 
+pub(crate) struct CacheExtractionRequest<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) language: &'a str,
+    pub(crate) content_id: &'a str,
+    pub(crate) extraction_fingerprint: &'a str,
+    pub(crate) parser_version: &'a str,
+    pub(crate) extractor_version: &'a str,
+    pub(crate) content: &'a str,
+}
+
 pub(crate) fn extract_to_cache_format(
     cfg: &crate::host::devql::DevqlConfig,
-    path: &str,
-    content_id: &str,
-    parser_version: &str,
-    extractor_version: &str,
-    content: &str,
+    request: CacheExtractionRequest<'_>,
 ) -> Result<Option<CachedExtraction>> {
-    let language = crate::host::devql::detect_language(path);
+    if request.language == crate::host::devql::PLAIN_TEXT_LANGUAGE_ID {
+        if !crate::host::devql::plain_text_content_is_allowed(request.content) {
+            return Ok(None);
+        }
+        return Ok(Some(map_extraction_to_cache_format(
+            ExtractionInput {
+                path: request.path,
+                content_id: request.content_id,
+                extraction_fingerprint: request.extraction_fingerprint,
+                parser_version: request.parser_version,
+                extractor_version: request.extractor_version,
+                language: request.language,
+                content: request.content,
+                file_docstring: None,
+            },
+            Vec::new(),
+            Vec::new(),
+        )));
+    }
+
     let rev = crate::host::devql::FileRevision {
-        commit_sha: content_id,
+        commit_sha: request.content_id,
         revision: crate::host::devql::TemporalRevisionRef {
             kind: crate::host::devql::TemporalRevisionKind::Temporary,
-            id: content_id,
+            id: request.content_id,
             temp_checkpoint_id: None,
         },
         commit_unix: 0,
-        path,
-        blob_sha: content_id,
+        path: request.path,
+        blob_sha: request.content_id,
     };
 
     let Some((items, edges, file_docstring)) =
         crate::host::devql::extract_language_pack_artefacts_and_edges(
-            cfg, &rev, &language, content,
+            cfg,
+            &rev,
+            request.language,
+            request.content,
         )?
     else {
         return Ok(None);
@@ -50,12 +79,13 @@ pub(crate) fn extract_to_cache_format(
 
     Ok(Some(map_extraction_to_cache_format(
         ExtractionInput {
-            path,
-            content_id,
-            parser_version,
-            extractor_version,
-            language: &language,
-            content,
+            path: request.path,
+            content_id: request.content_id,
+            extraction_fingerprint: request.extraction_fingerprint,
+            parser_version: request.parser_version,
+            extractor_version: request.extractor_version,
+            language: request.language,
+            content: request.content,
             file_docstring,
         },
         items,
@@ -67,12 +97,14 @@ pub(crate) fn extract_to_cache_format(
 pub(crate) fn parse_error_to_cache_format(
     content_id: &str,
     language: &str,
+    extraction_fingerprint: &str,
     parser_version: &str,
     extractor_version: &str,
 ) -> CachedExtraction {
     CachedExtraction {
         content_id: content_id.to_string(),
         language: language.to_string(),
+        extraction_fingerprint: extraction_fingerprint.to_string(),
         parser_version: parser_version.to_string(),
         extractor_version: extractor_version.to_string(),
         parse_status: PARSE_STATUS_PARSE_ERROR.to_string(),
@@ -147,6 +179,7 @@ fn map_extraction_to_cache_format(
     CachedExtraction {
         content_id: input.content_id.to_string(),
         language: input.language.to_string(),
+        extraction_fingerprint: input.extraction_fingerprint.to_string(),
         parser_version: input.parser_version.to_string(),
         extractor_version: input.extractor_version.to_string(),
         parse_status: PARSE_STATUS_OK.to_string(),
@@ -345,6 +378,7 @@ mod tests {
             ExtractionInput {
                 path: "src/sample.ts",
                 content_id: "content-id",
+                extraction_fingerprint: "fingerprint-v1",
                 parser_version: "parser-v1",
                 extractor_version: "extractor-v1",
                 language: "typescript",
@@ -358,6 +392,7 @@ mod tests {
             ExtractionInput {
                 path: "src/sample.ts",
                 content_id: "content-id",
+                extraction_fingerprint: "fingerprint-v1",
                 parser_version: "parser-v1",
                 extractor_version: "extractor-v1",
                 language: "typescript",
@@ -374,11 +409,17 @@ mod tests {
 
     #[test]
     fn parse_error_cache_payload_has_empty_extraction_data() {
-        let parse_error =
-            parse_error_to_cache_format("content-id", "typescript", "parser-v1", "extractor-v1");
+        let parse_error = parse_error_to_cache_format(
+            "content-id",
+            "typescript",
+            "fingerprint-v1",
+            "parser-v1",
+            "extractor-v1",
+        );
 
         assert_eq!(parse_error.content_id, "content-id");
         assert_eq!(parse_error.language, "typescript");
+        assert_eq!(parse_error.extraction_fingerprint, "fingerprint-v1");
         assert_eq!(parse_error.parser_version, "parser-v1");
         assert_eq!(parse_error.extractor_version, "extractor-v1");
         assert_eq!(parse_error.parse_status, PARSE_STATUS_PARSE_ERROR);

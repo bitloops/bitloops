@@ -34,7 +34,7 @@ Linux examples:
 ~/.local/share/bitloops/stores/relational/relational.db
 ~/.local/share/bitloops/stores/event/events.duckdb
 ~/.local/share/bitloops/stores/blob/
-~/.cache/bitloops/embeddings/models/
+~/.cache/bitloops-embeddings/
 ~/.local/state/bitloops/daemon/runtime.sqlite
 ```
 
@@ -78,30 +78,51 @@ s3_secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
 
 ## Embedding Cache
 
-Semantic and embeddings configuration lives alongside store config in the daemon config, but it uses separate sections from `[stores]`:
+Inference configuration lives alongside store config in the daemon config, but it uses separate sections from `[stores]`:
 
 ```toml
-[semantic]
-provider = "openai_compatible"
-model = "qwen2.5-coder"
-api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
-
 [semantic_clones]
 summary_mode = "auto"
 embedding_mode = "semantic_aware_once"
-embedding_profile = "local-code"
+ann_neighbors = 5
+enrichment_workers = 1
 
-[embeddings.runtime]
-command = "bitloops-embeddings"
-startup_timeout_secs = 10
-request_timeout_secs = 60
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 
-[embeddings.profiles.local-code]
-kind = "local_fastembed"
-model = "jinaai/jina-embeddings-v2-base-code"
-cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.bitloops_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_embeddings"
+model = "bge-m3"
+cache_dir = "/Users/alex/.cache/bitloops-embeddings"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
+model = "gpt-5.4-mini"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1/chat/completions"
 ```
+
+`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create the default local embeddings profile for you. `bitloops inference install` installs or repairs the managed summary runtime, and `bitloops init --install-default-daemon` or interactive `bitloops enable` can bind summaries to Ollama automatically when it is available. Edit the daemon config manually only when you need a different profile name, model, or hosted provider.
+
+When Bitloops installs a managed runtime, it writes an absolute path under the Bitloops data directory, as shown above. Use `command = "bitloops-embeddings"` or `command = "bitloops-inference"` only when you are managing those standalone binaries yourself on `PATH`.
 
 Embedding model downloads are cache, not durable relational or event store data.
 

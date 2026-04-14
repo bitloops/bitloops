@@ -5,12 +5,12 @@ use super::unified_config::{
     UnifiedSettings, merge_layers, resolve_dashboard_from_unified,
     resolve_embedding_capability_from_unified, resolve_embeddings_from_unified,
     resolve_provider_from_unified, resolve_semantic_clones_from_unified,
-    resolve_semantic_from_unified, resolve_store_backend_from_unified, resolve_watch_from_unified,
+    resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL,
-    ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
-    SemanticCloneEmbeddingMode, SemanticSummaryMode,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DashboardLocalDashboardConfig,
+    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS, InferenceTask, SemanticCloneEmbeddingMode,
+    SemanticClonesInferenceBindings, SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -76,139 +76,102 @@ fn store_backend_from_unified_merges_across_layers() {
 }
 
 // ---------------------------------------------------------------------------
-// B. Semantic config from unified
+// B. Semantic clones + inference config from unified
 // ---------------------------------------------------------------------------
 
 #[test]
-fn semantic_from_unified_reads_semantic_block() {
-    let settings = UnifiedSettings {
-        semantic: Some(json!({
-            "provider": "openai",
-            "model": "text-embedding-3-small",
-            "api_key": "sk-test",
-            "base_url": "https://api.openai.com"
-        })),
-        ..Default::default()
-    };
-    let cfg = resolve_semantic_from_unified(&settings, no_env);
-
-    assert_eq!(cfg.semantic_provider.as_deref(), Some("openai"));
-    assert_eq!(
-        cfg.semantic_model.as_deref(),
-        Some("text-embedding-3-small")
-    );
-    assert_eq!(cfg.semantic_api_key.as_deref(), Some("sk-test"));
-    assert_eq!(
-        cfg.semantic_base_url.as_deref(),
-        Some("https://api.openai.com")
-    );
-}
-
-#[test]
-fn semantic_from_unified_env_wins_over_file() {
-    let settings = UnifiedSettings {
-        semantic: Some(json!({
-            "provider": "openai",
-            "model": "file-model"
-        })),
-        ..Default::default()
-    };
-    let cfg = resolve_semantic_from_unified(&settings, |key| match key {
-        k if k == ENV_SEMANTIC_PROVIDER => Some("anthropic".into()),
-        k if k == ENV_SEMANTIC_MODEL => Some("env-model".into()),
-        k if k == ENV_SEMANTIC_API_KEY => Some("env-key".into()),
-        k if k == ENV_SEMANTIC_BASE_URL => Some("https://env.example.com".into()),
-        _ => None,
-    });
-
-    assert_eq!(cfg.semantic_provider.as_deref(), Some("anthropic"));
-    assert_eq!(cfg.semantic_model.as_deref(), Some("env-model"));
-    assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
-    assert_eq!(
-        cfg.semantic_base_url.as_deref(),
-        Some("https://env.example.com")
-    );
-}
-
-// ---------------------------------------------------------------------------
-// C. Embedding config from unified
-// ---------------------------------------------------------------------------
-
-#[test]
-fn embedding_capability_from_unified_requires_explicit_profile_selection() {
-    let settings = UnifiedSettings {
-        embeddings: Some(json!({
-            "profiles": {
-                "local": {
-                    "kind": "local_fastembed",
-                    "model": "jinaai/jina-embeddings-v2-base-code"
-                }
-            }
-        })),
-        ..Default::default()
-    };
-    let capability =
-        resolve_embedding_capability_from_unified(&settings, Path::new("/config"), no_env);
-
-    assert_eq!(capability.semantic_clones.embedding_profile, None);
-    assert!(capability.embeddings.profiles.contains_key("local"));
-    assert!(capability.embeddings.warnings.is_empty());
-}
-
-#[test]
-fn embeddings_from_unified_defaults_to_disabled() {
-    let settings = UnifiedSettings::default();
-    let embeddings = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
-
-    assert_eq!(embeddings.runtime.command, "bitloops-embeddings");
-    assert!(embeddings.profiles.is_empty());
-    assert!(embeddings.warnings.is_empty());
-}
-
-#[test]
-fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
+fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     let settings = UnifiedSettings {
         semantic_clones: Some(json!({
             "summary_mode": "auto",
             "embedding_mode": "semantic_aware_once",
-            "embedding_profile": "local"
+            "enrichment_workers": 12,
+            "inference": {
+                "summary_generation": "summary_llm",
+                "code_embeddings": "local_code",
+                "summary_embeddings": "local_summary"
+            }
         })),
-        embeddings: Some(json!({
-            "runtime": {
-                "command": "bitloops-embeddings",
-                "args": ["--verbose"]
+        inference: Some(json!({
+            "runtimes": {
+                "bitloops_embeddings": {
+                    "command": "bitloops-embeddings",
+                    "args": ["--verbose"]
+                },
+                "bitloops_inference": {
+                    "command": "bitloops-inference"
+                }
             },
             "profiles": {
-                "local": {
-                    "kind": "local_fastembed",
-                    "model": "jinaai/jina-embeddings-v2-base-code",
+                "local_code": {
+                    "task": "embeddings",
+                    "driver": "bitloops_embeddings_ipc",
+                    "runtime": "bitloops_embeddings",
+                    "model": "bge-m3",
                     "cache_dir": ".cache/embeddings"
+                },
+                "local_summary": {
+                    "task": "embeddings",
+                    "driver": "bitloops_embeddings_ipc",
+                    "runtime": "bitloops_embeddings",
+                    "model": "bge-m3"
+                },
+                "summary_llm": {
+                    "task": "text_generation",
+                    "driver": "ollama_chat",
+                    "runtime": "bitloops_inference",
+                    "model": "gpt-5.4-mini",
+                    "base_url": "https://api.openai.com/v1"
                 }
             }
         })),
         ..Default::default()
     };
-
     let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
+    let inference = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
+    let capability =
+        resolve_embedding_capability_from_unified(&settings, Path::new("/config"), no_env);
+
     assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Auto);
     assert_eq!(
         semantic_clones.embedding_mode,
         SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
-    assert_eq!(semantic_clones.embedding_profile.as_deref(), Some("local"));
-
-    let embeddings = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
-    assert_eq!(embeddings.runtime.command, "bitloops-embeddings");
-    assert_eq!(embeddings.runtime.args, vec!["--verbose".to_string()]);
-    let profile = embeddings
-        .profiles
-        .get("local")
-        .expect("local embedding profile");
-    assert_eq!(profile.kind, "local_fastembed");
     assert_eq!(
-        profile.cache_dir.as_deref(),
+        semantic_clones.inference,
+        SemanticClonesInferenceBindings {
+            summary_generation: Some("summary_llm".to_string()),
+            code_embeddings: Some("local_code".to_string()),
+            summary_embeddings: Some("local_summary".to_string()),
+        }
+    );
+    assert_eq!(semantic_clones.ann_neighbors, 5);
+    assert_eq!(semantic_clones.enrichment_workers, 12);
+    assert!(inference.warnings.is_empty());
+    assert_eq!(
+        inference
+            .runtimes
+            .get("bitloops_embeddings")
+            .expect("runtime")
+            .args,
+        vec!["--verbose".to_string()]
+    );
+    let code_profile = inference.profiles.get("local_code").expect("code profile");
+    assert_eq!(code_profile.task, InferenceTask::Embeddings);
+    assert_eq!(code_profile.driver, "bitloops_embeddings_ipc");
+    assert_eq!(code_profile.runtime.as_deref(), Some("bitloops_embeddings"));
+    assert_eq!(code_profile.model.as_deref(), Some("bge-m3"));
+    assert_eq!(
+        code_profile.cache_dir.as_deref(),
         Some(Path::new("/config/.cache/embeddings"))
     );
+    let llm_profile = inference.profiles.get("summary_llm").expect("llm profile");
+    assert_eq!(llm_profile.task, InferenceTask::TextGeneration);
+    assert_eq!(llm_profile.driver, "ollama_chat");
+    assert_eq!(llm_profile.runtime.as_deref(), Some("bitloops_inference"));
+    assert_eq!(llm_profile.model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(capability.semantic_clones, semantic_clones);
+    assert_eq!(capability.inference, inference);
 }
 
 #[test]
@@ -224,9 +187,9 @@ fn embedding_capability_from_unified_does_not_activate_from_unrelated_store_sett
 
     let capability =
         resolve_embedding_capability_from_unified(&settings, Path::new("/config"), no_env);
-    assert_eq!(capability.semantic_clones.embedding_profile, None);
-    assert!(capability.embeddings.profiles.is_empty());
-    assert!(capability.embeddings.warnings.is_empty());
+    assert_eq!(capability.semantic_clones.inference.code_embeddings, None);
+    assert!(capability.inference.profiles.is_empty());
+    assert!(capability.inference.warnings.is_empty());
 }
 
 #[test]
@@ -235,17 +198,48 @@ fn semantic_clones_from_unified_reads_mode_fields() {
         semantic_clones: Some(json!({
             "summary_mode": "off",
             "embedding_mode": "refresh_on_upgrade",
+            "ann_neighbors": 17,
         })),
         ..Default::default()
     };
 
     let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
     assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Off);
+    assert_eq!(semantic_clones.inference.summary_generation, None);
     assert_eq!(
         semantic_clones.embedding_mode,
         SemanticCloneEmbeddingMode::RefreshOnUpgrade
     );
-    assert_eq!(semantic_clones.embedding_profile, None);
+    assert_eq!(semantic_clones.inference.code_embeddings, None);
+    assert_eq!(semantic_clones.ann_neighbors, 17);
+    assert_eq!(
+        semantic_clones.enrichment_workers,
+        DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
+    );
+}
+
+#[test]
+fn semantic_clones_from_unified_clamps_ann_neighbors_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_ANN_NEIGHBORS" => Some("999".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.ann_neighbors, 50);
+    assert_eq!(
+        semantic_clones.enrichment_workers,
+        DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
+    );
+}
+
+#[test]
+fn semantic_clones_from_unified_reads_enrichment_workers_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS" => Some("16".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.enrichment_workers, 16);
 }
 
 // ---------------------------------------------------------------------------

@@ -227,6 +227,21 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         }
     }
 
+    fn load_latest_test_runs(
+        &self,
+        commit_sha: &str,
+        test_symbol_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, LatestTestRunRecord>> {
+        match self {
+            Self::Sqlite(repository) => {
+                repository.load_latest_test_runs(commit_sha, test_symbol_ids)
+            }
+            Self::Postgres(repository) => {
+                repository.load_latest_test_runs(commit_sha, test_symbol_ids)
+            }
+        }
+    }
+
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
@@ -253,6 +268,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         &self,
         repo_id: &str,
         production_symbol_id: &str,
+        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -261,6 +277,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
             Self::Sqlite(repository) => repository.load_stage_covering_tests(
                 repo_id,
                 production_symbol_id,
+                commit_sha,
                 min_confidence,
                 linkage_source,
                 limit,
@@ -268,6 +285,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
             Self::Postgres(repository) => repository.load_stage_covering_tests(
                 repo_id,
                 production_symbol_id,
+                commit_sha,
                 min_confidence,
                 linkage_source,
                 limit,

@@ -15,4 +15,5 @@ pub static KNOWLEDGE_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     experimental: false,
     dependencies: KNOWLEDGE_DEPENDENCIES,
     required_host_features: &[],
+    inference_slots: &[],
 };

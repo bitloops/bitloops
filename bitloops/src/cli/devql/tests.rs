@@ -19,6 +19,115 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .expect("tokio runtime")
 }
 
+fn ingest_enqueue_command(require_daemon: bool) -> DevqlCommand {
+    DevqlCommand::Tasks(DevqlTasksArgs {
+        command: DevqlTasksCommand::Enqueue(DevqlTaskEnqueueArgs {
+            kind: DevqlTaskKindArg::Ingest,
+            full: false,
+            paths: None,
+            repair: false,
+            validate: false,
+            backfill: None,
+            status: false,
+            require_daemon,
+        }),
+    })
+}
+
+fn sync_enqueue_command(
+    full: bool,
+    paths: Option<Vec<String>>,
+    repair: bool,
+    validate: bool,
+    status: bool,
+    require_daemon: bool,
+) -> DevqlCommand {
+    DevqlCommand::Tasks(DevqlTasksArgs {
+        command: DevqlTasksCommand::Enqueue(DevqlTaskEnqueueArgs {
+            kind: DevqlTaskKindArg::Sync,
+            full,
+            paths,
+            repair,
+            validate,
+            backfill: None,
+            status,
+            require_daemon,
+        }),
+    })
+}
+
+fn queued_sync_task_payload(
+    task_id: &str,
+    mode: &str,
+    paths: Option<Vec<&str>>,
+) -> serde_json::Value {
+    json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "SYNC",
+        "source": "manual_cli",
+        "status": "QUEUED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": null,
+        "updatedAtUnix": 1,
+        "completedAtUnix": null,
+        "queuePosition": 1,
+        "tasksAhead": 0,
+        "error": null,
+        "syncSpec": {
+            "mode": mode,
+            "paths": paths.unwrap_or_default(),
+        },
+        "ingestSpec": null,
+        "syncProgress": {
+            "phase": "queued",
+            "currentPath": null,
+            "pathsTotal": 0,
+            "pathsCompleted": 0,
+            "pathsRemaining": 0,
+            "pathsUnchanged": 0,
+            "pathsAdded": 0,
+            "pathsChanged": 0,
+            "pathsRemoved": 0,
+            "cacheHits": 0,
+            "cacheMisses": 0,
+            "parseErrors": 0
+        },
+        "ingestProgress": null,
+        "syncResult": null,
+        "ingestResult": null
+    })
+}
+
+fn queued_ingest_task_payload(task_id: &str, backfill: Option<usize>) -> serde_json::Value {
+    json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "INGEST",
+        "source": "manual_cli",
+        "status": "QUEUED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": null,
+        "updatedAtUnix": 1,
+        "completedAtUnix": null,
+        "queuePosition": 1,
+        "tasksAhead": 0,
+        "error": null,
+        "syncSpec": null,
+        "ingestSpec": {
+            "backfill": backfill,
+        },
+        "syncProgress": null,
+        "ingestProgress": null,
+        "syncResult": null,
+        "ingestResult": null
+    })
+}
+
 fn test_daemon_state_root(repo_root: &Path) -> PathBuf {
     repo_root
         .parent()
@@ -34,18 +143,16 @@ fn test_daemon_state_root(repo_root: &Path) -> PathBuf {
 }
 
 fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
     let sqlite_path = settings["stores"]["relational"]["sqlite_path"]
         .as_str()
         .expect("relational sqlite path");
     let duckdb_path = settings["stores"]["events"]["duckdb_path"]
         .as_str()
         .expect("events duckdb path");
-    let semantic_provider = settings["semantic"]["provider"]
-        .as_str()
-        .expect("semantic provider");
 
     fs::write(
-        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        &config_path,
         format!(
             r#"[stores]
 [stores.relational]
@@ -53,13 +160,15 @@ sqlite_path = {sqlite_path:?}
 
 [stores.events]
 duckdb_path = {duckdb_path:?}
-
-[semantic]
-provider = {semantic_provider:?}
 "#
         ),
     )
     .expect("write config");
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
 }
 
 fn seed_devql_cli_repo() -> TempDir {
@@ -156,51 +265,72 @@ fn write_current_runtime_state(repo_root: &Path) {
 }
 
 #[test]
-fn devql_cli_parses_ingest_defaults() {
-    let parsed =
-        Cli::try_parse_from(["bitloops", "devql", "ingest"]).expect("devql ingest should parse");
+fn devql_cli_parses_ingest_enqueue_defaults() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "tasks", "enqueue", "--kind", "ingest"])
+        .expect("devql task ingest enqueue should parse");
 
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
-        panic!("expected devql ingest command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(enqueue) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
 
-    assert!(!ingest.require_daemon);
+    assert!(matches!(enqueue.kind, DevqlTaskKindArg::Ingest));
+    assert!(!enqueue.require_daemon);
 }
 
 #[test]
-fn devql_cli_parses_ingest_require_daemon_flag() {
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "ingest", "--require-daemon"])
-        .expect("devql ingest --require-daemon should parse");
-
-    let Some(Commands::Devql(args)) = parsed.command else {
-        panic!("expected devql command");
-    };
-    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
-        panic!("expected devql ingest command");
-    };
-
-    assert!(ingest.require_daemon);
-}
-
-#[test]
-fn devql_cli_parses_sync_modes() {
+fn devql_cli_parses_ingest_enqueue_require_daemon_flag() {
     let parsed = Cli::try_parse_from([
         "bitloops",
         "devql",
+        "tasks",
+        "enqueue",
+        "--kind",
+        "ingest",
+        "--require-daemon",
+    ])
+    .expect("devql task ingest enqueue --require-daemon should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(enqueue) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
+    };
+
+    assert!(enqueue.require_daemon);
+}
+
+#[test]
+fn devql_cli_parses_sync_enqueue_modes() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "tasks",
+        "enqueue",
+        "--kind",
         "sync",
         "--paths",
         "src/lib.rs,src/main.rs",
     ])
-    .expect("devql sync with paths should parse");
+    .expect("devql task sync enqueue with paths should parse");
 
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Sync(sync)) = args.command else {
-        panic!("expected devql sync command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(sync) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
 
     assert!(!sync.full);
@@ -213,13 +343,18 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.status);
     assert!(!sync.require_daemon);
 
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
-        .expect("devql sync repair should parse");
+    let parsed = Cli::try_parse_from([
+        "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--repair",
+    ])
+    .expect("devql task sync repair should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Sync(sync)) = args.command else {
-        panic!("expected devql sync command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(sync) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
     assert!(!sync.full);
     assert_eq!(sync.paths, None);
@@ -228,13 +363,18 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.status);
     assert!(!sync.require_daemon);
 
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
-        .expect("devql sync full should parse");
+    let parsed = Cli::try_parse_from([
+        "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--full",
+    ])
+    .expect("devql task sync full should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Sync(sync)) = args.command else {
-        panic!("expected devql sync command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(sync) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
     assert!(sync.full);
     assert_eq!(sync.paths, None);
@@ -243,13 +383,24 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.status);
     assert!(!sync.require_daemon);
 
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
-        .expect("devql sync validate should parse");
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "tasks",
+        "enqueue",
+        "--kind",
+        "sync",
+        "--validate",
+    ])
+    .expect("devql task sync validate should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Sync(sync)) = args.command else {
-        panic!("expected devql sync command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(sync) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
     assert!(!sync.full);
     assert_eq!(sync.paths, None);
@@ -260,57 +411,102 @@ fn devql_cli_parses_sync_modes() {
 }
 
 #[test]
-fn devql_cli_parses_sync_status_flag() {
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--status"])
-        .expect("devql sync --status should parse");
+fn devql_cli_parses_sync_enqueue_status_flag() {
+    let parsed = Cli::try_parse_from([
+        "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--status",
+    ])
+    .expect("devql task sync enqueue --status should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Sync(sync)) = args.command else {
-        panic!("expected devql sync command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(sync) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
     assert!(sync.status);
     assert!(!sync.require_daemon);
 }
 
 #[test]
-fn devql_cli_parses_sync_require_daemon_flag() {
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--require-daemon"])
-        .expect("devql sync --require-daemon should parse");
+fn devql_cli_parses_sync_enqueue_require_daemon_flag() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "tasks",
+        "enqueue",
+        "--kind",
+        "sync",
+        "--require-daemon",
+    ])
+    .expect("devql task sync enqueue --require-daemon should parse");
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");
     };
-    let Some(DevqlCommand::Sync(sync)) = args.command else {
-        panic!("expected devql sync command");
+    let Some(DevqlCommand::Tasks(tasks)) = args.command else {
+        panic!("expected devql tasks command");
+    };
+    let DevqlTasksCommand::Enqueue(sync) = tasks.command else {
+        panic!("expected devql tasks enqueue command");
     };
     assert!(sync.require_daemon);
 }
 
 #[test]
-fn devql_cli_rejects_conflicting_sync_modes() {
+fn devql_cli_rejects_conflicting_sync_enqueue_modes() {
     let cases = vec![
         vec![
             "bitloops",
             "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
             "sync",
             "--full",
             "--paths",
             "src/lib.rs",
         ],
-        vec!["bitloops", "devql", "sync", "--full", "--repair"],
+        vec![
+            "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--full", "--repair",
+        ],
         vec![
             "bitloops",
             "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
             "sync",
             "--paths",
             "src/lib.rs",
             "--repair",
         ],
-        vec!["bitloops", "devql", "sync", "--validate", "--repair"],
-        vec!["bitloops", "devql", "sync", "--validate", "--full"],
         vec![
             "bitloops",
             "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
+            "sync",
+            "--validate",
+            "--repair",
+        ],
+        vec![
+            "bitloops",
+            "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
+            "sync",
+            "--validate",
+            "--full",
+        ],
+        vec![
+            "bitloops",
+            "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
             "sync",
             "--validate",
             "--paths",
@@ -319,6 +515,9 @@ fn devql_cli_rejects_conflicting_sync_modes() {
         vec![
             "bitloops",
             "devql",
+            "tasks",
+            "enqueue",
+            "--kind",
             "sync",
             "--full",
             "--paths",
@@ -1013,7 +1212,7 @@ fn devql_run_init_requires_running_daemon() {
 }
 
 #[test]
-fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
+fn devql_run_ingest_enqueue_executes_graphql_mutation_with_expected_input() {
     let repo = seed_devql_cli_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
@@ -1029,18 +1228,9 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                           variables: &serde_json::Value| {
                         *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                         Ok(json!({
-                            "ingest": {
-                                "success": true,
-                                "commitsProcessed": 2,
-                                "checkpointCompanionsProcessed": 1,
-                                "eventsInserted": 3,
-                                "artefactsUpserted": 5,
-                                "semanticFeatureRowsUpserted": 0,
-                                "semanticFeatureRowsSkipped": 0,
-                                "symbolEmbeddingRowsUpserted": 0,
-                                "symbolEmbeddingRowsSkipped": 0,
-                                "symbolCloneEdgesUpserted": 0,
-                                "symbolCloneSourcesScored": 0
+                            "enqueueTask": {
+                                "merged": false,
+                                "task": queued_ingest_task_payload("ingest-task-1", None)
                             }
                         }))
                     }
@@ -1048,11 +1238,9 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                                require_daemon: false,
-                            })),
+                            command: Some(ingest_enqueue_command(false)),
                         }))
-                        .expect("devql ingest should succeed");
+                        .expect("devql ingest enqueue should succeed");
                 },
             );
         },
@@ -1062,12 +1250,12 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
         .borrow_mut()
         .take()
         .expect("graphql mutation should be captured");
-    assert!(query.contains("ingest"));
-    assert_eq!(variables, json!({}));
+    assert!(query.contains("enqueueTask"));
+    assert_eq!(variables["input"]["kind"], json!("INGEST"));
 }
 
 #[test]
-fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
+fn devql_run_ingest_enqueue_requires_current_daemon_before_graphql_mutation() {
     let repo = seed_devql_cli_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let bootstrap_count = Rc::new(RefCell::new(0usize));
@@ -1093,18 +1281,9 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
                         *query_count.borrow_mut() += 1;
                         *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
                         Ok(json!({
-                            "ingest": {
-                                "success": true,
-                                "commitsProcessed": 0,
-                                "checkpointCompanionsProcessed": 0,
-                                "eventsInserted": 0,
-                                "artefactsUpserted": 0,
-                                "semanticFeatureRowsUpserted": 0,
-                                "semanticFeatureRowsSkipped": 0,
-                                "symbolEmbeddingRowsUpserted": 0,
-                                "symbolEmbeddingRowsSkipped": 0,
-                                "symbolCloneEdgesUpserted": 0,
-                                "symbolCloneSourcesScored": 0
+                            "enqueueTask": {
+                                "merged": false,
+                                "task": queued_ingest_task_payload("ingest-task-2", None)
                             }
                         }))
                     }
@@ -1112,11 +1291,9 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                                require_daemon: false,
-                            })),
+                            command: Some(ingest_enqueue_command(false)),
                         }))
-                        .expect("devql ingest should succeed");
+                        .expect("devql ingest enqueue should succeed");
                 },
             );
         },
@@ -1128,8 +1305,8 @@ fn devql_run_ingest_requires_current_daemon_before_graphql_mutation() {
         .borrow_mut()
         .take()
         .expect("graphql mutation should be captured");
-    assert!(query.contains("ingest"));
-    assert_eq!(variables, json!({}));
+    assert!(query.contains("enqueueTask"));
+    assert_eq!(variables["input"]["kind"], json!("INGEST"));
 }
 
 #[test]
@@ -1149,11 +1326,11 @@ fn devql_run_ingest_require_daemon_fails_without_bootstrap() {
             || {
                 let err = test_runtime()
                     .block_on(run(DevqlArgs {
-                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                            require_daemon: true,
-                        })),
+                        command: Some(ingest_enqueue_command(true)),
                     }))
-                    .expect_err("devql ingest --require-daemon should fail without a daemon");
+                    .expect_err(
+                        "devql task ingest enqueue --require-daemon should fail without a daemon",
+                    );
 
                 assert!(
                     err.to_string().contains("Bitloops daemon is not running"),
@@ -1171,7 +1348,7 @@ fn devql_run_ingest_require_daemon_fails_without_bootstrap() {
 }
 
 #[test]
-fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
+fn devql_run_ingest_enqueues_via_graphql_even_when_enrichment_is_disabled() {
     let repo = seed_devql_cli_repo();
     let daemon_state_root = test_daemon_state_root(repo.path());
     fs::write(
@@ -1184,9 +1361,6 @@ sqlite_path = {sqlite_path:?}
 
 [stores.events]
 duckdb_path = {duckdb_path:?}
-
-[semantic]
-provider = "disabled"
 
 [semantic_clones]
 summary_mode = "off"
@@ -1223,32 +1397,25 @@ embedding_mode = "off"
                 let graphql_calls = Rc::clone(&graphql_calls);
                 move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
                     *graphql_calls.borrow_mut() += 1;
-                    panic!("graphql should not be used when enrichment is disabled");
+                    Ok(json!({
+                        "enqueueTask": {
+                            "merged": false,
+                            "task": queued_ingest_task_payload("ingest-task-3", None)
+                        }
+                    }))
                 }
             },
             || {
                 test_runtime()
                     .block_on(run(DevqlArgs {
-                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs::default())),
+                        command: Some(ingest_enqueue_command(false)),
                     }))
-                    .expect("local deterministic ingest should succeed");
+                    .expect("daemon task ingest should succeed");
             },
         );
     });
 
-    assert_eq!(*graphql_calls.borrow(), 0);
-    with_isolated_daemon_state(repo.path(), || {
-        let err = test_runtime()
-            .block_on(run(DevqlArgs {
-                command: Some(DevqlCommand::Ingest(DevqlIngestArgs::default())),
-            }))
-            .expect_err("deterministic-only ingest should require a current daemon");
-        assert!(
-            format!("{err:#}").contains("bitloops init")
-                || format!("{err:#}").contains("daemon restart"),
-            "unexpected error: {err:#}"
-        );
-    });
+    assert_eq!(*graphql_calls.borrow(), 1);
 }
 
 #[test]
@@ -1268,37 +1435,9 @@ fn devql_run_sync_executes_graphql_mutation() {
                           variables: &serde_json::Value| {
                         *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                         Ok(json!({
-                            "enqueueSync": {
+                            "enqueueTask": {
                                 "merged": false,
-                                "task": {
-                                    "taskId": "sync-task-1",
-                                    "repoId": "repo-1",
-                                    "repoName": "demo",
-                                    "repoIdentity": "local/demo",
-                                    "source": "manual_cli",
-                                    "mode": "full",
-                                    "status": "queued",
-                                    "phase": "queued",
-                                    "submittedAtUnix": 1,
-                                    "startedAtUnix": null,
-                                    "updatedAtUnix": 1,
-                                    "completedAtUnix": null,
-                                    "queuePosition": 1,
-                                    "tasksAhead": 0,
-                                    "currentPath": null,
-                                    "pathsTotal": 0,
-                                    "pathsCompleted": 0,
-                                    "pathsRemaining": 0,
-                                    "pathsUnchanged": 0,
-                                    "pathsAdded": 0,
-                                    "pathsChanged": 0,
-                                    "pathsRemoved": 0,
-                                    "cacheHits": 0,
-                                    "cacheMisses": 0,
-                                    "parseErrors": 0,
-                                    "error": null,
-                                    "summary": null
-                                }
+                                "task": queued_sync_task_payload("sync-task-1", "full", None)
                             }
                         }))
                     }
@@ -1306,14 +1445,9 @@ fn devql_run_sync_executes_graphql_mutation() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
-                                full: true,
-                                paths: None,
-                                repair: false,
-                                validate: false,
-                                status: false,
-                                require_daemon: false,
-                            })),
+                            command: Some(sync_enqueue_command(
+                                true, None, false, false, false, false,
+                            )),
                         }))
                         .expect("devql sync should succeed");
                 },
@@ -1326,10 +1460,11 @@ fn devql_run_sync_executes_graphql_mutation() {
         .take()
         .expect("graphql mutation should be captured");
     assert!(
-        query.contains("enqueueSync"),
-        "expected enqueueSync mutation in query"
+        query.contains("enqueueTask"),
+        "expected enqueueTask mutation in query"
     );
-    assert_eq!(variables["input"]["full"], json!(true));
+    assert_eq!(variables["input"]["kind"], json!("SYNC"));
+    assert_eq!(variables["input"]["sync"]["full"], json!(true));
 }
 
 #[test]
@@ -1349,37 +1484,13 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
                           variables: &serde_json::Value| {
                         *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                         Ok(json!({
-                            "enqueueSync": {
+                            "enqueueTask": {
                                 "merged": false,
-                                "task": {
-                                    "taskId": "sync-task-2",
-                                    "repoId": "repo-1",
-                                    "repoName": "demo",
-                                    "repoIdentity": "local/demo",
-                                    "source": "manual_cli",
-                                    "mode": "paths",
-                                    "status": "queued",
-                                    "phase": "queued",
-                                    "submittedAtUnix": 1,
-                                    "startedAtUnix": null,
-                                    "updatedAtUnix": 1,
-                                    "completedAtUnix": null,
-                                    "queuePosition": 1,
-                                    "tasksAhead": 0,
-                                    "currentPath": null,
-                                    "pathsTotal": 0,
-                                    "pathsCompleted": 0,
-                                    "pathsRemaining": 0,
-                                    "pathsUnchanged": 0,
-                                    "pathsAdded": 0,
-                                    "pathsChanged": 0,
-                                    "pathsRemoved": 0,
-                                    "cacheHits": 0,
-                                    "cacheMisses": 0,
-                                    "parseErrors": 0,
-                                    "error": null,
-                                    "summary": null
-                                }
+                                "task": queued_sync_task_payload(
+                                    "sync-task-2",
+                                    "paths",
+                                    Some(vec!["src/lib.rs", "src/main.rs"]),
+                                )
                             }
                         }))
                     }
@@ -1387,17 +1498,14 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
-                                full: false,
-                                paths: Some(vec![
-                                    "src/lib.rs".to_string(),
-                                    "src/main.rs".to_string(),
-                                ]),
-                                repair: false,
-                                validate: false,
-                                status: false,
-                                require_daemon: false,
-                            })),
+                            command: Some(sync_enqueue_command(
+                                false,
+                                Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]),
+                                false,
+                                false,
+                                false,
+                                false,
+                            )),
                         }))
                         .expect("devql sync with paths should succeed");
                 },
@@ -1410,7 +1518,7 @@ fn devql_run_sync_passes_paths_to_graphql_mutation() {
         .take()
         .expect("graphql mutation should be captured");
     assert_eq!(
-        variables["input"]["paths"],
+        variables["input"]["sync"]["paths"],
         json!(["src/lib.rs", "src/main.rs"])
     );
 }
@@ -1433,51 +1541,18 @@ fn devql_run_sync_ensures_daemon_available() {
             with_graphql_executor_hook(
                 |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
                     Ok(json!({
-                        "enqueueSync": {
+                        "enqueueTask": {
                             "merged": false,
-                            "task": {
-                                "taskId": "sync-task-3",
-                                "repoId": "repo-1",
-                                "repoName": "demo",
-                                "repoIdentity": "local/demo",
-                                "source": "manual_cli",
-                                "mode": "auto",
-                                "status": "queued",
-                                "phase": "queued",
-                                "submittedAtUnix": 1,
-                                "startedAtUnix": null,
-                                "updatedAtUnix": 1,
-                                "completedAtUnix": null,
-                                "queuePosition": 1,
-                                "tasksAhead": 0,
-                                "currentPath": null,
-                                "pathsTotal": 0,
-                                "pathsCompleted": 0,
-                                "pathsRemaining": 0,
-                                "pathsUnchanged": 0,
-                                "pathsAdded": 0,
-                                "pathsChanged": 0,
-                                "pathsRemoved": 0,
-                                "cacheHits": 0,
-                                "cacheMisses": 0,
-                                "parseErrors": 0,
-                                "error": null,
-                                "summary": null
-                            }
+                            "task": queued_sync_task_payload("sync-task-3", "auto", None)
                         }
                     }))
                 },
                 || {
                     test_runtime()
                         .block_on(run(DevqlArgs {
-                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
-                                full: false,
-                                paths: None,
-                                repair: false,
-                                validate: false,
-                                status: false,
-                                require_daemon: false,
-                            })),
+                            command: Some(sync_enqueue_command(
+                                false, None, false, false, false, false,
+                            )),
                         }))
                         .expect("devql sync should succeed");
                 },
@@ -1509,14 +1584,7 @@ fn devql_run_sync_require_daemon_fails_without_bootstrap() {
             || {
                 let err = test_runtime()
                     .block_on(run(DevqlArgs {
-                        command: Some(DevqlCommand::Sync(DevqlSyncArgs {
-                            full: false,
-                            paths: None,
-                            repair: false,
-                            validate: false,
-                            status: false,
-                            require_daemon: true,
-                        })),
+                        command: Some(sync_enqueue_command(false, None, false, false, false, true)),
                     }))
                     .expect_err("devql sync --require-daemon should fail without a daemon");
 

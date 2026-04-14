@@ -3,7 +3,7 @@ mod test_harness_support;
 #[path = "graphql/fixtures.rs"]
 mod fixtures;
 
-use crate::fixtures::{run_query_json, seeded_rust_graphql_workspace};
+use crate::fixtures::{run_query_json_until, seeded_rust_graphql_workspace};
 use serde_json::Value;
 
 const FIXTURE_FILE_PATH: &str = "src/repositories/user_repository.rs";
@@ -47,10 +47,17 @@ fn bitloops_devql_query_smoke_end_to_end() {
         }
     "#;
 
-    let default_output = run_query_json(&seeded, &["devql", "query", "--compact", graphql_query]);
-    let explicit_output = run_query_json(
+    let default_output = run_query_json_until(
+        &seeded,
+        &["devql", "query", "--compact", graphql_query],
+        "default GraphQL artefact rows",
+        |payload| !extract_file_connection_nodes(payload).is_empty(),
+    );
+    let explicit_output = run_query_json_until(
         &seeded,
         &["devql", "query", "--graphql", "--compact", graphql_query],
+        "explicit GraphQL artefact rows",
+        |payload| !extract_file_connection_nodes(payload).is_empty(),
     );
     assert_eq!(
         default_output, explicit_output,
@@ -63,7 +70,7 @@ fn bitloops_devql_query_smoke_end_to_end() {
         "expected seeded GraphQL query to return artefacts for {FIXTURE_FILE_PATH}"
     );
 
-    let dsl_output = run_query_json(
+    let dsl_output = run_query_json_until(
         &seeded,
         &[
             "devql",
@@ -71,6 +78,8 @@ fn bitloops_devql_query_smoke_end_to_end() {
             "--compact",
             r#"file("src/repositories/user_repository.rs")->artefacts()->select(path,canonical_kind,symbol_fqn)->limit(10)"#,
         ],
+        "DSL artefact rows",
+        |payload| payload.as_array().is_some_and(|rows| !rows.is_empty()),
     );
     assert_eq!(
         normalise_artefact_rows(&dsl_output),

@@ -197,12 +197,50 @@ pub fn write_project_bootstrap_settings(
     strategy: &str,
     supported_agents: &[String],
 ) -> Result<()> {
+    write_project_bootstrap_settings_with_daemon_binding(path, strategy, supported_agents, None)
+}
+
+pub fn write_project_bootstrap_settings_with_daemon_binding(
+    path: &Path,
+    strategy: &str,
+    supported_agents: &[String],
+    daemon_config_path: Option<&Path>,
+) -> Result<()> {
     write_repo_policy_file(path, |doc| {
         ensure_capture_table(doc);
         doc["capture"]["enabled"] = Item::Value(TomlValue::from(true));
         doc["capture"]["strategy"] = Item::Value(TomlValue::from(strategy));
         ensure_agents_table(doc);
         doc["agents"]["supported"] = string_array_item(supported_agents);
+        if let Some(daemon_config_path) = daemon_config_path {
+            ensure_daemon_table(doc);
+            doc["daemon"]["config_path"] = Item::Value(TomlValue::from(
+                daemon_config_path.to_string_lossy().as_ref(),
+            ));
+        }
+        Ok(())
+    })
+}
+
+pub fn write_repo_daemon_binding(path: &Path, daemon_config_path: &Path) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_daemon_table(doc);
+        doc["daemon"]["config_path"] = Item::Value(TomlValue::from(
+            daemon_config_path.to_string_lossy().as_ref(),
+        ));
+        Ok(())
+    })
+}
+
+pub fn set_scope_exclusions(
+    path: &Path,
+    exclude: &[String],
+    exclude_from: &[String],
+) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_scope_table(doc);
+        doc["scope"]["exclude"] = string_array_item(exclude);
+        doc["scope"]["exclude_from"] = string_array_item(exclude_from);
         Ok(())
     })
 }
@@ -307,6 +345,18 @@ fn ensure_capture_table(doc: &mut DocumentMut) {
 fn ensure_agents_table(doc: &mut DocumentMut) {
     if doc.get("agents").is_none_or(|item| !item.is_table()) {
         doc["agents"] = Item::Table(Table::new());
+    }
+}
+
+fn ensure_scope_table(doc: &mut DocumentMut) {
+    if doc.get("scope").is_none_or(|item| !item.is_table()) {
+        doc["scope"] = Item::Table(Table::new());
+    }
+}
+
+fn ensure_daemon_table(doc: &mut DocumentMut) {
+    if doc.get("daemon").is_none_or(|item| !item.is_table()) {
+        doc["daemon"] = Item::Table(Table::new());
     }
 }
 

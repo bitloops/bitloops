@@ -15,8 +15,8 @@ use uuid::Uuid;
 pub enum Suite {
     Smoke,
     Devql,
+    DevqlIngest,
     DevqlSync,
-    ClaudeCode,
     Onboarding,
     Quickstart,
 }
@@ -273,8 +273,8 @@ fn suite_feature_path(suite: &Suite) -> PathBuf {
     match suite {
         Suite::Smoke => root.join("smoke"),
         Suite::Devql => root.join("devql"),
+        Suite::DevqlIngest => root.join("devql-ingest").join("ingest_workspace.feature"),
         Suite::DevqlSync => root.join("devql-sync"),
-        Suite::ClaudeCode => root.join("claude-code"),
         Suite::Onboarding => root.join("onboarding"),
         Suite::Quickstart => root.join("quickstart"),
     }
@@ -327,6 +327,19 @@ mod tests {
         assert_eq!(
             resolve_execution_binary(&Suite::DevqlSync, &original, &snapshot),
             snapshot
+        );
+    }
+
+    #[test]
+    fn suite_feature_path_points_to_dedicated_devql_ingest_feature() {
+        let path = suite_feature_path(&Suite::DevqlIngest);
+        assert_eq!(
+            path,
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("qat")
+                .join("features")
+                .join("devql-ingest")
+                .join("ingest_workspace.feature")
         );
     }
 }

@@ -1,34 +1,67 @@
-Feature: Semantic Clones pattern-reuse discovery
+Feature: Semantic Clones enrichment and query coverage
 
-  Semantic Clones should surface the best local implementation patterns
-  to follow. Results must be explainable, rankable, and filterable by
-  score and relation kind.
+  The default semantic-clones QAT lane follows the enrichment QA guide.
+  It validates the offline deterministic fake-runtime path, not real local
+  model warm-cache behavior.
 
   Background:
     Given I run CleanStart for flow "SemanticClones"
     And I start the daemon in bitloops
-    And I create a TypeScript project with similar implementations in bitloops
+    And I create a TypeScript project with semantic clone quality fixtures in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
     And I run EnableCLI for bitloops
+    And I configure guide-aligned semantic clones with fake embeddings runtime in bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
-    And I run DevQL semantic clones rebuild in bitloops
+    And DevQL pack health for semantic clones is ready in bitloops
 
   @devql @semantic-clones
-  Scenario: Clones query returns similar implementations for a known artefact
-    Then DevQL clones query for "OrderService.create" returns at least 1 result in bitloops
+  Scenario: Historical ingest populates semantic-clone historical tables
+    When I run DevQL ingest in bitloops
+    Then semantic clone historical tables are populated in bitloops
+
+  @devql @semantic-clones
+  Scenario: Current projection populates semantic-clone current tables without inline embeddings
+    When I run DevQL ingest in bitloops
+    And I run DevQL sync --status in bitloops
+    And I wait for semantic clone enrichments to drain in bitloops
+    Then semantic clone current projection tables are populated without inline embeddings in bitloops
+
+  @devql @semantic-clones
+  Scenario: Two workers drive embedding and clone-edge rebuild queues during the same run
+    When I run DevQL ingest in bitloops
+    And I run DevQL sync --status in bitloops
+    Then semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in bitloops
+
+  @devql @semantic-clones
+  Scenario: Historical embeddings and current artefacts expose separate code and summary channels
+    When I run DevQL ingest in bitloops
+    And I run DevQL sync --status in bitloops
+    And I wait for semantic clone enrichments to drain in bitloops
+    Then semantic clone historical embeddings and current artefacts expose code and summary channels in bitloops
+
+  @devql @semantic-clones
+  Scenario: Handler clones rank the cross-file execute peer above the weaker same-file helper
+    When I run DevQL ingest in bitloops
+    And I run DevQL sync --status in bitloops
+    And I wait for semantic clone enrichments to drain in bitloops
+    Then DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" returns at least 2 results in bitloops
     And DevQL clones results include score and relation_kind fields in bitloops
+    And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" has highest-scored result with score above 0.60 in bitloops
+    And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" ranks "src/handlers/sync-component-snapshots.handler.ts::SyncComponentSnapshotsCommandHandler::execute" above "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForBelongsToSnapshotRelationship" in bitloops
+    And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" returns results with explanation data in bitloops
+    And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.90 excludes "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForBelongsToSnapshotRelationship" in bitloops
 
   @devql @semantic-clones
-  Scenario: Score filtering reduces result set
-    Then DevQL clones query for "OrderService.create" with min_score 0.3 returns results in bitloops
-    And DevQL clones query for "OrderService.create" with min_score 0.95 returns fewer or equal results in bitloops
+  Scenario: DevQL clone summary returns grouped counts for the handler fixture
+    When I run DevQL ingest in bitloops
+    And I run DevQL sync --status in bitloops
+    And I wait for semantic clone enrichments to drain in bitloops
+    Then DevQL clone summary for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.60 returns grouped counts in bitloops
 
   @devql @semantic-clones
-  Scenario: Strong local patterns rank ahead of weak matches
-    Then DevQL clones query for "OrderService.create" has highest-scored result with score above 0.5 in bitloops
-
-  @devql @semantic-clones
-  Scenario: Clone results include explanation payload
-    Then DevQL clones query for "OrderService.create" returns results with explanation data in bitloops
+  Scenario: GraphQL clone summary returns grouped counts for the handler fixture
+    When I run DevQL ingest in bitloops
+    And I run DevQL sync --status in bitloops
+    And I wait for semantic clone enrichments to drain in bitloops
+    Then GraphQL clone summary for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.60 returns grouped counts in bitloops

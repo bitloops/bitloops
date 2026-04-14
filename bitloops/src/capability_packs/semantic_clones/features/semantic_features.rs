@@ -15,10 +15,10 @@ use self::common::{build_body_tokens, normalize_name, normalize_repo_path};
 pub(crate) use self::common::{build_dependency_context_signal, render_dependency_context};
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
 pub use self::semantic::SymbolSemanticsRow;
+pub(crate) use self::semantic::synthesize_deterministic_summary;
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
-    SemanticSummaryProviderConfig, build_semantic_summary_provider,
-    resolve_semantic_summary_endpoint,
+    summary_provider_from_service,
 };
 use self::semantic::{build_semantics_row, normalize_summary_text};
 

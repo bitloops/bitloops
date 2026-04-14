@@ -10,7 +10,7 @@ use super::{
     select_startup_mode, warning_block_lines,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
-use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, enter_process_state};
+use crate::test_support::process_state::enter_process_state;
 use async_graphql::futures_util::StreamExt;
 use axum::{
     body::{Body, to_bytes},
