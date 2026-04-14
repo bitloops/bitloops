@@ -226,7 +226,7 @@ This is the normal escalation path:
 
 ## Agent Hook Guidance
 
-When Bitloops-managed hooks are installed for Claude Code, Codex, or Gemini, Bitloops injects a short DevQL reminder at supported pre-turn hooks. That reminder follows the same workflow documented here:
+When Bitloops-managed integrations are installed for supported agents, Bitloops injects a short DevQL reminder at the supported bootstrap and pre-turn surfaces. This currently includes Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, and OpenCode via its repo-local plugin path. That reminder follows the same workflow documented here:
 
 1. Start with `selectArtefacts(by: ...) { summary }`
 2. Read stage `schema` only when the summary says a drill-down is worth it
