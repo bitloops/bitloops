@@ -53,6 +53,33 @@ On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to
 `cargo qat-devql-ingest` is the focused DevQL ingest alias.
 `cargo qat-devql-sync` is the focused DevQL sync alias.
 
+### QAT scenario filtering
+
+QAT suites support opt-in Cucumber tag filtering via `CUCUMBER_FILTER_TAGS`. If the variable is unset, the full suite runs as before.
+
+- Run only tagged scenarios in the focused DevQL sync suite:
+
+```bash
+CUCUMBER_FILTER_TAGS='@test_harness_sync' cargo qat-devql-sync
+```
+
+- Use the direct `cargo test` form when you want the suite to stream step-by-step output:
+
+```bash
+CUCUMBER_FILTER_TAGS='@test_harness_sync' \
+cargo test \
+  --manifest-path bitloops/Cargo.toml \
+  --features qat-tests \
+  --test qat_acceptance \
+  qat_devql_sync \
+  -- --ignored --nocapture
+```
+
+- Tag expressions use standard Cucumber syntax, for example:
+  - `@test_harness_sync`
+  - `@devql and @sync`
+  - `@test_harness_sync and not @slow`
+
 ### Fast-lane thread tuning
 
 - Override the local fast-lane default with `BITLOOPS_TEST_THREADS=<n> cargo dev-test-fast`.
