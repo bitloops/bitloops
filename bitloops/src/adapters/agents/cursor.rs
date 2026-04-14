@@ -3,4 +3,5 @@ pub mod hook_output;
 pub mod hooks;
 pub mod hooks_cmd;
 pub mod lifecycle;
+pub mod rules;
 pub mod types;

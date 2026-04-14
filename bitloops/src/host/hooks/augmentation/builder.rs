@@ -40,7 +40,7 @@ fn session_bootstrap_text(agent_name: &str) -> String {
             "The repo includes a Bitloops-managed skill at `.github/skills/bitloops/using-devql/SKILL.md`."
         }
         AGENT_NAME_CURSOR => {
-            "Bitloops provides DevQL guidance through Cursor session bootstrap for this repo."
+            "The repo includes a Bitloops-managed Cursor rule at `.cursor/rules/bitloops-using-devql.mdc`, and Bitloops also provides Cursor session bootstrap guidance for this repo."
         }
         AGENT_NAME_GEMINI => {
             "The repo includes Bitloops-managed Gemini instructions via `GEMINI.md` and `.gemini/skills/bitloops/using-devql/SKILL.md`."
@@ -128,6 +128,11 @@ mod tests {
                 && gemini
                     .additional_context
                     .contains(".gemini/skills/bitloops/using-devql/SKILL.md")
+        );
+        assert!(
+            cursor
+                .additional_context
+                .contains(".cursor/rules/bitloops-using-devql.mdc")
         );
         assert!(
             cursor

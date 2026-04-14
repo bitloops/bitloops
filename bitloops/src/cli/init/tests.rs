@@ -786,6 +786,11 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         assert!(!rendered.contains("Initialised agents: cursor"));
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(
+            repo.path()
+                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .exists()
+        );
         assert!(!repo.path().join(".claude/settings.json").exists());
     });
 }

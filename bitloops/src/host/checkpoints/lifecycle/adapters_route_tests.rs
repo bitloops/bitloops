@@ -570,6 +570,7 @@ fn route_cursor_session_start_returns_additional_context_stdout() -> Result<()> 
             .expect("additional_context");
         assert!(context.contains("<EXTREMELY_IMPORTANT>"));
         assert!(context.contains("You have DevQL in this repo."));
+        assert!(context.contains(".cursor/rules/bitloops-using-devql.mdc"));
         assert!(context.contains("Cursor session bootstrap"));
         assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
         assert!(context.contains("MUST use DevQL as your FIRST approach"));
