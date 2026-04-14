@@ -10,19 +10,26 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use self::storage::{
-    build_current_repo_artefacts_sql, build_current_semantic_persist_rows_sql,
-    build_delete_current_symbol_features_sql, build_delete_current_symbol_semantics_sql,
-    build_historical_repo_artefacts_sql, build_semantic_get_artefacts_by_ids_sql,
-    build_semantic_get_artefacts_sql, build_semantic_get_dependencies_sql,
-    build_semantic_get_index_state_sql, build_semantic_get_summary_sql,
-    build_semantic_persist_rows_sql, parse_semantic_artefact_rows, parse_semantic_dependency_rows,
-    parse_semantic_index_state_rows, semantic_features_postgres_schema_sql,
-    semantic_features_postgres_upgrade_sql, semantic_features_sqlite_schema_sql,
-    upgrade_sqlite_semantic_features_schema,
+    build_current_projection_targets_by_artefact_ids_sql, build_current_repo_artefacts_sql,
+    build_current_semantic_persist_rows_sql, build_delete_current_symbol_features_sql,
+    build_delete_current_symbol_semantics_sql, build_historical_repo_artefacts_sql,
+    build_semantic_get_artefacts_by_ids_sql, build_semantic_get_artefacts_sql,
+    build_semantic_get_dependencies_sql, build_semantic_get_index_state_sql,
+    build_semantic_get_summary_sql, build_semantic_persist_rows_sql, parse_semantic_artefact_rows,
+    parse_semantic_dependency_rows, parse_semantic_index_state_rows,
+    semantic_features_postgres_schema_sql, semantic_features_postgres_upgrade_sql,
+    semantic_features_sqlite_schema_sql, upgrade_sqlite_semantic_features_schema,
 };
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::{RelationalStorage, postgres_exec, sqlite_exec_path_allow_create};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CurrentSemanticProjectionTarget {
+    path: String,
+    content_id: String,
+    symbol_id: Option<String>,
+}
 
 fn ensure_required_llm_summary_output(
     rows: &semantic::SemanticFeatureRows,
@@ -128,6 +135,14 @@ pub(crate) async fn upsert_semantic_feature_rows(
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
 ) -> Result<semantic::SemanticFeatureIngestionStats> {
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
+    let current_projection_targets = load_current_projection_targets_for_artefacts(
+        relational,
+        &inputs
+            .iter()
+            .map(|input| input.artefact_id.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
 
     for input in inputs {
         let next_input_hash =
@@ -140,13 +155,26 @@ pub(crate) async fn upsert_semantic_feature_rows(
 
         let input = input.clone();
         let summary_provider_for_row = Arc::clone(&summary_provider);
+        let input_for_row = input.clone();
         let rows = tokio::task::spawn_blocking(move || {
-            semantic::build_semantic_feature_rows(&input, summary_provider_for_row.as_ref())
+            semantic::build_semantic_feature_rows(&input_for_row, summary_provider_for_row.as_ref())
         })
         .await
         .context("building semantic feature rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.as_ref())?;
         persist_semantic_feature_rows(relational, &rows).await?;
+        if let Some(target) = current_projection_targets.get(&input.artefact_id)
+            && target.content_id == input.blob_sha
+        {
+            persist_current_semantic_feature_rows(
+                relational,
+                target.symbol_id.as_deref(),
+                &target.path,
+                &target.content_id,
+                &rows,
+            )
+            .await?;
+        }
         stats.upserted += 1;
     }
 
@@ -435,6 +463,70 @@ async fn load_semantic_index_state(
     Ok(parse_semantic_index_state_rows(&rows))
 }
 
+async fn load_current_projection_targets_for_artefacts(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+) -> Result<HashMap<String, CurrentSemanticProjectionTarget>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = match relational
+        .query_rows(&build_current_projection_targets_by_artefact_ids_sql(
+            artefact_ids,
+        ))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("no such table: artefacts_current")
+                || message.contains("no such table: current_file_state")
+            {
+                return Ok(HashMap::new());
+            }
+            return Err(err).context("loading current semantic projection targets");
+        }
+    };
+    let mut targets = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let Some(artefact_id) = row
+            .get("artefact_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(path) = row
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(content_id) = row
+            .get("content_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let symbol_id = row
+            .get("symbol_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        targets.insert(
+            artefact_id.to_string(),
+            CurrentSemanticProjectionTarget {
+                path: path.to_string(),
+                content_id: content_id.to_string(),
+                symbol_id,
+            },
+        );
+    }
+    Ok(targets)
+}
+
 async fn persist_semantic_feature_rows(
     relational: &RelationalStorage,
     rows: &semantic::SemanticFeatureRows,
@@ -473,13 +565,18 @@ fn load_blob_content_from_git(repo_root: &Path, blob_sha: &str) -> Result<String
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use super::{
         SemanticSummarySnapshot, current_semantic_artefact_key_from_row,
         ensure_required_llm_summary_output, remap_semantic_input_to_current_artefact,
+        semantic_features_sqlite_schema_sql, upsert_semantic_feature_rows,
     };
     use crate::capability_packs::semantic_clones::features as semantic;
     use crate::capability_packs::semantic_clones::features::SemanticSummaryCandidate;
+    use crate::host::devql::{RelationalStorage, sqlite_exec_path_allow_create};
+    use serde_json::Value;
+    use tempfile::tempdir;
 
     struct StrictNoopSummaryProvider;
 
@@ -498,6 +595,189 @@ mod tests {
         fn requires_model_output(&self) -> bool {
             true
         }
+    }
+
+    struct TestSummaryProvider;
+
+    impl semantic::SemanticSummaryProvider for TestSummaryProvider {
+        fn cache_key(&self) -> String {
+            "provider=ollama:ministral-3:3b".to_string()
+        }
+
+        fn generate(
+            &self,
+            _input: &semantic::SemanticFeatureInput,
+        ) -> Option<SemanticSummaryCandidate> {
+            Some(SemanticSummaryCandidate {
+                summary: "Summarises the symbol.".to_string(),
+                confidence: 0.91,
+                source_model: Some("ollama:ministral-3:3b".to_string()),
+            })
+        }
+
+        fn requires_model_output(&self) -> bool {
+            true
+        }
+    }
+
+    async fn sqlite_relational_with_current_projection_schema() -> RelationalStorage {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("semantic-features.sqlite");
+        sqlite_exec_path_allow_create(
+            &db_path,
+            &format!(
+                "{}\nCREATE TABLE artefacts_current (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    extraction_fingerprint TEXT,
+    canonical_kind TEXT,
+    language_kind TEXT,
+    symbol_fqn TEXT,
+    parent_symbol_id TEXT,
+    parent_artefact_id TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    docstring TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
+);
+CREATE TABLE current_file_state (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    analysis_mode TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path)
+);",
+                semantic_features_sqlite_schema_sql(),
+            ),
+        )
+        .await
+        .expect("create sqlite schema");
+        std::mem::forget(temp);
+        RelationalStorage::local_only(db_path)
+    }
+
+    fn sample_semantic_input(artefact_id: &str, blob_sha: &str) -> semantic::SemanticFeatureInput {
+        semantic::SemanticFeatureInput {
+            artefact_id: artefact_id.to_string(),
+            symbol_id: Some(format!("symbol-{artefact_id}")),
+            repo_id: "repo-1".to_string(),
+            blob_sha: blob_sha.to_string(),
+            path: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: format!("src/lib.rs::{artefact_id}"),
+            name: artefact_id.to_string(),
+            signature: Some(format!("fn {artefact_id}()")),
+            modifiers: vec!["pub".to_string()],
+            body: "do_work()".to_string(),
+            docstring: Some("Performs work.".to_string()),
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:worker::do_work".to_string()],
+            content_hash: Some(blob_sha.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn historical_semantic_upsert_mirrors_model_backed_rows_into_current_projection() {
+        let relational = sqlite_relational_with_current_projection_schema().await;
+        relational
+            .exec(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                    start_byte, end_byte, modifiers, updated_at
+                ) VALUES (
+                    'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
+                    'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
+                );
+                INSERT INTO current_file_state (repo_id, path, analysis_mode)
+                VALUES ('repo-1', 'src/lib.rs', 'code');",
+            )
+            .await
+            .expect("seed current projection rows");
+
+        let stats = upsert_semantic_feature_rows(
+            &relational,
+            &[sample_semantic_input("artefact-1", "content-1")],
+            Arc::new(TestSummaryProvider),
+        )
+        .await
+        .expect("upsert historical semantic rows");
+
+        assert_eq!(stats.upserted, 1);
+        let rows = relational
+            .query_rows(
+                "SELECT summary, llm_summary, source_model, content_id
+                 FROM symbol_semantics_current
+                 WHERE artefact_id = 'artefact-1'",
+            )
+            .await
+            .expect("load mirrored current summary row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("llm_summary").and_then(Value::as_str),
+            Some("Summarises the symbol.")
+        );
+        assert_eq!(
+            rows[0].get("source_model").and_then(Value::as_str),
+            Some("ollama:ministral-3:3b")
+        );
+        assert_eq!(
+            rows[0].get("content_id").and_then(Value::as_str),
+            Some("content-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_semantic_upsert_does_not_overwrite_diverged_current_projection() {
+        let relational = sqlite_relational_with_current_projection_schema().await;
+        relational
+            .exec(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                    start_byte, end_byte, modifiers, updated_at
+                ) VALUES (
+                    'repo-1', 'src/lib.rs', 'content-new', 'symbol-artefact-1', 'artefact-1', 'rust',
+                    'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
+                );
+                INSERT INTO current_file_state (repo_id, path, analysis_mode)
+                VALUES ('repo-1', 'src/lib.rs', 'code');",
+            )
+            .await
+            .expect("seed diverged current projection rows");
+
+        let stats = upsert_semantic_feature_rows(
+            &relational,
+            &[sample_semantic_input("artefact-1", "content-old")],
+            Arc::new(TestSummaryProvider),
+        )
+        .await
+        .expect("upsert historical semantic rows");
+
+        assert_eq!(stats.upserted, 1);
+        let rows = relational
+            .query_rows(
+                "SELECT summary, llm_summary, source_model, content_id
+                 FROM symbol_semantics_current
+                 WHERE artefact_id = 'artefact-1'",
+            )
+            .await
+            .expect("load current summary rows");
+        assert!(
+            rows.is_empty(),
+            "historical summary refresh must not overwrite a newer current projection"
+        );
     }
 
     #[test]

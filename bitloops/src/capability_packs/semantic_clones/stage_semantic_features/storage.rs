@@ -295,6 +295,24 @@ ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.s
     )
 }
 
+pub(super) fn build_current_projection_targets_by_artefact_ids_sql(
+    artefact_ids: &[String],
+) -> String {
+    let artefact_ids = artefact_ids
+        .iter()
+        .map(|artefact_id| format!("'{}'", esc_pg(artefact_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "SELECT current.artefact_id, current.path, current.content_id, current.symbol_id \
+FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+WHERE current.artefact_id IN ({artefact_ids}) AND state.analysis_mode = 'code' \
+ORDER BY current.path, coalesce(current.start_line, 0), current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
+    )
+}
+
 pub(super) fn build_historical_repo_artefacts_sql(repo_id: &str) -> String {
     format!(
         "SELECT historical.artefact_id, historical.symbol_id, historical.repo_id, historical.blob_sha, historical.path, historical.language, \
