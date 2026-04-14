@@ -52,7 +52,7 @@ fn is_supported_baseline_file(path: &str) -> bool {
 
     matches!(
         extension.trim().to_ascii_lowercase().as_str(),
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "cs"
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "cs"
     )
 }
 
@@ -244,8 +244,11 @@ mod tests {
         assert!(is_supported_baseline_file("src/main.tsx"));
         assert!(is_supported_baseline_file("src/main.js"));
         assert!(is_supported_baseline_file("src/main.jsx"));
+        assert!(is_supported_baseline_file("src/main.py"));
+        assert!(is_supported_baseline_file("src/main.go"));
+        assert!(is_supported_baseline_file("src/Main.java"));
         assert!(is_supported_baseline_file("src/main.cs"));
         assert!(!is_supported_baseline_file("README.md"));
-        assert!(!is_supported_baseline_file("src/main.py"));
+        assert!(!is_supported_baseline_file("src/main.md"));
     }
 }

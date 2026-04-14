@@ -33,6 +33,21 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
     )
     .expect("write jsx file");
     std::fs::write(
+        repo.path().join("src/service.py"),
+        "def run():\n    return 'ok'\n",
+    )
+    .expect("write python file");
+    std::fs::write(
+        repo.path().join("src/service.go"),
+        "package service\n\nfunc Run() string { return \"ok\" }\n",
+    )
+    .expect("write go file");
+    std::fs::write(
+        repo.path().join("src/Main.java"),
+        "class Main { String run() { return \"ok\"; } }\n",
+    )
+    .expect("write java file");
+    std::fs::write(
         repo.path().join("src/service.cs"),
         "public class Service { public string Run() => \"ok\"; }\n",
     )
@@ -46,11 +61,14 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
     assert_eq!(
         files,
         vec![
+            "src/Main.java".to_string(),
             "src/component.jsx".to_string(),
             "src/index.ts".to_string(),
             "src/lib.rs".to_string(),
             "src/node.js".to_string(),
             "src/service.cs".to_string(),
+            "src/service.go".to_string(),
+            "src/service.py".to_string(),
             "src/view.tsx".to_string(),
         ]
     );
@@ -75,6 +93,11 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
         "using System;\n\npublic class Service {\n    public string Run() {\n        return DateTime.UtcNow.ToString();\n    }\n}\n",
     )
     .expect("write csharp file");
+    std::fs::write(
+        repo.path().join("src/service.go"),
+        "package service\n\nfunc Run() string { return \"ok\" }\n",
+    )
+    .expect("write go file");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add baseline files"]);
 
@@ -96,7 +119,7 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
             |row| row.get(0),
         )
         .expect("count current_file_state rows");
-    assert_eq!(current_file_state_count, 3);
+    assert_eq!(current_file_state_count, 4);
 
     let current_count = count_rows(
         &conn,
@@ -118,6 +141,18 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
     assert!(
         csharp_current_count >= 2,
         "expected baseline to persist csharp file and symbol artefacts"
+    );
+
+    let go_current_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2 AND language = 'go'",
+            rusqlite::params![cfg.repo.repo_id.as_str(), "src/service.go"],
+            |row| row.get(0),
+        )
+        .expect("count go current-state rows");
+    assert!(
+        go_current_count >= 2,
+        "expected baseline to persist go file and symbol artefacts"
     );
 
     let baseline_sha: String = conn

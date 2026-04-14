@@ -6,7 +6,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tree_sitter::{Node, Parser};
 
-use super::extraction::using_target_name;
 use crate::host::language_adapter::{
     DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, LanguageTestSupport,
     ReferenceCandidate, ScenarioDiscoverySource,
@@ -71,10 +70,7 @@ impl CSharpTestMappingHelper {
         Ok(DiscoveredTestFile {
             relative_path: relative_path.to_string(),
             language: "csharp".to_string(),
-            reference_candidates: collect_csharp_import_paths(root, bytes)
-                .into_iter()
-                .map(ReferenceCandidate::SourcePath)
-                .collect(),
+            reference_candidates: Vec::new(),
             suites: collect_csharp_test_suites(root, bytes, relative_path),
         })
     }
@@ -271,32 +267,6 @@ fn collect_csharp_called_symbols(scope: Node<'_>, source: &[u8]) -> Vec<String> 
     result
 }
 
-fn collect_csharp_import_paths(root: Node<'_>, source: &[u8]) -> Vec<String> {
-    let content = std::str::from_utf8(source).unwrap_or_default();
-    let mut paths = HashSet::new();
-    let mut stack = vec![root];
-
-    while let Some(node) = stack.pop() {
-        if node.kind() == "using_directive"
-            && let Some(name) = using_target_name(node, content)
-        {
-            let normalized = name.trim().replace('.', "/");
-            if !normalized.is_empty() {
-                paths.insert(format!("{normalized}.cs"));
-            }
-        }
-
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-
-    let mut result = paths.into_iter().collect::<Vec<_>>();
-    result.sort();
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::{CSharpTestMappingHelper, CSharpTestSupport};
@@ -365,13 +335,7 @@ public class UserServiceTests
             vec!["Loads_user", "Saves_user", "Deletes_user"]
         );
 
-        assert!(
-            discovered
-                .reference_candidates
-                .contains(&ReferenceCandidate::SourcePath(
-                    "MyApp/Services.cs".to_string()
-                ))
-        );
+        assert!(discovered.reference_candidates.is_empty());
         assert_eq!(
             discovered.suites[0].scenarios[0].reference_candidates,
             vec![ReferenceCandidate::SymbolName("helper".to_string())]
