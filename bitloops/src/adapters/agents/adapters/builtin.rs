@@ -1,7 +1,7 @@
 use super::super::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
     AGENT_NAME_GEMINI, AGENT_NAME_OPEN_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX,
-    AGENT_TYPE_COPILOT, AGENT_TYPE_CURSOR, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE, HookSupport,
+    AGENT_TYPE_COPILOT, AGENT_TYPE_CURSOR, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE,
 };
 use super::registration::AgentAdapterRegistration;
 use super::types::{
@@ -286,11 +286,11 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             },
             || Box::new(GeminiCliAgent),
             |repo_root| repo_root.join(".gemini").is_dir(),
-            |_repo_root| HookSupport::are_hooks_installed(&GeminiCliAgent),
-            |_repo_root, local_dev, force| {
-                HookSupport::install_hooks(&GeminiCliAgent, local_dev, force)
+            |repo_root| GeminiCliAgent.are_hooks_installed_at(repo_root),
+            |repo_root, local_dev, force| {
+                GeminiCliAgent.install_hooks_at(repo_root, local_dev, force)
             },
-            |_repo_root| HookSupport::uninstall_hooks(&GeminiCliAgent),
+            |repo_root| GeminiCliAgent.uninstall_hooks_at(repo_root),
             |_session_id| "gemini".to_string(),
             Some(gemini_hook_output::render_hook_output),
         ),
@@ -320,11 +320,11 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             },
             || Box::new(OpenCodeAgent),
             |repo_root| repo_root.join(".opencode").is_dir(),
-            |_repo_root| HookSupport::are_hooks_installed(&OpenCodeAgent),
-            |_repo_root, local_dev, force| {
-                HookSupport::install_hooks(&OpenCodeAgent, local_dev, force)
+            |repo_root| OpenCodeAgent.are_hooks_installed_at(repo_root),
+            |repo_root, local_dev, force| {
+                OpenCodeAgent.install_hooks_at(repo_root, local_dev, force)
             },
-            |_repo_root| HookSupport::uninstall_hooks(&OpenCodeAgent),
+            |repo_root| OpenCodeAgent.uninstall_hooks_at(repo_root),
             |session_id| {
                 if session_id.trim().is_empty() {
                     "opencode".to_string()

@@ -5,6 +5,7 @@ mod agent_session_io;
 pub mod cli_commands;
 pub mod hooks;
 pub mod plugin;
+pub mod skills;
 pub mod transcript;
 pub mod types;
 

@@ -261,6 +261,7 @@ fn normalize_entries_for_install(
 
 pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
     ensure_codex_hooks_feature_enabled_at(repo_root)?;
+    crate::adapters::agents::codex::skills::install_global_skill()?;
     let path = hooks_file_path_for(repo_root);
     let existing_data = fs::read(&path).ok();
 
@@ -308,6 +309,8 @@ pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
 }
 
 pub fn uninstall_hooks_at(repo_root: &Path) -> Result<()> {
+    crate::adapters::agents::codex::skills::uninstall_global_skill()?;
+
     let path = hooks_file_path_for(repo_root);
     let data = match fs::read(&path) {
         Ok(data) => data,
