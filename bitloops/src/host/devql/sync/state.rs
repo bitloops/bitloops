@@ -101,6 +101,24 @@ pub(crate) async fn read_scope_exclusions_fingerprint(
         .map(str::to_string))
 }
 
+pub(crate) async fn read_last_sync_status(
+    store: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Option<String>> {
+    let rows = store
+        .query_rows(&format!(
+            "SELECT last_sync_status FROM repo_sync_state WHERE repo_id = '{}' LIMIT 1",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .first()
+        .and_then(Value::as_object)
+        .and_then(|row| row.get("last_sync_status"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
 pub(crate) async fn repo_sync_state_exists(
     store: &RelationalStorage,
     repo_id: &str,

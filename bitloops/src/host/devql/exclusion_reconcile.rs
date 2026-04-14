@@ -26,6 +26,14 @@ pub(crate) async fn scope_exclusion_reconcile_needed(
     let snapshot = load_scope_exclusion_snapshot(&cfg.repo_root)?;
     let stored =
         sync::state::read_scope_exclusions_fingerprint(relational, &cfg.repo.repo_id).await?;
+    if stored.is_none()
+        && sync::state::read_last_sync_status(relational, &cfg.repo.repo_id)
+            .await?
+            .as_deref()
+            == Some("running")
+    {
+        return Ok(None);
+    }
     if stored.as_deref() == Some(snapshot.fingerprint.as_str()) {
         Ok(None)
     } else {

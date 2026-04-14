@@ -114,6 +114,42 @@ fn new_test_coordinator(temp: &TempDir) -> (EnrichmentCoordinator, EnrichmentJob
     )
 }
 
+fn configure_summary_refresh_for_repo(target: &EnrichmentJobTarget) {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    );
+    fs::write(&config_path, config).expect("write test daemon config with summary profile");
+}
+
 fn load_workplane_jobs(
     coordinator: &EnrichmentCoordinator,
     status: WorkplaneJobStatus,
@@ -369,6 +405,7 @@ async fn enqueue_symbol_embeddings_splits_large_batches_into_smaller_jobs() {
 async fn enqueue_semantic_summaries_keeps_larger_semantic_batches() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
+    configure_summary_refresh_for_repo(&target);
     let inputs = (0..(MAX_SEMANTIC_ENRICHMENT_JOB_ARTEFACTS + 1))
         .map(|index| sample_input_with_artefact_id(&format!("artefact-{index}")))
         .collect::<Vec<_>>();
@@ -484,6 +521,7 @@ fn ensure_started_recovers_stale_running_jobs_on_startup() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
     let coordinator = Arc::new(coordinator);
+    configure_summary_refresh_for_repo(&target);
 
     coordinator
         .runtime_store

@@ -157,6 +157,24 @@ pub fn enqueue_summary_refresh_jobs(
     enqueue_artefact_jobs(workplane, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, inputs)
 }
 
+pub fn enqueue_summary_refresh_repo_backfill_for_repo(repo_root: &Path) -> Result<()> {
+    let store = open_workplane_store_for_repo(repo_root)?;
+    let _ = store.enqueue_capability_workplane_jobs(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        vec![
+            crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                Some(repo_backfill_dedupe_key(
+                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                )),
+                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)
+                    .expect("summary repo backfill payload should serialize"),
+            ),
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn enqueue_embedding_jobs(
     workplane: &dyn CapabilityWorkplaneGateway,
     inputs: &[semantic_features::SemanticFeatureInput],

@@ -293,10 +293,30 @@ async fn scope_exclusion_reconcile_needed_skips_repos_without_sync_state() {
 
     let needed = crate::host::devql::scope_exclusion_reconcile_needed(&cfg, &relational)
         .await
-        .expect("check exclusion reconcile with sync state");
+        .expect("check exclusion reconcile while sync is running");
+    assert_eq!(
+        needed, None,
+        "repos with an in-flight sync and no stored fingerprint should not enqueue a hidden reconcile sync"
+    );
+
+    crate::host::devql::sync::state::write_sync_completed(
+        &relational,
+        &cfg.repo.repo_id,
+        Some("head-sha"),
+        Some("tree-sha"),
+        Some("main"),
+        "parser-v1",
+        "extractor-v1",
+    )
+    .await
+    .expect("write completed state");
+
+    let needed = crate::host::devql::scope_exclusion_reconcile_needed(&cfg, &relational)
+        .await
+        .expect("check exclusion reconcile after sync completed");
     assert!(
         needed.is_some(),
-        "repos with sync state but no stored fingerprint should still reconcile"
+        "repos with a completed sync but no stored fingerprint should still reconcile"
     );
 }
 
