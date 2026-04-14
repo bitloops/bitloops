@@ -8,6 +8,8 @@ use super::content_cache::{CachedArtefact, CachedEdge, CachedExtraction};
 pub(crate) const PARSE_STATUS_OK: &str = "ok";
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const PARSE_STATUS_PARSE_ERROR: &str = "parse_error";
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const PARSE_STATUS_DECODE_ERROR: &str = "decode_error";
 
 struct ExtractionInput<'a> {
     path: &'a str,
@@ -109,6 +111,42 @@ pub(crate) fn parse_error_to_cache_format(
         extractor_version: extractor_version.to_string(),
         parse_status: PARSE_STATUS_PARSE_ERROR.to_string(),
         artefacts: Vec::new(),
+        edges: Vec::new(),
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn decode_error_file_only_to_cache_format(
+    path: &str,
+    content_id: &str,
+    language: &str,
+    extraction_fingerprint: &str,
+    parser_version: &str,
+    extractor_version: &str,
+    raw_bytes: &[u8],
+) -> CachedExtraction {
+    CachedExtraction {
+        content_id: content_id.to_string(),
+        language: language.to_string(),
+        extraction_fingerprint: extraction_fingerprint.to_string(),
+        parser_version: parser_version.to_string(),
+        extractor_version: extractor_version.to_string(),
+        parse_status: PARSE_STATUS_DECODE_ERROR.to_string(),
+        artefacts: vec![CachedArtefact {
+            artifact_key: file_artifact_key_from_bytes(raw_bytes),
+            canonical_kind: Some("file".to_string()),
+            language_kind: "file".to_string(),
+            name: path.to_string(),
+            parent_artifact_key: None,
+            start_line: 1,
+            end_line: file_end_line_from_bytes(raw_bytes),
+            start_byte: 0,
+            end_byte: i32::try_from(raw_bytes.len()).unwrap_or(i32::MAX),
+            signature: String::new(),
+            modifiers: Vec::new(),
+            docstring: None,
+            metadata: json!({ "symbol_fqn": path }),
+        }],
         edges: Vec::new(),
     }
 }
@@ -260,10 +298,14 @@ fn cached_edge_from_extraction(
 }
 
 fn file_artifact_key(content: &str) -> String {
+    file_artifact_key_from_bytes(content.as_bytes())
+}
+
+fn file_artifact_key_from_bytes(raw_bytes: &[u8]) -> String {
     crate::host::devql::deterministic_uuid(&format!(
         "cache-file|{}|{}",
-        file_end_line(content),
-        content.len()
+        file_end_line_from_bytes(raw_bytes),
+        raw_bytes.len()
     ))
 }
 
@@ -286,7 +328,11 @@ fn local_artifact_fingerprint(item: &crate::host::language_adapter::LanguageArte
 }
 
 fn file_end_line(content: &str) -> i32 {
-    (content.lines().count() as i32).max(1)
+    file_end_line_from_bytes(content.as_bytes())
+}
+
+fn file_end_line_from_bytes(raw_bytes: &[u8]) -> i32 {
+    crate::host::devql::line_count_from_bytes(raw_bytes)
 }
 
 #[cfg(test)]
@@ -425,5 +471,34 @@ mod tests {
         assert_eq!(parse_error.parse_status, PARSE_STATUS_PARSE_ERROR);
         assert!(parse_error.artefacts.is_empty());
         assert!(parse_error.edges.is_empty());
+    }
+
+    #[test]
+    fn decode_error_cache_payload_materializes_file_only_from_raw_bytes() {
+        let decode_error = decode_error_file_only_to_cache_format(
+            "src/bad.rs",
+            "content-id",
+            "rust",
+            "fingerprint-v1",
+            "parser-v1",
+            "extractor-v1",
+            &[0x2f, 0x2f, 0xff, 0x0a, 0x66, 0x6e, 0x20, 0x78, 0x0a],
+        );
+
+        assert_eq!(decode_error.parse_status, PARSE_STATUS_DECODE_ERROR);
+        assert_eq!(decode_error.artefacts.len(), 1);
+        assert!(decode_error.edges.is_empty());
+
+        let file = &decode_error.artefacts[0];
+        assert_eq!(file.canonical_kind.as_deref(), Some("file"));
+        assert_eq!(file.language_kind, "file");
+        assert_eq!(file.name, "src/bad.rs");
+        assert_eq!(file.start_line, 1);
+        assert_eq!(file.end_line, 2);
+        assert_eq!(file.start_byte, 0);
+        assert_eq!(file.end_byte, 9);
+        assert!(file.signature.is_empty());
+        assert!(file.modifiers.is_empty());
+        assert!(file.docstring.is_none());
     }
 }

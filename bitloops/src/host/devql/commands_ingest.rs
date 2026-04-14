@@ -302,7 +302,10 @@ async fn execute_ingest_inner(
                     let Some(blob_sha) = blob_sha else {
                         continue;
                     };
-                    let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+                    let Some(blob_content) = git_blob_decoded_content(&cfg.repo_root, &blob_sha)
+                    else {
+                        continue;
+                    };
 
                     upsert_file_state_row(
                         &cfg.repo.repo_id,
@@ -315,25 +318,33 @@ async fn execute_ingest_inner(
                     if !classification.should_extract() {
                         continue;
                     }
-                    if classification.analysis_mode == AnalysisMode::Text
-                        && !plain_text_content_is_allowed(&content)
-                    {
-                        continue;
+                    if classification.analysis_mode == AnalysisMode::Text {
+                        let Some(content) = blob_content.text.as_deref() else {
+                            continue;
+                        };
+                        if !plain_text_content_is_allowed(content) {
+                            continue;
+                        }
                     }
                     let file_artefact = upsert_file_artefact_row(
                         &cfg.repo.repo_id,
-                        &cfg.repo_root,
                         &relational,
                         &normalized_path,
                         &blob_sha,
                         &classification.language,
                         &classification.extraction_fingerprint,
+                        &blob_content,
                     )
                     .await?;
                     if classification.analysis_mode == AnalysisMode::Text {
                         counters.artefacts_upserted += 1;
                         continue;
                     }
+                    if blob_content.decode_degraded {
+                        counters.artefacts_upserted += 1;
+                        continue;
+                    }
+                    let source_content = blob_content.text.as_deref().unwrap_or_default();
                     upsert_language_artefacts(
                         cfg,
                         &relational,
@@ -349,6 +360,7 @@ async fn execute_ingest_inner(
                             blob_sha: &blob_sha,
                         },
                         &file_artefact,
+                        source_content,
                     )
                     .await?;
 
@@ -370,7 +382,7 @@ async fn execute_ingest_inner(
                         semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
                             &pre_stage_artefacts,
                             &pre_stage_dependencies,
-                            &content,
+                            source_content,
                         );
                     let (semantic_feature_stats, input_hashes, _enriched) =
                         run_semantic_features_refresh(

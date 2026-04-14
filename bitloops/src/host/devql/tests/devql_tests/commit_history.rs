@@ -377,6 +377,88 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
 }
 
 #[tokio::test]
+async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-utf8-ingest-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::write(
+        repo.path().join("src/bad.rs"),
+        [
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66,
+            0x6e, 0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33,
+            0x32, 0x20, 0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+        ],
+    )
+    .expect("write invalid UTF-8 rust file");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add invalid utf8 file"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history decode-degraded file-only test")
+        .await
+        .expect("initialise local devql store for decode-degraded ingest test");
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest for decode-degraded commits");
+    assert!(summary.success, "ingest summary should report success");
+
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let bad_blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:src/bad.rs"]);
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+
+    let file_state_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count file_state rows for src/bad.rs");
+    let file_artefact_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts
+             WHERE repo_id = ?1 AND symbol_fqn = ?2 AND canonical_kind = 'file'",
+            rusqlite::params![cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count file artefact rows for src/bad.rs");
+    let nested_artefact_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts
+             WHERE repo_id = ?1 AND symbol_fqn LIKE ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), "src/bad.rs::%"],
+            |row| row.get(0),
+        )
+        .expect("count nested artefact rows for src/bad.rs");
+    let snapshot_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_snapshots
+             WHERE repo_id = ?1 AND blob_sha = ?2 AND path = ?3",
+            rusqlite::params![cfg.repo.repo_id.as_str(), bad_blob_sha.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count artefact snapshots for src/bad.rs");
+    let edge_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges WHERE repo_id = ?1 AND blob_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), bad_blob_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical edge rows for src/bad.rs");
+
+    assert_eq!(file_state_rows, 1, "ingest should persist file_state for src/bad.rs");
+    assert_eq!(file_artefact_rows, 1, "ingest should persist one file artefact for src/bad.rs");
+    assert_eq!(nested_artefact_rows, 0, "ingest should not persist nested artefacts for src/bad.rs");
+    assert_eq!(snapshot_rows, 1, "ingest should persist one snapshot row for src/bad.rs");
+    assert_eq!(edge_rows, 0, "ingest should not persist dependency edges for src/bad.rs");
+}
+
+#[tokio::test]
 async fn execute_ingest_skips_events_backend_for_unmapped_commits_when_events_store_is_unavailable()
 {
     let repo = seed_git_repo();

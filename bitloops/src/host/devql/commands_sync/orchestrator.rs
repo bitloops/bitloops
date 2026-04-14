@@ -923,6 +923,17 @@ async fn project_materialized_items(
     items: &[super::sqlite_writer::PreparedSyncItem],
 ) -> Result<()> {
     for item in items {
+        if !item.semantic_projection_allowed {
+            sync::semantic_projector::remove_path(cfg, relational, &item.desired.path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "clearing current semantic clone projection for `{}`",
+                        item.desired.path
+                    )
+                })?;
+            continue;
+        }
         let inputs =
             semantic_features::build_semantic_feature_inputs_from_artefacts_with_dependencies(
                 &sync::semantic_projector::pre_stage_artefacts_for_projection(
