@@ -2927,6 +2927,8 @@ fn invalid_embedding_gateway(
                     model: Some("bge-m3".to_string()),
                     api_key: None,
                     base_url: None,
+                    temperature: None,
+                    max_output_tokens: None,
                     cache_dir: None,
                 },
             );

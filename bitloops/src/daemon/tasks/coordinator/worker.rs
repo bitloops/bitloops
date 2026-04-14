@@ -174,14 +174,22 @@ impl DevqlTaskCoordinator {
         config_root: &Path,
         repo_registry_path: Option<&Path>,
     ) -> Result<Vec<PathBuf>> {
-        let current_repo_root = config_root
+        let current_root = config_root
             .canonicalize()
             .unwrap_or_else(|_| config_root.to_path_buf());
         let current_daemon_config_root =
-            crate::config::resolve_bound_daemon_config_root_for_repo(&current_repo_root)
-                .unwrap_or_else(|_| current_repo_root.clone());
-        let mut repo_roots = vec![current_repo_root.clone()];
-        let mut seen = HashSet::from([current_repo_root]);
+            crate::config::resolve_bound_daemon_config_root_for_repo(&current_root)
+                .unwrap_or_else(|_| current_root.clone());
+        let mut repo_roots = Vec::new();
+        let mut seen = HashSet::new();
+
+        if git_repo_root(&current_root)
+            .as_deref()
+            .is_some_and(|repo_root| repo_root == current_root.as_path())
+            && seen.insert(current_root.clone())
+        {
+            repo_roots.push(current_root.clone());
+        }
 
         let Some(repo_registry_path) = repo_registry_path else {
             return Ok(repo_roots);
@@ -678,5 +686,151 @@ impl DevqlTaskCoordinator {
         }
 
         Ok(())
+    }
+}
+
+fn git_repo_root(path: &Path) -> Option<PathBuf> {
+    crate::host::checkpoints::strategy::manual_commit::run_git(
+        path,
+        &["rev-parse", "--show-toplevel"],
+    )
+    .ok()
+    .map(PathBuf::from)
+    .map(|repo_root| repo_root.canonicalize().unwrap_or(repo_root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    use tempfile::TempDir;
+    use tokio::sync::Notify;
+
+    use crate::devql_transport::{
+        RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry,
+    };
+    use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+
+    fn coordinator(temp: &TempDir) -> DevqlTaskCoordinator {
+        DevqlTaskCoordinator {
+            runtime_store: DaemonSqliteRuntimeStore::open_at(
+                temp.path().join("daemon-runtime.sqlite"),
+            )
+            .expect("open daemon runtime store"),
+            lock: Mutex::new(()),
+            notify: Notify::new(),
+            worker_started: std::sync::atomic::AtomicBool::new(false),
+            subscription_hub: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn scope_exclusion_reconcile_skips_non_repo_config_root_and_keeps_matching_registry_repos() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_root = temp.path().join("config-root");
+        let repo_root = temp.path().join("repo-a");
+        let other_config_root = temp.path().join("other-config-root");
+        let other_repo_root = temp.path().join("repo-b");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        std::fs::create_dir_all(&other_config_root).expect("create other config root");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+        std::fs::create_dir_all(&other_repo_root).expect("create other repo root");
+
+        crate::test_support::git_fixtures::init_test_repo(
+            &repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+        crate::test_support::git_fixtures::init_test_repo(
+            &other_repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+        let other_config_path =
+            crate::test_support::git_fixtures::write_test_daemon_config(&other_config_root);
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("bind repo root to config");
+        crate::config::settings::write_repo_daemon_binding(
+            &other_repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &other_config_path,
+        )
+        .expect("bind other repo root to config");
+
+        let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+        let other_repo = crate::host::devql::resolve_repo_identity(&other_repo_root)
+            .expect("resolve other repo");
+        let registry_path = temp.path().join("repo-registry.json");
+        persist_repo_path_registry(
+            &registry_path,
+            &RepoPathRegistry {
+                version: 1,
+                entries: vec![
+                    RepoPathRegistryEntry {
+                        repo_id: repo.repo_id,
+                        provider: repo.provider,
+                        organisation: repo.organization,
+                        name: repo.name,
+                        identity: repo.identity,
+                        repo_root: repo_root.clone(),
+                        last_branch: Some("main".to_string()),
+                        git_dir_relative_path: Some(".git".to_string()),
+                        updated_at_unix: 1,
+                    },
+                    RepoPathRegistryEntry {
+                        repo_id: other_repo.repo_id,
+                        provider: other_repo.provider,
+                        organisation: other_repo.organization,
+                        name: other_repo.name,
+                        identity: other_repo.identity,
+                        repo_root: other_repo_root.clone(),
+                        last_branch: Some("main".to_string()),
+                        git_dir_relative_path: Some(".git".to_string()),
+                        updated_at_unix: 2,
+                    },
+                ],
+            },
+        )
+        .expect("persist repo registry");
+
+        let coordinator = coordinator(&temp);
+        let repo_roots = coordinator
+            .scope_exclusion_reconcile_repo_roots(&config_root, Some(&registry_path))
+            .expect("resolve repo roots");
+
+        assert_eq!(
+            repo_roots,
+            vec![repo_root.canonicalize().expect("canonicalize repo root")]
+        );
+    }
+
+    #[test]
+    fn scope_exclusion_reconcile_keeps_repo_local_config_root() {
+        let temp = TempDir::new().expect("temp dir");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+        crate::test_support::git_fixtures::init_test_repo(
+            &repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+
+        let coordinator = coordinator(&temp);
+        let repo_roots = coordinator
+            .scope_exclusion_reconcile_repo_roots(&repo_root, None)
+            .expect("resolve repo roots");
+
+        assert_eq!(
+            repo_roots,
+            vec![repo_root.canonicalize().expect("canonicalize repo root")]
+        );
     }
 }

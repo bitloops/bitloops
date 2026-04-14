@@ -88,6 +88,8 @@ driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1/chat/completions"
+temperature = "0.1"
+max_output_tokens = 200
 ```
 
 `bitloops enable --install-embeddings`, `bitloops daemon enable --install-embeddings`, and `bitloops init --install-default-daemon` can create the default local embeddings profile for you. `bitloops inference install` manages the standalone summary runtime, and interactive `bitloops enable` or `bitloops init --install-default-daemon` can attach summaries to Ollama automatically when it is available. Edit the daemon config manually only when you want a hosted profile or a customised local profile.

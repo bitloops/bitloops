@@ -104,6 +104,8 @@ driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1/chat/completions"
+temperature = "0.1"
+max_output_tokens = 200
 
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
@@ -128,9 +130,10 @@ The current daemon parser accepts these top-level surfaces:
 ### Text-Generation Profiles
 
 - `task = "text_generation"` profiles must declare `runtime`.
+- `task = "text_generation"` profiles must also declare `temperature` and `max_output_tokens`.
 - Bitloops always routes text generation through the configured runtime, typically `bitloops_inference`.
 - `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
-- Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it.
+- Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
 
 ### Telemetry Consent
 

@@ -279,7 +279,9 @@ fn gateway_rejects_text_generation_profile_without_runtime() {
             runtime: None,
             model: Some("ministral-3:3b".to_string()),
             api_key: None,
-            base_url: None,
+            base_url: Some("http://127.0.0.1:11434/api/chat".to_string()),
+            temperature: Some("0.1".to_string()),
+            max_output_tokens: Some(200),
             cache_dir: None,
         },
     );
@@ -306,6 +308,61 @@ fn gateway_rejects_text_generation_profile_without_runtime() {
 
     assert!(
         err.to_string().contains("requires a runtime"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn gateway_rejects_text_generation_profile_without_request_defaults() {
+    let _guard = test_lock();
+    let mut inference = InferenceConfig::default();
+    inference.runtimes.insert(
+        "bitloops_inference".to_string(),
+        InferenceRuntimeConfig {
+            command: "/bin/true".to_string(),
+            args: Vec::new(),
+            startup_timeout_secs: 1,
+            request_timeout_secs: 1,
+        },
+    );
+    inference.profiles.insert(
+        "summary_local".to_string(),
+        crate::config::InferenceProfileConfig {
+            name: "summary_local".to_string(),
+            task: InferenceTask::TextGeneration,
+            driver: "ollama_chat".to_string(),
+            runtime: Some("bitloops_inference".to_string()),
+            model: Some("ministral-3:3b".to_string()),
+            api_key: None,
+            base_url: Some("http://127.0.0.1:11434/api/chat".to_string()),
+            temperature: None,
+            max_output_tokens: Some(200),
+            cache_dir: None,
+        },
+    );
+    let temp = TempDir::new().expect("temp dir");
+    let gateway = LocalInferenceGateway::new(
+        temp.path(),
+        inference,
+        HashMap::from([(
+            "semantic_clones".to_string(),
+            BTreeMap::from([(
+                "summary_generation".to_string(),
+                "summary_local".to_string(),
+            )]),
+        )]),
+    );
+
+    let err = match gateway
+        .scoped(Some("semantic_clones"))
+        .text_generation("summary_generation")
+    {
+        Ok(_) => panic!("missing defaults must fail"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains("requires a temperature"),
         "unexpected error: {err:#}"
     );
 }
@@ -362,7 +419,9 @@ task = "text_generation"
 driver = "ollama_chat"
 runtime = "bitloops_inference"
 model = "ministral-3:3b"
-base_url = "http://127.0.0.1:11434"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
 "#,
             script_path.display(),
             launch_log.display(),

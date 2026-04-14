@@ -613,6 +613,15 @@ where
                 &mut warnings,
                 &format!("inference.profiles.{name}.runtime"),
             );
+            let temperature = resolve_runtime_string_opt(
+                Some(profile_root),
+                "temperature",
+                &env_lookup,
+                &mut warnings,
+                &format!("inference.profiles.{name}.temperature"),
+            );
+            let max_output_tokens = read_any_u64(profile_root, &["max_output_tokens"])
+                .map(|value| value.min(u32::MAX as u64) as u32);
             if task == InferenceTask::TextGeneration
                 && runtime
                     .as_deref()
@@ -621,6 +630,21 @@ where
             {
                 warnings.push(format!(
                     "inference.profiles.{name} uses task `text_generation` and should declare `runtime`"
+                ));
+            }
+            if task == InferenceTask::TextGeneration
+                && temperature
+                    .as_deref()
+                    .map(str::trim)
+                    .is_none_or(|value| value.is_empty())
+            {
+                warnings.push(format!(
+                    "inference.profiles.{name} uses task `text_generation` and should declare `temperature`"
+                ));
+            }
+            if task == InferenceTask::TextGeneration && max_output_tokens.is_none() {
+                warnings.push(format!(
+                    "inference.profiles.{name} uses task `text_generation` and should declare `max_output_tokens`"
                 ));
             }
 
@@ -652,6 +676,8 @@ where
                         &mut warnings,
                         &format!("inference.profiles.{name}.base_url"),
                     ),
+                    temperature,
+                    max_output_tokens,
                     cache_dir: resolve_runtime_string_opt(
                         Some(profile_root),
                         "cache_dir",

@@ -15,6 +15,9 @@ use crate::host::inference::BITLOOPS_INFERENCE_RUNTIME_ID;
 use super::managed::install_or_bootstrap_inference;
 
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
+const DEFAULT_OLLAMA_CHAT_BASE_URL: &str = "http://127.0.0.1:11434/api/chat";
+const DEFAULT_SUMMARY_TEMPERATURE: &str = "0.1";
+const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS: i64 = 200;
 const DEFAULT_SUMMARY_PROFILE_NAME: &str = "summary_local";
 const PREFERRED_OLLAMA_MODELS: &[&str] = &["ministral-3:3b", "ministral-3:8b"];
 
@@ -72,10 +75,26 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
 
     profile.task == InferenceTask::TextGeneration
         && profile
+            .model
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && profile
             .runtime
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
+        && profile
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && profile
+            .temperature
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && profile.max_output_tokens.is_some_and(|value| value > 0)
 }
 
 pub(crate) fn configure_local_summary_generation(
@@ -286,7 +305,9 @@ fn write_summary_profile(repo_root: &Path, model_name: &str) -> Result<()> {
         profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
         profile["driver"] = Item::Value("ollama_chat".into());
         profile["model"] = Item::Value(model_name.into());
-        profile["base_url"] = Item::Value(DEFAULT_OLLAMA_BASE_URL.into());
+        profile["base_url"] = Item::Value(DEFAULT_OLLAMA_CHAT_BASE_URL.into());
+        profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+        profile["max_output_tokens"] = Item::Value(DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS.into());
         profile.remove("api_key");
         profile.remove("cache_dir");
     }

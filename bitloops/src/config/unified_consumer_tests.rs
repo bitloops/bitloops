@@ -121,7 +121,9 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
                     "driver": "ollama_chat",
                     "runtime": "bitloops_inference",
                     "model": "gpt-5.4-mini",
-                    "base_url": "https://api.openai.com/v1"
+                    "base_url": "https://api.openai.com/v1",
+                    "temperature": "0.1",
+                    "max_output_tokens": 200
                 }
             }
         })),
@@ -170,6 +172,12 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     assert_eq!(llm_profile.driver, "ollama_chat");
     assert_eq!(llm_profile.runtime.as_deref(), Some("bitloops_inference"));
     assert_eq!(llm_profile.model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(
+        llm_profile.base_url.as_deref(),
+        Some("https://api.openai.com/v1")
+    );
+    assert_eq!(llm_profile.temperature.as_deref(), Some("0.1"));
+    assert_eq!(llm_profile.max_output_tokens, Some(200));
     assert_eq!(capability.semantic_clones, semantic_clones);
     assert_eq!(capability.inference, inference);
 }

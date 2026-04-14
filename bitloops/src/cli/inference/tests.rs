@@ -109,6 +109,8 @@ driver = "openai"
 model = "gpt-4.1-mini"
 api_key = "sk-test"
 base_url = "https://api.openai.com/v1/chat/completions"
+temperature = "0.1"
+max_output_tokens = 200
 "#,
     )
     .expect("write config");
@@ -135,6 +137,8 @@ driver = "openai"
 model = "gpt-4.1-mini"
 api_key = "sk-test"
 base_url = "https://api.openai.com/v1/chat/completions"
+temperature = "0.1"
+max_output_tokens = 200
 "#,
     )
     .expect("write config");
@@ -224,5 +228,25 @@ base_url = "https://api.openai.com/v1/chat/completions"
             .and_then(Item::as_value)
             .and_then(|value| value.as_str()),
         Some("ministral-3:3b")
+    );
+    assert_eq!(
+        managed_profile
+            .get("base_url")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str()),
+        Some("http://127.0.0.1:11434/api/chat")
+    );
+    assert_eq!(
+        managed_profile
+            .get("temperature")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str()),
+        Some("0.1")
+    );
+    assert_eq!(
+        managed_profile
+            .get("max_output_tokens")
+            .and_then(Item::as_integer),
+        Some(200)
     );
 }
