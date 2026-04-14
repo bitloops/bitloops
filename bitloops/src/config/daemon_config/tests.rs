@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use tempfile::NamedTempFile;
 
@@ -125,5 +126,72 @@ request_timeout_secs = 300
     assert!(
         !rendered.contains("\"-B\""),
         "expected stale python-style args removed:\n{rendered}"
+    );
+}
+
+#[test]
+fn apply_with_managed_runtime_path_preserves_concurrent_summary_profile_updates() {
+    let config = NamedTempFile::new().expect("create temp config");
+    fs::write(
+        config.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[inference.runtimes.bitloops_embeddings]
+command = "bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+"#,
+    )
+    .expect("write temp config");
+
+    let plan =
+        prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
+    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
+
+    fs::write(
+        config.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.runtimes.bitloops_embeddings]
+command = "bitloops-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write concurrent summary config update");
+
+    plan.apply_with_managed_runtime_path(Path::new("/tmp/bitloops-embeddings"))
+        .expect("apply staged embeddings config");
+
+    let rendered = fs::read_to_string(config.path()).expect("read updated config");
+    assert!(
+        rendered.contains("summary_generation = \"summary_local\""),
+        "expected embeddings apply to preserve summary binding:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("[inference.profiles.summary_local]"),
+        "expected embeddings apply to preserve summary profile:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("command = \"/tmp/bitloops-embeddings\""),
+        "expected embeddings runtime command to be rewritten:\n{rendered}"
     );
 }

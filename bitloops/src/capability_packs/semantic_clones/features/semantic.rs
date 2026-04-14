@@ -18,6 +18,9 @@ pub struct SemanticSummaryCandidate {
 pub trait SemanticSummaryProvider: Send + Sync {
     fn cache_key(&self) -> String;
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate>;
+    fn requires_model_output(&self) -> bool {
+        false
+    }
 }
 
 pub fn summary_provider_from_service(
@@ -142,6 +145,10 @@ impl SemanticSummaryProvider for TextGenerationServiceAdapter {
             source_model: Some(self.service.descriptor()),
         })
     }
+
+    fn requires_model_output(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -156,6 +163,18 @@ pub struct SymbolSemanticsRow {
     pub summary: String,
     pub confidence: f32,
     pub source_model: Option<String>,
+}
+
+impl SymbolSemanticsRow {
+    pub fn is_llm_enriched(&self) -> bool {
+        self.llm_summary
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .source_model
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+    }
 }
 pub(super) fn build_semantics_row(
     input: &SemanticFeatureInput,

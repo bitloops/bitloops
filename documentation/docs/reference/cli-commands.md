@@ -27,17 +27,18 @@ bitloops help devql
 Bootstraps the current project or subproject.
 
 ```bash
+bitloops init --install-default-daemon
+bitloops init --install-default-daemon --sync=true
 bitloops init
 bitloops init --sync=true
 bitloops init --sync=false
-bitloops init --install-default-daemon
-bitloops init --install-default-daemon --sync=true
 ```
 
 Notes:
 
+- The fastest way to get started on a fresh machine from inside a repository is `bitloops init --install-default-daemon`.
 - Run `bitloops start` first when the daemon is already configured.
-- Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
+- Use `bitloops start --create-default-config` first when you want to bootstrap or customise the daemon separately before running `init`.
 - When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from `bitloops/bitloops-embeddings` automatically and writes the managed absolute path into the runtime config.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.

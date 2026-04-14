@@ -1,15 +1,20 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_graphql::{Request as GraphqlRequest, Variables};
 use chrono::{DateTime, TimeZone, Utc};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::Deserialize;
 use serde_json::json;
 
-use super::super::dto::{
-    ApiBranchSummaryDto, ApiCommitDto, ApiCommitFileDiffDto, ApiCommitRowDto, ApiError,
-    ApiKpisResponse, ApiRepositoryDto, ApiTokenUsageDto,
+use crate::api::dashboard_types::{
+    DashboardBranchSummary, DashboardCheckpoint, DashboardCommit, DashboardCommitFileDiff,
+    DashboardCommitRow, DashboardKpis, DashboardTokenUsage,
 };
-use super::super::{CommitCheckpointQuery, DashboardState, canonical_agent_key};
+use crate::api::{
+    ApiError, CommitCheckpointQuery, DashboardState, canonical_agent_key, dashboard_user,
+    user_matches_filter,
+};
+
+use super::repository::dashboard_graphql_context;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,19 +68,19 @@ pub(super) struct DashboardGraphqlCommitNode {
     pub(super) author_email: String,
     pub(super) committed_at: String,
     pub(super) commit_message: String,
-    checkpoints: DashboardGraphqlCheckpointConnection,
+    pub(super) checkpoints: DashboardGraphqlCheckpointConnection,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DashboardGraphqlCheckpointConnection {
-    edges: Vec<DashboardGraphqlCheckpointEdge>,
+pub(super) struct DashboardGraphqlCheckpointConnection {
+    pub(super) edges: Vec<DashboardGraphqlCheckpointEdge>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DashboardGraphqlCheckpointEdge {
-    node: DashboardGraphqlCheckpointNode,
+pub(super) struct DashboardGraphqlCheckpointEdge {
+    pub(super) node: DashboardGraphqlCheckpointNode,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -101,34 +106,34 @@ pub(super) struct DashboardGraphqlCheckpointNode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DashboardGraphqlCheckpointFileRelation {
-    pub(super) filepath: String,
-    pub(super) change_kind: String,
-    pub(super) copied_from_path: Option<String>,
-    pub(super) copied_from_blob_sha: Option<String>,
+    filepath: String,
+    change_kind: String,
+    copied_from_path: Option<String>,
+    copied_from_blob_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DashboardGraphqlTokenUsage {
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_creation_tokens: u64,
-    cache_read_tokens: u64,
-    api_call_count: u64,
+    pub(super) input_tokens: u64,
+    pub(super) output_tokens: u64,
+    pub(super) cache_creation_tokens: u64,
+    pub(super) cache_read_tokens: u64,
+    pub(super) api_call_count: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct DashboardGraphqlCommitRow {
     pub(super) commit: DashboardGraphqlCommitNode,
-    pub(super) checkpoint: DashboardGraphqlCheckpointNode,
+    pub(super) checkpoints: Vec<DashboardGraphqlCheckpointNode>,
 }
 
 pub(super) async fn load_dashboard_branches_via_graphql(
     state: &DashboardState,
+    repo_selector: &str,
     from_unix: Option<i64>,
     to_unix: Option<i64>,
-) -> std::result::Result<Vec<ApiBranchSummaryDto>, ApiError> {
-    let repo_selector = dashboard_graphql_repo_selector(state)?;
+) -> std::result::Result<Vec<DashboardBranchSummary>, ApiError> {
     let data: DashboardGraphqlBranchesData = execute_dashboard_graphql(
         state,
         r#"
@@ -153,44 +158,18 @@ pub(super) async fn load_dashboard_branches_via_graphql(
         .repo
         .branches
         .into_iter()
-        .map(|branch| ApiBranchSummaryDto {
+        .map(|branch| DashboardBranchSummary {
             branch: branch.name,
             checkpoint_commits: branch.checkpoint_count,
         })
         .collect())
 }
 
-pub(super) async fn load_dashboard_repositories(
-    state: &DashboardState,
-) -> std::result::Result<Vec<ApiRepositoryDto>, ApiError> {
-    let context = crate::graphql::DevqlGraphqlContext::for_global_request(
-        state.config_root.clone(),
-        state.repo_root.clone(),
-        state.repo_registry_path().map(std::path::Path::to_path_buf),
-        state.db.clone(),
-    );
-    let repositories = context.list_known_repositories().await.map_err(|err| {
-        ApiError::internal(format!("failed to load dashboard repositories: {err:#}"))
-    })?;
-
-    Ok(repositories
-        .into_iter()
-        .map(|repository| ApiRepositoryDto {
-            repo_id: repository.repo_id().to_string(),
-            identity: repository.identity().to_string(),
-            name: repository.name().to_string(),
-            provider: repository.provider().to_string(),
-            organization: repository.organization().to_string(),
-            default_branch: repository.default_branch().map(str::to_string),
-        })
-        .collect())
-}
-
 pub(super) async fn load_dashboard_commit_rows_via_graphql(
     state: &DashboardState,
+    repo_selector: &str,
     filter: &CommitCheckpointQuery,
 ) -> std::result::Result<Vec<DashboardGraphqlCommitRow>, ApiError> {
-    let repo_selector = dashboard_graphql_repo_selector(state)?;
     let data: DashboardGraphqlCommitsData = execute_dashboard_graphql(
         state,
         r#"
@@ -205,7 +184,7 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
                   authorEmail
                   committedAt
                   commitMessage
-                  checkpoints(first: 1) {
+                  checkpoints(first: 5000) {
                     edges {
                       node {
                         id
@@ -254,44 +233,33 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
 
     let mut rows = Vec::new();
     for edge in data.repo.commits.edges {
-        let commit = edge.node;
-        let Some(checkpoint) = commit
-            .checkpoints
-            .edges
-            .first()
-            .cloned()
+        let mut commit = edge.node;
+        let checkpoints = std::mem::take(&mut commit.checkpoints.edges)
+            .into_iter()
             .map(|edge| edge.node)
-        else {
-            continue;
-        };
-
-        let user = super::super::dashboard_user(&commit.author_name, &commit.author_email);
-        if !super::super::user_matches_filter(&user, filter.user.as_deref()) {
-            continue;
-        }
-        if !graphql_checkpoint_matches_agent_filter(&checkpoint, filter.agent.as_deref()) {
+            .filter(|checkpoint| {
+                graphql_checkpoint_matches_agent_filter(checkpoint, filter.agent.as_deref())
+            })
+            .collect::<Vec<_>>();
+        if checkpoints.is_empty() {
             continue;
         }
 
-        rows.push(DashboardGraphqlCommitRow { commit, checkpoint });
+        let user = dashboard_user(&commit.author_name, &commit.author_email);
+        if !user_matches_filter(&user, filter.user.as_deref()) {
+            continue;
+        }
+
+        rows.push(DashboardGraphqlCommitRow {
+            commit,
+            checkpoints,
+        });
     }
 
     Ok(rows)
 }
 
-fn dashboard_graphql_repo_selector(
-    state: &DashboardState,
-) -> std::result::Result<String, ApiError> {
-    crate::host::devql::resolve_repo_identity(&state.repo_root)
-        .map(|repo| repo.repo_id)
-        .map_err(|err| {
-            ApiError::internal(format!(
-                "failed to resolve dashboard repository scope: {err:#}"
-            ))
-        })
-}
-
-async fn execute_dashboard_graphql<T: DeserializeOwned>(
+async fn execute_dashboard_graphql<T: for<'de> Deserialize<'de>>(
     state: &DashboardState,
     query: &str,
     variables: serde_json::Value,
@@ -301,12 +269,7 @@ async fn execute_dashboard_graphql<T: DeserializeOwned>(
         .execute(
             GraphqlRequest::new(query)
                 .variables(Variables::from_json(variables))
-                .data(crate::graphql::DevqlGraphqlContext::for_global_request(
-                    state.config_root.clone(),
-                    state.repo_root.clone(),
-                    state.repo_registry_path.clone(),
-                    state.db.clone(),
-                )),
+                .data(dashboard_graphql_context(state)),
         )
         .await;
 
@@ -351,9 +314,9 @@ fn optional_rfc3339_from_unix_seconds(value: Option<i64>) -> Option<String> {
     })
 }
 
-pub(super) fn build_kpis_response_from_graphql_rows(
+pub(super) fn build_dashboard_kpis_from_graphql_rows(
     rows: &[DashboardGraphqlCommitRow],
-) -> ApiKpisResponse {
+) -> DashboardKpis {
     let mut unique_checkpoint_ids: HashSet<String> = HashSet::new();
     let mut unique_agents: HashSet<String> = HashSet::new();
     let mut total_sessions = 0usize;
@@ -365,24 +328,26 @@ pub(super) fn build_kpis_response_from_graphql_rows(
     let mut api_call_count = 0u64;
 
     for row in rows {
-        if !unique_checkpoint_ids.insert(row.checkpoint.id.clone()) {
-            continue;
-        }
+        for checkpoint in &row.checkpoints {
+            if !unique_checkpoint_ids.insert(checkpoint.id.clone()) {
+                continue;
+            }
 
-        for agent_key in checkpoint_agents(&row.checkpoint) {
-            unique_agents.insert(agent_key);
-        }
-        total_sessions += row.checkpoint.session_count;
-        for file in &row.checkpoint.files_touched {
-            files_touched.insert(file.clone());
-        }
+            for agent_key in checkpoint_agents(checkpoint) {
+                unique_agents.insert(agent_key);
+            }
+            total_sessions += checkpoint.session_count;
+            for file in &checkpoint.files_touched {
+                files_touched.insert(file.clone());
+            }
 
-        if let Some(token_usage) = row.checkpoint.token_usage.as_ref() {
-            input_tokens += token_usage.input_tokens;
-            output_tokens += token_usage.output_tokens;
-            cache_creation_tokens += token_usage.cache_creation_tokens;
-            cache_read_tokens += token_usage.cache_read_tokens;
-            api_call_count += token_usage.api_call_count;
+            if let Some(token_usage) = checkpoint.token_usage.as_ref() {
+                input_tokens += token_usage.input_tokens;
+                output_tokens += token_usage.output_tokens;
+                cache_creation_tokens += token_usage.cache_creation_tokens;
+                cache_read_tokens += token_usage.cache_read_tokens;
+                api_call_count += token_usage.api_call_count;
+            }
         }
     }
 
@@ -399,7 +364,7 @@ pub(super) fn build_kpis_response_from_graphql_rows(
         total_sessions as f64 / total_checkpoints as f64
     };
 
-    ApiKpisResponse {
+    DashboardKpis {
         total_commits: rows.len(),
         total_checkpoints,
         total_agents: unique_agents.len(),
@@ -454,10 +419,10 @@ pub(super) fn checkpoint_agents(info: &DashboardGraphqlCheckpointNode) -> Vec<St
     keys
 }
 
-fn api_token_usage_from_graphql(
+fn dashboard_token_usage_from_graphql(
     usage: Option<&DashboardGraphqlTokenUsage>,
-) -> Option<ApiTokenUsageDto> {
-    usage.map(|usage| ApiTokenUsageDto {
+) -> Option<DashboardTokenUsage> {
+    usage.map(|usage| DashboardTokenUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cache_creation_tokens: usage.cache_creation_tokens,
@@ -466,18 +431,49 @@ fn api_token_usage_from_graphql(
     })
 }
 
-pub(super) fn api_commit_row_from_graphql(
+pub(super) fn dashboard_commit_row_from_graphql(
     row: DashboardGraphqlCommitRow,
-    files_touched: Vec<ApiCommitFileDiffDto>,
-) -> ApiCommitRowDto {
-    let DashboardGraphqlCommitRow { commit, checkpoint } = row;
-    let agents = checkpoint_agents(&checkpoint);
-    let checkpoint_files_touched = checkpoint_file_diffs_from_graphql(&checkpoint, &files_touched);
+    files_touched: Vec<DashboardCommitFileDiff>,
+) -> DashboardCommitRow {
+    let DashboardGraphqlCommitRow {
+        commit,
+        checkpoints,
+    } = row;
     let timestamp = DateTime::parse_from_rfc3339(&commit.committed_at)
         .map(|value| value.timestamp())
         .unwrap_or(0);
-    ApiCommitRowDto {
-        commit: ApiCommitDto {
+    let checkpoints = checkpoints
+        .into_iter()
+        .map(|checkpoint| {
+            let checkpoint_files_touched =
+                checkpoint_file_diffs_from_graphql(&checkpoint, &files_touched);
+            let agents = checkpoint_agents(&checkpoint);
+            let token_usage = dashboard_token_usage_from_graphql(checkpoint.token_usage.as_ref());
+
+            DashboardCheckpoint {
+                checkpoint_id: checkpoint.id,
+                strategy: checkpoint.strategy.unwrap_or_default(),
+                branch: checkpoint.branch.unwrap_or_default(),
+                checkpoints_count: checkpoint.checkpoints_count.try_into().unwrap_or(u32::MAX),
+                files_touched: checkpoint_files_touched,
+                session_count: checkpoint.session_count,
+                token_usage,
+                session_id: checkpoint.session_id,
+                agents,
+                first_prompt_preview: checkpoint.first_prompt_preview.unwrap_or_default(),
+                created_at: checkpoint.created_at.unwrap_or_default(),
+                is_task: checkpoint.is_task,
+                tool_use_id: checkpoint.tool_use_id.unwrap_or_default(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let checkpoint = checkpoints
+        .first()
+        .cloned()
+        .expect("dashboard commit rows always include at least one checkpoint");
+
+    DashboardCommitRow {
+        commit: DashboardCommit {
             sha: commit.sha,
             parents: commit.parents,
             author_name: commit.author_name,
@@ -486,28 +482,15 @@ pub(super) fn api_commit_row_from_graphql(
             message: commit.commit_message,
             files_touched,
         },
-        checkpoint: super::super::dto::ApiCheckpointDto {
-            checkpoint_id: checkpoint.id,
-            strategy: checkpoint.strategy.unwrap_or_default(),
-            branch: checkpoint.branch.unwrap_or_default(),
-            checkpoints_count: checkpoint.checkpoints_count.try_into().unwrap_or(u32::MAX),
-            files_touched: checkpoint_files_touched,
-            session_count: checkpoint.session_count,
-            token_usage: api_token_usage_from_graphql(checkpoint.token_usage.as_ref()),
-            session_id: checkpoint.session_id,
-            agents,
-            first_prompt_preview: checkpoint.first_prompt_preview.unwrap_or_default(),
-            created_at: checkpoint.created_at.unwrap_or_default(),
-            is_task: checkpoint.is_task,
-            tool_use_id: checkpoint.tool_use_id.unwrap_or_default(),
-        },
+        checkpoint,
+        checkpoints,
     }
 }
 
 fn checkpoint_file_diffs_from_graphql(
     checkpoint: &DashboardGraphqlCheckpointNode,
-    commit_file_diffs: &[ApiCommitFileDiffDto],
-) -> Vec<ApiCommitFileDiffDto> {
+    commit_file_diffs: &[DashboardCommitFileDiff],
+) -> Vec<DashboardCommitFileDiff> {
     if checkpoint.file_relations.is_empty() {
         return commit_file_diffs.to_vec();
     }
@@ -520,7 +503,7 @@ fn checkpoint_file_diffs_from_graphql(
                 (diff.additions_count, diff.deletions_count),
             )
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
     let mut files_touched = checkpoint
         .file_relations
         .iter()
@@ -529,7 +512,7 @@ fn checkpoint_file_diffs_from_graphql(
                 .get(&relation.filepath)
                 .copied()
                 .unwrap_or((0, 0));
-            ApiCommitFileDiffDto {
+            DashboardCommitFileDiff {
                 filepath: relation.filepath.clone(),
                 additions_count,
                 deletions_count,

@@ -6,7 +6,11 @@ pub(crate) use config::{
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 #[allow(unused_imports)]
-pub(crate) use install::{ensure_managed_inference_runtime, install_or_bootstrap_inference};
+pub(crate) use install::{
+    ManagedInferenceInstallPhase, ManagedInferenceInstallProgress,
+    ensure_managed_inference_runtime, install_or_bootstrap_inference,
+    install_or_bootstrap_inference_with_progress,
+};
 
 #[cfg(test)]
 pub(crate) use install::{

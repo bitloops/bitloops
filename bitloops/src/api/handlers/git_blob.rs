@@ -7,13 +7,13 @@ use axum::{
     response::Response,
 };
 
-use super::super::dto::{ApiError, ApiErrorEnvelope};
+use super::super::ApiError;
 use super::resolve_repo_root_from_repo_id;
 use crate::api::DashboardState;
 use crate::host::checkpoints::strategy::manual_commit::new_git_command;
 use std::process::Stdio;
 
-/// Upper bound for `GET /api/blobs/...` body size (via `git cat-file -s` before reading bytes).
+/// Upper bound for `GET /devql/dashboard/blobs/...` body size (via `git cat-file -s` before reading bytes).
 #[cfg(test)]
 pub(crate) const MAX_GIT_BLOB_BYTES: u64 = 64 * 1024;
 #[cfg(not(test))]
@@ -136,22 +136,7 @@ fn git_cat_file_blob_bytes(repo_root: &Path, blob_sha: &str) -> Result<Vec<u8>, 
     )))
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/blobs/{repo_id}/{blob_sha}",
-    params(
-        ("repo_id" = String, Path, description = "Repository id"),
-        ("blob_sha" = String, Path, description = "Git blob object id (40 or 64 hex characters)")
-    ),
-    responses(
-        (status = 200, description = "Raw git blob bytes", content_type = "application/octet-stream"),
-        (status = 400, description = "Bad request", body = ApiErrorEnvelope),
-        (status = 404, description = "Not found", body = ApiErrorEnvelope),
-        (status = 413, description = "Blob larger than configured maximum", body = ApiErrorEnvelope),
-        (status = 500, description = "Internal server error", body = ApiErrorEnvelope)
-    )
-)]
-pub(crate) async fn handle_api_git_blob(
+pub(crate) async fn handle_dashboard_git_blob(
     State(state): State<DashboardState>,
     AxumPath((repo_id, blob_sha)): AxumPath<(String, String)>,
 ) -> Result<Response, ApiError> {

@@ -12,10 +12,11 @@ mod subscriptions;
 mod types;
 
 pub(crate) use context::DevqlGraphqlContext;
-pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
+pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error, graphql_error};
 pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode};
 pub(crate) use subscriptions::SubscriptionHub;
 pub(crate) use types::Checkpoint;
+pub(crate) use types::HealthStatus;
 pub(crate) use types::{ArtefactFilterInput, CanonicalKind};
 
 #[cfg(test)]
@@ -150,7 +151,7 @@ pub(crate) async fn slim_graphql_handler(
         Ok(scope) => scope,
         Err(err) => {
             let response = graphql_error_response(err).into_response();
-            track_devql_action(DevqlGraphqlTelemetry {
+            track_graphql_action(GraphqlActionTelemetry {
                 repo_root: state.repo_root.as_path(),
                 event: "bitloops devql slim http",
                 scope: "slim",
@@ -170,7 +171,7 @@ pub(crate) async fn slim_graphql_handler(
         scope.as_ref().map(|scope| scope.repo_root.as_path()),
     ) {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(DevqlGraphqlTelemetry {
+        track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
             event: "bitloops devql slim http",
             scope: "slim",
@@ -187,7 +188,7 @@ pub(crate) async fn slim_graphql_handler(
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(DevqlGraphqlTelemetry {
+        track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
             event: "bitloops devql slim http",
             scope: "slim",
@@ -217,7 +218,7 @@ pub(crate) async fn slim_graphql_handler(
     let (response, success) =
         execute_graphql_request(state.devql_slim_schema(), request.data(context), &headers).await;
     let response = response.into_response();
-    track_devql_action(DevqlGraphqlTelemetry {
+    track_graphql_action(GraphqlActionTelemetry {
         repo_root: repo_root.as_path(),
         event: "bitloops devql slim http",
         scope: "slim",
@@ -243,7 +244,7 @@ pub(crate) async fn global_graphql_handler(
         Ok(repo_root) => repo_root,
         Err(err) => {
             let response = graphql_error_response(err).into_response();
-            track_devql_action(DevqlGraphqlTelemetry {
+            track_graphql_action(GraphqlActionTelemetry {
                 repo_root: state.repo_root.as_path(),
                 event: "bitloops devql global http",
                 scope: "global",
@@ -259,7 +260,7 @@ pub(crate) async fn global_graphql_handler(
     };
     if let Err(err) = validate_repo_daemon_binding(&headers, &state, repo_root.as_deref()) {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(DevqlGraphqlTelemetry {
+        track_graphql_action(GraphqlActionTelemetry {
             repo_root: repo_root.as_deref().unwrap_or(state.repo_root.as_path()),
             event: "bitloops devql global http",
             scope: "global",
@@ -282,7 +283,7 @@ pub(crate) async fn global_graphql_handler(
     let (response, success) =
         execute_graphql_request(state.devql_global_schema(), request.data(context), &headers).await;
     let response = response.into_response();
-    track_devql_action(DevqlGraphqlTelemetry {
+    track_graphql_action(GraphqlActionTelemetry {
         repo_root: state.repo_root.as_path(),
         event: "bitloops devql global http",
         scope: "global",
@@ -307,7 +308,7 @@ pub(crate) async fn slim_graphql_ws_handler(
         Ok(scope) => scope,
         Err(err) => {
             let response = graphql_error_response(err).into_response();
-            track_devql_action(DevqlGraphqlTelemetry {
+            track_graphql_action(GraphqlActionTelemetry {
                 repo_root: state.repo_root.as_path(),
                 event: "bitloops devql slim ws",
                 scope: "slim",
@@ -327,7 +328,7 @@ pub(crate) async fn slim_graphql_ws_handler(
         scope.as_ref().map(|scope| scope.repo_root.as_path()),
     ) {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(DevqlGraphqlTelemetry {
+        track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
             event: "bitloops devql slim ws",
             scope: "slim",
@@ -344,7 +345,7 @@ pub(crate) async fn slim_graphql_ws_handler(
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
         let response = graphql_error_response(err).into_response();
-        track_devql_action(DevqlGraphqlTelemetry {
+        track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
             event: "bitloops devql slim ws",
             scope: "slim",
@@ -377,7 +378,7 @@ pub(crate) async fn slim_graphql_ws_handler(
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| GraphQLWebSocket::new(stream, schema, protocol).serve())
         .into_response();
-    track_devql_action(DevqlGraphqlTelemetry {
+    track_graphql_action(GraphqlActionTelemetry {
         repo_root: repo_root.as_path(),
         event: "bitloops devql slim ws",
         scope: "slim",
@@ -419,7 +420,7 @@ pub(crate) async fn global_graphql_ws_handler(
         .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| GraphQLWebSocket::new(stream, schema, protocol).serve())
         .into_response();
-    track_devql_action(DevqlGraphqlTelemetry {
+    track_graphql_action(GraphqlActionTelemetry {
         repo_root: state.repo_root.as_path(),
         event: "bitloops devql global ws",
         scope: "global",
@@ -471,7 +472,7 @@ fn validate_repo_daemon_binding(
     )
 }
 
-async fn execute_graphql_request<Query, Mutation, Subscription>(
+pub(crate) async fn execute_graphql_request<Query, Mutation, Subscription>(
     schema: &Schema<Query, Mutation, Subscription>,
     request: Request,
     headers: &HeaderMap,
@@ -515,7 +516,7 @@ where
     )
 }
 
-fn graphql_request_signature(request: &Request) -> (String, String) {
+pub(crate) fn graphql_request_signature(request: &Request) -> (String, String) {
     let request_kind = graphql_request_kind(request.query.as_str()).to_string();
     let raw_operation_name = request
         .operation_name
@@ -568,20 +569,20 @@ fn graphql_operation_family(name: &str) -> Option<String> {
     }
 }
 
-/// Inputs for [`track_devql_action`]: DevQL GraphQL/WS request telemetry (HTTP or WebSocket).
-struct DevqlGraphqlTelemetry<'a> {
-    repo_root: &'a Path,
-    event: &'a str,
-    scope: &'a str,
-    transport: &'a str,
-    request_kind: &'a str,
-    operation_family: &'a str,
-    success: bool,
-    status: axum::http::StatusCode,
-    duration: Duration,
+/// Inputs for [`track_graphql_action`]: GraphQL/WS request telemetry (HTTP or WebSocket).
+pub(crate) struct GraphqlActionTelemetry<'a> {
+    pub repo_root: &'a Path,
+    pub event: &'a str,
+    pub scope: &'a str,
+    pub transport: &'a str,
+    pub request_kind: &'a str,
+    pub operation_family: &'a str,
+    pub success: bool,
+    pub status: axum::http::StatusCode,
+    pub duration: Duration,
 }
 
-fn track_devql_action(t: DevqlGraphqlTelemetry<'_>) {
+pub(crate) fn track_graphql_action(t: GraphqlActionTelemetry<'_>) {
     let mut properties = HashMap::new();
     properties.insert("scope".to_string(), JsonValue::String(t.scope.to_string()));
     properties.insert(
@@ -618,23 +619,27 @@ fn track_devql_action(t: DevqlGraphqlTelemetry<'_>) {
 }
 
 pub(crate) async fn slim_graphql_playground_handler() -> impl IntoResponse {
-    graphql_playground_response("/devql", "/devql/ws", "DevQL Slim Explorer")
+    graphql_playground_response("/devql", Some("/devql/ws"), "DevQL Slim Explorer")
 }
 
 pub(crate) async fn global_graphql_playground_handler() -> impl IntoResponse {
-    graphql_playground_response("/devql/global", "/devql/global/ws", "DevQL Global Explorer")
+    graphql_playground_response(
+        "/devql/global",
+        Some("/devql/global/ws"),
+        "DevQL Global Explorer",
+    )
 }
 
-fn graphql_playground_response(
+pub(crate) fn graphql_playground_response(
     endpoint: &str,
-    subscription_endpoint: &str,
+    subscription_endpoint: Option<&str>,
     title: &str,
 ) -> impl IntoResponse {
-    Html(playground_source(
-        GraphQLPlaygroundConfig::new(endpoint)
-            .subscription_endpoint(subscription_endpoint)
-            .title(title),
-    ))
+    let mut config = GraphQLPlaygroundConfig::new(endpoint).title(title);
+    if let Some(subscription_endpoint) = subscription_endpoint {
+        config = config.subscription_endpoint(subscription_endpoint);
+    }
+    Html(playground_source(config))
 }
 
 pub(crate) async fn slim_graphql_sdl_handler(

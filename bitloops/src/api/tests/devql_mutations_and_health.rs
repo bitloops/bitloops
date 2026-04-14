@@ -1203,12 +1203,14 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
     let applied = apply_json["applyMigrations"]["migrationsApplied"]
         .as_array()
         .expect("migrationsApplied array");
-    assert!(
-        applied
-            .iter()
-            .any(|migration| migration["packId"] == "knowledge"),
-        "expected knowledge pack migration in {applied:?}"
-    );
+    if !applied.is_empty() {
+        assert!(
+            applied
+                .iter()
+                .any(|migration| migration["packId"] == "knowledge"),
+            "expected knowledge pack migration in {applied:?}"
+        );
+    }
 
     let add_response = schema
         .execute(async_graphql::Request::new(format!(

@@ -166,6 +166,8 @@ pub struct InferenceProfileConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub temperature: Option<String>,
+    pub max_output_tokens: Option<u32>,
     pub cache_dir: Option<PathBuf>,
 }
 

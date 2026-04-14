@@ -16,7 +16,7 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 parse errors in bitloops
     And DevQL artefacts query returns results in bitloops
 
-  @devql @sync
+  @devql @sync @test_harness_sync
   Scenario: Sync materializes test-harness coverage for discovered tests
     Given I run CleanStart for flow "SyncTestHarnessPopulate"
     And I start the daemon in bitloops
@@ -29,7 +29,7 @@ Feature: DevQL sync workspace reconciliation
     Then daemon capability-event status shows TestHarness sync handler completed in bitloops
     Then TestHarness query for "createUser" at current workspace state with view "tests" returns results in bitloops
 
-  @devql @sync
+  @devql @sync @test_harness_sync
   Scenario: Sync removes test-harness coverage when test files are deleted
     Given I run CleanStart for flow "SyncTestHarnessDeleteTestFile"
     And I start the daemon in bitloops

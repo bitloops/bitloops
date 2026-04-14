@@ -177,6 +177,38 @@ pub fn resolve_bound_daemon_config_path_for_repo(repo_root: &Path) -> Result<Pat
     repo_bound_daemon_settings_for_repo(repo_root).map(|loaded| loaded.path)
 }
 
+pub(crate) fn resolve_preferred_daemon_config_path_for_repo(repo_root: &Path) -> Result<PathBuf> {
+    if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
+        return Ok(PathBuf::from(explicit_path));
+    }
+
+    let policy = discover_repo_policy_optional(repo_root)?;
+    if let Some(bound_path) = policy.daemon_config_path {
+        return Ok(bound_path);
+    }
+
+    resolve_daemon_config_path_for_repo(repo_root)
+}
+
+fn preferred_daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
+    if let Some(override_settings) = explicit_daemon_settings_override()? {
+        return Ok(override_settings);
+    }
+
+    let policy = discover_repo_policy_optional(repo_root)?;
+    if let Some(bound_path) = policy.daemon_config_path.as_deref() {
+        let loaded = load_strict_daemon_settings(bound_path).with_context(|| {
+            format!(
+                "resolving preferred Bitloops daemon config from `{}`; rerun `bitloops init` to rebind this repo",
+                REPO_POLICY_LOCAL_FILE_NAME
+            )
+        })?;
+        return Ok((loaded.root, loaded.settings));
+    }
+
+    daemon_settings_for_repo(repo_root)
+}
+
 pub fn resolve_bound_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBackendConfig> {
     let loaded = repo_bound_daemon_settings_for_repo(repo_root)?;
     resolve_store_backend_from_unified(&loaded.settings, &loaded.root)
@@ -270,14 +302,14 @@ pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConf
     resolve_provider_from_unified(&settings, |key| env::var(key).ok())
 }
 pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClonesConfig {
-    let settings = daemon_settings_for_repo(repo_root)
+    let settings = preferred_daemon_settings_for_repo(repo_root)
         .map(|(_, settings)| settings)
         .unwrap_or_default();
     resolve_semantic_clones_from_unified(&settings, |key| env::var(key).ok())
 }
 
 pub fn resolve_inference_config_for_repo(repo_root: &Path) -> InferenceConfig {
-    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
+    let (config_root, settings) = preferred_daemon_settings_for_repo(repo_root).unwrap_or_default();
     resolve_inference_from_unified(&settings, &config_root, |key| env::var(key).ok())
 }
 
@@ -286,7 +318,7 @@ pub fn resolve_embeddings_config_for_repo(repo_root: &Path) -> EmbeddingsConfig 
 }
 
 pub fn resolve_inference_capability_config_for_repo(repo_root: &Path) -> InferenceCapabilityConfig {
-    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
+    let (config_root, settings) = preferred_daemon_settings_for_repo(repo_root).unwrap_or_default();
     resolve_inference_capability_from_unified(&settings, &config_root, |key| env::var(key).ok())
 }
 
@@ -613,6 +645,15 @@ where
                 &mut warnings,
                 &format!("inference.profiles.{name}.runtime"),
             );
+            let temperature = resolve_runtime_string_opt(
+                Some(profile_root),
+                "temperature",
+                &env_lookup,
+                &mut warnings,
+                &format!("inference.profiles.{name}.temperature"),
+            );
+            let max_output_tokens = read_any_u64(profile_root, &["max_output_tokens"])
+                .map(|value| value.min(u32::MAX as u64) as u32);
             if task == InferenceTask::TextGeneration
                 && runtime
                     .as_deref()
@@ -621,6 +662,21 @@ where
             {
                 warnings.push(format!(
                     "inference.profiles.{name} uses task `text_generation` and should declare `runtime`"
+                ));
+            }
+            if task == InferenceTask::TextGeneration
+                && temperature
+                    .as_deref()
+                    .map(str::trim)
+                    .is_none_or(|value| value.is_empty())
+            {
+                warnings.push(format!(
+                    "inference.profiles.{name} uses task `text_generation` and should declare `temperature`"
+                ));
+            }
+            if task == InferenceTask::TextGeneration && max_output_tokens.is_none() {
+                warnings.push(format!(
+                    "inference.profiles.{name} uses task `text_generation` and should declare `max_output_tokens`"
                 ));
             }
 
@@ -652,6 +708,8 @@ where
                         &mut warnings,
                         &format!("inference.profiles.{name}.base_url"),
                     ),
+                    temperature,
+                    max_output_tokens,
                     cache_dir: resolve_runtime_string_opt(
                         Some(profile_root),
                         "cache_dir",

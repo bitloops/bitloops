@@ -1,3 +1,9 @@
+//! Legacy commit-scoped test-harness ingestion.
+//!
+//! Prefer automatic current-state sync for workspace validation and current-tree
+//! test linkage queries. Keep this path only for historical or commit-scoped
+//! materialization where the caller explicitly targets a commit SHA.
+
 use std::path::Path;
 
 use anyhow::Result;
@@ -24,6 +30,10 @@ pub struct IngestTestsSummary {
     pub issues: Vec<IngestTestsIssue>,
 }
 
+/// Materialize test discovery/linkage for a specific historical commit.
+///
+/// This is the legacy commit-scoped path. Automatic current-state sync should be
+/// the default for validating the active workspace state.
 pub fn execute(
     repository: &mut impl TestHarnessRepository,
     relational: &dyn RelationalGateway,

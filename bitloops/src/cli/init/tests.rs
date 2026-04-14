@@ -7,7 +7,10 @@ use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
-use crate::cli::inference::with_summary_generation_configured_hook;
+use crate::cli::inference::{
+    ManagedInferenceBinaryInstallOutcome, OllamaAvailability, with_managed_inference_install_hook,
+    with_ollama_probe_hook, with_summary_generation_configured_hook,
+};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
     with_test_assume_daemon_running, with_test_tty_override,
@@ -20,6 +23,8 @@ use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_d
 use clap::Parser;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn setup_git_repo(dir: &TempDir) {
@@ -1422,6 +1427,179 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
 }
 
 #[test]
+fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is_accepted() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_summary_generation_configured_hook(
+        |_| false,
+        || {
+            with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+                with_test_tty_override(true, || {
+                    with_test_assume_daemon_running(true, || {
+                        with_install_default_daemon_hook(
+                            move |install_default_daemon| {
+                                assert!(install_default_daemon);
+                                let config_path = ensure_daemon_config_exists()
+                                    .expect("create default daemon config");
+                                write_runtime_only_daemon_config(
+                                    &config_path,
+                                    "bitloops-embeddings",
+                                    &[],
+                                );
+                                Ok(())
+                            },
+                            || {
+                                with_global_graphql_executor_hook(
+                                    |_runtime_root, _query, variables| {
+                                        assert_eq!(
+                                            variables["telemetry"],
+                                            serde_json::json!(false)
+                                        );
+                                        Ok(serde_json::json!({
+                                            "updateCliTelemetryConsent": {
+                                                "telemetry": false,
+                                                "needsPrompt": false
+                                            }
+                                        }))
+                                    },
+                                    || {
+                                        let install_root = repo.path().to_path_buf();
+                                        with_managed_inference_install_hook(
+                                            move |_repo_root| {
+                                                Ok(ManagedInferenceBinaryInstallOutcome {
+                                                    version: "v1.2.3".to_string(),
+                                                    binary_path: install_root
+                                                        .join("bitloops-inference"),
+                                                    freshly_installed: true,
+                                                })
+                                            },
+                                            || {
+                                                with_ollama_probe_hook(
+                                                    || {
+                                                        Ok(OllamaAvailability::Running {
+                                                            models: vec![
+                                                                "ministral-3:3b".to_string(),
+                                                            ],
+                                                        })
+                                                    },
+                                                    || {
+                                                        with_ingest_daemon_bootstrap_hook(
+                                                            |_repo_root| Ok(()),
+                                                            || {
+                                                                with_graphql_executor_hook(
+                                                                    |_repo_root, query, variables| {
+                                                                        if query.contains("task(")
+                                                                            || query.contains("query Task")
+                                                                        {
+                                                                            let task_id = variables["id"]
+                                                                                .as_str()
+                                                                                .expect("task id");
+                                                                            if task_id.starts_with(
+                                                                                "embeddings_bootstrap-task-",
+                                                                            ) {
+                                                                                return Ok(
+                                                                                    serde_json::json!({
+                                                                                        "task": completed_bootstrap_task_json(task_id)
+                                                                                    }),
+                                                                                );
+                                                                            }
+                                                                        }
+
+                                                                        panic!(
+                                                                            "unexpected repo-scoped query: {query}"
+                                                                        );
+                                                                    },
+                                                                    || {
+                                                                        let mut out = Vec::new();
+                                                                        let mut input =
+                                                                            Cursor::new("y\n");
+                                                                        let select = |_items: &[String]| {
+                                                                            Ok(vec![
+                                                                                "claude-code"
+                                                                                    .to_string(),
+                                                                            ])
+                                                                        };
+                                                                        let runtime =
+                                                                            test_runtime();
+                                                                        runtime
+                                                                            .block_on(run_with_io_async_for_project_root(
+                                                                                InitArgs {
+                                                                                    install_default_daemon: true,
+                                                                                    force: false,
+                                                                                    agent: None,
+                                                                                    telemetry: Some(false),
+                                                                                    no_telemetry: false,
+                                                                                    skip_baseline: false,
+                                                                                    sync: Some(false),
+                                                                                    ingest: Some(false),
+                                                                                    backfill: None,
+                                                                                    exclude: Vec::new(),
+                                                                                    exclude_from: Vec::new(),
+                                                                                },
+                                                                                repo.path(),
+                                                                                &mut out,
+                                                                                &mut input,
+                                                                                Some(&select),
+                                                                            ))
+                                                                            .expect("run init");
+
+                                                                        let rendered =
+                                                                            String::from_utf8(out)
+                                                                                .expect("utf8 output");
+                                                                        assert!(rendered.contains(
+                                                                            "Configure local semantic summaries as well?"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "Configure semantic summaries now? (Y/n)"
+                                                                        ));
+
+                                                                        let daemon_config_path =
+                                                                            ensure_daemon_config_exists()
+                                                                                .expect("daemon config path");
+                                                                        let daemon_config = std::fs::read_to_string(
+                                                                            daemon_config_path,
+                                                                        )
+                                                                        .expect("read daemon config");
+                                                                        assert!(
+                                                                            daemon_config.contains(
+                                                                                "summary_generation = \"summary_local\""
+                                                                            ),
+                                                                            "expected summary generation binding after init:\n{daemon_config}"
+                                                                        );
+                                                                        assert!(
+                                                                            daemon_config.contains(
+                                                                                "[inference.profiles.summary_local]"
+                                                                            ),
+                                                                            "expected summary profile after init:\n{daemon_config}"
+                                                                        );
+                                                                        assert!(
+                                                                            daemon_config.contains(
+                                                                                "model = \"ministral-3:3b\""
+                                                                            ),
+                                                                            "expected Ollama model after init:\n{daemon_config}"
+                                                                        );
+                                                                    },
+                                                                )
+                                                            },
+                                                        );
+                                                    },
+                                                )
+                                            },
+                                        )
+                                    },
+                                );
+                            },
+                        );
+                    })
+                })
+            })
+        },
+    );
+}
+
+#[test]
 fn run_init_with_install_default_daemon_auto_installs_embeddings() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
@@ -1756,6 +1934,230 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
             },
         );
     });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_renders_separate_lane() {
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_summary_generation_configured_hook(
+        |_| false,
+        || {
+            with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+                with_test_tty_override(false, || {
+                    with_test_assume_daemon_running(true, || {
+                        with_install_default_daemon_hook(
+                            move |install_default_daemon| {
+                                assert!(install_default_daemon);
+                                let config_path = ensure_daemon_config_exists()
+                                    .expect("create default daemon config");
+                                write_runtime_only_daemon_config(
+                                    &config_path,
+                                    "bitloops-embeddings",
+                                    &[],
+                                );
+                                Ok(())
+                            },
+                            || {
+                                with_global_graphql_executor_hook(
+                                    |_runtime_root, _query, variables| {
+                                        assert_eq!(
+                                            variables["telemetry"],
+                                            serde_json::json!(false)
+                                        );
+                                        Ok(serde_json::json!({
+                                            "updateCliTelemetryConsent": {
+                                                "telemetry": false,
+                                                "needsPrompt": false
+                                            }
+                                        }))
+                                    },
+                                    || {
+                                        let install_root = repo.path().to_path_buf();
+                                        with_managed_inference_install_hook(
+                                            {
+                                                let events = Arc::clone(&events);
+                                                move |_repo_root| {
+                                                    events
+                                                        .lock()
+                                                        .expect("lock inference events")
+                                                        .push("inference_start".to_string());
+                                                    std::thread::sleep(Duration::from_millis(250));
+                                                    events
+                                                        .lock()
+                                                        .expect("lock inference events")
+                                                        .push("inference_finish".to_string());
+                                                    Ok(ManagedInferenceBinaryInstallOutcome {
+                                                        version: "v1.2.3".to_string(),
+                                                        binary_path: install_root
+                                                            .join("bitloops-inference"),
+                                                        freshly_installed: true,
+                                                    })
+                                                }
+                                            },
+                                            || {
+                                                with_ollama_probe_hook(
+                                                    || Ok(OllamaAvailability::MissingCli),
+                                                    || {
+                                                        with_ingest_daemon_bootstrap_hook(
+                                                            |_repo_root| Ok(()),
+                                                            || {
+                                                                with_graphql_executor_hook(
+                                                                    {
+                                                                        let events =
+                                                                            Arc::clone(&events);
+                                                                        move |_repo_root, query, variables| {
+                                                                            if query.contains("enqueueTask")
+                                                                                && variables["input"]["kind"] == "SYNC"
+                                                                            {
+                                                                                events
+                                                                                    .lock()
+                                                                                    .expect("lock sync events")
+                                                                                    .push("sync".to_string());
+                                                                                return Ok(serde_json::json!({
+                                                                                    "enqueueTask": {
+                                                                                        "merged": false,
+                                                                                        "task": {
+                                                                                            "taskId": "sync-task-1",
+                                                                                            "repoId": "repo-1",
+                                                                                            "repoName": "demo",
+                                                                                            "repoIdentity": "local/demo",
+                                                                                            "kind": "SYNC",
+                                                                                            "source": "init",
+                                                                                            "status": "QUEUED",
+                                                                                            "submittedAtUnix": 1,
+                                                                                            "startedAtUnix": null,
+                                                                                            "updatedAtUnix": 1,
+                                                                                            "completedAtUnix": null,
+                                                                                            "queuePosition": 1,
+                                                                                            "tasksAhead": 0,
+                                                                                            "error": null,
+                                                                                            "syncSpec": {
+                                                                                                "mode": "auto",
+                                                                                                "paths": []
+                                                                                            },
+                                                                                            "ingestSpec": null,
+                                                                                            "embeddingsBootstrapSpec": null,
+                                                                                            "syncProgress": {
+                                                                                                "phase": "queued",
+                                                                                                "currentPath": null,
+                                                                                                "pathsTotal": 0,
+                                                                                                "pathsCompleted": 0,
+                                                                                                "pathsRemaining": 0,
+                                                                                                "pathsUnchanged": 0,
+                                                                                                "pathsAdded": 0,
+                                                                                                "pathsChanged": 0,
+                                                                                                "pathsRemoved": 0,
+                                                                                                "cacheHits": 0,
+                                                                                                "cacheMisses": 0,
+                                                                                                "parseErrors": 0
+                                                                                            },
+                                                                                            "ingestProgress": null,
+                                                                                            "embeddingsBootstrapProgress": null,
+                                                                                            "syncResult": null,
+                                                                                            "ingestResult": null,
+                                                                                            "embeddingsBootstrapResult": null
+                                                                                        }
+                                                                                    }
+                                                                                }));
+                                                                            }
+
+                                                                            if query.contains("task(")
+                                                                                || query.contains("query Task")
+                                                                            {
+                                                                                let task_id = variables["id"].as_str().expect("task id");
+                                                                                let task = if task_id == "sync-task-1" {
+                                                                                    completed_sync_task_json(task_id)
+                                                                                } else if task_id.starts_with("embeddings_bootstrap-task-") {
+                                                                                    completed_bootstrap_task_json(task_id)
+                                                                                } else {
+                                                                                    panic!("unexpected task id: {task_id}");
+                                                                                };
+                                                                                return Ok(serde_json::json!({
+                                                                                    "task": task
+                                                                                }));
+                                                                            }
+
+                                                                            panic!("unexpected repo-scoped query: {query}");
+                                                                        }
+                                                                    },
+                                                                    || {
+                                                                        let mut out = Vec::new();
+                                                                        let mut input =
+                                                                            Cursor::new("");
+                                                                        let runtime =
+                                                                            test_runtime();
+                                                                        runtime
+                                                                            .block_on(run_with_io_async_for_project_root(
+                                                                                InitArgs {
+                                                                                    install_default_daemon: true,
+                                                                                    force: false,
+                                                                                    agent: None,
+                                                                                    telemetry: Some(false),
+                                                                                    no_telemetry: false,
+                                                                                    skip_baseline: false,
+                                                                                    sync: Some(true),
+                                                                                    ingest: Some(false),
+                                                                                    backfill: None,
+                                                                                    exclude: Vec::new(),
+                                                                                    exclude_from: Vec::new(),
+                                                                                },
+                                                                                repo.path(),
+                                                                                &mut out,
+                                                                                &mut input,
+                                                                                None,
+                                                                            ))
+                                                                            .expect("run init");
+
+                                                                        let rendered =
+                                                                            String::from_utf8(out)
+                                                                                .expect(
+                                                                                    "utf8 output",
+                                                                                );
+                                                                        assert!(
+                                                                            rendered.contains("Creating code embeddings for fast search using our local embeddings provider")
+                                                                        );
+                                                                        assert!(
+                                                                            rendered.contains("Configuring local semantic summaries with bitloops-inference")
+                                                                        );
+                                                                        assert!(
+                                                                            !rendered.contains("Starting initial DevQL sync...")
+                                                                        );
+                                                                    },
+                                                                )
+                                                            },
+                                                        );
+                                                    },
+                                                )
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    })
+                })
+            })
+        },
+    );
+
+    let events = events.lock().expect("lock events");
+    let sync_index = events
+        .iter()
+        .position(|event| event == "sync")
+        .expect("sync event");
+    let inference_finish_index = events
+        .iter()
+        .position(|event| event == "inference_finish")
+        .expect("inference finish event");
+    assert!(
+        sync_index < inference_finish_index,
+        "summary setup should not block sync enqueueing, saw events: {:?}",
+        *events
+    );
 }
 
 #[test]

@@ -89,8 +89,44 @@ pub struct ProviderDescriptor {
     pub model_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_provider_capabilities")]
     pub capabilities: Vec<String>,
+}
+
+fn deserialize_provider_capabilities<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum ProviderCapabilitiesWire {
+        Legacy(Vec<String>),
+        Structured(StructuredProviderCapabilitiesWire),
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct StructuredProviderCapabilitiesWire {
+        #[serde(default)]
+        response_modes: Vec<ResponseMode>,
+        #[serde(default)]
+        usage_reporting: bool,
+    }
+
+    let capabilities = ProviderCapabilitiesWire::deserialize(deserializer)?;
+    Ok(match capabilities {
+        ProviderCapabilitiesWire::Legacy(capabilities) => capabilities,
+        ProviderCapabilitiesWire::Structured(capabilities) => {
+            let _ = capabilities.usage_reporting;
+            capabilities
+                .response_modes
+                .into_iter()
+                .map(|mode| match mode {
+                    ResponseMode::Text => "text".to_string(),
+                    ResponseMode::JsonObject => "json_object".to_string(),
+                })
+                .collect()
+        }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,4 +165,75 @@ pub struct ErrorResponse {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn describe_response_accepts_legacy_provider_capabilities_array() {
+        let payload = r#"{
+            "type":"describe",
+            "request_id":"text-generation-1",
+            "protocol_version":1,
+            "runtime_name":"bitloops-inference",
+            "runtime_version":"0.1.1",
+            "profile_name":"summary_local",
+            "provider":{
+                "kind":"ollama_chat",
+                "provider_name":"ollama",
+                "model_name":"ministral-3:3b",
+                "endpoint":"http://127.0.0.1:11434/api/chat",
+                "capabilities":["text","json_object"]
+            }
+        }"#;
+
+        let response =
+            serde_json::from_str::<RuntimeResponse>(payload).expect("legacy capabilities array");
+        let RuntimeResponse::Describe(response) = response else {
+            panic!("expected describe response");
+        };
+
+        assert_eq!(
+            response.provider.capabilities,
+            vec!["text".to_string(), "json_object".to_string()]
+        );
+    }
+
+    #[test]
+    fn describe_response_accepts_structured_provider_capabilities() {
+        let payload = r#"{
+            "type":"describe",
+            "request_id":"text-generation-1",
+            "protocol_version":1,
+            "runtime_name":"bitloops-inference",
+            "runtime_version":"0.1.1",
+            "profile_name":"summary_local",
+            "provider":{
+                "kind":"ollama_chat",
+                "provider_name":"ollama",
+                "model_name":"ministral-3:3b",
+                "endpoint":"http://127.0.0.1:11434/api/chat",
+                "capabilities":{
+                    "response_modes":["text","json_object"],
+                    "usage_reporting":true
+                }
+            }
+        }"#;
+
+        let response = serde_json::from_str::<RuntimeResponse>(payload)
+            .expect("structured capabilities should deserialize");
+        let RuntimeResponse::Describe(response) = response else {
+            panic!("expected describe response");
+        };
+
+        assert_eq!(response.profile_name, "summary_local");
+        assert_eq!(response.provider.provider_name, "ollama");
+        assert_eq!(response.provider.model_name, "ministral-3:3b");
+        assert_eq!(
+            response.provider.capabilities,
+            vec!["text".to_string(), "json_object".to_string()]
+        );
+    }
 }
