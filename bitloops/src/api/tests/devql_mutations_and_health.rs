@@ -1109,12 +1109,14 @@ async fn devql_mutations_report_validation_and_backend_errors() {
     );
 }
 
+#[cfg(feature = "slow-tests")]
 #[tokio::test]
 async fn devql_mutations_manage_knowledge_and_apply_migrations() {
     if !localhost_bind_available("devql_mutations_manage_knowledge_and_apply_migrations") {
         return;
     }
     let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     let server = match MockSequentialHttpServer::try_start(vec![
         MockHttpResponse::json(
             200,
@@ -1372,6 +1374,7 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
     assert_eq!(document_count, 2);
 }
 
+#[cfg(feature = "slow-tests")]
 #[tokio::test]
 async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flows() {
     if !localhost_bind_available(
@@ -1380,6 +1383,7 @@ async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flo
         return;
     }
     let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let (_app_root, _guard) = enter_isolated_app_process_state(repo.path());
     let server = match MockSequentialHttpServer::try_start(vec![MockHttpResponse::json(
         500,
         json!({ "errorMessages": ["provider boom"] }),

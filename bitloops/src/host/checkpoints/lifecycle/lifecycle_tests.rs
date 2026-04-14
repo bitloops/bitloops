@@ -346,7 +346,12 @@ fn route_codex_user_prompt_submit_persists_pre_prompt_state() -> anyhow::Result<
             "model": "gpt-5.4-codex"
         })
         .to_string();
-        route_hook_command_to_lifecycle(AGENT_NAME_CODEX, CODEX_HOOK_USER_PROMPT_SUBMIT, &payload)?;
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            &payload,
+        )?;
         Ok(())
     })?;
 

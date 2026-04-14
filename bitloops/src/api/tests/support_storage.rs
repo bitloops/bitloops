@@ -116,6 +116,7 @@ pub(super) fn seed_repository_catalog_row(repo_root: &Path, repo_name: &str, def
     .expect("upsert repository row");
 }
 
+#[cfg(feature = "slow-tests")]
 pub(super) fn update_seeded_jira_site_url(repo_root: &Path, jira_site_url: &str) {
     let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
     let raw = fs::read_to_string(&config_path).expect("read config");
@@ -319,11 +320,13 @@ pub(super) fn insert_checkpoint_file_snapshot_row(
     .expect("insert checkpoint_files row");
 }
 
+#[cfg(feature = "slow-tests")]
 pub(super) struct MockHttpResponse {
     pub(super) status_code: u16,
     pub(super) body: String,
 }
 
+#[cfg(feature = "slow-tests")]
 impl MockHttpResponse {
     pub(super) fn json(status_code: u16, body: serde_json::Value) -> Self {
         Self {
@@ -333,12 +336,14 @@ impl MockHttpResponse {
     }
 }
 
+#[cfg(feature = "slow-tests")]
 pub(super) struct MockSequentialHttpServer {
     pub(super) url: String,
     pub(super) handle: Option<thread::JoinHandle<()>>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[cfg(feature = "slow-tests")]
 impl MockSequentialHttpServer {
     pub(super) fn try_start(responses: Vec<MockHttpResponse>) -> std::io::Result<Self> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -401,6 +406,7 @@ impl MockSequentialHttpServer {
     }
 }
 
+#[cfg(feature = "slow-tests")]
 impl Drop for MockSequentialHttpServer {
     fn drop(&mut self) {
         self.shutdown

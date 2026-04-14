@@ -132,10 +132,13 @@ impl Strategy for ManualCommitStrategy {
             checkpoint_number: state.pending.step_count as i32 + 1,
             ..Default::default()
         };
-        let prompt_attr = state
-            .pending_prompt_attribution
-            .clone()
-            .unwrap_or(default_prompt_attr);
+        let prompt_attr = state.pending_prompt_attribution.clone().unwrap_or_else(|| {
+            if state.base_commit.trim().is_empty() {
+                default_prompt_attr
+            } else {
+                self.calculate_prompt_attribution_at_start(&state)
+            }
+        });
 
         // Determine files to snapshot — use context lists, fall back to git status.
         let (modified, new_files, deleted) = if ctx.modified_files.is_empty()

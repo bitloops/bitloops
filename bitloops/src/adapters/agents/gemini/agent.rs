@@ -407,6 +407,7 @@ impl GeminiCliAgent {
         local_dev: bool,
         force: bool,
     ) -> Result<usize> {
+        super::skills::install_repo_skill(repo_root)?;
         let settings_path = self.settings_path_at(repo_root);
 
         let mut raw_settings: Map<String, Value> = match std::fs::read(&settings_path) {
@@ -584,7 +585,10 @@ impl GeminiCliAgent {
         let settings_path = self.settings_path_at(repo_root);
         let data = match std::fs::read(&settings_path) {
             Ok(data) => data,
-            Err(_) => return Ok(()),
+            Err(_) => {
+                super::skills::uninstall_repo_skill(repo_root)?;
+                return Ok(());
+            }
         };
 
         let mut raw_settings: Map<String, Value> = serde_json::from_slice(&data)
@@ -648,6 +652,8 @@ impl GeminiCliAgent {
             .map_err(|err| anyhow!("failed to marshal settings: {err}"))?;
         std::fs::write(&settings_path, output)
             .map_err(|err| anyhow!("failed to write settings.json: {err}"))?;
+
+        super::skills::uninstall_repo_skill(repo_root)?;
 
         Ok(())
     }
@@ -975,6 +981,10 @@ impl GeminiCliAgent {
         (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
     }
 }
+
+#[cfg(test)]
+#[path = "skills_integration_tests.rs"]
+mod skills_integration_tests;
 
 #[cfg(test)]
 #[path = "agent_tests.rs"]
