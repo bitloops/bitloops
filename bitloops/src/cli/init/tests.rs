@@ -830,12 +830,12 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
                     .expect("read codex config");
                 assert!(config.contains("codex_hooks = true"));
-                let global_skill = codex_home
+                let repo_skill = repo
                     .path()
                     .join(".agents/skills/bitloops/using-devql/SKILL.md");
                 assert!(
-                    global_skill.exists(),
-                    "expected Codex global skill to be installed"
+                    repo_skill.exists(),
+                    "expected Codex repo-local skill to be installed"
                 );
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });

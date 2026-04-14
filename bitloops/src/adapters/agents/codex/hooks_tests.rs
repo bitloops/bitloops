@@ -169,15 +169,20 @@ fn install_hooks_fresh_and_idempotent() {
 
 #[test]
 fn install_hooks_writes_the_canonical_repo_skill() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    init_repo(dir.path());
-    with_codex_test_env(dir.path(), || {
-        install_hooks_at(dir.path(), false, false).expect("install");
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let home = tempfile::tempdir().expect("home tempdir");
+    init_repo(repo.path());
+    with_codex_test_env(home.path(), || {
+        install_hooks_at(repo.path(), false, false).expect("install");
 
-        let skill = fs::read_to_string(skill_file(dir.path())).expect("read global skill");
+        let skill = fs::read_to_string(skill_file(repo.path())).expect("read repo skill");
         assert_eq!(
             skill,
             crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL
+        );
+        assert!(
+            !skill_file(home.path()).exists(),
+            "must not write Codex skill into HOME"
         );
     });
 }
@@ -372,20 +377,29 @@ fn uninstall_preserves_non_bitloops_hooks() {
 
 #[test]
 fn uninstall_removes_the_repo_skill() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    init_repo(dir.path());
-    with_codex_test_env(dir.path(), || {
-        install_hooks_at(dir.path(), false, false).expect("install");
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let home = tempfile::tempdir().expect("home tempdir");
+    init_repo(repo.path());
+    with_codex_test_env(home.path(), || {
+        install_hooks_at(repo.path(), false, false).expect("install");
         assert!(
-            skill_file(dir.path()).exists(),
-            "global skill should exist after install"
+            skill_file(repo.path()).exists(),
+            "repo-local skill should exist after install"
+        );
+        assert!(
+            !skill_file(home.path()).exists(),
+            "HOME should not receive a Codex skill"
         );
 
-        uninstall_hooks_at(dir.path()).expect("uninstall");
+        uninstall_hooks_at(repo.path()).expect("uninstall");
 
         assert!(
-            !skill_file(dir.path()).exists(),
-            "global skill should be removed by uninstall"
+            !skill_file(repo.path()).exists(),
+            "repo-local skill should be removed by uninstall"
+        );
+        assert!(
+            !skill_file(home.path()).exists(),
+            "HOME should remain clean after uninstall"
         );
     });
 }

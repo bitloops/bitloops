@@ -34,7 +34,7 @@ fn session_bootstrap_text(agent_name: &str) -> String {
             "The repo includes a Bitloops-managed skill at `.claude/skills/bitloops/using-devql/SKILL.md`."
         }
         AGENT_NAME_CODEX => {
-            "Bitloops installs a native Codex skill at `~/.agents/skills/bitloops/using-devql/SKILL.md`."
+            "The repo includes a Bitloops-managed skill at `.agents/skills/bitloops/using-devql/SKILL.md`."
         }
         AGENT_NAME_COPILOT => {
             "The repo includes a Bitloops-managed skill at `.github/skills/bitloops/using-devql/SKILL.md`."
@@ -115,6 +115,11 @@ mod tests {
 
         assert!(
             codex
+                .additional_context
+                .contains(".agents/skills/bitloops/using-devql/SKILL.md")
+        );
+        assert!(
+            !codex
                 .additional_context
                 .contains("~/.agents/skills/bitloops/using-devql/SKILL.md")
         );

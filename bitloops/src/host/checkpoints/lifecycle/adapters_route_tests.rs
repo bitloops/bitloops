@@ -419,7 +419,8 @@ fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
         );
         assert!(context.contains("<EXTREMELY_IMPORTANT>"));
         assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains("~/.agents/skills/bitloops/using-devql/SKILL.md"));
+        assert!(context.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
+        assert!(!context.contains("~/.agents/skills/bitloops/using-devql/SKILL.md"));
         assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
         assert!(context.contains("MUST use DevQL as your FIRST approach"));
         assert!(context.contains("repo search, file reads, or file listing tools"));
