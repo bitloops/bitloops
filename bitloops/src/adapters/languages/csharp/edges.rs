@@ -157,14 +157,14 @@ fn collect_call_edge(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
             };
             if let Some(target_fqn) = ctx.callable_name_to_fqn.get(&name) {
                 (
-                    CallForm::Function,
+                    CallForm::Method,
                     Some(target_fqn.clone()),
                     None,
                     Resolution::Local,
                 )
             } else {
                 (
-                    CallForm::Function,
+                    CallForm::Method,
                     None,
                     Some(format!("{}::{name}", ctx.path)),
                     Resolution::Unresolved,
@@ -183,7 +183,7 @@ fn collect_call_edge(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
                 return;
             };
             (
-                CallForm::Method,
+                CallForm::Member,
                 None,
                 Some(format!(
                     "{}::member::{}::{}",
@@ -516,6 +516,7 @@ public class UserService
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
                 && edge.to_target_symbol_fqn.as_deref()
                     == Some("src/UserService.cs::UserService::Helper")
+                && edge.metadata["call_form"] == "method"
         }));
     }
 
@@ -539,11 +540,13 @@ public class UserService
             edge.edge_kind == EdgeKind::Calls
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
                 && edge.to_symbol_ref.as_deref() == Some("src/UserService.cs::member::repo::Save")
+                && edge.metadata["call_form"] == "member"
         }));
         assert!(edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::Calls
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService::Run"
                 && edge.to_symbol_ref.as_deref() == Some("src/UserService.cs::member::cache::Save")
+                && edge.metadata["call_form"] == "member"
         }));
     }
 
