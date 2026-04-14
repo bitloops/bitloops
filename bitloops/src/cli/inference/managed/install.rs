@@ -8,15 +8,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(test)]
-use std::cell::RefCell;
-#[cfg(test)]
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cli::embeddings::managed::archive::{
     ManagedEmbeddingsArchiveKind, extract_managed_embeddings_bundle_entries, sha256_hex,
     write_file_atomically,
 };
-use crate::config::{prepare_daemon_inference_install, resolve_daemon_config_path_for_repo};
+use crate::config::{
+    prepare_daemon_inference_install, resolve_preferred_daemon_config_path_for_repo,
+};
 
 use super::config::{
     MANAGED_INFERENCE_VERSION_OVERRIDE_ENV, ManagedInferenceInstallMetadata,
@@ -30,6 +30,38 @@ const MANAGED_INFERENCE_RELEASES_API_BASE: &str =
     "https://api.github.com/repos/bitloops/bitloops-inference";
 const MANAGED_INFERENCE_HTTP_TIMEOUT_SECS: u64 = 300;
 const MANAGED_INFERENCE_USER_AGENT: &str = "bitloops-cli";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedInferenceInstallPhase {
+    Queued,
+    ResolvingRelease,
+    DownloadingRuntime,
+    ExtractingRuntime,
+    RewritingRuntime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedInferenceInstallProgress {
+    pub(crate) phase: ManagedInferenceInstallPhase,
+    pub(crate) asset_name: Option<String>,
+    pub(crate) bytes_downloaded: u64,
+    pub(crate) bytes_total: Option<u64>,
+    pub(crate) version: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+impl Default for ManagedInferenceInstallProgress {
+    fn default() -> Self {
+        Self {
+            phase: ManagedInferenceInstallPhase::Queued,
+            asset_name: None,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            version: None,
+            message: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ManagedInferenceReleaseRequest {
@@ -71,12 +103,21 @@ struct ManagedInferenceAssetSpec {
 
 #[cfg(test)]
 type ManagedInferenceInstallHook =
-    dyn Fn(&Path) -> Result<ManagedInferenceBinaryInstallOutcome> + 'static;
+    dyn Fn(&Path) -> Result<ManagedInferenceBinaryInstallOutcome> + Send + Sync + 'static;
 
 #[cfg(test)]
-thread_local! {
-    static MANAGED_INFERENCE_INSTALL_HOOK: RefCell<Option<Rc<ManagedInferenceInstallHook>>> =
-        RefCell::new(None);
+fn managed_inference_install_hook_cell() -> &'static Mutex<Option<Arc<ManagedInferenceInstallHook>>>
+{
+    static MANAGED_INFERENCE_INSTALL_HOOK: OnceLock<
+        Mutex<Option<Arc<ManagedInferenceInstallHook>>>,
+    > = OnceLock::new();
+    MANAGED_INFERENCE_INSTALL_HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn managed_inference_install_hook_lock() -> &'static Mutex<()> {
+    static MANAGED_INFERENCE_INSTALL_HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    MANAGED_INFERENCE_INSTALL_HOOK_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[allow(dead_code)]
@@ -91,13 +132,85 @@ pub(crate) fn ensure_managed_inference_runtime(
     ))
 }
 
+pub(crate) fn install_or_bootstrap_inference_with_progress<R>(
+    repo_root: &Path,
+    mut report: R,
+) -> Result<Vec<String>>
+where
+    R: FnMut(ManagedInferenceInstallProgress) -> Result<()>,
+{
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
+    let plan = prepare_daemon_inference_install(&config_path)?;
+    if plan.config_modified {
+        report(ManagedInferenceInstallProgress {
+            phase: ManagedInferenceInstallPhase::RewritingRuntime,
+            message: Some(format!(
+                "Preparing inference config in {}",
+                config_path.display()
+            )),
+            ..Default::default()
+        })?;
+        plan.apply()?;
+    }
+
+    let ensure = ensure_managed_inference_runtime_with_config_and_progress(
+        repo_root,
+        Some(&config_path),
+        &mut report,
+    );
+    match ensure {
+        Ok(outcome) => {
+            let mut lines = format_managed_inference_runtime_lines(&outcome, Some(&config_path));
+            if plan.config_modified {
+                lines.insert(
+                    0,
+                    format!("Configured inference runtime in {}.", config_path.display()),
+                );
+            }
+            Ok(lines)
+        }
+        Err(err) => {
+            if plan.config_modified {
+                plan.rollback()?;
+            }
+            Err(err)
+        }
+    }
+}
+
 fn ensure_managed_inference_runtime_with_config(
     repo_root: &Path,
     config_path: Option<&Path>,
 ) -> Result<ManagedInferenceRuntimeEnsureOutcome> {
-    let install = install_managed_inference_binary(repo_root)?;
+    ensure_managed_inference_runtime_with_config_and_progress(repo_root, config_path, |_progress| {
+        Ok(())
+    })
+}
+
+fn ensure_managed_inference_runtime_with_config_and_progress<R>(
+    repo_root: &Path,
+    config_path: Option<&Path>,
+    mut report: R,
+) -> Result<ManagedInferenceRuntimeEnsureOutcome>
+where
+    R: FnMut(ManagedInferenceInstallProgress) -> Result<()>,
+{
+    let install = install_managed_inference_binary_with_progress(repo_root, &mut report)?;
     let command_rewritten = if let Some(config_path) = config_path {
-        rewrite_managed_runtime_command_if_eligible(config_path, &install.binary_path)?
+        let rewritten =
+            rewrite_managed_runtime_command_if_eligible(config_path, &install.binary_path)?;
+        if rewritten {
+            report(ManagedInferenceInstallProgress {
+                phase: ManagedInferenceInstallPhase::RewritingRuntime,
+                version: Some(install.version.clone()),
+                message: Some(format!(
+                    "Updating inference runtime command in {}",
+                    config_path.display()
+                )),
+                ..Default::default()
+            })?;
+        }
+        rewritten
     } else {
         false
     };
@@ -140,38 +253,29 @@ fn format_managed_inference_runtime_lines(
 }
 
 pub(crate) fn install_or_bootstrap_inference(repo_root: &Path) -> Result<Vec<String>> {
-    let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
-    let plan = prepare_daemon_inference_install(&config_path)?;
-    if plan.config_modified {
-        plan.apply()?;
-    }
-
-    let ensure = ensure_managed_inference_runtime_with_config(repo_root, Some(&config_path));
-    match ensure {
-        Ok(outcome) => {
-            let mut lines = format_managed_inference_runtime_lines(&outcome, Some(&config_path));
-            if plan.config_modified {
-                lines.insert(
-                    0,
-                    format!("Configured inference runtime in {}.", config_path.display()),
-                );
-            }
-            Ok(lines)
-        }
-        Err(err) => {
-            if plan.config_modified {
-                plan.rollback()?;
-            }
-            Err(err)
-        }
-    }
+    install_or_bootstrap_inference_with_progress(repo_root, |_progress| Ok(()))
 }
 
+#[allow(dead_code)]
 fn install_managed_inference_binary(
     repo_root: &Path,
 ) -> Result<ManagedInferenceBinaryInstallOutcome> {
+    install_managed_inference_binary_with_progress(repo_root, |_progress| Ok(()))
+}
+
+fn install_managed_inference_binary_with_progress<R>(
+    repo_root: &Path,
+    mut report: R,
+) -> Result<ManagedInferenceBinaryInstallOutcome>
+where
+    R: FnMut(ManagedInferenceInstallProgress) -> Result<()>,
+{
     #[cfg(test)]
-    if let Some(hook) = MANAGED_INFERENCE_INSTALL_HOOK.with(|cell| cell.borrow().clone()) {
+    if let Some(hook) = managed_inference_install_hook_cell()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
+    {
         return hook(repo_root);
     }
 
@@ -191,8 +295,13 @@ fn install_managed_inference_binary(
         return Ok(outcome);
     }
 
+    report(ManagedInferenceInstallProgress {
+        phase: ManagedInferenceInstallPhase::ResolvingRelease,
+        message: Some("Resolving managed `bitloops-inference` release".to_string()),
+        ..Default::default()
+    })?;
     let release = fetch_managed_inference_release(&release_request)?;
-    install_managed_inference_binary_from_release(&release)
+    install_managed_inference_binary_from_release_with_progress(&release, &mut report)
 }
 
 fn load_managed_inference_install_metadata_for_install()
@@ -211,9 +320,20 @@ fn load_managed_inference_install_metadata_for_install()
     }
 }
 
+#[allow(dead_code)]
 fn install_managed_inference_binary_from_release(
     release: &GitHubReleasePayload,
 ) -> Result<ManagedInferenceBinaryInstallOutcome> {
+    install_managed_inference_binary_from_release_with_progress(release, |_progress| Ok(()))
+}
+
+fn install_managed_inference_binary_from_release_with_progress<R>(
+    release: &GitHubReleasePayload,
+    mut report: R,
+) -> Result<ManagedInferenceBinaryInstallOutcome>
+where
+    R: FnMut(ManagedInferenceInstallProgress) -> Result<()>,
+{
     let asset_spec = managed_inference_asset_spec(&release.tag_name)?;
     let asset = release
         .assets
@@ -227,7 +347,24 @@ fn install_managed_inference_binary_from_release(
             )
         })?;
     let expected_digest = parse_sha256_digest(asset.digest.as_deref())?;
-    let archive_bytes = download_managed_inference_asset(&asset.browser_download_url)?;
+    report(ManagedInferenceInstallProgress {
+        phase: ManagedInferenceInstallPhase::DownloadingRuntime,
+        asset_name: Some(asset.name.clone()),
+        version: Some(release.tag_name.clone()),
+        message: Some(format!("Downloading `{}`", asset.name)),
+        ..Default::default()
+    })?;
+    let archive_bytes =
+        download_managed_inference_asset(&asset.browser_download_url, |downloaded, total| {
+            report(ManagedInferenceInstallProgress {
+                phase: ManagedInferenceInstallPhase::DownloadingRuntime,
+                asset_name: Some(asset.name.clone()),
+                bytes_downloaded: downloaded,
+                bytes_total: total,
+                version: Some(release.tag_name.clone()),
+                message: Some(format!("Downloading `{}`", asset.name)),
+            })
+        })?;
 
     let actual_digest = sha256_hex(&archive_bytes);
     if actual_digest != expected_digest {
@@ -238,6 +375,15 @@ fn install_managed_inference_binary_from_release(
             actual_digest
         );
     }
+
+    report(ManagedInferenceInstallProgress {
+        phase: ManagedInferenceInstallPhase::ExtractingRuntime,
+        asset_name: Some(asset.name.clone()),
+        bytes_downloaded: archive_bytes.len() as u64,
+        bytes_total: Some(archive_bytes.len() as u64),
+        version: Some(release.tag_name.clone()),
+        message: Some(format!("Extracting `{}`", asset.name)),
+    })?;
 
     let binary_name = managed_inference_binary_name();
     let bundle_entries = extract_managed_embeddings_bundle_entries(
@@ -373,7 +519,10 @@ fn fetch_managed_inference_release(
         .context("parsing managed bitloops-inference release metadata")
 }
 
-fn download_managed_inference_asset(url: &str) -> Result<Vec<u8>> {
+fn download_managed_inference_asset(
+    url: &str,
+    mut progress: impl FnMut(u64, Option<u64>) -> Result<()>,
+) -> Result<Vec<u8>> {
     let mut response = managed_inference_http_client()?
         .get(url)
         .header(ACCEPT, "application/octet-stream")
@@ -382,8 +531,11 @@ fn download_managed_inference_asset(url: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("downloading managed bitloops-inference asset from {url}"))?
         .error_for_status()
         .with_context(|| format!("downloading managed bitloops-inference asset from {url}"))?;
+    let total = response.content_length();
     let mut bytes = Vec::new();
+    let mut downloaded = 0_u64;
     let mut chunk = [0_u8; 64 * 1024];
+    progress(downloaded, total)?;
     loop {
         let read = response
             .read(&mut chunk)
@@ -392,6 +544,8 @@ fn download_managed_inference_asset(url: &str) -> Result<Vec<u8>> {
             break;
         }
         bytes.extend_from_slice(&chunk[..read]);
+        downloaded += read as u64;
+        progress(downloaded, total)?;
     }
     Ok(bytes)
 }
@@ -417,19 +571,25 @@ fn parse_sha256_digest(digest: Option<&str>) -> Result<String> {
 
 #[cfg(test)]
 pub(crate) fn with_managed_inference_install_hook<T>(
-    hook: impl Fn(&Path) -> Result<ManagedInferenceBinaryInstallOutcome> + 'static,
+    hook: impl Fn(&Path) -> Result<ManagedInferenceBinaryInstallOutcome> + Send + Sync + 'static,
     f: impl FnOnce() -> T,
 ) -> T {
-    MANAGED_INFERENCE_INSTALL_HOOK.with(|cell| {
+    let _hook_lock = managed_inference_install_hook_lock()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let cell = managed_inference_install_hook_cell();
+    {
+        let mut guard = cell.lock().unwrap_or_else(|poison| poison.into_inner());
         assert!(
-            cell.borrow().is_none(),
+            guard.is_none(),
             "managed inference install hook already installed"
         );
-        *cell.borrow_mut() = Some(Rc::new(hook));
-    });
-    let result = f();
-    MANAGED_INFERENCE_INSTALL_HOOK.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-    result
+        *guard = Some(Arc::new(hook));
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    *cell.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+    match result {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }

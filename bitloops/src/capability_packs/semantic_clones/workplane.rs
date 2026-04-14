@@ -134,8 +134,9 @@ fn resolve_effective_mailbox_intent_from_status(
             .is_some();
 
     SemanticClonesMailboxIntentState {
-        summary_refresh_active: repo_intent(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
-            || summary_live,
+        // Summary refresh jobs require a live summary-generation slot. Repo intent alone should
+        // not seed work that the daemon cannot ever claim.
+        summary_refresh_active: summary_live,
         code_embeddings_active: repo_intent(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX) || code_live,
         summary_embeddings_active: repo_intent(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX)
             || summary_embedding_live,
@@ -154,6 +155,24 @@ pub fn enqueue_summary_refresh_jobs(
         return Ok(());
     }
     enqueue_artefact_jobs(workplane, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, inputs)
+}
+
+pub fn enqueue_summary_refresh_repo_backfill_for_repo(repo_root: &Path) -> Result<()> {
+    let store = open_workplane_store_for_repo(repo_root)?;
+    let _ = store.enqueue_capability_workplane_jobs(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        vec![
+            crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                Some(repo_backfill_dedupe_key(
+                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                )),
+                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)
+                    .expect("summary repo backfill payload should serialize"),
+            ),
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn enqueue_embedding_jobs(
@@ -263,4 +282,53 @@ fn build_embedding_jobs(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::capability_host::gateways::CapabilityMailboxStatus;
+    use std::collections::BTreeMap;
+
+    fn status_with_active_intents() -> BTreeMap<String, CapabilityMailboxStatus> {
+        SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES
+            .iter()
+            .map(|mailbox_name| {
+                (
+                    (*mailbox_name).to_string(),
+                    CapabilityMailboxStatus {
+                        intent_active: true,
+                        ..CapabilityMailboxStatus::default()
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summary_refresh_requires_a_configured_summary_slot() {
+        let intent = resolve_effective_mailbox_intent_from_status(
+            &status_with_active_intents(),
+            &SemanticClonesConfig::default(),
+        );
+
+        assert!(
+            !intent.summary_refresh_active,
+            "repo intent alone should not activate summary refresh without a live summary slot"
+        );
+        assert!(intent.code_embeddings_active);
+        assert!(intent.summary_embeddings_active);
+        assert!(intent.clone_rebuild_active);
+    }
+
+    #[test]
+    fn summary_refresh_activates_once_summary_generation_is_configured() {
+        let mut config = SemanticClonesConfig::default();
+        config.inference.summary_generation = Some("summary_local".to_string());
+
+        let intent =
+            resolve_effective_mailbox_intent_from_status(&status_with_active_intents(), &config);
+
+        assert!(intent.summary_refresh_active);
+    }
 }

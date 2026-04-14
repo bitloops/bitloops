@@ -29,6 +29,7 @@ pub use repo_policy::{
     discover_repo_policy, discover_repo_policy_optional, parse_exclusion_patterns,
     resolve_repo_policy_scope_exclusions,
 };
+pub(crate) use resolve::resolve_preferred_daemon_config_path_for_repo;
 pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo,
     resolve_bound_daemon_config_path_for_repo, resolve_bound_daemon_config_root_for_repo,

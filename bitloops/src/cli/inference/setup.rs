@@ -7,14 +7,20 @@ use serde::Deserialize;
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::{
-    InferenceTask, resolve_daemon_config_path_for_repo,
-    resolve_inference_capability_config_for_repo,
+    InferenceTask, resolve_inference_capability_config_for_repo,
+    resolve_preferred_daemon_config_path_for_repo,
 };
 use crate::host::inference::BITLOOPS_INFERENCE_RUNTIME_ID;
 
-use super::managed::install_or_bootstrap_inference;
+use super::managed::{
+    ManagedInferenceInstallPhase, ManagedInferenceInstallProgress, install_or_bootstrap_inference,
+    install_or_bootstrap_inference_with_progress,
+};
 
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
+const DEFAULT_OLLAMA_CHAT_BASE_URL: &str = "http://127.0.0.1:11434/api/chat";
+const DEFAULT_SUMMARY_TEMPERATURE: &str = "0.1";
+const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS: i64 = 200;
 const DEFAULT_SUMMARY_PROFILE_NAME: &str = "summary_local";
 const PREFERRED_OLLAMA_MODELS: &[&str] = &["ministral-3:3b", "ministral-3:8b"];
 
@@ -22,6 +28,57 @@ const PREFERRED_OLLAMA_MODELS: &[&str] = &["ministral-3:3b", "ministral-3:8b"];
 pub(crate) enum SummarySetupOutcome {
     InstalledRuntimeOnly,
     Configured { model_name: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SummarySetupPhase {
+    Queued,
+    ResolvingRelease,
+    DownloadingRuntime,
+    ExtractingRuntime,
+    RewritingRuntime,
+    WritingProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SummarySetupProgress {
+    pub(crate) phase: SummarySetupPhase,
+    pub(crate) asset_name: Option<String>,
+    pub(crate) bytes_downloaded: u64,
+    pub(crate) bytes_total: Option<u64>,
+    pub(crate) version: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+impl Default for SummarySetupProgress {
+    fn default() -> Self {
+        Self {
+            phase: SummarySetupPhase::Queued,
+            asset_name: None,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            version: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SummarySetupExecutionResult {
+    pub(crate) outcome: SummarySetupOutcome,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PreparedSummarySetupAction {
+    InstallRuntimeOnly { message: String },
+    InstallRuntimeOnlyPendingProbe { message: String },
+    Configure { model_name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedSummarySetupPlan {
+    action: PreparedSummarySetupAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,10 +129,26 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
 
     profile.task == InferenceTask::TextGeneration
         && profile
+            .model
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && profile
             .runtime
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
+        && profile
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && profile
+            .temperature
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && profile.max_output_tokens.is_some_and(|value| value > 0)
 }
 
 pub(crate) fn configure_local_summary_generation(
@@ -84,20 +157,31 @@ pub(crate) fn configure_local_summary_generation(
     input: &mut dyn BufRead,
     interactive: bool,
 ) -> Result<SummarySetupOutcome> {
+    let plan = prepare_local_summary_generation_plan(out, input, interactive)?;
     let lines = install_or_bootstrap_inference(repo_root)?;
     for line in lines {
         writeln!(out, "{line}")?;
     }
 
+    let execution = apply_prepared_summary_setup(repo_root, plan)?;
+    writeln!(out, "{}", execution.message)?;
+    Ok(execution.outcome)
+}
+
+pub(crate) fn prepare_local_summary_generation_plan(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    interactive: bool,
+) -> Result<PreparedSummarySetupPlan> {
     let mut availability = probe_ollama_availability()?;
     loop {
         match availability {
             OllamaAvailability::MissingCli => {
-                writeln!(
-                    out,
-                    "Ollama was not found on PATH; installed `bitloops-inference` but skipped semantic summary setup."
-                )?;
-                return Ok(SummarySetupOutcome::InstalledRuntimeOnly);
+                return Ok(PreparedSummarySetupPlan {
+                    action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                        message: "Ollama was not found on PATH; installed `bitloops-inference` but skipped semantic summary setup.".to_string(),
+                    },
+                });
             }
             OllamaAvailability::NotRunning if interactive => {
                 writeln!(
@@ -117,11 +201,11 @@ pub(crate) fn configure_local_summary_generation(
                         continue;
                     }
                     "" | "s" | "skip" => {
-                        writeln!(
-                            out,
-                            "Installed `bitloops-inference`; skipped semantic summary setup because Ollama is not running."
-                        )?;
-                        return Ok(SummarySetupOutcome::InstalledRuntimeOnly);
+                        return Ok(PreparedSummarySetupPlan {
+                            action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                                message: "Installed `bitloops-inference`; skipped semantic summary setup because Ollama is not running.".to_string(),
+                            },
+                        });
                     }
                     _ => {
                         writeln!(out, "Please answer `r` to retry or `s` to skip.")?;
@@ -130,30 +214,181 @@ pub(crate) fn configure_local_summary_generation(
                 }
             }
             OllamaAvailability::NotRunning => {
-                writeln!(
-                    out,
-                    "Installed `bitloops-inference`; skipped semantic summary setup because Ollama is not running."
-                )?;
-                return Ok(SummarySetupOutcome::InstalledRuntimeOnly);
+                return Ok(PreparedSummarySetupPlan {
+                    action: PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe {
+                        message: "Installed `bitloops-inference`; skipped semantic summary setup because Ollama is not running.".to_string(),
+                    },
+                });
             }
             OllamaAvailability::Running { ref models } => {
                 let model_name = select_ollama_model(models, out, input, interactive)?;
                 let Some(model_name) = model_name else {
-                    writeln!(
-                        out,
-                        "Installed `bitloops-inference`; skipped semantic summary profile setup."
-                    )?;
-                    return Ok(SummarySetupOutcome::InstalledRuntimeOnly);
+                    return Ok(PreparedSummarySetupPlan {
+                        action: PreparedSummarySetupAction::InstallRuntimeOnly {
+                            message: "Installed `bitloops-inference`; skipped semantic summary profile setup.".to_string(),
+                        },
+                    });
                 };
-                write_summary_profile(repo_root, &model_name)?;
-                writeln!(
-                    out,
-                    "Configured semantic summaries to use Ollama model `{model_name}`."
-                )?;
-                return Ok(SummarySetupOutcome::Configured { model_name });
+                return Ok(PreparedSummarySetupPlan {
+                    action: PreparedSummarySetupAction::Configure { model_name },
+                });
             }
         }
     }
+}
+
+pub(crate) fn execute_prepared_summary_setup_with_progress<R>(
+    repo_root: &Path,
+    plan: PreparedSummarySetupPlan,
+    mut report: R,
+) -> Result<SummarySetupExecutionResult>
+where
+    R: FnMut(SummarySetupProgress) -> Result<()>,
+{
+    install_or_bootstrap_inference_with_progress(repo_root, |progress| {
+        report(summary_setup_progress_from_managed(progress))
+    })?;
+    apply_prepared_summary_setup_with_progress(repo_root, plan, &mut report)
+}
+
+fn apply_prepared_summary_setup(
+    repo_root: &Path,
+    plan: PreparedSummarySetupPlan,
+) -> Result<SummarySetupExecutionResult> {
+    match plan.action {
+        PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            if let Some(model_name) = auto_configured_summary_model_name()? {
+                write_summary_profile(repo_root, &model_name)?;
+                return Ok(SummarySetupExecutionResult {
+                    outcome: SummarySetupOutcome::Configured {
+                        model_name: model_name.clone(),
+                    },
+                    message: format!(
+                        "Configured semantic summaries to use Ollama model `{model_name}`."
+                    ),
+                });
+            }
+
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::Configure { model_name } => {
+            write_summary_profile(repo_root, &model_name)?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: model_name.clone(),
+                },
+                message: format!(
+                    "Configured semantic summaries to use Ollama model `{model_name}`."
+                ),
+            })
+        }
+    }
+}
+
+fn apply_prepared_summary_setup_with_progress<R>(
+    repo_root: &Path,
+    plan: PreparedSummarySetupPlan,
+    report: &mut R,
+) -> Result<SummarySetupExecutionResult>
+where
+    R: FnMut(SummarySetupProgress) -> Result<()>,
+{
+    match plan.action {
+        PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            report(SummarySetupProgress {
+                phase: SummarySetupPhase::WritingProfile,
+                message: Some("Rechecking Ollama before applying summary profile".to_string()),
+                ..Default::default()
+            })?;
+            if let Some(model_name) = auto_configured_summary_model_name()? {
+                report(SummarySetupProgress {
+                    phase: SummarySetupPhase::WritingProfile,
+                    message: Some(format!("Applying summary profile for `{model_name}`")),
+                    ..Default::default()
+                })?;
+                write_summary_profile(repo_root, &model_name)?;
+                return Ok(SummarySetupExecutionResult {
+                    outcome: SummarySetupOutcome::Configured {
+                        model_name: model_name.clone(),
+                    },
+                    message: format!(
+                        "Configured semantic summaries to use Ollama model `{model_name}`."
+                    ),
+                });
+            }
+
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::InstalledRuntimeOnly,
+                message,
+            })
+        }
+        PreparedSummarySetupAction::Configure { model_name } => {
+            report(SummarySetupProgress {
+                phase: SummarySetupPhase::WritingProfile,
+                message: Some(format!("Applying summary profile for `{model_name}`")),
+                ..Default::default()
+            })?;
+            write_summary_profile(repo_root, &model_name)?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: model_name.clone(),
+                },
+                message: format!(
+                    "Configured semantic summaries to use Ollama model `{model_name}`."
+                ),
+            })
+        }
+    }
+}
+
+fn summary_setup_progress_from_managed(
+    progress: ManagedInferenceInstallProgress,
+) -> SummarySetupProgress {
+    SummarySetupProgress {
+        phase: match progress.phase {
+            ManagedInferenceInstallPhase::Queued => SummarySetupPhase::Queued,
+            ManagedInferenceInstallPhase::ResolvingRelease => SummarySetupPhase::ResolvingRelease,
+            ManagedInferenceInstallPhase::DownloadingRuntime => {
+                SummarySetupPhase::DownloadingRuntime
+            }
+            ManagedInferenceInstallPhase::ExtractingRuntime => SummarySetupPhase::ExtractingRuntime,
+            ManagedInferenceInstallPhase::RewritingRuntime => SummarySetupPhase::RewritingRuntime,
+        },
+        asset_name: progress.asset_name,
+        bytes_downloaded: progress.bytes_downloaded,
+        bytes_total: progress.bytes_total,
+        version: progress.version,
+        message: progress.message,
+    }
+}
+
+fn auto_configured_summary_model_name() -> Result<Option<String>> {
+    match probe_ollama_availability()? {
+        OllamaAvailability::Running { models } => Ok(select_preferred_ollama_model(&models)),
+        OllamaAvailability::MissingCli | OllamaAvailability::NotRunning => Ok(None),
+    }
+}
+
+fn select_preferred_ollama_model(models: &[String]) -> Option<String> {
+    PREFERRED_OLLAMA_MODELS
+        .iter()
+        .find(|candidate| models.iter().any(|model| model == **candidate))
+        .map(|model| (*model).to_string())
 }
 
 fn select_ollama_model(
@@ -162,11 +397,8 @@ fn select_ollama_model(
     input: &mut dyn BufRead,
     interactive: bool,
 ) -> Result<Option<String>> {
-    if let Some(preferred) = PREFERRED_OLLAMA_MODELS
-        .iter()
-        .find(|candidate| models.iter().any(|model| model == **candidate))
-    {
-        return Ok(Some((*preferred).to_string()));
+    if let Some(preferred) = select_preferred_ollama_model(models) {
+        return Ok(Some(preferred));
     }
 
     if !interactive {
@@ -204,10 +436,7 @@ fn probe_ollama_availability() -> Result<OllamaAvailability> {
         return hook();
     }
 
-    if !command_exists("ollama") {
-        return Ok(OllamaAvailability::MissingCli);
-    }
-
+    let cli_available = command_exists("ollama");
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
@@ -217,10 +446,20 @@ fn probe_ollama_availability() -> Result<OllamaAvailability> {
         .send()
     {
         Ok(response) => response,
-        Err(_) => return Ok(OllamaAvailability::NotRunning),
+        Err(_) => {
+            return Ok(if cli_available {
+                OllamaAvailability::NotRunning
+            } else {
+                OllamaAvailability::MissingCli
+            });
+        }
     };
     if !response.status().is_success() {
-        return Ok(OllamaAvailability::NotRunning);
+        return Ok(if cli_available {
+            OllamaAvailability::NotRunning
+        } else {
+            OllamaAvailability::MissingCli
+        });
     }
     let payload = response
         .json::<OllamaTagsResponse>()
@@ -247,7 +486,7 @@ fn command_exists(command: &str) -> bool {
 }
 
 fn write_summary_profile(repo_root: &Path, model_name: &str) -> Result<()> {
-    let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
     let contents = match std::fs::read_to_string(&config_path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -279,7 +518,9 @@ fn write_summary_profile(repo_root: &Path, model_name: &str) -> Result<()> {
         profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
         profile["driver"] = Item::Value("ollama_chat".into());
         profile["model"] = Item::Value(model_name.into());
-        profile["base_url"] = Item::Value(DEFAULT_OLLAMA_BASE_URL.into());
+        profile["base_url"] = Item::Value(DEFAULT_OLLAMA_CHAT_BASE_URL.into());
+        profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+        profile["max_output_tokens"] = Item::Value(DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS.into());
         profile.remove("api_key");
         profile.remove("cache_dir");
     }

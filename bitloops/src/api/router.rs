@@ -1,11 +1,9 @@
-use super::handlers::{
-    handle_api_agents, handle_api_branches, handle_api_check_bundle_version, handle_api_checkpoint,
-    handle_api_commits, handle_api_db_health, handle_api_fetch_bundle, handle_api_git_blob,
-    handle_api_kpis, handle_api_not_found, handle_api_openapi, handle_api_repositories,
-    handle_api_root, handle_api_users,
+use super::dashboard_schema::{
+    dashboard_graphql_handler, dashboard_graphql_playground_handler, dashboard_graphql_sdl_handler,
 };
+use super::handlers::handle_dashboard_git_blob;
 use super::{
-    DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
+    ApiError, DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
     has_bundle_index, request_path_looks_like_asset, resolve_bundle_file,
 };
 use crate::graphql::{
@@ -39,17 +37,24 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
     internal: "Unexpected dashboard update error. Please retry."
   };
 
-  function parseError(payload) {
-    var code = payload && payload.error && payload.error.code ? payload.error.code : "internal";
-    var message = payload && payload.error && payload.error.message ? payload.error.message : (messages[code] || messages.internal);
+  function parseGraphqlError(payload) {
+    var first = payload && payload.errors && payload.errors.length ? payload.errors[0] : null;
+    var code = first && first.extensions && first.extensions.code ? first.extensions.code : "internal";
+    var message = messages[code] || (first && first.message) || messages.internal;
     return { code: code, message: message };
   }
 
-  function requestJson(path, options) {
-    return fetch(path, options || {}).then(function (res) {
+  function requestDashboardGraphql(document) {
+    return fetch("/devql/dashboard", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: document })
+    }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (payload) {
-        if (!res.ok) throw parseError(payload);
-        return payload;
+        if (!res.ok || (payload && payload.errors && payload.errors.length)) {
+          throw parseGraphqlError(payload);
+        }
+        return payload && payload.data ? payload.data : {};
       });
     });
   }
@@ -143,11 +148,7 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
       setInstalling(true);
       status.style.color = "#f8fafc";
       status.textContent = "Installing dashboard update...";
-      requestJson("/api/fetch_bundle", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}"
-      })
+      requestDashboardGraphql("mutation DashboardFetchBundle { fetchBundle { installedVersion } }")
         .then(function () {
           status.style.color = "#86efac";
           status.textContent = "Update installed. Reloading...";
@@ -168,10 +169,11 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
     document.body.appendChild(overlay);
   }
 
-  requestJson("/api/check_bundle_version")
+  requestDashboardGraphql("query DashboardCheckBundleVersion { checkBundleVersion { currentVersion latestApplicableVersion installAvailable reason } }")
     .then(function (payload) {
-      if (!payload || payload.installAvailable !== true || payload.reason !== "update_available") return;
-      mountPrompt(payload);
+      var version = payload ? payload.checkBundleVersion : null;
+      if (!version || version.installAvailable !== true || version.reason !== "update_available") return;
+      mountPrompt(version);
     })
     .catch(function () {
       return;
@@ -181,8 +183,9 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
 
 pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
     Router::new()
-        .route("/api/", get(handle_api_root))
-        .nest("/api", build_dashboard_api_router())
+        .route("/api", any(handle_removed_api_route))
+        .route("/api/", any(handle_removed_api_route))
+        .route("/api/{*path}", any(handle_removed_api_route))
         .route(
             "/devql",
             post(slim_graphql_handler).get(slim_graphql_playground_handler),
@@ -190,6 +193,19 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/devql/playground", get(slim_graphql_playground_handler))
         .route("/devql/sdl", get(slim_graphql_sdl_handler))
         .route("/devql/ws", get(slim_graphql_ws_handler))
+        .route(
+            "/devql/dashboard",
+            post(dashboard_graphql_handler).get(dashboard_graphql_playground_handler),
+        )
+        .route(
+            "/devql/dashboard/playground",
+            get(dashboard_graphql_playground_handler),
+        )
+        .route("/devql/dashboard/sdl", get(dashboard_graphql_sdl_handler))
+        .route(
+            "/devql/dashboard/blobs/{repo_id}/{blob_sha}",
+            get(handle_dashboard_git_blob),
+        )
         .route(
             "/devql/global",
             post(global_graphql_handler).get(global_graphql_playground_handler),
@@ -205,28 +221,8 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
         .with_state(state)
 }
 
-fn build_dashboard_api_router() -> Router<DashboardState> {
-    Router::new()
-        .route("/", get(handle_api_root))
-        .route("/kpis", get(handle_api_kpis))
-        .route("/commits", get(handle_api_commits))
-        .route("/branches", get(handle_api_branches))
-        .route("/repositories", get(handle_api_repositories))
-        .route("/users", get(handle_api_users))
-        .route("/agents", get(handle_api_agents))
-        .route("/db/health", get(handle_api_db_health))
-        .route(
-            "/checkpoints/{repo_id}/{checkpoint_id}",
-            get(handle_api_checkpoint),
-        )
-        .route("/blobs/{repo_id}/{blob_sha}", get(handle_api_git_blob))
-        .route(
-            "/check_bundle_version",
-            get(handle_api_check_bundle_version),
-        )
-        .route("/fetch_bundle", post(handle_api_fetch_bundle))
-        .route("/openapi.json", get(handle_api_openapi))
-        .fallback(handle_api_not_found)
+async fn handle_removed_api_route() -> ApiError {
+    ApiError::not_found("route not found")
 }
 
 async fn handle_dashboard_root(State(state): State<DashboardState>, method: Method) -> Response {
