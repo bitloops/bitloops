@@ -221,35 +221,32 @@ impl RustTestMappingHelper {
             .scenarios
             .into_iter()
             .filter(|scenario| {
-                let normalized_key =
-                    if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
-                        let item_name = scenario_base_name(&scenario.scenario_name);
-                        scenario
-                            .reference_candidates
-                            .iter()
-                            .find_map(|candidate| match candidate {
-                                ReferenceCandidate::ExplicitTarget { path, start_line } => {
-                                    Some(normalized_enumerated_doctest_key(
-                                        path,
-                                        &item_name,
-                                        *start_line,
-                                    ))
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| {
-                                normalized_enumerated_doctest_key(
-                                    &scenario.relative_path,
-                                    &item_name,
-                                    0,
-                                )
-                            })
-                    } else {
-                        normalized_enumerated_test_key(&format!(
-                            "{}::{}",
-                            scenario.suite_name, scenario.scenario_name
-                        ))
-                    };
+                let normalized_key = if scenario.discovery_source
+                    == ScenarioDiscoverySource::Doctest
+                {
+                    let item_name = scenario_base_name(&scenario.scenario_name);
+                    scenario
+                        .reference_candidates
+                        .iter()
+                        .find_map(|candidate| match candidate {
+                            ReferenceCandidate::ExplicitTarget { path, start_line } => Some(
+                                normalized_enumerated_doctest_key(path, &item_name, *start_line),
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            normalized_enumerated_doctest_key(
+                                &scenario.relative_path,
+                                &item_name,
+                                0,
+                            )
+                        })
+                } else {
+                    normalized_enumerated_test_key(&format!(
+                        "{}::{}",
+                        scenario.suite_name, scenario.scenario_name
+                    ))
+                };
 
                 if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
                     !source_doctest_keys.contains(&normalized_key)
@@ -333,8 +330,8 @@ fn normalize_rel_path(path: &Path) -> String {
 mod tests {
     use super::RustTestMappingHelper;
     use crate::host::language_adapter::{
-        DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, EnumerationMode,
-        EnumerationResult, EnumeratedTestScenario, ReferenceCandidate, ScenarioDiscoverySource,
+        DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, EnumeratedTestScenario,
+        EnumerationMode, EnumerationResult, ReferenceCandidate, ScenarioDiscoverySource,
     };
 
     #[test]
