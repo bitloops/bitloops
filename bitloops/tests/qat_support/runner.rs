@@ -2,7 +2,9 @@ use super::helpers::{sanitize_name, stop_daemon_for_scenario};
 use super::steps;
 use super::world::{QatRunConfig, QatWorld};
 use anyhow::{Context, Result, bail};
-use cucumber::{World as _, writer::Stats as _};
+use cucumber::{
+    World as _, gherkin, gherkin::tagexpr::TagOperation, tag::Ext as _, writer::Stats as _,
+};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,8 @@ pub enum Suite {
     Onboarding,
     Quickstart,
 }
+
+const CUCUMBER_FILTER_TAGS_ENV: &str = "CUCUMBER_FILTER_TAGS";
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     let max_concurrent = resolve_max_concurrent_scenarios();
@@ -48,7 +52,7 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     });
 
     let before_config = Arc::clone(&config);
-    let result = QatWorld::cucumber()
+    let cucumber = QatWorld::cucumber()
         .steps(steps::collection())
         .max_concurrent_scenarios(max_concurrent)
         .before(move |_, _, scenario, world| {
@@ -71,9 +75,19 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
             })
         })
         .fail_on_skipped()
-        .with_default_cli()
-        .run(feature_path)
-        .await;
+        .with_default_cli();
+
+    let result = if let Some(tags_filter) =
+        parse_cucumber_tags_filter(env::var(CUCUMBER_FILTER_TAGS_ENV).ok().as_deref())?
+    {
+        cucumber
+            .filter_run(feature_path, move |feature, rule, scenario| {
+                scenario_matches_tags_filter(feature, rule, scenario, &tags_filter)
+            })
+            .await
+    } else {
+        cucumber.run(feature_path).await
+    };
 
     if result.execution_has_failed() || result.parsing_errors() != 0 {
         bail!(
@@ -288,9 +302,36 @@ fn resolve_max_concurrent_scenarios() -> usize {
         .unwrap_or(1)
 }
 
+fn parse_cucumber_tags_filter(raw: Option<&str>) -> Result<Option<TagOperation>> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    let parsed = raw.parse::<TagOperation>().with_context(|| {
+        format!("parsing {CUCUMBER_FILTER_TAGS_ENV} value `{raw}` as a cucumber tag expression")
+    })?;
+    Ok(Some(parsed))
+}
+
+fn scenario_matches_tags_filter(
+    feature: &gherkin::Feature,
+    rule: Option<&gherkin::Rule>,
+    scenario: &gherkin::Scenario,
+    tags_filter: &TagOperation,
+) -> bool {
+    tags_filter.eval(
+        feature
+            .tags
+            .iter()
+            .chain(rule.iter().flat_map(|current| current.tags.iter()))
+            .chain(scenario.tags.iter()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cucumber::gherkin::{Feature, LineCol, Rule, Scenario, Span};
 
     #[test]
     fn prepare_suite_binary_copies_snapshot() {
@@ -341,5 +382,69 @@ mod tests {
                 .join("devql-ingest")
                 .join("ingest_workspace.feature")
         );
+    }
+
+    #[test]
+    fn parse_cucumber_tags_filter_treats_missing_or_blank_values_as_disabled() {
+        assert!(parse_cucumber_tags_filter(None).unwrap().is_none());
+        assert!(parse_cucumber_tags_filter(Some("")).unwrap().is_none());
+        assert!(parse_cucumber_tags_filter(Some("   ")).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_cucumber_tags_filter_accepts_valid_tag_expression() {
+        let parsed = parse_cucumber_tags_filter(Some("@test_harness_sync and not @slow"))
+            .expect("parse tag filter")
+            .expect("tag filter should be present");
+
+        assert!(parsed.eval(["test_harness_sync"]));
+        assert!(!parsed.eval(["test_harness_sync", "slow"]));
+    }
+
+    #[test]
+    fn scenario_matches_tags_filter_merges_feature_rule_and_scenario_tags() {
+        let feature = Feature {
+            keyword: "Feature".to_string(),
+            name: "feature".to_string(),
+            description: None,
+            background: None,
+            scenarios: Vec::new(),
+            rules: Vec::new(),
+            tags: vec!["feature_tag".to_string()],
+            span: Span::default(),
+            position: LineCol::default(),
+            path: None,
+        };
+        let rule = Rule {
+            keyword: "Rule".to_string(),
+            name: "rule".to_string(),
+            description: None,
+            background: None,
+            scenarios: Vec::new(),
+            tags: vec!["rule_tag".to_string()],
+            span: Span::default(),
+            position: LineCol::default(),
+        };
+        let scenario = Scenario {
+            keyword: "Scenario".to_string(),
+            name: "scenario".to_string(),
+            description: None,
+            steps: Vec::new(),
+            examples: Vec::new(),
+            tags: vec!["scenario_tag".to_string()],
+            span: Span::default(),
+            position: LineCol::default(),
+        };
+        let filter =
+            parse_cucumber_tags_filter(Some("@feature_tag and @rule_tag and @scenario_tag"))
+                .expect("parse tag filter")
+                .expect("tag filter should be present");
+
+        assert!(scenario_matches_tags_filter(
+            &feature,
+            Some(&rule),
+            &scenario,
+            &filter
+        ));
     }
 }

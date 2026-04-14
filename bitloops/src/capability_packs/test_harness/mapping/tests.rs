@@ -332,6 +332,107 @@ mod tests {
 }
 
 #[test]
+fn rust_suites_include_additional_test_case_string_arguments_in_scenario_names() {
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use test_case::test_case;
+
+    #[test_case(
+        Rule::PytestFixtureIncorrectParenthesesStyle,
+        Path::new("PT001.py"),
+        Settings::default(),
+        "PT001_default"
+    )]
+    #[test_case(
+        Rule::PytestFixtureIncorrectParenthesesStyle,
+        Path::new("PT001.py"),
+        Settings { fixture_parentheses: true, ..Settings::default() },
+        "PT001_parentheses"
+    )]
+    fn test_pytest_style(rule_code: Rule, path: &Path, plugin_settings: Settings, name: &str) {}
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_RUST.into())
+        .expect("failed setting rust parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing rust source");
+
+    let suites = collect_rust_suites(
+        tree.root_node(),
+        source,
+        "crates/ruff_linter/src/rules/flake8_pytest_style/mod.rs",
+    );
+    assert_eq!(suites.len(), 1, "expected one inline rust test suite");
+
+    let scenario_names: Vec<&str> = suites[0]
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(
+        scenario_names,
+        vec![
+            "test_pytest_style[PytestFixtureIncorrectParenthesesStyle, PT001.py, PT001_default]",
+            "test_pytest_style[PytestFixtureIncorrectParenthesesStyle, PT001.py, PT001_parentheses]",
+        ]
+    );
+}
+
+#[test]
+fn rust_suites_use_generic_test_case_labels_and_arguments_to_avoid_duplicate_names() {
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    #[test_case(Type::Any)]
+    #[test_case(Type::Unknown)]
+    #[test_case(todo_type!())]
+    fn build_intersection_t_and_negative_t_does_not_simplify(ty: Type) {}
+
+    #[test_case("\"%s\"", "\"{}\""; "simple string")]
+    #[test_case("\"%%%s\"", "\"%{}\""; "three percents")]
+    fn test_percent_to_format(sample: &str, expected: &str) {}
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_RUST.into())
+        .expect("failed setting rust parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing rust source");
+
+    let suites = collect_rust_suites(tree.root_node(), source, "tests/parameterized.rs");
+    assert_eq!(suites.len(), 1, "expected one inline rust test suite");
+
+    let scenario_names: Vec<&str> = suites[0]
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(
+        scenario_names,
+        vec![
+            "build_intersection_t_and_negative_t_does_not_simplify[Type::Any]",
+            "build_intersection_t_and_negative_t_does_not_simplify[Type::Unknown]",
+            "build_intersection_t_and_negative_t_does_not_simplify[todo_type!()]",
+            "test_percent_to_format[simple string]",
+            "test_percent_to_format[three percents]",
+        ]
+    );
+}
+
+#[test]
 fn rust_suites_detect_wasm_bindgen_test_functions() {
     let source = r#"
 use wasm_bindgen_test::wasm_bindgen_test;

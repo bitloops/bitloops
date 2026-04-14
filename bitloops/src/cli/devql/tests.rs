@@ -894,6 +894,29 @@ fn devql_cli_parses_knowledge_add_command() {
 }
 
 #[test]
+fn devql_test_harness_ingest_tests_help_marks_command_as_legacy() {
+    let help_text = match Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "test-harness",
+        "ingest-tests",
+        "--help",
+    ]) {
+        Ok(_) => panic!("--help should return a clap error"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        help_text.contains("Legacy commit-scoped test discovery/linkage ingestion"),
+        "expected ingest-tests help to mark the command as legacy:\n{help_text}"
+    );
+    assert!(
+        help_text.contains("Prefer automatic current-state sync for workspace validation"),
+        "expected ingest-tests help to steer users toward current-state sync:\n{help_text}"
+    );
+}
+
+#[test]
 fn devql_cli_parses_knowledge_associate_command() {
     let parsed = Cli::try_parse_from([
         "bitloops",

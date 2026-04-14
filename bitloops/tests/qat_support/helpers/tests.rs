@@ -7,7 +7,9 @@ use std::time::Duration as StdDuration;
 
 use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::daemon::CapabilityEventRunStatus;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
+use bitloops::host::runtime_store::DaemonSqliteRuntimeStore;
 
 #[test]
 fn sanitize_name_normalizes_user_input() {
@@ -367,10 +369,175 @@ fn daemon_runtime_store_candidate_paths_cover_isolated_state_dirs() {
             PathBuf::from("/tmp/qat-run/home/xdg-state/bitloops/daemon/runtime.sqlite"),
             PathBuf::from("/tmp/qat-run/home/.local/state/bitloops/daemon/runtime.sqlite"),
             PathBuf::from(
+                "/tmp/qat-run/home/Library/Application Support/bitloops/stores/runtime/runtime.sqlite"
+            ),
+            PathBuf::from(
                 "/tmp/qat-run/home/Library/Application Support/bitloops/daemon/runtime.sqlite"
             ),
         ]
     );
+}
+
+#[test]
+fn load_latest_test_harness_capability_event_run_reads_macos_current_state_store() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = temp.path().join("repo");
+    let bin_dir = temp.path().join("bin");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let runtime_path = run_dir
+        .join("home")
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    let runtime_parent = runtime_path.parent().expect("runtime parent");
+    fs::create_dir_all(runtime_parent).expect("create runtime parent");
+    let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-1",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness.current_state",
+                    "test_harness",
+                    1_i64,
+                    2_i64,
+                    "full_reconcile",
+                    "completed",
+                    1_i64,
+                    100_i64,
+                    101_i64,
+                    102_i64,
+                    103_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("insert current-state run");
+
+    let world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let (_, run) = load_latest_test_harness_capability_event_run(&world)
+        .expect("load latest run")
+        .expect("completed run should be found");
+
+    assert_eq!(run.run_id, "run-1");
+    assert_eq!(run.status, CapabilityEventRunStatus::Completed);
+    assert_eq!(run.capability_id, "test_harness");
+    assert_eq!(run.consumer_id, "test_harness.current_state");
+    assert_eq!(run.event_kind, "current_state_consumer");
+}
+
+#[test]
+fn load_latest_test_harness_capability_event_run_prefers_newer_legacy_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = temp.path().join("repo");
+    let bin_dir = temp.path().join("bin");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let runtime_path = run_dir
+        .join("home")
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    let runtime_parent = runtime_path.parent().expect("runtime parent");
+    fs::create_dir_all(runtime_parent).expect("create runtime parent");
+    let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-current-state",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness.current_state",
+                    "test_harness",
+                    1_i64,
+                    2_i64,
+                    "full_reconcile",
+                    "completed",
+                    1_i64,
+                    100_i64,
+                    101_i64,
+                    102_i64,
+                    103_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO pack_reconcile_runs (run_id, repo_id, repo_root, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-legacy",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness",
+                    "test_harness.current_state",
+                    3_i64,
+                    4_i64,
+                    "merged_delta",
+                    "completed",
+                    1_i64,
+                    200_i64,
+                    201_i64,
+                    202_i64,
+                    203_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("insert mixed-schema runs");
+
+    let world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let (_, run) = load_latest_test_harness_capability_event_run(&world)
+        .expect("load latest run")
+        .expect("completed run should be found");
+
+    assert_eq!(run.run_id, "run-legacy");
+    assert_eq!(run.status, CapabilityEventRunStatus::Completed);
+    assert_eq!(run.capability_id, "test_harness");
+    assert_eq!(run.consumer_id, "test_harness.current_state");
 }
 
 #[test]

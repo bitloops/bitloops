@@ -1,7 +1,10 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::host::capability_host::CapabilityRegistrar;
+use crate::host::capability_host::{
+    CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxRegistration,
+    CapabilityRegistrar,
+};
 
 use super::event_handlers::TestHarnessCurrentStateConsumer;
 use super::ingesters::{
@@ -18,6 +21,14 @@ pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Re
     registrar.register_stage(build_tests_stage())?;
     registrar.register_stage(build_tests_summary_stage())?;
     registrar.register_stage(build_coverage_stage())?;
+    registrar.register_mailbox(CapabilityMailboxRegistration::new(
+        super::types::TEST_HARNESS_CAPABILITY_ID,
+        super::types::TEST_HARNESS_CURRENT_STATE_CONSUMER_ID,
+        CapabilityMailboxPolicy::Cursor,
+        CapabilityMailboxHandler::CurrentStateConsumer(
+            super::types::TEST_HARNESS_CURRENT_STATE_CONSUMER_ID,
+        ),
+    ))?;
     registrar.register_current_state_consumer(
         crate::host::capability_host::CurrentStateConsumerRegistration::new(
             super::types::TEST_HARNESS_CAPABILITY_ID,
@@ -50,6 +61,7 @@ mod tests {
         stages: Vec<(&'static str, &'static str)>,
         ingesters: Vec<(&'static str, &'static str)>,
         current_state_consumers: Vec<(&'static str, &'static str)>,
+        mailboxes: Vec<(&'static str, &'static str)>,
         schema_modules: Vec<SchemaModule>,
         query_examples: Vec<QueryExample>,
     }
@@ -72,6 +84,15 @@ mod tests {
         ) -> Result<()> {
             self.current_state_consumers
                 .push((registration.capability_id, registration.consumer_id));
+            Ok(())
+        }
+
+        fn register_mailbox(
+            &mut self,
+            registration: crate::host::capability_host::CapabilityMailboxRegistration,
+        ) -> Result<()> {
+            self.mailboxes
+                .push((registration.capability_id, registration.mailbox_name));
             Ok(())
         }
 
@@ -110,6 +131,10 @@ mod tests {
         );
         assert_eq!(
             registrar.current_state_consumers,
+            vec![("test_harness", TEST_HARNESS_CURRENT_STATE_CONSUMER_ID)]
+        );
+        assert_eq!(
+            registrar.mailboxes,
             vec![("test_harness", TEST_HARNESS_CURRENT_STATE_CONSUMER_ID)]
         );
         assert_eq!(registrar.schema_modules, vec![TEST_HARNESS_SCHEMA_MODULE]);

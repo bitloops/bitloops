@@ -32,6 +32,9 @@ pub(super) async fn run(args: DevqlTestHarnessArgs, repo_root: &Path) -> Result<
 }
 
 async fn run_ingest_tests(repo_root: &Path, args: &DevqlTestHarnessIngestTestsArgs) -> Result<()> {
+    // Legacy commit-scoped ingestion path.
+    // Prefer automatic current-state sync for workspace validation and DevQL
+    // `tests(linkageSource: "static_analysis")` queries against the current tree.
     let repo = resolve_repo_identity(repo_root)?;
     let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
