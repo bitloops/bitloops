@@ -20,9 +20,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::Cursor;
+#[cfg(feature = "slow-tests")]
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "slow-tests")]
 use std::thread;
 use tempfile::TempDir;
 use tower::util::ServiceExt;

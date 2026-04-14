@@ -213,6 +213,12 @@ pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Resul
 }
 
 fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    let repo_root = path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .unwrap_or_else(|| Path::new("."));
+    crate::adapters::agents::cursor::rules::install_repo_rule(repo_root)?;
+
     let existing_data = fs::read(path).ok();
 
     let mut raw_file = match existing_data {
@@ -271,6 +277,12 @@ pub fn uninstall_hooks_at(repo_root: &Path) -> Result<()> {
 }
 
 fn uninstall_hooks_at_path(path: &Path) -> Result<()> {
+    let repo_root = path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .unwrap_or_else(|| Path::new("."));
+    crate::adapters::agents::cursor::rules::uninstall_repo_rule(repo_root)?;
+
     let data = match fs::read(path) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -347,6 +359,12 @@ mod tests {
         with_env_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, f)
     }
 
+    fn rule_file(path: &Path) -> PathBuf {
+        path.join(".cursor")
+            .join("rules")
+            .join("bitloops-using-devql.mdc")
+    }
+
     fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
@@ -373,6 +391,19 @@ mod tests {
 
             let second = install_hooks_at(dir.path(), false, false).expect("install second");
             assert_eq!(second, 0);
+        });
+    }
+
+    #[test]
+    fn install_hooks_writes_repo_local_cursor_rule() {
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let count = install_hooks_at(dir.path(), false, false).expect("install");
+            assert_eq!(count, 9);
+            assert!(
+                rule_file(dir.path()).exists(),
+                "expected repo-local Cursor rule to be installed"
+            );
         });
     }
 
@@ -506,6 +537,19 @@ mod tests {
             let output = fs::read_to_string(hooks_path).expect("read");
             assert!(output.contains("echo custom"));
             assert!(!output.contains("bitloops hooks cursor session-start"));
+        });
+    }
+
+    #[test]
+    fn uninstall_hooks_removes_repo_local_cursor_rule() {
+        with_managed_hook_env_cleared(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            install_hooks_at(dir.path(), false, false).expect("install");
+            uninstall_hooks_at(dir.path()).expect("uninstall");
+            assert!(
+                !rule_file(dir.path()).exists(),
+                "expected repo-local Cursor rule to be removed"
+            );
         });
     }
 

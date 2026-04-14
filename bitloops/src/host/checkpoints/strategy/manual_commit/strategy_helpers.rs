@@ -59,12 +59,14 @@ impl ManualCommitStrategy {
         state.last_checkpoint_id.clear();
         state.turn_checkpoint_ids.clear();
 
-        state.pending_prompt_attribution = Some(self.calculate_prompt_attribution_at_start(&state));
+        // Turn-start hooks run under tight agent timeout budgets. Defer prompt
+        // attribution until checkpoint save so pre-submit hooks stay lightweight.
+        state.pending_prompt_attribution = None;
 
         self.backend.save_session(&state)
     }
 
-    fn calculate_prompt_attribution_at_start(
+    pub(crate) fn calculate_prompt_attribution_at_start(
         &self,
         state: &SessionState,
     ) -> SessionPromptAttribution {

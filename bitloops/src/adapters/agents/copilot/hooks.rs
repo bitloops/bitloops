@@ -247,6 +247,13 @@ pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Resul
 }
 
 fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    let repo_root = path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .and_then(|parent| parent.parent())
+        .unwrap_or_else(|| Path::new("."));
+    crate::adapters::agents::copilot::skills::install_repo_skill(repo_root)?;
+
     let daemon_config_override = daemon_config_override_from_env();
     install_hooks_at_path_with_daemon_config_override(
         path,
@@ -327,6 +334,13 @@ pub fn uninstall_hooks_at(repo_root: &Path) -> Result<()> {
 }
 
 fn uninstall_hooks_at_path(path: &Path) -> Result<()> {
+    let repo_root = path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .and_then(|parent| parent.parent())
+        .unwrap_or_else(|| Path::new("."));
+    crate::adapters::agents::copilot::skills::uninstall_repo_skill(repo_root)?;
+
     let data = match fs::read(path) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -405,6 +419,18 @@ mod tests {
         assert!(output.status.success(), "git init failed");
     }
 
+    fn read_repo_skill(dir: &tempfile::TempDir) -> Option<String> {
+        fs::read_to_string(
+            dir.path()
+                .join(".github")
+                .join("skills")
+                .join("bitloops")
+                .join("using-devql")
+                .join("SKILL.md"),
+        )
+        .ok()
+    }
+
     #[test]
     fn install_hooks_canonical_fresh_and_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -427,6 +453,39 @@ mod tests {
         )
         .expect("install second");
         assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn install_hooks_writes_copilot_repo_skill() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo(dir.path());
+
+        install_hooks_at(dir.path(), false, false).expect("install");
+
+        let skill = read_repo_skill(&dir).expect("repo skill should be installed");
+        assert_eq!(
+            skill,
+            crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL
+        );
+    }
+
+    #[test]
+    fn uninstall_hooks_removes_copilot_repo_skill() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo(dir.path());
+
+        install_hooks_at(dir.path(), false, false).expect("install");
+        assert!(
+            read_repo_skill(&dir).is_some(),
+            "repo skill should exist before uninstall"
+        );
+
+        uninstall_hooks_at(dir.path()).expect("uninstall");
+
+        assert!(
+            read_repo_skill(&dir).is_none(),
+            "repo skill should be removed by uninstall"
+        );
     }
 
     #[test]

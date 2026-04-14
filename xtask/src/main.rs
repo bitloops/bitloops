@@ -20,7 +20,11 @@ const SLOW_TEST_TARGETS: &[&str] = &[
     "testlens_gherkin",
     "testlens_sqlite_acceptance",
 ];
-const SLOW_LIB_TESTS: &[&str] = &["host::devql::cucumber_bdd::devql_bdd_features_pass"];
+const SLOW_LIB_TESTS: &[&str] = &[
+    "host::devql::cucumber_bdd::devql_bdd_features_pass",
+    "api::tests::devql_mutations_and_health::devql_mutations_manage_knowledge_and_apply_migrations",
+    "api::tests::devql_mutations_and_health::devql_mutations_surface_provider_and_reference_errors_for_knowledge_flows",
+];
 const MERGE_SMOKE_TARGETS: &[&str] = &[
     "agent_cli_smoke",
     "checkpoint_rewind_smoke",

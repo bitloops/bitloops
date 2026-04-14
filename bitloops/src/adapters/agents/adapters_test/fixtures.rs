@@ -213,6 +213,7 @@ pub(super) fn make_registration_with_package(
         install_noop,
         uninstall_noop,
         callbacks.format_resume_command,
+        None,
     )
 }
 
