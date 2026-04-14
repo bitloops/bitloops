@@ -314,9 +314,9 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
     fs::write(
         repo.path().join("src/bad.rs"),
         [
-            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66,
-            0x6e, 0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33,
-            0x32, 0x20, 0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66, 0x6e,
+            0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33, 0x32, 0x20,
+            0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
         ],
     )
     .expect("overwrite bad rust file with invalid UTF-8");
@@ -383,8 +383,14 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
         bad_rows, 1,
         "decode-degraded path should still be persisted in current_file_state"
     );
-    assert_eq!(bad_artefact_rows, 1, "bad.rs should materialize one file artefact");
-    assert_eq!(bad_edge_rows, 0, "bad.rs should not materialize dependency edges");
+    assert_eq!(
+        bad_artefact_rows, 1,
+        "bad.rs should materialize one file artefact"
+    );
+    assert_eq!(
+        bad_edge_rows, 0,
+        "bad.rs should not materialize dependency edges"
+    );
     assert_eq!(bad_file_kind, "file");
 }
 
@@ -971,9 +977,9 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
     fs::write(
         repo.path().join("src/bad.rs"),
         [
-            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66,
-            0x6e, 0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33,
-            0x32, 0x20, 0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66, 0x6e,
+            0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33, 0x32, 0x20,
+            0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
         ],
     )
     .expect("overwrite bad rust file with invalid UTF-8");
@@ -1021,10 +1027,28 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
         )
         .expect("count symbol_features_current rows for good.rs");
 
-    assert!(result.success, "sync should succeed with decode-degraded input");
-    assert!(result.parse_errors >= 1, "decode degradation should count as a parse error");
-    assert_eq!(bad_file_rows, 1, "bad.rs should still materialize as a file-only path");
-    assert_eq!(bad_semantics_rows, 0, "bad.rs should not project semantic summaries");
-    assert_eq!(bad_feature_rows, 0, "bad.rs should not project semantic features");
-    assert!(good_feature_rows > 0, "good.rs should still populate semantic features");
+    assert!(
+        result.success,
+        "sync should succeed with decode-degraded input"
+    );
+    assert!(
+        result.parse_errors >= 1,
+        "decode degradation should count as a parse error"
+    );
+    assert_eq!(
+        bad_file_rows, 1,
+        "bad.rs should still materialize as a file-only path"
+    );
+    assert_eq!(
+        bad_semantics_rows, 0,
+        "bad.rs should not project semantic summaries"
+    );
+    assert_eq!(
+        bad_feature_rows, 0,
+        "bad.rs should not project semantic features"
+    );
+    assert!(
+        good_feature_rows > 0,
+        "good.rs should still populate semantic features"
+    );
 }

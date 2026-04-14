@@ -389,9 +389,9 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
     std::fs::write(
         repo.path().join("src/bad.rs"),
         [
-            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66,
-            0x6e, 0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33,
-            0x32, 0x20, 0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66, 0x6e,
+            0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33, 0x32, 0x20,
+            0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
         ],
     )
     .expect("write invalid UTF-8 rust file");
@@ -439,7 +439,11 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
         .query_row(
             "SELECT COUNT(*) FROM artefact_snapshots
              WHERE repo_id = ?1 AND blob_sha = ?2 AND path = ?3",
-            rusqlite::params![cfg.repo.repo_id.as_str(), bad_blob_sha.as_str(), "src/bad.rs"],
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                bad_blob_sha.as_str(),
+                "src/bad.rs"
+            ],
             |row| row.get(0),
         )
         .expect("count artefact snapshots for src/bad.rs");
@@ -451,11 +455,26 @@ async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
         )
         .expect("count historical edge rows for src/bad.rs");
 
-    assert_eq!(file_state_rows, 1, "ingest should persist file_state for src/bad.rs");
-    assert_eq!(file_artefact_rows, 1, "ingest should persist one file artefact for src/bad.rs");
-    assert_eq!(nested_artefact_rows, 0, "ingest should not persist nested artefacts for src/bad.rs");
-    assert_eq!(snapshot_rows, 1, "ingest should persist one snapshot row for src/bad.rs");
-    assert_eq!(edge_rows, 0, "ingest should not persist dependency edges for src/bad.rs");
+    assert_eq!(
+        file_state_rows, 1,
+        "ingest should persist file_state for src/bad.rs"
+    );
+    assert_eq!(
+        file_artefact_rows, 1,
+        "ingest should persist one file artefact for src/bad.rs"
+    );
+    assert_eq!(
+        nested_artefact_rows, 0,
+        "ingest should not persist nested artefacts for src/bad.rs"
+    );
+    assert_eq!(
+        snapshot_rows, 1,
+        "ingest should persist one snapshot row for src/bad.rs"
+    );
+    assert_eq!(
+        edge_rows, 0,
+        "ingest should not persist dependency edges for src/bad.rs"
+    );
 }
 
 #[tokio::test]
