@@ -373,6 +373,44 @@ fn completed_bootstrap_task_json(task_id: &str) -> serde_json::Value {
     })
 }
 
+fn running_bootstrap_task_json(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "EMBEDDINGS_BOOTSTRAP",
+        "source": "init",
+        "status": "RUNNING",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": serde_json::Value::Null,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": {
+            "configPath": "/tmp/config.toml",
+            "profileName": "local_code"
+        },
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "warming_profile",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Warming profile `local_code`"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
+    })
+}
+
 #[test]
 fn init_args_supports_agent_flag() {
     let parsed =
@@ -1783,6 +1821,174 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         assert_eq!(queued.len(), 1);
                                     },
                                 )
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_readiness() {
+    let sync_events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let bootstrap_query_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        with_ingest_daemon_bootstrap_hook(
+                            |_repo_root| Ok(()),
+                            || {
+                                with_graphql_executor_hook(
+                                    {
+                                        let sync_events = std::rc::Rc::clone(&sync_events);
+                                        let bootstrap_query_count =
+                                            std::rc::Rc::clone(&bootstrap_query_count);
+                                        move |_repo_root, query, variables| {
+                                            if query.contains("enqueueTask")
+                                                && variables["input"]["kind"] == "SYNC"
+                                            {
+                                                let mut sync_events = sync_events.borrow_mut();
+                                                let task_number = sync_events.len() + 1;
+                                                sync_events.push(
+                                                    variables["input"]["sync"]["source"]
+                                                        .as_str()
+                                                        .expect("sync source")
+                                                        .to_string(),
+                                                );
+                                                return Ok(serde_json::json!({
+                                                    "enqueueTask": {
+                                                        "merged": false,
+                                                        "task": {
+                                                            "taskId": format!("sync-task-{task_number}"),
+                                                            "repoId": "repo-1",
+                                                            "repoName": "demo",
+                                                            "repoIdentity": "local/demo",
+                                                            "kind": "SYNC",
+                                                            "source": variables["input"]["sync"]["source"],
+                                                            "status": "QUEUED",
+                                                            "submittedAtUnix": 1,
+                                                            "startedAtUnix": serde_json::Value::Null,
+                                                            "updatedAtUnix": 1,
+                                                            "completedAtUnix": serde_json::Value::Null,
+                                                            "queuePosition": 1,
+                                                            "tasksAhead": 0,
+                                                            "error": serde_json::Value::Null,
+                                                            "syncSpec": {
+                                                                "mode": "auto",
+                                                                "paths": []
+                                                            },
+                                                            "ingestSpec": serde_json::Value::Null,
+                                                            "embeddingsBootstrapSpec": serde_json::Value::Null,
+                                                            "syncProgress": {
+                                                                "phase": "queued",
+                                                                "currentPath": serde_json::Value::Null,
+                                                                "pathsTotal": 0,
+                                                                "pathsCompleted": 0,
+                                                                "pathsRemaining": 0,
+                                                                "pathsUnchanged": 0,
+                                                                "pathsAdded": 0,
+                                                                "pathsChanged": 0,
+                                                                "pathsRemoved": 0,
+                                                                "cacheHits": 0,
+                                                                "cacheMisses": 0,
+                                                                "parseErrors": 0
+                                                            },
+                                                            "ingestProgress": serde_json::Value::Null,
+                                                            "embeddingsBootstrapProgress": serde_json::Value::Null,
+                                                            "syncResult": serde_json::Value::Null,
+                                                            "ingestResult": serde_json::Value::Null,
+                                                            "embeddingsBootstrapResult": serde_json::Value::Null
+                                                        }
+                                                    }
+                                                }));
+                                            }
+
+                                            if query.contains("task(")
+                                                || query.contains("query Task")
+                                            {
+                                                let task_id =
+                                                    variables["id"].as_str().expect("task id");
+                                                let task = if task_id.starts_with("sync-task-") {
+                                                    completed_sync_task_json(task_id)
+                                                } else if task_id
+                                                    .starts_with("embeddings_bootstrap-task-")
+                                                {
+                                                    let mut count =
+                                                        bootstrap_query_count.borrow_mut();
+                                                    *count += 1;
+                                                    if *count == 1 {
+                                                        running_bootstrap_task_json(task_id)
+                                                    } else {
+                                                        completed_bootstrap_task_json(task_id)
+                                                    }
+                                                } else {
+                                                    panic!("unexpected task id: {task_id}");
+                                                };
+                                                return Ok(serde_json::json!({ "task": task }));
+                                            }
+
+                                            panic!("unexpected repo-scoped query: {query}");
+                                        }
+                                    },
+                                    || {
+                                        let mut out = Vec::new();
+                                        let mut input = Cursor::new("");
+                                        let runtime = test_runtime();
+                                        runtime
+                                            .block_on(run_with_io_async_for_project_root(
+                                                InitArgs {
+                                                    install_default_daemon: true,
+                                                    force: false,
+                                                    agent: None,
+                                                    telemetry: Some(false),
+                                                    no_telemetry: false,
+                                                    skip_baseline: false,
+                                                    sync: Some(true),
+                                                    ingest: Some(false),
+                                                    backfill: None,
+                                                    exclude: Vec::new(),
+                                                    exclude_from: Vec::new(),
+                                                },
+                                                repo.path(),
+                                                &mut out,
+                                                &mut input,
+                                                None,
+                                            ))
+                                            .expect("run init");
+
+                                        assert_eq!(
+                                            &*sync_events.borrow(),
+                                            &[
+                                                "init".to_string(),
+                                                "init_embeddings_ready".to_string()
+                                            ]
+                                        );
+                                    },
+                                );
                             },
                         );
                     },
