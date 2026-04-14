@@ -18,7 +18,7 @@ struct CSharpTraversalCtx<'a> {
     artefacts: &'a [LanguageArtefact],
     callable_name_to_fqn: &'a HashMap<String, String>,
     type_targets: &'a HashMap<String, String>,
-    interface_targets: &'a HashSet<String>,
+    non_interface_type_targets: &'a HashSet<String>,
     out: &'a mut Vec<DependencyEdge>,
     seen_imports: &'a mut HashSet<String>,
     seen_calls: &'a mut HashSet<String>,
@@ -43,7 +43,7 @@ pub(crate) fn extract_csharp_dependency_edges(
 
     let mut callable_name_to_fqn = HashMap::new();
     let mut type_targets = HashMap::new();
-    let mut interface_targets = HashSet::new();
+    let mut non_interface_type_targets = HashSet::new();
     for artefact in artefacts {
         let projected = artefact
             .canonical_kind
@@ -71,8 +71,13 @@ pub(crate) fn extract_csharp_dependency_edges(
                 .entry(artefact.name.clone())
                 .or_insert_with(|| artefact.symbol_fqn.clone());
         }
-        if projected == Some(CanonicalKindProjection::Interface) {
-            interface_targets.insert(artefact.name.clone());
+        if projected.is_some_and(|kind| {
+            matches!(
+                kind,
+                CanonicalKindProjection::Type | CanonicalKindProjection::Enum
+            )
+        }) {
+            non_interface_type_targets.insert(artefact.name.clone());
         }
     }
 
@@ -89,7 +94,7 @@ pub(crate) fn extract_csharp_dependency_edges(
         artefacts,
         callable_name_to_fqn: &callable_name_to_fqn,
         type_targets: &type_targets,
-        interface_targets: &interface_targets,
+        non_interface_type_targets: &non_interface_type_targets,
         out: &mut edges,
         seen_imports: &mut seen_imports,
         seen_calls: &mut seen_calls,
@@ -226,8 +231,8 @@ fn collect_inheritance_edges(node: Node<'_>, ctx: &mut CSharpTraversalCtx<'_>) {
             continue;
         };
         let base_name = name.split('<').next().unwrap_or(&name).trim().to_string();
-        let target_is_interface = ctx.interface_targets.contains(&base_name);
-        if owner_is_interface || target_is_interface || index > 0 {
+        let known_local_non_interface = ctx.non_interface_type_targets.contains(&base_name);
+        if owner_is_interface || index > 0 || !known_local_non_interface {
             push_implements_edge(
                 ctx,
                 &owner.symbol_fqn,
@@ -561,6 +566,31 @@ public interface IDerived : IBase {}
         assert!(!edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::Implements
                 && edge.from_symbol_fqn == "src/UserService.cs::IDerived"
+        }));
+    }
+
+    #[test]
+    fn extract_csharp_dependency_edges_treat_external_interface_first_base_entry_as_implements() {
+        let content = r#"using System;
+
+public class UserService : IDisposable
+{
+    public void Dispose() {}
+}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Implements
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+                && edge.to_symbol_ref.as_deref() == Some("IDisposable")
+        }));
+        assert!(!edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Extends
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
         }));
     }
 }
