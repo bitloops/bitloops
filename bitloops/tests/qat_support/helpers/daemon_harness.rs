@@ -59,6 +59,13 @@ fn daemon_runtime_store_candidate_paths(run_dir: &Path) -> Vec<PathBuf> {
             .join("Library")
             .join("Application Support")
             .join("bitloops")
+            .join("stores")
+            .join("runtime")
+            .join("runtime.sqlite"),
+        home_dir
+            .join("Library")
+            .join("Application Support")
+            .join("bitloops")
             .join("daemon")
             .join("runtime.sqlite"),
     ]

@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Semantic-clone real-path fixture completeness and expectations**: real-path BDD fixtures now persist summary embeddings alongside code embeddings, and the semantic-clone feature expectations were refreshed to match the classifier's explainable output, including the lower-threshold clone case and unrelated-pair suppression coverage.
 - **Semantic-clones health coverage for summary generation**: capability health now validates `summary_generation` slot binding, expected task type, runtime presence, runtime command resolution, and live runtime handshakes alongside embeddings, so misconfigured semantic summary profiles fail fast instead of appearing healthy.
 - **Repo-scoped exclusion reconciliation now ignores daemon config directories that are not repositories**: the coordinator only seeds reconciliation from the current path when that path is itself a Git repository, and registry-driven reconciliation now keeps only repositories bound to the active daemon config. This prevents exclusion updates from spilling into unrelated daemon config roots or repos registered under a different binding.
+- **Test-harness current-state parity for Rust linkage discovery**: automatic sync now schedules and materializes `test_harness.current_state` through the generic cursor queue, closes the Ruff-style static-linkage gap, and documents legacy `ingest-tests` as commit-scoped historical ingestion rather than the default workspace-validation path.
 
 ## [0.0.14] - 2026-04-12
 

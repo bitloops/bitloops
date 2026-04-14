@@ -252,8 +252,13 @@ pub(crate) fn build_rust_parameterized_test_case(
     function_end_line: i64,
 ) -> RustScenarioSeed {
     let raw = attribute_node.utf8_text(source).unwrap_or_default();
-    let rule_variant = extract_rule_variant_from_rust_test_case(raw);
-    let fixture_path = extract_fixture_path_from_rust_test_case(raw);
+    let raw_args = extract_rust_attribute_args(raw).unwrap_or_default();
+    let (case_args, explicit_case_name) = split_rust_test_case_args_and_name(raw_args);
+    let rule_variant = extract_rule_variant_from_rust_test_case(case_args);
+    let fixture_path = extract_fixture_path_from_rust_test_case(case_args);
+    let extra_case_name = explicit_case_name.or_else(|| {
+        extract_additional_test_case_string_argument(case_args, fixture_path.as_deref())
+    });
 
     let mut name_parts = Vec::new();
     if let Some(rule_variant) = rule_variant.as_deref() {
@@ -261,6 +266,22 @@ pub(crate) fn build_rust_parameterized_test_case(
     }
     if let Some(fixture_path) = fixture_path.as_deref() {
         name_parts.push(fixture_path.to_string());
+    }
+    if let Some(extra_case_name) = extra_case_name {
+        name_parts.push(extra_case_name);
+    } else {
+        for summary in split_top_level_arguments(case_args)
+            .into_iter()
+            .map(summarize_rust_test_case_argument)
+            .filter(|summary| !summary.is_empty())
+        {
+            let already_present = Some(summary.as_str()) == rule_variant.as_deref()
+                || Some(summary.as_str()) == fixture_path.as_deref()
+                || name_parts.iter().any(|part| part == &summary);
+            if !already_present {
+                name_parts.push(summary);
+            }
+        }
     }
 
     let name = if name_parts.is_empty() {
@@ -325,6 +346,99 @@ fn extract_fixture_path_from_rust_test_case(raw_attribute: &str) -> Option<Strin
         .find(|literal| {
             literal.ends_with(".py") || literal.ends_with(".pyi") || literal.ends_with(".ipynb")
         })
+}
+
+fn split_rust_test_case_args_and_name(raw_args: &str) -> (&str, Option<String>) {
+    let Some(separator) = find_top_level_separator(raw_args, ';') else {
+        return (raw_args.trim(), None);
+    };
+
+    let case_args = raw_args[..separator].trim();
+    let case_name_raw = raw_args[separator + 1..].trim();
+    let case_name = extract_single_string_literal(case_name_raw).or_else(|| {
+        let compact: String = case_name_raw
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        (!compact.is_empty()).then_some(compact)
+    });
+    (case_args, case_name)
+}
+
+fn extract_additional_test_case_string_argument(
+    raw_args: &str,
+    fixture_path: Option<&str>,
+) -> Option<String> {
+    split_top_level_arguments(raw_args)
+        .into_iter()
+        .find_map(|argument| {
+            let literal = extract_single_string_literal(argument)?;
+            (Some(literal.as_str()) != fixture_path).then_some(literal)
+        })
+}
+
+fn summarize_rust_test_case_argument(argument: &str) -> String {
+    let trimmed = argument.trim();
+    if let Some(literal) = extract_single_string_literal(trimmed) {
+        return literal;
+    }
+    if let Some(rule_variant) = extract_rule_variant_from_rust_test_case(trimmed) {
+        return rule_variant;
+    }
+    if let Some(fixture_path) = extract_fixture_path_from_rust_test_case(trimmed) {
+        return fixture_path;
+    }
+    trimmed.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+fn extract_single_string_literal(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let quote = trimmed.chars().next()?;
+    if (quote != '"' && quote != '\'') || !trimmed.ends_with(quote) || trimmed.len() < 2 {
+        return None;
+    }
+    Some(trimmed[1..trimmed.len() - 1].to_string())
+}
+
+fn find_top_level_separator(raw: &str, separator: char) -> Option<usize> {
+    let mut paren_depth = 0i32;
+    let mut brace_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in raw.char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            '(' => paren_depth += 1,
+            ')' => paren_depth -= 1,
+            '{' => brace_depth += 1,
+            '}' => brace_depth -= 1,
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth -= 1,
+            _ if ch == separator && paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                return Some(idx);
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn rust_scoped_tokens(raw: &str) -> Vec<String> {
