@@ -19,6 +19,7 @@ const CMD_USER_PROMPT_SUBMIT: &str = "bitloops hooks claude-code user-prompt-sub
 const CMD_PRE_TASK: &str = "bitloops hooks claude-code pre-task";
 const CMD_POST_TASK: &str = "bitloops hooks claude-code post-task";
 const CMD_POST_TODO: &str = "bitloops hooks claude-code post-todo";
+const SESSION_START_MATCHER: &str = "startup|clear|compact";
 
 /// A single hook entry within a matcher.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +141,8 @@ fn write_settings_file(path: &Path, settings: &Map<String, Value>) -> Result<()>
 /// Idempotent: safe to call multiple times.
 ///
 pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
+    crate::adapters::agents::claude_code::skills::install_repo_skill(repo_root)?;
+
     let settings_path = claude_settings_path(repo_root);
     let cmd_session_start = crate::adapters::agents::managed_hook_command(CMD_SESSION_START);
     let cmd_session_end = crate::adapters::agents::managed_hook_command(CMD_SESSION_END);
@@ -182,9 +185,15 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
 
     let mut count = 0usize;
 
-    // Session hooks use empty matcher; tool-use hooks use named matcher.
-    if !hook_command_exists(&session_start, &cmd_session_start) {
-        session_start = add_hook_to_matcher(session_start, "", &cmd_session_start);
+    // Session hooks use empty matcher except SessionStart, which should be
+    // reinjected across startup/clear/compact lifecycle boundaries.
+    if !hook_command_exists_with_matcher(&session_start, SESSION_START_MATCHER, &cmd_session_start)
+    {
+        if hook_command_exists(&session_start, &cmd_session_start) {
+            session_start = remove_bitloops_hooks(session_start);
+        }
+        session_start =
+            add_hook_to_matcher(session_start, SESSION_START_MATCHER, &cmd_session_start);
         count += 1;
     }
     if !hook_command_exists(&session_end, &cmd_session_end) {
@@ -232,6 +241,8 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
 /// Removes all Bitloops hooks from `.claude/settings.json`.
 ///
 pub fn uninstall_hooks(repo_root: &Path) -> Result<()> {
+    crate::adapters::agents::claude_code::skills::uninstall_repo_skill(repo_root)?;
+
     let settings_path = claude_settings_path(repo_root);
 
     let data = match fs::read(&settings_path) {
@@ -342,6 +353,18 @@ mod tests {
         parse_hook_type(&raw, hook_type)
     }
 
+    fn read_repo_skill(dir: &TempDir) -> Option<String> {
+        fs::read_to_string(
+            dir.path()
+                .join(".claude")
+                .join("skills")
+                .join("bitloops")
+                .join("using-devql")
+                .join("SKILL.md"),
+        )
+        .ok()
+    }
+
     fn assert_hook_exists(
         matchers: &[ClaudeHookMatcher],
         matcher_name: &str,
@@ -377,6 +400,41 @@ mod tests {
         );
         assert!(allow.is_empty());
         assert!(deny.is_empty());
+    }
+
+    #[test]
+    fn install_hooks_writes_bitloops_managed_repo_skill() {
+        let dir = tempfile::tempdir().unwrap();
+
+        install_hooks(dir.path(), false).unwrap();
+
+        let skill = read_repo_skill(&dir).expect("repo skill should be installed");
+        assert!(
+            skill.contains("name: using-devql"),
+            "installed repo skill should contain skill metadata, got:\n{skill}"
+        );
+        assert!(
+            skill.contains("bitloops devql query"),
+            "installed repo skill should contain devql commands, got:\n{skill}"
+        );
+    }
+
+    #[test]
+    fn uninstall_hooks_removes_bitloops_managed_repo_skill() {
+        let dir = tempfile::tempdir().unwrap();
+
+        install_hooks(dir.path(), false).unwrap();
+        assert!(
+            read_repo_skill(&dir).is_some(),
+            "repo skill should exist before uninstall"
+        );
+
+        uninstall_hooks(dir.path()).unwrap();
+
+        assert!(
+            read_repo_skill(&dir).is_none(),
+            "repo skill should be removed by uninstall"
+        );
     }
 
     #[test]
@@ -606,7 +664,7 @@ mod tests {
             );
             assert_hook_exists(
                 &session_start,
-                "",
+                "startup|clear|compact",
                 &cmd_session_start,
                 "Bitloops SessionStart hook",
             );
@@ -785,7 +843,7 @@ mod tests {
         let session_start = read_hook_type(&dir, "SessionStart");
         assert_hook_exists(
             &session_start,
-            "",
+            "startup|clear|compact",
             "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start",
             "Bitloops SessionStart hook with daemon config override",
         );

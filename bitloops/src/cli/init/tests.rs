@@ -535,6 +535,14 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]
         );
+        let repo_skill = repo
+            .path()
+            .join(".claude/skills/bitloops/using-devql/SKILL.md");
+        assert!(
+            repo_skill.exists(),
+            "expected repo-local DevQL skill to be installed at {}",
+            repo_skill.display()
+        );
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
