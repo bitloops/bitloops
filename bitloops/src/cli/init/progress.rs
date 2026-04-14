@@ -531,7 +531,7 @@ pub(super) async fn run_dual_init_progress(
                             None,
                             false,
                             false,
-                            "init_embeddings_ready",
+                            "init",
                             false,
                         )
                         .await?;

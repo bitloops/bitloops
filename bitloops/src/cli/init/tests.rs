@@ -1984,7 +1984,7 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
                                             &*sync_events.borrow(),
                                             &[
                                                 "init".to_string(),
-                                                "init_embeddings_ready".to_string()
+                                                "init".to_string()
                                             ]
                                         );
                                     },
