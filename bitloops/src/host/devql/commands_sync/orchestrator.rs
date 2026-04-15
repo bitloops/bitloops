@@ -936,64 +936,6 @@ fn estimate_sync_progress_paths_completed(
         .saturating_add(transform_credit)
 }
 
-fn build_current_projection_context(cfg: &DevqlConfig) -> Result<DevqlCapabilityHost> {
-    build_capability_host(&cfg.repo_root, cfg.repo.clone())
-}
-
-async fn project_materialized_items(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    current_projection: &DevqlCapabilityHost,
-    items: &[super::sqlite_writer::PreparedSyncItem],
-) -> Result<()> {
-    for item in items {
-        if !item.semantic_projection_allowed {
-            sync::semantic_projector::remove_path(cfg, relational, &item.desired.path)
-                .await
-                .with_context(|| {
-                    format!(
-                        "clearing current semantic clone projection for `{}`",
-                        item.desired.path
-                    )
-                })?;
-            continue;
-        }
-        let inputs =
-            semantic_features::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-                &sync::semantic_projector::pre_stage_artefacts_for_projection(
-                    cfg,
-                    &item.desired,
-                    &item.extraction,
-                )?,
-                &sync::semantic_projector::pre_stage_dependencies_for_projection(
-                    cfg,
-                    &item.desired,
-                    &item.extraction,
-                )?,
-                &item.effective_content,
-            );
-        current_projection
-            .invoke_ingester_with_relational(
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
-                serde_json::to_value(
-                    crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshPayload {
-                        scope: crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshScope::CurrentPath,
-                        path: Some(item.desired.path.clone()),
-                        content_id: Some(item.desired.effective_content_id.clone()),
-                        inputs: inputs.clone(),
-                        mode: crate::capability_packs::semantic_clones::ingesters::SemanticSummaryRefreshMode::ConfiguredDegrade,
-                    }
-                )?,
-                Some(relational),
-            )
-            .await
-            .with_context(|| format!("refreshing current semantic features for `{}`", item.desired.path))?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::estimate_sync_progress_paths_completed;
