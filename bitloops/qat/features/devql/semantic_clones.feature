@@ -32,12 +32,14 @@ Feature: Semantic Clones enrichment and query coverage
 
   @devql @semantic-clones
   Scenario: Sync drives embeddings before clone-edge rebuild fully drains
-    When I run DevQL sync --status in bitloops
+    When I run DevQL sync without status in bitloops
     Then semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in bitloops
 
   @devql @semantic-clones
   Scenario: Commit snapshots current semantic-clone data into historical tables
-    Given I run DevQL sync --status in bitloops
+    Given I committed today in bitloops
+    And I run DevQL sync --status in bitloops
+    And I modify a semantic clone fixture source file in bitloops
     And I committed today in bitloops
     Then semantic clone historical tables are populated in bitloops
     And semantic clone historical and current embeddings expose code and summary channels in bitloops

@@ -1138,7 +1138,15 @@ const DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS: u64 = 250;
 
 pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_devql_sync_with_flags(world, repo_name, &[])
+    run_devql_sync_command(world, repo_name, &[], true)
+}
+
+pub fn run_devql_sync_without_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_devql_sync_command(world, repo_name, &[], false)
 }
 
 pub fn run_devql_sync_with_flags(
@@ -1146,10 +1154,19 @@ pub fn run_devql_sync_with_flags(
     repo_name: &str,
     flags: &[&str],
 ) -> Result<()> {
+    run_devql_sync_command(world, repo_name, flags, true)
+}
+
+fn run_devql_sync_command(
+    world: &mut QatWorld,
+    repo_name: &str,
+    flags: &[&str],
+    include_status: bool,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let mut args = vec!["devql", "tasks", "enqueue", "--kind", "sync"];
     args.extend_from_slice(flags);
-    if !args.contains(&"--status") {
+    if include_status && !args.contains(&"--status") {
         args.push("--status");
     }
     let label = format!("bitloops {}", args.join(" "));

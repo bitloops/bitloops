@@ -153,16 +153,14 @@ impl DevqlTaskCoordinator {
                 if let Some(snapshot) = task
                     .sync_spec()
                     .and_then(|spec| spec.post_commit_snapshot.as_ref())
-                {
-                    if let Err(err) =
+                    && let Err(err) =
                         crate::host::devql::snapshot_committed_current_rows_for_commit_for_config(
                             &cfg, snapshot,
                         )
                         .await
-                    {
-                        self.finish_task_failed(&task.task_id, err)?;
-                        return Ok(());
-                    }
+                {
+                    self.finish_task_failed(&task.task_id, err)?;
+                    return Ok(());
                 }
                 if !matches!(effective_spec, SyncTaskMode::Validate)
                     && let Err(err) = persist_scope_exclusions_fingerprint(

@@ -242,6 +242,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I modify a semantic clone fixture source file in (\S+)$"),
+            step_fn(given_modify_semantic_clone_fixture_source),
+        )
+        .given(
+            None,
             regex(r"^I configure guide-aligned semantic clones with fake embeddings runtime in (\S+)$"),
             step_fn(given_configure_semantic_clones_guide_aligned_fake_runtime),
         )
@@ -294,6 +299,16 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL sync without status in (\S+)$"),
+            step_fn(given_devql_sync_without_status),
+        )
+        .when(
+            None,
+            regex(r"^I run DevQL sync without status in (\S+)$"),
+            step_fn(given_devql_sync_without_status),
         )
         .given(
             None,

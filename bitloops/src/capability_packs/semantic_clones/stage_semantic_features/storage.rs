@@ -295,20 +295,6 @@ ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.s
     )
 }
 
-pub(super) fn build_historical_repo_artefacts_sql(repo_id: &str) -> String {
-    format!(
-        "SELECT historical.artefact_id, historical.symbol_id, historical.repo_id, historical.blob_sha, historical.path, historical.language, \
-COALESCE(historical.canonical_kind, COALESCE(historical.language_kind, 'symbol')) AS canonical_kind, \
-COALESCE(historical.language_kind, COALESCE(historical.canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(historical.symbol_fqn, historical.path) AS symbol_fqn, historical.parent_artefact_id, historical.start_line, historical.end_line, historical.start_byte, historical.end_byte, historical.signature, historical.modifiers, historical.docstring, historical.content_hash \
-FROM artefacts_historical historical \
-JOIN symbol_semantics semantics ON semantics.artefact_id = historical.artefact_id \
-WHERE historical.repo_id = '{repo_id}' \
-ORDER BY historical.blob_sha, historical.path, coalesce(historical.start_byte, 0), coalesce(historical.start_line, 0), historical.artefact_id",
-        repo_id = esc_pg(repo_id),
-    )
-}
-
 pub(super) fn build_semantic_get_dependencies_sql(
     repo_id: &str,
     blob_sha: &str,

@@ -631,6 +631,20 @@ pub(super) fn given_add_semantic_clone_fixtures(
     })
 }
 
+pub(super) fn given_modify_semantic_clone_fixture_source(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I modify a semantic clone fixture source file",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::modify_semantic_clone_fixture_source(world.repo_dir())),
+        );
+    })
+}
+
 pub(super) fn given_configure_semantic_clones_guide_aligned_fake_runtime(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -779,6 +793,19 @@ pub(super) fn given_devql_sync(
         run_step(
             "I run DevQL sync",
             helpers::run_devql_sync_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_devql_sync_without_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL sync without status",
+            helpers::run_devql_sync_without_status_for_repo(world, &repo_name),
         );
     })
 }

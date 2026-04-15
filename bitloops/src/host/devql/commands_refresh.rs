@@ -718,10 +718,9 @@ mod tests {
                         ('artefact::draft', '{repo_id}', 'src/draft.ts', 'blob-draft-worktree', 'sym::draft', 'hash-draft',
                          'render_draft', 'function renderDraft()', '[]', '[\"render\",\"draft\"]', '[\"render\",\"draft\"]', 'module', '[\"draft\"]')"
                 ),
-                format!(
-                    "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
+                "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
                      VALUES ('setup-code', 'local', 'test-model', 3)"
-                ),
+                    .to_string(),
                 format!(
                     "INSERT INTO symbol_embeddings_current (
                         artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
@@ -905,10 +904,9 @@ mod tests {
                         ('artefact::b', '{repo_id}', 'src/head_b.ts', 'blob-b', 'sym::b', 'hash-b',
                          'render_b', 'function renderB()', '[]', '[\"render\",\"b\"]', '[\"render\",\"b\"]', 'module', '[\"head\",\"b\"]')"
                 ),
-                format!(
-                    "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
+                "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
                      VALUES ('setup-code', 'local', 'test-model', 3)"
-                ),
+                    .to_string(),
                 format!(
                     "INSERT INTO symbol_embeddings_current (
                         artefact_id, repo_id, path, content_id, symbol_id, representation_kind,

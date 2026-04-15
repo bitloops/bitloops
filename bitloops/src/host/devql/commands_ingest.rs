@@ -15,9 +15,7 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     resolve_semantic_clones_config, resolve_summary_provider,
 };
 #[allow(unused_imports)]
-use crate::capability_packs::semantic_clones::workplane::{
-    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
-};
+use crate::capability_packs::semantic_clones::workplane::resolve_effective_mailbox_intent;
 #[allow(unused_imports)]
 use crate::capability_packs::semantic_clones::{
     RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
