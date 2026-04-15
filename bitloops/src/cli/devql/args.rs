@@ -268,7 +268,10 @@ pub struct DevqlTestHarnessArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevqlTestHarnessCommand {
-    /// Parse test files, discover suites/scenarios, and link tests to production artefacts.
+    /// Legacy commit-scoped test discovery/linkage ingestion.
+    ///
+    /// Prefer automatic current-state sync for workspace validation.
+    /// Keep this command for historical or commit-scoped materialization.
     IngestTests(DevqlTestHarnessIngestTestsArgs),
     /// Ingest coverage report (LCOV or LLVM JSON).
     IngestCoverage(DevqlTestHarnessIngestCoverageArgs),
@@ -280,6 +283,10 @@ pub enum DevqlTestHarnessCommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlTestHarnessIngestTestsArgs {
+    /// Commit SHA to materialize into the historical test-harness tables.
+    ///
+    /// This legacy command is commit-scoped. Prefer automatic current-state sync
+    /// for workspace validation and source-level linkage queries.
     #[arg(long)]
     pub commit: String,
 }

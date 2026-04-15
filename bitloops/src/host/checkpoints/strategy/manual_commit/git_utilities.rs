@@ -22,8 +22,31 @@ pub fn run_git(repo_root: &Path, args: &[&str]) -> Result<String> {
     run_git_env(repo_root, args, &[])
 }
 
+/// Runs a git command and returns raw stdout bytes without trimming or UTF-8 decoding.
+pub fn run_git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    run_git_env_bytes(repo_root, args, &[])
+}
+
 /// Runs a git command with extra environment variables and returns trimmed stdout.
 pub fn run_git_env(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
+    let output = run_git_output(repo_root, args, env)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if should_preserve_stdout(args) {
+        return Ok(stdout);
+    }
+    Ok(stdout.trim().to_string())
+}
+
+/// Runs a git command with extra environment variables and returns raw stdout bytes.
+pub fn run_git_env_bytes(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<Vec<u8>> {
+    Ok(run_git_output(repo_root, args, env)?.stdout)
+}
+
+fn run_git_output(
+    repo_root: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<std::process::Output> {
     let mut cmd = new_git_command();
     cmd.args(args).current_dir(repo_root).stdin(Stdio::null());
 
@@ -45,11 +68,7 @@ pub fn run_git_env(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Res
         );
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if should_preserve_stdout(args) {
-        return Ok(stdout);
-    }
-    Ok(stdout.trim().to_string())
+    Ok(output)
 }
 
 /// Best-effort name for the repository default branch when the caller does not pass one explicitly.

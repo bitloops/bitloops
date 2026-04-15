@@ -164,6 +164,7 @@ pub(super) async fn run(
     }
 
     let url = format_dashboard_url(transport, &browser_host, local_addr.port());
+    let dashboard_graphql_schema = super::dashboard_schema::build_dashboard_schema_template();
     let devql_schema = graphql::build_global_schema_template();
     let devql_slim_schema = graphql::build_slim_schema_template();
 
@@ -233,10 +234,15 @@ pub(super) async fn run(
         bundle_dir,
         bundle_source_overrides: super::DashboardBundleSourceOverrides::default(),
         subscription_hub: graphql::SubscriptionHub::new_arc(),
+        dashboard_graphql_schema,
         devql_schema,
         devql_slim_schema,
     };
-    crate::daemon::activate_task_worker(&state.config_root, state.subscription_hub());
+    crate::daemon::activate_task_worker(
+        &state.config_root,
+        state.repo_registry_path.as_deref(),
+        state.subscription_hub(),
+    );
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {

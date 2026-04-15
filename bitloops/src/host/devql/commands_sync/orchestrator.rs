@@ -1,12 +1,19 @@
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
-use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
+#[path = "orchestrator/semantic_projection.rs"]
+mod semantic_projection;
+
+use self::semantic_projection::{
+    build_current_projection_context, finalize_semantic_clone_projection_after_sync,
+    project_materialized_items,
+};
 use super::diff_collector::SyncDiffCollector;
 use super::progress::{SyncObserver, SyncProgressPhase, emit_progress};
 use super::shared::{
@@ -193,7 +200,14 @@ async fn execute_sync_inner(
     let mut counters = sync::types::SyncCounters::default();
     let mut stats = SyncExecutionStats::default();
     let mut diff_collector = SyncDiffCollector::new();
-    let requested_paths = requested_paths(mode);
+    let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
+        .context("loading repo policy exclusions for DevQL sync")?;
+    let internal_ignored_paths = sync_internal_ignored_paths(relational, &cfg.repo_root);
+    let mut requested_paths = requested_paths(mode);
+    if let Some(paths) = requested_paths.as_mut() {
+        paths.retain(|path| !exclusion_matcher.excludes_repo_relative_path(path));
+        paths.retain(|path| !is_sync_internal_ignored_path(path, &internal_ignored_paths));
+    }
 
     emit_progress(
         observer,
@@ -204,11 +218,27 @@ async fn execute_sync_inner(
         0,
     );
     let workspace_started = Instant::now();
-    let workspace = sync::workspace_state::inspect_workspace_for_paths(
+    let mut workspace = sync::workspace_state::inspect_workspace_for_paths(
         &cfg.repo_root,
         requested_paths.as_ref(),
     )
     .context("inspecting workspace for DevQL sync")?;
+    workspace.head_tree.retain(|path, _| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
+    workspace.staged_changes.retain(|path, _| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
+    workspace.dirty_files.retain(|path| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
+    workspace.untracked_files.retain(|path| {
+        !exclusion_matcher.excludes_repo_relative_path(path)
+            && !is_sync_internal_ignored_path(path, &internal_ignored_paths)
+    });
     stats.workspace_inspection = workspace_started.elapsed();
 
     emit_progress(
@@ -220,8 +250,29 @@ async fn execute_sync_inner(
         0,
     );
     let desired_started = Instant::now();
+    let classifier = ProjectAwareClassifier::discover_for_worktree(
+        &cfg.repo_root,
+        workspace
+            .head_tree
+            .keys()
+            .cloned()
+            .chain(workspace.staged_changes.keys().cloned())
+            .chain(workspace.dirty_files.iter().cloned())
+            .chain(workspace.untracked_files.iter().cloned())
+            .collect::<Vec<_>>(),
+        parser_version,
+        extractor_version,
+    )
+    .context("building project-aware classifier for DevQL sync")?;
+    replace_project_contexts_current(relational, &cfg.repo.repo_id, &classifier.contexts())
+        .await
+        .context("persisting project context snapshot for DevQL sync")?;
     let mut desired = sync::manifest::build_desired_manifest(&workspace, &cfg.repo_root, |path| {
-        resolve_language_id_for_file_path(path).map(str::to_string)
+        let classification = classifier.classify_repo_relative_path(path, false)?;
+        if !classification.should_persist_current_state() {
+            return Ok(None);
+        }
+        Ok(Some(classification))
     })
     .context("building desired manifest for DevQL sync")?;
     if let Some(requested_paths) = requested_paths.as_ref() {
@@ -310,6 +361,7 @@ async fn execute_sync_inner(
         .await
         .context("opening persistent SQLite sync writer")?;
     let current_projection = build_current_projection_context(cfg)?;
+    let mut current_projection_changed = false;
     let removals = classified
         .iter()
         .filter(|path| matches!(path.action, sync::types::PathAction::Removed))
@@ -337,6 +389,9 @@ async fn execute_sync_inner(
                 .with_context(|| {
                     format!("removing current semantic clone projection for `{path}`")
                 })?;
+        }
+        if !outcome.removed_paths.is_empty() {
+            current_projection_changed = true;
         }
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
@@ -410,7 +465,7 @@ async fn execute_sync_inner(
                 tokio::select! {
                     join_result = join_set.join_next() => {
                         let Some(join_result) = join_result else { continue; };
-                        let outcome = join_result.context("joining sync prepare task")??;
+                        let outcome = join_result.context("joining sync prepare task")?;
                         handle_prepared_outcome(
                             &mut counters,
                             &mut stats,
@@ -455,6 +510,7 @@ async fn execute_sync_inner(
                                 extracted_completed,
                                 &mut materialized_completed,
                                 &mut paths_completed,
+                                &mut current_projection_changed,
                             )
                             .await?;
                         }
@@ -479,6 +535,7 @@ async fn execute_sync_inner(
                             extracted_completed,
                             &mut materialized_completed,
                             &mut paths_completed,
+                            &mut current_projection_changed,
                         )
                         .await?;
                     }
@@ -487,7 +544,7 @@ async fn execute_sync_inner(
                 let Some(join_result) = join_set.join_next().await else {
                     continue;
                 };
-                let outcome = join_result.context("joining sync prepare task")??;
+                let outcome = join_result.context("joining sync prepare task")?;
                 handle_prepared_outcome(
                     &mut counters,
                     &mut stats,
@@ -532,6 +589,7 @@ async fn execute_sync_inner(
                         extracted_completed,
                         &mut materialized_completed,
                         &mut paths_completed,
+                        &mut current_projection_changed,
                     )
                     .await?;
                 }
@@ -558,6 +616,7 @@ async fn execute_sync_inner(
         extracted_completed,
         &mut materialized_completed,
         &mut paths_completed,
+        &mut current_projection_changed,
     )
     .await?;
 
@@ -571,6 +630,14 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
+
+    finalize_semantic_clone_projection_after_sync(
+        cfg,
+        relational,
+        &current_projection,
+        current_projection_changed,
+    )
+    .await?;
 
     emit_progress(
         observer,
@@ -630,6 +697,75 @@ async fn execute_sync_inner(
     Ok((summary, stats, file_diff, artefact_diff))
 }
 
+async fn replace_project_contexts_current(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    contexts: &[ProjectContext],
+) -> Result<()> {
+    let mut statements = vec![format!(
+        "DELETE FROM project_contexts_current WHERE repo_id = '{}'",
+        esc_pg(repo_id),
+    )];
+    statements.extend(contexts.iter().map(|context| {
+        format!(
+            "INSERT INTO project_contexts_current (repo_id, context_id, root, kind, detection_source, frameworks_json, runtime_profile, config_files_json, config_fingerprint, source_versions_json) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}')",
+            esc_pg(repo_id),
+            esc_pg(&context.context_id),
+            esc_pg(&context.root),
+            esc_pg(&context.kind),
+            esc_pg(&context.detection_source),
+            esc_pg(
+                &serde_json::to_string(&context.frameworks)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            ),
+            context
+                .runtime_profile
+                .as_deref()
+                .map(|value| format!("'{}'", esc_pg(value)))
+                .unwrap_or_else(|| "NULL".to_string()),
+            esc_pg(
+                &serde_json::to_string(&context.config_files)
+                    .unwrap_or_else(|_| "[]".to_string()),
+            ),
+            esc_pg(&context.config_fingerprint),
+            esc_pg(
+                &serde_json::to_string(&context.source_versions)
+                    .unwrap_or_else(|_| "{}".to_string()),
+            ),
+        )
+    }));
+    relational.exec_batch_transactional(&statements).await
+}
+
+fn sync_internal_ignored_paths(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+) -> HashSet<String> {
+    let mut ignored = HashSet::new();
+    let sqlite_path = relational.sqlite_path();
+    let Some(relative) = sqlite_path
+        .strip_prefix(repo_root)
+        .ok()
+        .map(|path| normalize_repo_path(path.to_string_lossy().as_ref()))
+        .filter(|path| !path.is_empty())
+    else {
+        return ignored;
+    };
+
+    ignored.insert(relative.clone());
+    ignored
+}
+
+fn is_sync_internal_ignored_path(path: &str, ignored: &HashSet<String>) -> bool {
+    if path.starts_with(".bitloops/stores/") {
+        return true;
+    }
+    ignored
+        .iter()
+        .any(|base| path == base || path.starts_with(&format!("{base}-")))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_prepared_outcome(
     counters: &mut sync::types::SyncCounters,
@@ -645,6 +781,12 @@ fn handle_prepared_outcome(
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
 ) -> Result<()> {
+    if let Some(error_message) = outcome.error_message.as_deref() {
+        log::warn!(
+            "skipping sync path `{}` due prepare failure: {error_message}",
+            outcome.path
+        );
+    }
     stats.add_prepared_path(&outcome.stats);
     if outcome.cache_hit {
         counters.cache_hits += 1;
@@ -702,6 +844,7 @@ async fn flush_pending_materialisations(
     extracted_completed: usize,
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
+    current_projection_changed: &mut bool,
 ) -> Result<()> {
     if !writer.has_pending_items() {
         return Ok(());
@@ -721,6 +864,7 @@ async fn flush_pending_materialisations(
         )
         .await
         .context("projecting current semantic clone rows for synced paths")?;
+        *current_projection_changed = true;
     }
     for artefact in outcome.pre_artefacts.clone() {
         diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
@@ -790,53 +934,6 @@ fn estimate_sync_progress_paths_completed(
     unchanged_total
         .saturating_add(removed_completed)
         .saturating_add(transform_credit)
-}
-
-fn build_current_projection_context(cfg: &DevqlConfig) -> Result<DevqlCapabilityHost> {
-    build_capability_host(&cfg.repo_root, cfg.repo.clone())
-}
-
-async fn project_materialized_items(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    current_projection: &DevqlCapabilityHost,
-    items: &[super::sqlite_writer::PreparedSyncItem],
-) -> Result<()> {
-    for item in items {
-        let inputs =
-            semantic_features::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-                &sync::semantic_projector::pre_stage_artefacts_for_projection(
-                    cfg,
-                    &item.desired,
-                    &item.extraction,
-                )?,
-                &sync::semantic_projector::pre_stage_dependencies_for_projection(
-                    cfg,
-                    &item.desired,
-                    &item.extraction,
-                )?,
-                &item.effective_content,
-            );
-        current_projection
-            .invoke_ingester_with_relational(
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
-                serde_json::to_value(
-                    crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshPayload {
-                        scope: crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshScope::CurrentPath,
-                        path: Some(item.desired.path.clone()),
-                        content_id: Some(item.desired.effective_content_id.clone()),
-                        inputs: inputs.clone(),
-                        mode: crate::capability_packs::semantic_clones::ingesters::SemanticSummaryRefreshMode::ConfiguredDegrade,
-                    }
-                )?,
-                Some(relational),
-            )
-            .await
-            .with_context(|| format!("refreshing current semantic features for `{}`", item.desired.path))?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

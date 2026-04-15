@@ -131,6 +131,16 @@ fn setup_git_repo_with_backend_initializer(
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
     fs::write(dir.path().join(".gitignore"), "stores/\n").unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        "{\n  \"name\": \"manual-commit-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .unwrap();
     initialize_backends(dir.path());
     fs::write(dir.path().join("README.md"), "initial content").unwrap();
     run(&["add", "."]);

@@ -197,7 +197,7 @@ embedding_mode = "deterministic"
 code_embeddings = "{profile_name}"
 summary_embeddings = "{profile_name}"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -206,7 +206,7 @@ request_timeout_secs = 5
 [inference.profiles.{profile_name}]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = {model:?}
 "#
         ),
@@ -290,7 +290,18 @@ fn seed_daemon_embedding_repo() -> (TempDir, String, String) {
         "Bitloops Test",
         "bitloops-test@example.com",
     );
-    git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
+    fs::write(
+        dir.path().join("package.json"),
+        "{\n  \"name\": \"daemon-embedding-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
+    git_ok(dir.path(), &["add", "package.json", "tsconfig.json"]);
+    git_ok(dir.path(), &["commit", "-m", "initial"]);
 
     let src_dir = dir.path().join("src");
     fs::create_dir_all(&src_dir).expect("create src dir");
@@ -332,7 +343,10 @@ fn load_current_embedding_rows(sqlite_path: &Path, repo_id: &str) -> Vec<Current
         .prepare(
             "SELECT a.symbol_fqn, a.path, e.provider, e.model, e.dimension, e.embedding_input_hash
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY a.path, a.start_line, a.symbol_fqn",
         )
@@ -373,7 +387,10 @@ fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(Stri
         .prepare(
             "SELECT DISTINCT e.provider, e.model, e.dimension
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY e.provider, e.model, e.dimension",
         )
@@ -387,7 +404,7 @@ fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(Stri
 fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
     conn.query_row(
-        "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+        "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
         [repo_id],
         |row| row.get(0),
     )
@@ -473,6 +490,12 @@ async fn seed_current_state_and_semantics(
     )
     .await
     .expect("clear seeded clone edges");
+    crate::capability_packs::semantic_clones::pipeline::delete_repo_current_symbol_clone_edges(
+        &relational,
+        &cfg.repo.repo_id,
+    )
+    .await
+    .expect("clear seeded current clone edges");
 
     let inputs =
         crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
@@ -512,6 +535,21 @@ fn build_embedding_job(
     artefact_ids: Vec<String>,
     input_hashes: BTreeMap<String, String>,
 ) -> EnrichmentJob {
+    build_embedding_job_for_representation(
+        cfg,
+        artefact_ids,
+        input_hashes,
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+    )
+}
+
+fn build_embedding_job_for_representation(
+    cfg: &DevqlConfig,
+    artefact_ids: Vec<String>,
+    input_hashes: BTreeMap<String, String>,
+    representation_kind:
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
+) -> EnrichmentJob {
     EnrichmentJob {
         id: "job-1".to_string(),
         repo_id: cfg.repo.repo_id.clone(),
@@ -530,8 +568,7 @@ fn build_embedding_job(
                 .unwrap_or_else(|| "batch".to_string()),
             artefact_ids,
             input_hashes,
-            representation_kind:
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+            representation_kind,
         },
     }
 }
@@ -810,6 +847,80 @@ async fn daemon_embedding_job_keeps_incremental_behavior_when_setup_is_unchanged
 }
 
 #[tokio::test]
+async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unchanged() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "stable-model",
+        "3",
+    )
+    .await;
+
+    let code_job = build_embedding_job(
+        &cfg,
+        inputs
+            .iter()
+            .map(|input| input.artefact_id.clone())
+            .collect(),
+        input_hashes.clone(),
+    );
+    let first_code =
+        run_embedding_job_with_env(&code_job, TEST_EMBEDDINGS_DRIVER, "stable-model", "3").await;
+    assert!(first_code.error.is_none());
+
+    let full_summary_job = build_embedding_job_for_representation(
+        &cfg,
+        inputs
+            .iter()
+            .map(|input| input.artefact_id.clone())
+            .collect(),
+        input_hashes.clone(),
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+    );
+    let first_summary = run_embedding_job_with_env(
+        &full_summary_job,
+        TEST_EMBEDDINGS_DRIVER,
+        "stable-model",
+        "3",
+    )
+    .await;
+    assert!(first_summary.error.is_none());
+
+    let one_input = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice input");
+    let incremental_summary_job = build_embedding_job_for_representation(
+        &cfg,
+        vec![one_input.artefact_id.clone()],
+        BTreeMap::from([(
+            one_input.artefact_id.clone(),
+            input_hashes
+                .get(&one_input.artefact_id)
+                .expect("input hash for invoice artefact")
+                .clone(),
+        )]),
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+    );
+    let second_summary = run_embedding_job_with_env(
+        &incremental_summary_job,
+        TEST_EMBEDDINGS_DRIVER,
+        "stable-model",
+        "3",
+    )
+    .await;
+
+    assert!(second_summary.error.is_none());
+    assert_eq!(second_summary.follow_ups.len(), 1);
+    assert!(matches!(
+        second_summary.follow_ups.first(),
+        Some(FollowUpJob::CloneEdgesRebuild { .. })
+    ));
+}
+
+#[tokio::test]
 async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_management() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
@@ -865,4 +976,209 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
     assert_eq!(rows[0].path, "src/invoice.ts");
     assert_eq!(rows[0].model, "mailbox-model");
     assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
+}
+
+#[tokio::test]
+async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
+    use std::collections::BTreeSet;
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::write(
+        repo.path().join("package.json"),
+        "{\n  \"name\": \"daemon-backfill-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        repo.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
+    git_ok(repo.path(), &["add", "package.json", "tsconfig.json"]);
+    git_ok(repo.path(), &["commit", "-m", "initial"]);
+
+    let src_dir = repo.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        src_dir.join("legacy.ts"),
+        "export function legacyInvoice(): string { return 'legacy'; }\n",
+    )
+    .expect("write legacy source");
+    git_ok(repo.path(), &["add", "src/legacy.ts"]);
+    git_ok(repo.path(), &["commit", "-m", "add legacy artefact"]);
+
+    fs::remove_file(src_dir.join("legacy.ts")).expect("remove legacy source");
+    fs::write(
+        src_dir.join("current.ts"),
+        "export function currentInvoice(): string { return 'current'; }\n",
+    )
+    .expect("write current source");
+    git_ok(repo.path(), &["add", "-A"]);
+    git_ok(repo.path(), &["commit", "-m", "replace legacy artefact"]);
+
+    write_daemon_embedding_config(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        3,
+    );
+
+    let cfg = daemon_test_cfg_for_repo(repo.path());
+    crate::host::devql::execute_init_schema(&cfg, "repo backfill daemon test")
+        .await
+        .expect("initialise devql schema for repo backfill test");
+    let backends = resolve_store_backend_config_for_repo(repo.path())
+        .expect("resolve backend config for repo backfill test");
+    let relational =
+        RelationalStorage::connect(&cfg, &backends.relational, "repo backfill daemon test")
+            .await
+            .expect("connect relational storage for repo backfill test");
+    execute_ingest_with_observer(&cfg, false, 10, None, None)
+        .await
+        .expect("ingest repo backfill fixture");
+    execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("seed current state for repo backfill test");
+
+    let current_inputs =
+        crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
+            &relational,
+            repo.path(),
+            &cfg.repo.repo_id,
+        )
+        .await
+        .expect("load current semantic inputs");
+    let historical_legacy_rows = relational
+        .query_rows(&format!(
+            "SELECT COUNT(*) AS count FROM file_state WHERE repo_id = '{}' AND path = 'src/legacy.ts'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("count historical legacy file rows");
+    assert!(
+        historical_legacy_rows
+            .first()
+            .and_then(|row| row.get("count"))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default()
+            > 0,
+        "fixture must include a historical-only artefact"
+    );
+    assert!(
+        current_inputs
+            .iter()
+            .all(|input| input.path != "src/legacy.ts"),
+        "current inputs must exclude the deleted legacy artefact"
+    );
+
+    let job = WorkplaneJobRecord {
+        job_id: "repo-backfill-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let repo_backfill_inputs = load_repo_backfill_inputs(&relational, &job)
+        .await
+        .expect("load repo backfill inputs");
+    let current_artefact_ids = current_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<BTreeSet<_>>();
+    let repo_backfill_artefact_ids = repo_backfill_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        repo_backfill_artefact_ids, current_artefact_ids,
+        "repo backfill should use the current repo artefacts only"
+    );
+    assert!(
+        repo_backfill_inputs
+            .iter()
+            .all(|input| input.path != "src/legacy.ts"),
+        "repo backfill should exclude historical-only artefacts"
+    );
+}
+
+#[tokio::test]
+async fn workplane_summary_embedding_mailbox_job_enqueues_clone_rebuild_follow_up() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "mailbox-model",
+        "3",
+    )
+    .await;
+    let selected = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice artefact input");
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-summary-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(selected.artefact_id.clone()),
+        payload: serde_json::json!({ "artefact_id": selected.artefact_id }),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.follow_ups.len(), 1);
+    assert!(matches!(
+        outcome.follow_ups.first(),
+        Some(FollowUpJob::CloneEdgesRebuild { .. })
+    ));
 }

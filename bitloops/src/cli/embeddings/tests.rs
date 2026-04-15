@@ -1,4 +1,6 @@
-use super::managed::archive::{ManagedEmbeddingsArchiveKind, sha256_hex};
+use super::managed::archive::{
+    ManagedEmbeddingsArchiveKind, extract_managed_embeddings_bundle_entries_from_file, sha256_hex,
+};
 use super::managed::config::{
     load_managed_embeddings_install_metadata, managed_embeddings_binary_name,
     raw_managed_runtime_command,
@@ -7,9 +9,10 @@ use super::managed::install::{
     install_managed_embeddings_binary_from_release_bytes, managed_embeddings_asset_spec_for,
 };
 use super::{
-    EmbeddingsCommand, EmbeddingsInstallState, ManagedEmbeddingsBinaryInstallOutcome,
-    clear_cache_for_profile, doctor_profile, inspect_embeddings_install_state,
-    install_or_bootstrap_embeddings, pull_profile, with_managed_embeddings_install_hook,
+    EmbeddingsCommand, EmbeddingsInstallState, EmbeddingsRuntime,
+    ManagedEmbeddingsBinaryInstallOutcome, clear_cache_for_profile, doctor_profile,
+    inspect_embeddings_install_state, install_or_bootstrap_embeddings, pull_profile,
+    with_managed_embeddings_install_hook,
 };
 use crate::cli::Cli;
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_embedding_capability_config_for_repo};
@@ -68,8 +71,8 @@ local_dev = false
 code_embeddings = "local"
 summary_embeddings = "local"
 
-[inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
 args = []
 startup_timeout_secs = 60
 request_timeout_secs = 300
@@ -77,7 +80,7 @@ request_timeout_secs = 300
 [inference.profiles.local]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "bge-m3"
 cache_dir = ".bitloops/embeddings/models"
 
@@ -204,7 +207,7 @@ while (($line = $stdin.ReadLine()) -ne $null) {
 
 #[cfg(unix)]
 fn fake_managed_runtime_path(repo_root: &Path) -> PathBuf {
-    let script_path = repo_root.join(".bitloops/test-bin/fake-managed-bitloops-embeddings");
+    let script_path = repo_root.join(".bitloops/test-bin/fake-managed-bitloops-local-embeddings");
     let (_, args) = fake_runtime_command_and_args(repo_root);
     fs::copy(&args[0], &script_path).expect("copy managed runtime script");
     script_path
@@ -214,8 +217,8 @@ fn fake_managed_runtime_path(repo_root: &Path) -> PathBuf {
 fn fake_managed_runtime_path(repo_root: &Path) -> PathBuf {
     let script_dir = repo_root.join(".bitloops/test-bin");
     fs::create_dir_all(&script_dir).expect("create managed runtime dir");
-    let powershell_script = script_dir.join("fake-managed-bitloops-embeddings.ps1");
-    let launcher = script_dir.join("fake-managed-bitloops-embeddings.cmd");
+    let powershell_script = script_dir.join("fake-managed-bitloops-local-embeddings.ps1");
+    let launcher = script_dir.join("fake-managed-bitloops-local-embeddings.cmd");
     let (_, args) = fake_runtime_command_and_args(repo_root);
     fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
     fs::write(
@@ -285,6 +288,45 @@ fn create_archive_bytes(
     }
 }
 
+#[test]
+fn extract_managed_embeddings_bundle_entries_from_file_reads_zip_archive() {
+    assert_archive_file_extraction_matches_payload(ManagedEmbeddingsArchiveKind::Zip);
+}
+
+#[test]
+fn extract_managed_embeddings_bundle_entries_from_file_reads_tar_xz_archive() {
+    assert_archive_file_extraction_matches_payload(ManagedEmbeddingsArchiveKind::TarXz);
+}
+
+fn assert_archive_file_extraction_matches_payload(archive_kind: ManagedEmbeddingsArchiveKind) {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let binary_name = managed_embeddings_binary_name();
+    let payload = b"managed-runtime-payload";
+    let archive_bytes = create_archive_bytes(archive_kind, binary_name, payload);
+    let archive_name = match archive_kind {
+        ManagedEmbeddingsArchiveKind::Zip => "managed-runtime.zip",
+        ManagedEmbeddingsArchiveKind::TarXz => "managed-runtime.tar.xz",
+    };
+    let archive_path = temp_dir.path().join(archive_name);
+    fs::write(&archive_path, archive_bytes).expect("write archive");
+
+    let bundle_entries = extract_managed_embeddings_bundle_entries_from_file(
+        &archive_path,
+        archive_kind,
+        binary_name,
+    )
+    .expect("extract archive");
+
+    assert!(bundle_entries.iter().any(|entry| {
+        entry.relative_path.as_os_str() == binary_name && entry.bytes.as_slice() == payload
+    }));
+    assert!(
+        bundle_entries
+            .iter()
+            .any(|entry| { entry.relative_path == Path::new("_internal").join("Python") })
+    );
+}
+
 fn write_runtime_only_config(repo_root: &Path, command: &str, args: &[String]) {
     let runtime_args = args
         .iter()
@@ -298,7 +340,7 @@ fn write_runtime_only_config(repo_root: &Path, command: &str, args: &[String]) {
 [runtime]
 local_dev = false
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -347,25 +389,58 @@ fn embeddings_cli_parses_pull_and_clear_cache() {
 }
 
 #[test]
+fn embeddings_install_supports_platform_runtime_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "embeddings",
+        "install",
+        "--runtime",
+        "platform",
+        "--gateway-url",
+        "https://gateway.example/v1/embeddings",
+        "--api-key-env",
+        "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+    ])
+    .expect("platform embeddings install should parse");
+    let Some(crate::cli::Commands::Embeddings(args)) = parsed.command else {
+        panic!("expected embeddings command");
+    };
+    let Some(EmbeddingsCommand::Install(args)) = args.command else {
+        panic!("expected install command");
+    };
+
+    assert_eq!(args.runtime, EmbeddingsRuntime::Platform);
+    assert_eq!(
+        args.gateway_url.as_deref(),
+        Some("https://gateway.example/v1/embeddings")
+    );
+    assert_eq!(args.api_key_env, "BITLOOPS_PLATFORM_GATEWAY_TOKEN");
+}
+
+#[test]
 fn managed_embeddings_asset_spec_matches_external_release_names() {
     assert_eq!(
         managed_embeddings_asset_spec_for("macos", "aarch64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("mac arm asset")
             .asset_name,
-        format!("bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-aarch64-apple-darwin.zip")
+        format!(
+            "bitloops-local-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-aarch64-apple-darwin.zip"
+        )
     );
     assert_eq!(
         managed_embeddings_asset_spec_for("macos", "x86_64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("mac x64 asset")
             .asset_name,
-        format!("bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-apple-darwin.zip")
+        format!(
+            "bitloops-local-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-apple-darwin.zip"
+        )
     );
     assert_eq!(
         managed_embeddings_asset_spec_for("linux", "aarch64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("linux arm asset")
             .asset_name,
         format!(
-            "bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-aarch64-unknown-linux-gnu.tar.xz"
+            "bitloops-local-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-aarch64-unknown-linux-gnu.tar.xz"
         )
     );
     assert_eq!(
@@ -373,14 +448,16 @@ fn managed_embeddings_asset_spec_matches_external_release_names() {
             .expect("linux x64 asset")
             .asset_name,
         format!(
-            "bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-unknown-linux-gnu.tar.xz"
+            "bitloops-local-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-unknown-linux-gnu.tar.xz"
         )
     );
     assert_eq!(
         managed_embeddings_asset_spec_for("windows", "x86_64", TEST_MANAGED_EMBEDDINGS_VERSION)
             .expect("windows x64 asset")
             .asset_name,
-        format!("bitloops-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-pc-windows-msvc.zip")
+        format!(
+            "bitloops-local-embeddings-{TEST_MANAGED_EMBEDDINGS_VERSION}-x86_64-pc-windows-msvc.zip"
+        )
     );
 }
 
@@ -654,11 +731,11 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
     );
     write_runtime_only_config(
         repo.path(),
-        "bitloops-embeddings",
+        "bitloops-local-embeddings",
         &[
             "-B".to_string(),
             "-m".to_string(),
-            "bitloops_embeddings".to_string(),
+            "bitloops_local_embeddings".to_string(),
         ],
     );
     let data_root = data.path().to_string_lossy().to_string();
@@ -856,7 +933,7 @@ summary_embeddings = "local_code"
 [inference.profiles.local_code]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "bge-m3"
 "#,
     );

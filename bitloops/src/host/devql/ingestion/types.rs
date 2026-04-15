@@ -72,6 +72,7 @@ pub(super) struct FileArtefactRow {
     pub(super) artefact_id: String,
     pub(super) symbol_id: String,
     pub(super) language: String,
+    pub(super) extraction_fingerprint: String,
     pub(super) end_line: i32,
     pub(super) end_byte: i32,
 }

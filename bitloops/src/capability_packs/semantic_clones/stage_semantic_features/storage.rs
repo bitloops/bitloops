@@ -287,23 +287,10 @@ COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS c
 COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
 COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
 FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
 LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
-WHERE current.repo_id = '{repo_id}' \
+WHERE current.repo_id = '{repo_id}' AND state.analysis_mode = 'code' \
 ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
-        repo_id = esc_pg(repo_id),
-    )
-}
-
-pub(super) fn build_historical_repo_artefacts_sql(repo_id: &str) -> String {
-    format!(
-        "SELECT historical.artefact_id, historical.symbol_id, historical.repo_id, historical.blob_sha, historical.path, historical.language, \
-COALESCE(historical.canonical_kind, COALESCE(historical.language_kind, 'symbol')) AS canonical_kind, \
-COALESCE(historical.language_kind, COALESCE(historical.canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(historical.symbol_fqn, historical.path) AS symbol_fqn, historical.parent_artefact_id, historical.start_line, historical.end_line, historical.start_byte, historical.end_byte, historical.signature, historical.modifiers, historical.docstring, historical.content_hash \
-FROM artefacts_historical historical \
-JOIN symbol_semantics semantics ON semantics.artefact_id = historical.artefact_id \
-WHERE historical.repo_id = '{repo_id}' \
-ORDER BY historical.blob_sha, historical.path, coalesce(historical.start_byte, 0), coalesce(historical.start_line, 0), historical.artefact_id",
         repo_id = esc_pg(repo_id),
     )
 }
@@ -530,6 +517,47 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
     ))
 }
 
+pub(super) fn build_conditional_current_semantic_persist_rows_sql(
+    rows: &semantic::SemanticFeatureRows,
+    input: &semantic::SemanticFeatureInput,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let features = &rows.features;
+    let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
+    let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
+    let modifiers_expr = sql_json_string_for_dialect(&features.modifiers, dialect)?;
+    let identifier_tokens_expr = sql_json_string_for_dialect(&features.identifier_tokens, dialect)?;
+    let body_tokens_expr = sql_json_string_for_dialect(&features.normalized_body_tokens, dialect)?;
+    let context_tokens_expr = sql_json_string_for_dialect(&features.context_tokens, dialect)?;
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+    let target_select = build_current_semantic_target_select_sql(input);
+
+    Ok(format!(
+        "{persist_summary_sql}; \
+INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, modifiers, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
+SELECT target.artefact_id, target.repo_id, target.path, target.content_id, target.symbol_id, '{features_input_hash}', '{normalized_name}', {normalized_signature}, {modifiers}, {identifier_tokens}, {body_tokens}, {parent_kind}, {context_tokens} \
+FROM ({target_select}) target \
+WHERE 1 = 1 \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}",
+        persist_summary_sql = build_conditional_current_semantic_persist_summary_sql(
+            &rows.semantics,
+            &rows.semantic_features_input_hash,
+            input,
+            dialect,
+        )?,
+        target_select = target_select,
+        features_input_hash = esc_pg(&rows.semantic_features_input_hash),
+        normalized_name = esc_pg(&features.normalized_name),
+        normalized_signature = normalized_signature_expr,
+        modifiers = modifiers_expr,
+        identifier_tokens = identifier_tokens_expr,
+        body_tokens = body_tokens_expr,
+        parent_kind = parent_kind_expr,
+        context_tokens = context_tokens_expr,
+        generated_at = generated_at_sql,
+    ))
+}
+
 pub(super) fn build_semantic_persist_summary_sql(
     semantics: &semantic::SymbolSemanticsRow,
     semantic_features_input_hash: &str,
@@ -556,6 +584,27 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         source_model = source_model_expr,
         generated_at = generated_at_sql,
     ))
+}
+
+fn build_current_semantic_target_select_sql(input: &semantic::SemanticFeatureInput) -> String {
+    format!(
+        "SELECT current.artefact_id, current.repo_id, current.path, current.content_id, current.symbol_id \
+FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+WHERE current.repo_id = '{repo_id}' \
+  AND current.path = '{path}' \
+  AND current.content_id = '{content_id}' \
+  AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) = '{canonical_kind}' \
+  AND COALESCE(current.symbol_fqn, current.path) = '{symbol_fqn}' \
+  AND state.analysis_mode = 'code' \
+ORDER BY coalesce(current.start_line, 0), current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id \
+LIMIT 1",
+        repo_id = esc_pg(&input.repo_id),
+        path = esc_pg(&input.path),
+        content_id = esc_pg(&input.blob_sha),
+        canonical_kind = esc_pg(&input.canonical_kind.to_ascii_lowercase()),
+        symbol_fqn = esc_pg(&input.symbol_fqn),
+    )
 }
 
 #[allow(dead_code)]
@@ -589,6 +638,36 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
         summary = esc_pg(&semantics.summary),
         confidence = semantics.confidence,
         source_model = source_model_expr,
+        generated_at = generated_at_sql,
+    ))
+}
+
+fn build_conditional_current_semantic_persist_summary_sql(
+    semantics: &semantic::SymbolSemanticsRow,
+    semantic_features_input_hash: &str,
+    input: &semantic::SemanticFeatureInput,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
+    let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+    let target_select = build_current_semantic_target_select_sql(input);
+
+    Ok(format!(
+        "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
+SELECT target.artefact_id, target.repo_id, target.path, target.content_id, target.symbol_id, '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model} \
+FROM ({target_select}) target \
+WHERE 1 = 1 \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
+        input_hash = esc_pg(semantic_features_input_hash),
+        docstring_summary = docstring_summary_expr,
+        llm_summary = llm_summary_expr,
+        template_summary = esc_pg(&semantics.template_summary),
+        summary = esc_pg(&semantics.summary),
+        confidence = semantics.confidence,
+        source_model = source_model_expr,
+        target_select = target_select,
         generated_at = generated_at_sql,
     ))
 }
@@ -706,6 +785,51 @@ mod tests {
         assert!(sql.contains("LEFT JOIN artefacts a ON a.repo_id = current.repo_id"));
         assert!(sql.contains("WHERE current.repo_id = 'repo''1'"));
         assert!(!sql.contains("WHERE artefact_id IN"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_builds_conditional_current_persist_sql_with_repo_scoped_target_filters()
+     {
+        let rows = sample_semantic_rows();
+        let sql = build_conditional_current_semantic_persist_rows_sql(
+            &rows,
+            &semantic::SemanticFeatureInput {
+                artefact_id: "historical-1".to_string(),
+                symbol_id: Some("historical-symbol".to_string()),
+                repo_id: "repo'1".to_string(),
+                blob_sha: "content'1".to_string(),
+                path: "src/o'brien.ts".to_string(),
+                language: "typescript".to_string(),
+                canonical_kind: "Method".to_string(),
+                language_kind: "method".to_string(),
+                symbol_fqn: "src/o'brien.ts::UserService::getById".to_string(),
+                name: "getById".to_string(),
+                signature: Some("async getById(id: string): Promise<User | null>".to_string()),
+                modifiers: vec!["public".to_string(), "async".to_string()],
+                body: "return repo.findById(id);".to_string(),
+                docstring: Some("Fetches O'Brien by id.".to_string()),
+                parent_kind: Some("class".to_string()),
+                dependency_signals: vec!["calls:user_repo::find_by_id".to_string()],
+                content_hash: Some("hash-1".to_string()),
+            },
+            RelationalDialect::Sqlite,
+        )
+        .expect("conditional current persist SQL");
+
+        assert!(sql.contains("FROM artefacts_current current"));
+        assert!(sql.contains(
+            "JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path"
+        ));
+        assert!(sql.contains("current.repo_id = 'repo''1'"));
+        assert!(sql.contains("current.path = 'src/o''brien.ts'"));
+        assert!(sql.contains("current.content_id = 'content''1'"));
+        assert!(sql.contains(
+            "LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) = 'method'"
+        ));
+        assert!(sql.contains(
+            "COALESCE(current.symbol_fqn, current.path) = 'src/o''brien.ts::UserService::getById'"
+        ));
+        assert!(sql.contains("state.analysis_mode = 'code'"));
     }
 
     #[test]

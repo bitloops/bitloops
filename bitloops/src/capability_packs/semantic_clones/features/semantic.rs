@@ -1,14 +1,9 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Result, anyhow};
-
-use crate::adapters::model_providers::llm::{LlmProvider, build_llm_provider};
 use crate::host::inference::TextGenerationService;
 
 use super::common::{normalize_repo_path, render_dependency_context, split_identifier_tokens};
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
-
-pub use crate::adapters::model_providers::llm::resolve_semantic_summary_endpoint;
 
 const MINIMUM_SUMMARY_LENGTH: usize = 12;
 const MAXIMUM_SUMMARY_LENGTH: usize = 200;
@@ -23,12 +18,19 @@ pub struct SemanticSummaryCandidate {
 pub trait SemanticSummaryProvider: Send + Sync {
     fn cache_key(&self) -> String;
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate>;
+    fn requires_model_output(&self) -> bool {
+        false
+    }
 }
 
 pub fn summary_provider_from_service(
     service: std::sync::Arc<dyn TextGenerationService>,
+    require_model_output: bool,
 ) -> std::sync::Arc<dyn SemanticSummaryProvider> {
-    std::sync::Arc::new(TextGenerationServiceAdapter { service })
+    std::sync::Arc::new(TextGenerationServiceAdapter {
+        service,
+        require_model_output,
+    })
 }
 
 pub struct NoopSemanticSummaryProvider;
@@ -48,59 +50,6 @@ struct HostedSemanticSummaryJson {
     summary: String,
     #[serde(default)]
     confidence: Option<f32>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SemanticSummaryProviderConfig {
-    pub semantic_provider: Option<String>,
-    pub semantic_model: Option<String>,
-    pub semantic_api_key: Option<String>,
-    pub semantic_base_url: Option<String>,
-}
-
-pub fn build_semantic_summary_provider(
-    cfg: &SemanticSummaryProviderConfig,
-) -> Result<Box<dyn SemanticSummaryProvider>> {
-    let provider = cfg
-        .semantic_provider
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if provider.is_empty() || provider == "none" || provider == "disabled" {
-        return Ok(Box::new(NoopSemanticSummaryProvider));
-    }
-
-    let model = cfg
-        .semantic_model
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "BITLOOPS_DEVQL_SEMANTIC_MODEL is required when semantic provider is configured"
-            )
-        })?
-        .trim()
-        .to_string();
-    let api_key = cfg
-        .semantic_api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "BITLOOPS_DEVQL_SEMANTIC_API_KEY is required when semantic provider is configured"
-            )
-        })?
-        .trim()
-        .to_string();
-    Ok(Box::new(LlmSemanticSummaryProvider {
-        llm_provider: build_llm_provider(
-            &provider,
-            model,
-            api_key,
-            cfg.semantic_base_url.as_deref(),
-        )?,
-    }))
 }
 
 fn build_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
@@ -176,31 +125,9 @@ fn extract_json_object_from_text(content: &str) -> Option<String> {
     Some(trimmed[start..=end].to_string())
 }
 
-struct LlmSemanticSummaryProvider {
-    llm_provider: Box<dyn LlmProvider>,
-}
-
-impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
-    fn cache_key(&self) -> String {
-        format!("provider={}", self.llm_provider.descriptor())
-    }
-
-    fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
-        let content = self.llm_provider.complete(
-            "You summarize code symbols. Return only JSON with keys summary and confidence.",
-            &build_semantic_summary_prompt(input),
-        )?;
-        let parsed = parse_semantic_summary_candidate_json(&content)?;
-        Some(SemanticSummaryCandidate {
-            summary: parsed.summary,
-            confidence: parsed.confidence.unwrap_or(0.75),
-            source_model: Some(self.llm_provider.descriptor()),
-        })
-    }
-}
-
 struct TextGenerationServiceAdapter {
     service: std::sync::Arc<dyn TextGenerationService>,
+    require_model_output: bool,
 }
 
 impl SemanticSummaryProvider for TextGenerationServiceAdapter {
@@ -209,19 +136,37 @@ impl SemanticSummaryProvider for TextGenerationServiceAdapter {
     }
 
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
-        let content = self
-            .service
-            .complete(
-                "You summarize code symbols. Return only JSON with keys summary and confidence.",
-                &build_semantic_summary_prompt(input),
-            )
-            .ok()?;
-        let parsed = parse_semantic_summary_candidate_json(&content)?;
+        let content = match self.service.complete(
+            "You summarize code symbols. Return only JSON with keys summary and confidence.",
+            &build_semantic_summary_prompt(input),
+        ) {
+            Ok(content) => content,
+            Err(err) => {
+                log::warn!(
+                    "semantic summary generation failed for `{}` (artefact `{}`): {err:#}",
+                    input.path,
+                    input.artefact_id
+                );
+                return None;
+            }
+        };
+        let Some(parsed) = parse_semantic_summary_candidate_json(&content) else {
+            log::warn!(
+                "semantic summary provider returned an unparsable response for `{}` (artefact `{}`)",
+                input.path,
+                input.artefact_id
+            );
+            return None;
+        };
         Some(SemanticSummaryCandidate {
             summary: parsed.summary,
             confidence: parsed.confidence.unwrap_or(0.75),
             source_model: Some(self.service.descriptor()),
         })
+    }
+
+    fn requires_model_output(&self) -> bool {
+        self.require_model_output
     }
 }
 
@@ -237,6 +182,18 @@ pub struct SymbolSemanticsRow {
     pub summary: String,
     pub confidence: f32,
     pub source_model: Option<String>,
+}
+
+impl SymbolSemanticsRow {
+    pub fn is_llm_enriched(&self) -> bool {
+        self.llm_summary
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .source_model
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+    }
 }
 pub(super) fn build_semantics_row(
     input: &SemanticFeatureInput,
@@ -464,27 +421,6 @@ mod tests {
             dependency_signals: vec!["calls:user_repo::load_by_id".to_string()],
             content_hash: Some("hash-1".to_string()),
         }
-    }
-
-    #[test]
-    fn semantic_features_build_provider_supports_disabled_and_requires_api_key() {
-        let _disabled = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
-            semantic_provider: Some("disabled".to_string()),
-            ..SemanticSummaryProviderConfig::default()
-        })
-        .expect("disabled provider should build");
-
-        let err = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
-            semantic_provider: Some("openai".to_string()),
-            semantic_model: Some("gpt-test".to_string()),
-            ..SemanticSummaryProviderConfig::default()
-        })
-        .err()
-        .expect("missing API key should fail");
-        assert!(
-            err.to_string()
-                .contains("BITLOOPS_DEVQL_SEMANTIC_API_KEY is required")
-        );
     }
 
     #[test]

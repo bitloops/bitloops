@@ -27,18 +27,20 @@ bitloops help devql
 Bootstraps the current project or subproject.
 
 ```bash
+bitloops init --install-default-daemon
+bitloops init --install-default-daemon --sync=true
+bitloops init --install-default-daemon --embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings
 bitloops init
 bitloops init --sync=true
 bitloops init --sync=false
-bitloops init --install-default-daemon
-bitloops init --install-default-daemon --sync=true
 ```
 
 Notes:
 
+- The fastest way to get started on a fresh machine from inside a repository is `bitloops init --install-default-daemon`.
 - Run `bitloops start` first when the daemon is already configured.
-- Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
-- When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-embeddings` binary from `bitloops/bitloops-embeddings` automatically and writes the managed absolute path into the runtime config.
+- Use `bitloops start --create-default-config` first when you want to bootstrap or customise the daemon separately before running `init`.
+- When `--install-default-daemon` is used and embeddings are not configured yet, `init` also applies the default local embeddings setup. When that setup targets the default local Bitloops-managed runtime, Bitloops installs the standalone `bitloops-local-embeddings` binary from `bitloops/bitloops-embeddings` automatically and writes the managed absolute path into the runtime config.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
@@ -49,12 +51,19 @@ Notes:
 - If embeddings are already configured, `init --install-default-daemon` leaves the active profile in place. Active `bitloops_embeddings_ipc` profiles may still be warmed; hosted or other non-local drivers are treated as already enabled.
 - `init` can queue an initial DevQL current-state sync after hook setup.
 - With `--install-default-daemon`, init-triggered sync and ingest run first. The managed embeddings runtime download then runs afterwards when the default local runtime still needs to be installed.
+- Use `--embeddings-runtime platform --embeddings-gateway-url <https://.../v1/embeddings>` when you want init to configure the hosted gateway runtime instead of the default local runtime.
+- `--embeddings-api-key-env <NAME>` changes the environment variable that the managed platform runtime reads for its bearer token. The default is `BITLOOPS_PLATFORM_GATEWAY_TOKEN`.
 - `--sync=true` queues that sync and follows it to completion.
 - `--sync=false` skips the initial sync explicitly.
 - If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
 - In non-interactive mode, `init` requires `--sync=true` or `--sync=false`.
 - `init` can also run DevQL ingest when you opt in with `--ingest=true` or accept the interactive prompt. The `--skip-baseline` flag is accepted for compatibility only.
-- Use `--agent <name>` to pin the supported agent set.
+- Use `--agent <name>` repeatedly to pin the supported agent set. For example:
+
+  ```bash
+  bitloops init --sync=false --agent claude-code --agent codex
+  ```
+
 - `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
 - `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
@@ -68,6 +77,7 @@ Enables capture in the nearest discovered project policy.
 ```bash
 bitloops enable
 bitloops enable --install-embeddings
+bitloops enable --install-embeddings --embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings
 bitloops daemon enable
 bitloops daemon enable --install-embeddings
 ```
@@ -78,7 +88,8 @@ Notes:
 - `enable` only toggles `[capture].enabled = true`.
 - Installed hooks stay in place and resume capturing without reinstallation.
 - `bitloops daemon enable` is an alias to the same implementation and keeps the same telemetry and repo-policy behaviour.
-- `--install-embeddings` is an explicit non-interactive opt-in to configure embeddings in the effective daemon config and then run the existing runtime warm/bootstrap path. When the selected runtime is the default local Bitloops-managed runtime, Bitloops also installs or updates the standalone `bitloops-embeddings` binary automatically.
+- `--install-embeddings` is an explicit non-interactive opt-in to configure embeddings in the effective daemon config and then run the existing runtime warm/bootstrap path. When the selected runtime is the default local Bitloops-managed runtime, Bitloops also installs or updates the standalone `bitloops-local-embeddings` binary automatically.
+- Add `--embeddings-runtime platform --embeddings-gateway-url <https://.../v1/embeddings>` when you want `enable` to install and configure the hosted gateway runtime instead. `--embeddings-api-key-env` overrides the bearer-token environment variable name.
 - In an interactive terminal, when `--install-embeddings` is absent and embeddings are not already configured, `enable` asks whether to install embeddings and includes them in sync. The prompt defaults to `Yes` with `[Y/n]`; blank input, `y`, and `yes` all opt in.
 - If an active embedding profile already exists, `enable` skips daemon-config mutation. Active `bitloops_embeddings_ipc` profiles still use the existing warm/bootstrap path; hosted or other non-local profiles are treated as already enabled and do not trigger local runtime bootstrap.
 - Embeddings setup targets the effective daemon config in this order: `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, the nearest repo `config.toml`, then the default global config.
@@ -102,6 +113,38 @@ Notes:
 - Hooks and watchers remain installed and become no-ops while capture is disabled.
 - Use `bitloops uninstall --agent-hooks --git-hooks` if you want to remove hooks themselves.
 
+## Authentication
+
+### `bitloops login`
+
+Starts the WorkOS device-login flow for the CLI.
+
+```bash
+bitloops login
+bitloops login status
+```
+
+Notes:
+
+- `bitloops login` opens the verification URL in your browser when possible, and always prints the URL and user code as a fallback.
+- `bitloops login` works out of the box with the built-in WorkOS client id.
+- `BITLOOPS_WORKOS_CLIENT_ID` and `BITLOOPS_WORKOS_BASE_URL` are advanced overrides for non-default WorkOS environments.
+- Token material is stored in the platform secure credential store.
+- Session metadata is stored in the daemon runtime store.
+- `bitloops login status` refreshes the access token automatically when the stored refresh token is still valid.
+
+### `bitloops logout`
+
+Removes the current CLI login session.
+
+```bash
+bitloops logout
+```
+
+Notes:
+
+- `logout` removes the stored daemon session metadata and deletes the secure-store credential entry for the active WorkOS client id.
+
 ### `bitloops uninstall`
 
 Removes Bitloops-managed artefacts from your machine and, for hook targets, from known repositories.
@@ -115,19 +158,19 @@ bitloops uninstall --config --data --caching
 
 Key flags:
 
-| Flag | Meaning |
-| --- | --- |
-| `--full` | Remove all Bitloops-managed artefacts, including repository-local cleanup |
-| `--binaries` | Remove recognised `bitloops` binaries |
-| `--service` | Remove the daemon service and daemon state metadata |
-| `--data` | Remove global data and repo-local `.bitloops/` data |
-| `--caching` | Remove the global cache directory |
-| `--config` | Remove the global config directory and TLS artefacts |
-| `--agent-hooks` | Remove supported agent hooks |
-| `--git-hooks` | Remove Bitloops git hooks |
-| `--shell` | Remove managed shell completion integration |
-| `--only-current-project` | Limit hook removal to the current repository |
-| `--force` | Skip confirmation |
+| Flag                     | Meaning                                                                   |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `--full`                 | Remove all Bitloops-managed artefacts, including repository-local cleanup |
+| `--binaries`             | Remove recognised `bitloops` binaries                                     |
+| `--service`              | Remove the daemon service and daemon state metadata                       |
+| `--data`                 | Remove global data and repo-local `.bitloops/` data                       |
+| `--caching`              | Remove the global cache directory                                         |
+| `--config`               | Remove the global config directory and TLS artefacts                      |
+| `--agent-hooks`          | Remove supported agent hooks                                              |
+| `--git-hooks`            | Remove Bitloops git hooks                                                 |
+| `--shell`                | Remove managed shell completion integration                               |
+| `--only-current-project` | Limit hook removal to the current repository                              |
+| `--force`                | Skip confirmation                                                         |
 
 Notes:
 
@@ -155,19 +198,19 @@ bitloops daemon start --until-stopped
 
 Key flags:
 
-| Flag | Meaning |
-| --- | --- |
-| `-d`, `--detached` | Start the daemon in the background without installing an always-on service |
-| `--until-stopped` | Install or refresh the global user service and start it |
-| `--host` | Override the bind host |
-| `--port` | Override the bind port |
-| `--http` | Force local HTTP instead of HTTPS |
-| `--recheck-local-dashboard-net` | Re-run local dashboard TLS and network checks |
-| `--bundle-dir` | Override the dashboard bundle directory for this run |
-| `--config` | Use an explicit daemon config file |
-| `--create-default-config` | Create the default global daemon config plus local default store files before starting |
-| `--bootstrap-local-stores` | Create the local SQLite, DuckDB, and blob-store artefacts required by the selected daemon config before starting |
-| `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version |
+| Flag                                                 | Meaning                                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `-d`, `--detached`                                   | Start the daemon in the background without installing an always-on service                                       |
+| `--until-stopped`                                    | Install or refresh the global user service and start it                                                          |
+| `--host`                                             | Override the bind host                                                                                           |
+| `--port`                                             | Override the bind port                                                                                           |
+| `--http`                                             | Force local HTTP instead of HTTPS                                                                                |
+| `--recheck-local-dashboard-net`                      | Re-run local dashboard TLS and network checks                                                                    |
+| `--bundle-dir`                                       | Override the dashboard bundle directory for this run                                                             |
+| `--config`                                           | Use an explicit daemon config file                                                                               |
+| `--create-default-config`                            | Create the default global daemon config plus local default store files before starting                           |
+| `--bootstrap-local-stores`                           | Create the local SQLite, DuckDB, and blob-store artefacts required by the selected daemon config before starting |
+| `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version                                                            |
 
 Notes:
 
@@ -346,6 +389,8 @@ Highlights:
 - `devql schema --human` prints formatted SDL for review and checked-in schema snapshot export
 - `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
 - `devql query` is daemon-backed, not in-process
+- Injected hook guidance is instruction-only; Bitloops does not run DevQL queries on the agent's behalf in the hook path.
+- GitHub currently documents Copilot CLI `sessionStart` output as ignored, so Bitloops can emit the session-start payload there without claiming the Copilot runtime will surface it to the model yet.
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
 
 ### Knowledge
@@ -375,12 +420,13 @@ Use `devql test-harness` to ingest test-linkage, coverage, and results data for 
 
 ```bash
 bitloops embeddings install
+bitloops embeddings install --runtime platform --gateway-url https://gateway.example/v1/embeddings
 bitloops embeddings pull local_code
 bitloops embeddings doctor
 bitloops embeddings clear-cache local_code
 ```
 
-These commands install the managed standalone runtime, inspect configured profiles, warm local caches, and clear local model caches from the current repo context.
+These commands install the managed standalone runtime, inspect configured profiles, warm local caches, and clear local model caches from the current repo context. `bitloops embeddings install` defaults to the local managed runtime; use `--runtime platform --gateway-url <https://.../v1/embeddings>` for the hosted gateway runtime, and `--api-key-env <NAME>` when the bearer token is stored under a different environment variable.
 
 ## Completion
 

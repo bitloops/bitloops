@@ -317,7 +317,7 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
                         "embedding_slot": provider_slot_name.as_deref(),
                         "embedding_inference_profile": provider_profile_name.as_deref(),
                         "sync_action": sync_action.to_string(),
-                        "clone_rebuild_performed": payload.representation_kind == EmbeddingRepresentationKind::Code,
+                        "clone_rebuild_performed": representation_requires_clone_rebuild(payload.representation_kind),
                         "clone_rebuild_recommended": false,
                         "symbol_clone_edges_upserted": refresh.clone_build.edges.len(),
                         "symbol_clone_sources_scored": refresh.clone_build.sources_considered,
@@ -350,7 +350,7 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
             }
 
             let clone_rebuild_recommended = payload.manage_active_state
-                && payload.representation_kind == EmbeddingRepresentationKind::Code
+                && representation_requires_clone_rebuild(payload.representation_kind)
                 && (stats.eligible > 0 || sync_action == RepoEmbeddingSyncAction::AdoptExisting);
             Ok(IngestResult::new(
                 json!({
@@ -458,6 +458,13 @@ fn required_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("`{field}` is required"))
+}
+
+fn representation_requires_clone_rebuild(representation_kind: EmbeddingRepresentationKind) -> bool {
+    matches!(
+        representation_kind,
+        EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Summary
+    )
 }
 
 async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {

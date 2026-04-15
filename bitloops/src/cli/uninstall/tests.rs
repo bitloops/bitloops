@@ -329,6 +329,208 @@ fn only_current_project_limits_hook_removal() {
 }
 
 #[test]
+fn uninstall_agent_hooks_uses_supported_agents_when_detection_is_false() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            fs::write(
+                repo.path().join(".bitloops.local.toml"),
+                r#"
+[capture]
+enabled = false
+
+[agents]
+supported = ["codex"]
+"#,
+            )
+            .unwrap();
+            let skill_path = repo
+                .path()
+                .join(".agents/skills/bitloops/using-devql/SKILL.md");
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(&skill_path, "managed").unwrap();
+
+            run_uninstall_for_test(
+                UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                None,
+                None,
+                &|| Box::pin(async { Ok(()) }),
+                &|| Ok(()),
+                &|| Ok(Vec::new()),
+            )
+            .unwrap();
+
+            assert!(!skill_path.exists());
+        },
+    );
+}
+
+#[test]
+fn uninstall_agent_hooks_reports_cleanup_attempts_without_claiming_real_removals() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            fs::write(
+                repo.path().join(".bitloops.local.toml"),
+                r#"
+[capture]
+enabled = false
+
+[agents]
+supported = ["codex"]
+"#,
+            )
+            .unwrap();
+
+            let output = run_uninstall_for_test(
+                UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                None,
+                None,
+                &|| Box::pin(async { Ok(()) }),
+                &|| Ok(()),
+                &|| Ok(Vec::new()),
+            )
+            .unwrap();
+
+            assert!(output.contains("Ensured Codex hooks and prompt surfaces are removed."));
+            assert!(!output.contains("Removed Codex hooks and prompt surfaces."));
+        },
+    );
+}
+
+#[test]
+fn uninstall_agent_hooks_discovers_nested_bitloops_project_roots() {
+    let repo = tempfile::tempdir().unwrap();
+    let app = repo.path().join("packages/app");
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    fs::create_dir_all(&app).unwrap();
+
+    with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        fs::create_dir_all(repo.path().join("node_modules/left-pad")).unwrap();
+        fs::create_dir_all(repo.path().join("target/debug/deps")).unwrap();
+        fs::create_dir_all(repo.path().join("vendor/cache/pkg")).unwrap();
+        fs::write(repo.path().join("node_modules/left-pad/package.json"), "{}").unwrap();
+        fs::write(repo.path().join("target/debug/deps/app"), "bin").unwrap();
+        fs::write(repo.path().join("vendor/cache/pkg/lib.txt"), "vendored").unwrap();
+        fs::write(
+            app.join(".bitloops.local.toml"),
+            r#"
+[capture]
+enabled = false
+
+[agents]
+supported = ["claude-code"]
+"#,
+        )
+        .unwrap();
+        crate::adapters::agents::claude_code::hooks::install_hooks(&app, false).unwrap();
+
+        let registry_path = bitloops_state_dir()
+            .unwrap()
+            .join("daemon")
+            .join("repo-path-registry.json");
+        write_repo_registry(&registry_path, &[repo.path()]);
+
+        run_uninstall_for_test(
+            UninstallArgs {
+                agent_hooks: true,
+                force: true,
+                ..UninstallArgs::default()
+            },
+            None,
+            None,
+            &|| Box::pin(async { Ok(()) }),
+            &|| Ok(()),
+            &|| Ok(Vec::new()),
+        )
+        .unwrap();
+
+        let settings = fs::read_to_string(app.join(".claude/settings.json")).unwrap();
+        assert!(!settings.contains("bitloops hooks claude-code"));
+    });
+}
+
+#[test]
+fn only_current_project_agent_hooks_falls_back_to_repo_root_without_policy() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            codex_hooks::install_hooks_at(repo.path(), false, false).unwrap();
+
+            let scope = super::repo::resolve_scope(
+                &UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                &BTreeSet::from([UninstallTarget::AgentHooks]),
+            )
+            .unwrap();
+
+            assert_eq!(
+                scope.agent_project_roots,
+                vec![repo.path().canonicalize().unwrap()]
+            );
+        },
+    );
+}
+
+#[test]
 fn data_target_removes_only_data() {
     let config = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();

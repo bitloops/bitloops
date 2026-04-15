@@ -7,7 +7,9 @@ use std::time::Duration as StdDuration;
 
 use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::daemon::CapabilityEventRunStatus;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
+use bitloops::host::runtime_store::DaemonSqliteRuntimeStore;
 
 #[test]
 fn sanitize_name_normalizes_user_input() {
@@ -189,7 +191,7 @@ fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
 #[test]
 fn build_init_bitloops_args_with_backfill_enables_ingest_and_sets_window() {
     let args = build_init_bitloops_args_with_options(
-        "claude-code",
+        &["claude-code"],
         false,
         Some(false),
         Some(false),
@@ -209,6 +211,24 @@ fn build_init_bitloops_args_with_backfill_enables_ingest_and_sets_window() {
 }
 
 #[test]
+fn build_init_bitloops_args_supports_repeated_agent_flags() {
+    let args =
+        build_init_bitloops_args_with_options(&["claude-code", "codex"], false, None, None, None);
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--agent",
+            "codex",
+            "--sync=false",
+            "--ingest=false",
+        ]
+    );
+}
+
+#[test]
 fn parse_ingest_summary_field_reads_key_value_pairs() {
     let stdout = "DevQL ingest complete: commits_processed=0, checkpoint_companions_processed=0, events_inserted=0, artefacts_upserted=0";
     assert_eq!(
@@ -219,6 +239,40 @@ fn parse_ingest_summary_field_reads_key_value_pairs() {
         parse_ingest_summary_field(stdout, "artefacts_upserted"),
         Some(0)
     );
+}
+
+#[test]
+fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_and_two_workers() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let config =
+        render_guide_aligned_semantic_clones_config(&world, "sh", &["fake-runtime.sh".to_string()]);
+
+    assert!(config.contains("summary_mode = \"auto\""));
+    assert!(config.contains("embedding_mode = \"deterministic\""));
+    assert!(config.contains("enrichment_workers = 2"));
+    assert!(config.contains("[semantic_clones.inference]"));
+    assert!(config.contains("code_embeddings = \"fake\""));
+    assert!(config.contains("summary_embeddings = \"fake\""));
+    assert!(config.contains("[inference.profiles.fake]"));
+    assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
+    assert!(config.contains("model = \"qat-test-model\""));
 }
 
 #[test]
@@ -256,6 +310,37 @@ fn build_git_command_prepends_qat_binary_dir_to_path() {
     let mut paths = std::env::split_paths(&path_value);
     let first = paths.next().expect("PATH should have at least one entry");
     assert_eq!(first, bin_dir);
+}
+
+#[test]
+fn build_git_command_excludes_bitloops_stores_from_git_add_all() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let args = build_git_command(&world, &["add", "-A"], &[])
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        vec!["add", "-A", "--", ".", ":(exclude).bitloops/stores"]
+    );
 }
 
 #[test]
@@ -302,10 +387,175 @@ fn daemon_runtime_store_candidate_paths_cover_isolated_state_dirs() {
             PathBuf::from("/tmp/qat-run/home/xdg-state/bitloops/daemon/runtime.sqlite"),
             PathBuf::from("/tmp/qat-run/home/.local/state/bitloops/daemon/runtime.sqlite"),
             PathBuf::from(
+                "/tmp/qat-run/home/Library/Application Support/bitloops/stores/runtime/runtime.sqlite"
+            ),
+            PathBuf::from(
                 "/tmp/qat-run/home/Library/Application Support/bitloops/daemon/runtime.sqlite"
             ),
         ]
     );
+}
+
+#[test]
+fn load_latest_test_harness_capability_event_run_reads_macos_current_state_store() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = temp.path().join("repo");
+    let bin_dir = temp.path().join("bin");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let runtime_path = run_dir
+        .join("home")
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    let runtime_parent = runtime_path.parent().expect("runtime parent");
+    fs::create_dir_all(runtime_parent).expect("create runtime parent");
+    let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-1",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness.current_state",
+                    "test_harness",
+                    1_i64,
+                    2_i64,
+                    "full_reconcile",
+                    "completed",
+                    1_i64,
+                    100_i64,
+                    101_i64,
+                    102_i64,
+                    103_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("insert current-state run");
+
+    let world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let (_, run) = load_latest_test_harness_capability_event_run(&world)
+        .expect("load latest run")
+        .expect("completed run should be found");
+
+    assert_eq!(run.run_id, "run-1");
+    assert_eq!(run.status, CapabilityEventRunStatus::Completed);
+    assert_eq!(run.capability_id, "test_harness");
+    assert_eq!(run.consumer_id, "test_harness.current_state");
+    assert_eq!(run.event_kind, "current_state_consumer");
+}
+
+#[test]
+fn load_latest_test_harness_capability_event_run_prefers_newer_legacy_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = temp.path().join("repo");
+    let bin_dir = temp.path().join("bin");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let runtime_path = run_dir
+        .join("home")
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    let runtime_parent = runtime_path.parent().expect("runtime parent");
+    fs::create_dir_all(runtime_parent).expect("create runtime parent");
+    let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-current-state",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness.current_state",
+                    "test_harness",
+                    1_i64,
+                    2_i64,
+                    "full_reconcile",
+                    "completed",
+                    1_i64,
+                    100_i64,
+                    101_i64,
+                    102_i64,
+                    103_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO pack_reconcile_runs (run_id, repo_id, repo_root, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-legacy",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness",
+                    "test_harness.current_state",
+                    3_i64,
+                    4_i64,
+                    "merged_delta",
+                    "completed",
+                    1_i64,
+                    200_i64,
+                    201_i64,
+                    202_i64,
+                    203_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("insert mixed-schema runs");
+
+    let world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let (_, run) = load_latest_test_harness_capability_event_run(&world)
+        .expect("load latest run")
+        .expect("completed run should be found");
+
+    assert_eq!(run.run_id, "run-legacy");
+    assert_eq!(run.status, CapabilityEventRunStatus::Completed);
+    assert_eq!(run.capability_id, "test_harness");
+    assert_eq!(run.consumer_id, "test_harness.current_state");
 }
 
 #[test]
@@ -407,6 +657,7 @@ fn count_chat_history_edges_for_agent_only_counts_matching_agent_rows() {
         count_chat_history_edges_for_agent(&payload, "claude-code"),
         2
     );
+    assert_eq!(count_chat_history_edges_for_agent(&payload, "claude"), 2);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "cursor"), 1);
     assert_eq!(count_chat_history_edges_for_agent(&payload, "codex"), 0);
 }
@@ -479,6 +730,73 @@ fn semantic_clone_store_evidence_rejects_missing_embeddings_or_edges() {
 }
 
 #[test]
+fn parse_enrichment_status_snapshot_reads_cli_lines() {
+    let snapshot = parse_enrichment_status_snapshot(
+        "Enrichment queue: available\n\
+         Enrichment mode: paused\n\
+         Enrichment pending jobs: 6\n\
+         Enrichment pending semantic jobs: 3\n\
+         Enrichment pending embedding jobs: 2\n\
+         Enrichment pending clone-edge rebuild jobs: 1\n\
+         Enrichment running jobs: 4\n\
+         Enrichment running semantic jobs: 2\n\
+         Enrichment running embedding jobs: 1\n\
+         Enrichment running clone-edge rebuild jobs: 1\n\
+         Enrichment failed jobs: 0\n\
+         Enrichment failed semantic jobs: 0\n\
+         Enrichment failed embedding jobs: 0\n\
+         Enrichment failed clone-edge rebuild jobs: 0\n\
+         Enrichment retried failed jobs: 5\n\
+         Enrichment last action: paused\n\
+         Enrichment pause reason: qa hold\n\
+         Enrichment persisted: yes\n",
+    )
+    .expect("parse enrichments status");
+
+    assert_eq!(snapshot.mode, "paused");
+    assert_eq!(snapshot.pending_jobs, 6);
+    assert_eq!(snapshot.pending_semantic_jobs, 3);
+    assert_eq!(snapshot.pending_embedding_jobs, 2);
+    assert_eq!(snapshot.pending_clone_edges_rebuild_jobs, 1);
+    assert_eq!(snapshot.running_jobs, 4);
+    assert_eq!(snapshot.running_semantic_jobs, 2);
+    assert_eq!(snapshot.running_embedding_jobs, 1);
+    assert_eq!(snapshot.running_clone_edges_rebuild_jobs, 1);
+    assert_eq!(snapshot.failed_jobs, 0);
+    assert_eq!(snapshot.failed_semantic_jobs, 0);
+    assert_eq!(snapshot.failed_embedding_jobs, 0);
+    assert_eq!(snapshot.failed_clone_edges_rebuild_jobs, 0);
+    assert_eq!(snapshot.retried_failed_jobs, 5);
+    assert_eq!(snapshot.last_action.as_deref(), Some("paused"));
+    assert_eq!(snapshot.paused_reason.as_deref(), Some("qa hold"));
+    assert!(snapshot.persisted);
+}
+
+#[test]
+fn load_representation_kind_counts_normalizes_legacy_code_aliases() {
+    let conn = rusqlite::Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute(
+        "CREATE TABLE symbol_embeddings_current (repo_id TEXT NOT NULL, representation_kind TEXT NOT NULL)",
+        [],
+    )
+    .expect("create symbol_embeddings_current");
+    for kind in ["code", "baseline", "enriched", "summary", "summary"] {
+        conn.execute(
+            "INSERT INTO symbol_embeddings_current (repo_id, representation_kind) VALUES (?1, ?2)",
+            rusqlite::params!["repo-1", kind],
+        )
+        .expect("insert representation kind row");
+    }
+
+    let counts =
+        load_representation_kind_counts_for_repo(&conn, "symbol_embeddings_current", "repo-1")
+            .expect("load representation counts");
+
+    assert_eq!(counts.code, 3);
+    assert_eq!(counts.summary, 2);
+}
+
+#[test]
 fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
     let rows = serde_json::json!([
         {
@@ -493,6 +811,75 @@ fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
         extract_clone_nodes(&rows),
         rows.as_array().cloned().unwrap_or_default()
     );
+}
+
+#[test]
+fn extract_clone_summary_accepts_devql_summary_rows() {
+    let value = serde_json::json!([
+        {
+            "total_count": 3,
+            "groups": [
+                { "relation_kind": "similar_implementation", "count": 2 },
+                { "relation_kind": "weak_clone_candidate", "count": 1 }
+            ]
+        }
+    ]);
+
+    let summary = extract_clone_summary_from_devql_value(&value).expect("extract DevQL summary");
+
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 2);
+    assert_eq!(summary.groups[1].relation_kind, "weak_clone_candidate");
+    assert_eq!(summary.groups[1].count, 1);
+}
+
+#[test]
+fn extract_clone_summary_accepts_devql_summary_rows_with_camel_case_total_count() {
+    let value = serde_json::json!([
+        {
+            "totalCount": 3,
+            "groups": [
+                { "relationKind": "similar_implementation", "count": 2 },
+                { "relationKind": "weak_clone_candidate", "count": 1 }
+            ]
+        }
+    ]);
+
+    let summary = extract_clone_summary_from_devql_value(&value).expect("extract DevQL summary");
+
+    assert_eq!(summary.total_count, 3);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 2);
+    assert_eq!(summary.groups[1].relation_kind, "weak_clone_candidate");
+    assert_eq!(summary.groups[1].count, 1);
+}
+
+#[test]
+fn extract_clone_summary_accepts_graphql_repo_payload() {
+    let value = serde_json::json!({
+        "repo": {
+            "cloneSummary": {
+                "totalCount": 4,
+                "groups": [
+                    { "relationKind": "similar_implementation", "count": 3 },
+                    { "relationKind": "contextual_neighbor", "count": 1 }
+                ]
+            }
+        }
+    });
+
+    let summary =
+        extract_clone_summary_from_graphql_value(&value).expect("extract GraphQL clone summary");
+
+    assert_eq!(summary.total_count, 4);
+    assert_eq!(summary.groups.len(), 2);
+    assert_eq!(summary.groups[0].relation_kind, "similar_implementation");
+    assert_eq!(summary.groups[0].count, 3);
+    assert_eq!(summary.groups[1].relation_kind, "contextual_neighbor");
+    assert_eq!(summary.groups[1].count, 1);
 }
 
 #[test]

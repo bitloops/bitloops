@@ -19,11 +19,17 @@ pub use daemon_config::{
     ensure_daemon_config_exists, ensure_daemon_store_artifacts, load_daemon_settings,
     persist_daemon_cli_settings, persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
-pub(crate) use daemon_config::{DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install};
+pub(crate) use daemon_config::{
+    DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
+    prepare_daemon_inference_install, prepare_daemon_platform_embeddings_install,
+};
 pub use repo_policy::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
-    RepoPolicySnapshot, discover_repo_policy, discover_repo_policy_optional,
+    RepoPolicyExclusionFileReference, RepoPolicyScopeExclusions, RepoPolicySnapshot,
+    discover_repo_policy, discover_repo_policy_optional, parse_exclusion_patterns,
+    resolve_repo_policy_scope_exclusions,
 };
+pub(crate) use resolve::resolve_preferred_daemon_config_path_for_repo;
 pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo,
     resolve_bound_daemon_config_path_for_repo, resolve_bound_daemon_config_root_for_repo,

@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use serde_json::Value;
 
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::db_utils::esc_pg;
@@ -77,6 +78,69 @@ pub(crate) async fn write_sync_failed(store: &RelationalStorage, repo_id: &str) 
     ensure_repo_sync_state_exists(store, repo_id).await?;
     let sql = format!(
         "UPDATE repo_sync_state SET last_sync_status = 'failed' WHERE repo_id = '{}'",
+        esc_pg(repo_id),
+    );
+    store.exec(&sql).await
+}
+
+pub(crate) async fn read_scope_exclusions_fingerprint(
+    store: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Option<String>> {
+    let rows = store
+        .query_rows(&format!(
+            "SELECT scope_exclusions_fingerprint FROM repo_sync_state WHERE repo_id = '{}' LIMIT 1",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .first()
+        .and_then(Value::as_object)
+        .and_then(|row| row.get("scope_exclusions_fingerprint"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+pub(crate) async fn read_last_sync_status(
+    store: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Option<String>> {
+    let rows = store
+        .query_rows(&format!(
+            "SELECT last_sync_status FROM repo_sync_state WHERE repo_id = '{}' LIMIT 1",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .first()
+        .and_then(Value::as_object)
+        .and_then(|row| row.get("last_sync_status"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+pub(crate) async fn repo_sync_state_exists(
+    store: &RelationalStorage,
+    repo_id: &str,
+) -> Result<bool> {
+    let rows = store
+        .query_rows(&format!(
+            "SELECT repo_id FROM repo_sync_state WHERE repo_id = '{}' LIMIT 1",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(!rows.is_empty())
+}
+
+pub(crate) async fn write_scope_exclusions_fingerprint(
+    store: &RelationalStorage,
+    repo_id: &str,
+    fingerprint: &str,
+) -> Result<()> {
+    ensure_repo_sync_state_exists(store, repo_id).await?;
+    let sql = format!(
+        "UPDATE repo_sync_state SET scope_exclusions_fingerprint = '{}' WHERE repo_id = '{}'",
+        esc_pg(fingerprint),
         esc_pg(repo_id),
     );
     store.exec(&sql).await

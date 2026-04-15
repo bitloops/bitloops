@@ -149,7 +149,7 @@ pub struct InferenceRuntimeConfig {
 impl Default for InferenceRuntimeConfig {
     fn default() -> Self {
         Self {
-            command: "bitloops-embeddings".to_string(),
+            command: String::new(),
             args: Vec::new(),
             startup_timeout_secs: 60,
             request_timeout_secs: 300,
@@ -166,6 +166,8 @@ pub struct InferenceProfileConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub temperature: Option<String>,
+    pub max_output_tokens: Option<u32>,
     pub cache_dir: Option<PathBuf>,
 }
 

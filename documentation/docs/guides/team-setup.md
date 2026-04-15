@@ -26,7 +26,15 @@ Each developer may also keep:
 
 ## Team Onboarding Flow
 
-### 1. Start the daemon once on each machine
+### 1. Fastest onboarding path
+
+The fastest way to get started from inside the repository is:
+
+```bash
+bitloops init --install-default-daemon --sync=true
+```
+
+That single command bootstraps the default daemon service if needed, creates `.bitloops.local.toml`, installs hooks, and follows the initial current-state sync. Use the explicit `bitloops start --create-default-config` path below when someone needs to inspect or customise their daemon config before bootstrapping the repo.
 
 ```bash
 bitloops start --create-default-config
@@ -54,11 +62,11 @@ token = "${GITHUB_TOKEN}"
 From the repository root or a subproject directory:
 
 ```bash
-bitloops init --sync=true
 bitloops init --install-default-daemon --sync=true
+bitloops init --sync=true
 ```
 
-Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service before continuing.
+The fastest default path is `bitloops init --install-default-daemon --sync=true`. Use plain `bitloops init` when the daemon is already running, or when a developer has already bootstrapped their daemon separately.
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 
@@ -72,7 +80,11 @@ In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false
 
 `bitloops init` still does not run DevQL ingest. Use `bitloops devql tasks enqueue --kind ingest` when you want to populate checkpoint, commit, and event history.
 
-Use `--agent <name>` when a team wants to pin the supported agent set during bootstrap.
+Use `--agent <name>` repeatedly when a team wants to pin the supported agent set during bootstrap. For example:
+
+```bash
+bitloops init --sync=false --agent claude-code --agent codex
+```
 
 If telemetry consent later becomes unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
 

@@ -1,3 +1,4 @@
+pub(crate) mod csharp;
 pub(crate) mod go;
 pub(crate) mod java;
 pub(crate) mod python;
@@ -13,6 +14,7 @@ pub(crate) fn builtin_language_adapter_packs() -> Vec<Box<dyn LanguageAdapterPac
         Box::new(python::pack::PythonLanguageAdapterPack),
         Box::new(go::pack::GoLanguageAdapterPack),
         Box::new(java::pack::JavaLanguageAdapterPack),
+        Box::new(csharp::pack::CSharpLanguageAdapterPack),
     ]
 }
 
@@ -35,6 +37,7 @@ mod tests {
                 "python-language-pack",
                 "go-language-pack",
                 "java-language-pack",
+                "csharp-language-pack",
             ]
         );
     }

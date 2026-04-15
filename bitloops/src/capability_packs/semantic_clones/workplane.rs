@@ -3,12 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
-use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::config::{
     SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
     resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
 };
-use crate::host::capability_host::gateways::{CapabilityWorkplaneGateway, CapabilityWorkplaneJob};
+use crate::host::capability_host::gateways::CapabilityWorkplaneGateway;
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 use super::runtime_config::{embedding_slot_for_representation, resolve_selected_summary_slot};
@@ -134,8 +133,9 @@ fn resolve_effective_mailbox_intent_from_status(
             .is_some();
 
     SemanticClonesMailboxIntentState {
-        summary_refresh_active: repo_intent(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
-            || summary_live,
+        // Summary refresh jobs require a live summary-generation slot. Repo intent alone should
+        // not seed work that the daemon cannot ever claim.
+        summary_refresh_active: summary_live,
         code_embeddings_active: repo_intent(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX) || code_live,
         summary_embeddings_active: repo_intent(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX)
             || summary_embedding_live,
@@ -143,42 +143,6 @@ fn resolve_effective_mailbox_intent_from_status(
             || code_live
             || summary_embedding_live,
     }
-}
-
-pub fn enqueue_summary_refresh_jobs(
-    workplane: &dyn CapabilityWorkplaneGateway,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    intent: &SemanticClonesMailboxIntentState,
-) -> Result<()> {
-    if !intent.summary_refresh_active {
-        return Ok(());
-    }
-    enqueue_artefact_jobs(workplane, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, inputs)
-}
-
-pub fn enqueue_embedding_jobs(
-    workplane: &dyn CapabilityWorkplaneGateway,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    intent: &SemanticClonesMailboxIntentState,
-) -> Result<()> {
-    let mut jobs = Vec::new();
-    if intent.code_embeddings_active {
-        jobs.extend(build_embedding_jobs(
-            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-            inputs,
-        ));
-    }
-    if intent.summary_embeddings_active && !intent.summary_refresh_active {
-        jobs.extend(build_embedding_jobs(
-            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-            inputs,
-        ));
-    }
-    if jobs.is_empty() {
-        return Ok(());
-    }
-    let _ = workplane.enqueue_jobs(jobs)?;
-    Ok(())
 }
 
 pub fn payload_artefact_id(payload: &serde_json::Value) -> Option<String> {
@@ -221,46 +185,51 @@ fn open_workplane_store_for_repo(repo_root: &Path) -> Result<RepoSqliteRuntimeSt
     RepoSqliteRuntimeStore::open_for_roots(config_root, repo_root)
 }
 
-fn enqueue_artefact_jobs(
-    workplane: &dyn CapabilityWorkplaneGateway,
-    mailbox_name: &str,
-    inputs: &[semantic_features::SemanticFeatureInput],
-) -> Result<()> {
-    let jobs = inputs
-        .iter()
-        .map(|input| {
-            CapabilityWorkplaneJob::new(
-                mailbox_name,
-                Some(format!("{mailbox_name}:{}", input.artefact_id)),
-                serde_json::to_value(SemanticClonesMailboxPayload::Artefact {
-                    artefact_id: input.artefact_id.clone(),
-                })
-                .expect("workplane payload should serialize"),
-            )
-        })
-        .collect::<Vec<_>>();
-    if jobs.is_empty() {
-        return Ok(());
-    }
-    let _ = workplane.enqueue_jobs(jobs)?;
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::capability_host::gateways::CapabilityMailboxStatus;
+    use std::collections::BTreeMap;
 
-fn build_embedding_jobs(
-    mailbox_name: &str,
-    inputs: &[semantic_features::SemanticFeatureInput],
-) -> Vec<CapabilityWorkplaneJob> {
-    inputs
-        .iter()
-        .map(|input| {
-            CapabilityWorkplaneJob::new(
-                mailbox_name,
-                Some(format!("{mailbox_name}:{}", input.artefact_id)),
-                serde_json::to_value(SemanticClonesMailboxPayload::Artefact {
-                    artefact_id: input.artefact_id.clone(),
-                })
-                .expect("embedding workplane payload should serialize"),
-            )
-        })
-        .collect()
+    fn status_with_active_intents() -> BTreeMap<String, CapabilityMailboxStatus> {
+        SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES
+            .iter()
+            .map(|mailbox_name| {
+                (
+                    (*mailbox_name).to_string(),
+                    CapabilityMailboxStatus {
+                        intent_active: true,
+                        ..CapabilityMailboxStatus::default()
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summary_refresh_requires_a_configured_summary_slot() {
+        let intent = resolve_effective_mailbox_intent_from_status(
+            &status_with_active_intents(),
+            &SemanticClonesConfig::default(),
+        );
+
+        assert!(
+            !intent.summary_refresh_active,
+            "repo intent alone should not activate summary refresh without a live summary slot"
+        );
+        assert!(intent.code_embeddings_active);
+        assert!(intent.summary_embeddings_active);
+        assert!(intent.clone_rebuild_active);
+    }
+
+    #[test]
+    fn summary_refresh_activates_once_summary_generation_is_configured() {
+        let mut config = SemanticClonesConfig::default();
+        config.inference.summary_generation = Some("summary_local".to_string());
+
+        let intent =
+            resolve_effective_mailbox_intent_from_status(&status_with_active_intents(), &config);
+
+        assert!(intent.summary_refresh_active);
+    }
 }

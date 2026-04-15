@@ -101,7 +101,16 @@ fn clone_from_edge_preserves_metadata_shape() {
         lexical_score: 0.6,
         structural_score: 0.4,
         clone_input_hash: "hash".to_string(),
-        explanation_json: json!({"labels":["preferred_local_pattern"]}),
+        explanation_json: json!({
+            "labels": ["preferred_local_pattern"],
+            "evidence": {
+                "semantic_views": {
+                    "interpretation": "implementation_reuse_drift",
+                    "primary_driver": "code",
+                    "summary_signal_source": "embedding"
+                }
+            }
+        }),
     };
 
     let clone = clone_from_edge(edge).expect("clone row");
@@ -118,6 +127,18 @@ fn clone_from_edge_preserves_metadata_shape() {
     assert!(metadata.contains_key("lexicalScore"));
     assert!(metadata.contains_key("structuralScore"));
     assert!(metadata.contains_key("explanation"));
+    assert_eq!(
+        metadata["explanation"]["evidence"]["semantic_views"]["interpretation"],
+        "implementation_reuse_drift"
+    );
+    assert_eq!(
+        metadata["explanation"]["evidence"]["semantic_views"]["primary_driver"],
+        "code"
+    );
+    assert_eq!(
+        metadata["explanation"]["evidence"]["semantic_views"]["summary_signal_source"],
+        "embedding"
+    );
 }
 
 #[test]

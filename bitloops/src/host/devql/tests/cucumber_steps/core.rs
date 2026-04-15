@@ -306,7 +306,8 @@ async fn load_persisted_summary_map(
 fn build_fixture_embedding_provider(
     inputs: &[semantic::SemanticFeatureInput],
     summary_by_artefact_id: &HashMap<String, String>,
-    embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
+    code_embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
+    summary_embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
 ) -> Result<Arc<dyn EmbeddingService>> {
     let mut embeddings_by_document = HashMap::new();
     for representation_kind in [
@@ -319,6 +320,14 @@ fn build_fixture_embedding_provider(
             summary_by_artefact_id,
         );
         for input in embedding_inputs {
+            let embeddings_by_artefact_id = match input.representation_kind {
+                semantic_embeddings::EmbeddingRepresentationKind::Code => {
+                    code_embeddings_by_artefact_id
+                }
+                semantic_embeddings::EmbeddingRepresentationKind::Summary => {
+                    summary_embeddings_by_artefact_id
+                }
+            };
             let embedding = embeddings_by_artefact_id
                 .get(&input.artefact_id)
                 .cloned()
@@ -382,7 +391,8 @@ struct RealCloneFixtureSymbol {
     body: String,
     docstring: Option<String>,
     summary: String,
-    embedding: Vec<f32>,
+    code_embedding: Vec<f32>,
+    summary_embedding: Vec<f32>,
     call_targets: Vec<String>,
     dependency_targets: Vec<String>,
     churn_count: usize,
@@ -415,6 +425,7 @@ fn real_clone_symbol(
     dependency_targets: Vec<&str>,
     churn_count: usize,
 ) -> RealCloneFixtureSymbol {
+    let summary_embedding = embedding.clone();
     RealCloneFixtureSymbol {
         symbol_id: symbol_id.to_string(),
         artefact_id: artefact_id.to_string(),
@@ -426,7 +437,8 @@ fn real_clone_symbol(
         body: body.to_string(),
         docstring: None,
         summary: summary.to_string(),
-        embedding,
+        code_embedding: embedding,
+        summary_embedding,
         call_targets: call_targets.into_iter().map(str::to_string).collect(),
         dependency_targets: dependency_targets.into_iter().map(str::to_string).collect(),
         churn_count,
@@ -677,8 +689,8 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 1,
             ),
         ],
-        "shared logic candidates" => vec![
-            real_clone_symbol(
+        "shared logic candidates" => {
+            let mut create_invoice_pdf = real_clone_symbol(
                 "sym::create_invoice_pdf",
                 "artefact::create_invoice_pdf",
                 "src/billing/invoice.ts",
@@ -689,15 +701,17 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 ),
                 "const invoiceTemplate = billing.loadTemplate(orderId, locale);\nconst renderedInvoice = pdf.render(invoiceTemplate, currency.format(totalCents));\nreturn renderedInvoice;",
                 "Function create invoice pdf. Creates invoice PDF content for billing.",
-                vec![0.84, 0.16, 0.0],
+                vec![1.0, 0.0, 0.0],
                 vec!["billing.loadTemplate", "currency.format", "pdf.render"],
                 vec![
                     "references:invoice_template::default",
                     "references:billing_formatter::money",
                 ],
                 1,
-            ),
-            real_clone_symbol(
+            );
+            create_invoice_pdf.summary_embedding = vec![1.0, 0.0, 0.0];
+
+            let mut build_invoice_pdf_bundle = real_clone_symbol(
                 "sym::build_invoice_pdf_bundle",
                 "artefact::build_invoice_pdf_bundle",
                 "src/billing/invoice_helpers.ts",
@@ -708,17 +722,20 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 ),
                 "const invoiceTemplate = billing.loadTemplate(orderId, locale);\nconst renderedBundle = pdf.render(invoiceTemplate, currency.format(totalCents));\nreturn buildBundle(renderedBundle);",
                 "Function build invoice pdf bundle. Builds invoice pdf content from shared billing steps.",
-                vec![0.82, 0.18, 0.0],
+                vec![-1.0, 0.0, 0.0],
                 vec!["billing.loadTemplate", "currency.format", "pdf.render"],
                 vec![
                     "references:invoice_template::default",
                     "references:billing_formatter::money",
                 ],
                 4,
-            ),
-        ],
-        "diverged implementations" => vec![
-            real_clone_symbol(
+            );
+            build_invoice_pdf_bundle.summary_embedding = vec![0.99, 0.01, 0.0];
+
+            vec![create_invoice_pdf, build_invoice_pdf_bundle]
+        }
+        "diverged implementations" => {
+            let mut validate_order_checkout = real_clone_symbol(
                 "sym::validate_order_checkout",
                 "artefact::validate_order_checkout",
                 "src/validation/checkout.ts",
@@ -731,8 +748,10 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 vec!["rules.checkout"],
                 vec!["references:order_policy::default"],
                 1,
-            ),
-            real_clone_symbol(
+            );
+            validate_order_checkout.summary_embedding = vec![1.0, 0.0, 0.0];
+
+            let mut validate_order_draft = real_clone_symbol(
                 "sym::validate_order_draft",
                 "artefact::validate_order_draft",
                 "src/validation/draft.ts",
@@ -745,8 +764,11 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 vec!["rules.draft"],
                 vec!["references:order_policy::default"],
                 1,
-            ),
-        ],
+            );
+            validate_order_draft.summary_embedding = vec![-1.0, 0.0, 0.0];
+
+            vec![validate_order_checkout, validate_order_draft]
+        }
         "preferred local patterns" => vec![
             real_clone_symbol(
                 "sym::render_invoice_document",
@@ -900,6 +922,41 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 1,
             ),
         ],
+        "unrelated pairs" => {
+            let mut archive_invoice = real_clone_symbol(
+                "sym::archive_invoice",
+                "artefact::archive_invoice",
+                "src/archive/invoice.ts",
+                "function",
+                "src/archive/invoice.ts::archive_invoice",
+                Some("function archive_invoice(invoiceId: string)"),
+                "const archiveRecord = archiveRepo.load(invoiceId);\nreturn archiveRepo.persist(archiveRecord);",
+                "Function archive invoice. Archives an invoice for retention.",
+                vec![1.0, 0.0, 0.0],
+                vec!["archiveRepo.load", "archiveRepo.persist"],
+                vec!["references:archive_repository::default"],
+                1,
+            );
+            archive_invoice.summary_embedding = vec![1.0, 0.0, 0.0];
+
+            let mut notify_customer = real_clone_symbol(
+                "sym::notify_customer",
+                "artefact::notify_customer",
+                "src/notifications/customer.ts",
+                "function",
+                "src/notifications/customer.ts::notify_customer",
+                Some("function notify_customer(customerId: string)"),
+                "const message = notificationComposer.compose(customerId);\nreturn notifier.send(message);",
+                "Function notify customer. Sends a customer notification.",
+                vec![-1.0, 0.0, 0.0],
+                vec!["notificationComposer.compose", "notifier.send"],
+                vec!["references:notifier::default"],
+                1,
+            );
+            notify_customer.summary_embedding = vec![-1.0, 0.0, 0.0];
+
+            vec![archive_invoice, notify_customer]
+        }
         other => bail!("unknown real semantic clone fixture `{other}`"),
     };
 
@@ -1200,6 +1257,7 @@ async fn build_prepared_real_clone_fixture_db(
         .map(|symbol| symbol.artefact_id.as_str())
         .collect::<HashSet<_>>();
 
+    let mut semantic_inputs_by_file = Vec::new();
     let mut all_semantic_inputs = Vec::new();
     for file in &materialized_files {
         let pre_stage_artefacts =
@@ -1219,7 +1277,8 @@ async fn build_prepared_real_clone_fixture_db(
             .into_iter()
             .filter(|input| fixture_artefact_ids.contains(input.artefact_id.as_str()))
             .collect::<Vec<_>>();
-        all_semantic_inputs.extend(semantic_inputs);
+        all_semantic_inputs.extend(semantic_inputs.iter().cloned());
+        semantic_inputs_by_file.push((file.path.clone(), file.blob_sha.clone(), semantic_inputs));
     }
 
     upsert_semantic_feature_rows(
@@ -1229,6 +1288,19 @@ async fn build_prepared_real_clone_fixture_db(
     )
     .await
     .context("upsert semantic feature rows for real-path fixture")?;
+    for (path, content_id, semantic_inputs) in &semantic_inputs_by_file {
+        crate::capability_packs::semantic_clones::upsert_current_semantic_feature_rows(
+            &relational,
+            path,
+            content_id,
+            semantic_inputs,
+            Arc::clone(&summary_provider),
+        )
+        .await
+        .with_context(|| {
+            format!("upsert current semantic feature rows for real-path fixture {path}")
+        })?;
+    }
     let summary_by_artefact_id = load_persisted_summary_map(
         &relational,
         &all_semantic_inputs
@@ -1238,29 +1310,77 @@ async fn build_prepared_real_clone_fixture_db(
     )
     .await
     .context("load persisted summaries for real-path fixture")?;
-    let embeddings_by_artefact_id = fixture
+    let code_embeddings_by_artefact_id = fixture
         .symbols
         .iter()
-        .map(|symbol| (symbol.artefact_id.clone(), symbol.embedding.clone()))
+        .map(|symbol| (symbol.artefact_id.clone(), symbol.code_embedding.clone()))
+        .collect::<HashMap<_, _>>();
+    let summary_embeddings_by_artefact_id = fixture
+        .symbols
+        .iter()
+        .map(|symbol| (symbol.artefact_id.clone(), symbol.summary_embedding.clone()))
         .collect::<HashMap<_, _>>();
     let embedding_provider = build_fixture_embedding_provider(
         &all_semantic_inputs,
         &summary_by_artefact_id,
-        &embeddings_by_artefact_id,
+        &code_embeddings_by_artefact_id,
+        &summary_embeddings_by_artefact_id,
     )
     .context("build fixture embedding provider for real-path fixture")?;
     upsert_symbol_embedding_rows(
         &relational,
         &all_semantic_inputs,
         crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-        embedding_provider,
+        Arc::clone(&embedding_provider),
     )
     .await
-    .context("upsert symbol embedding rows for real-path fixture")?;
+    .context("upsert code symbol embedding rows for real-path fixture")?;
+    for (path, content_id, semantic_inputs) in &semantic_inputs_by_file {
+        crate::capability_packs::semantic_clones::upsert_current_symbol_embedding_rows(
+            &relational,
+            path,
+            content_id,
+            semantic_inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+            Arc::clone(&embedding_provider),
+        )
+        .await
+        .with_context(|| {
+            format!("upsert current code symbol embedding rows for real-path fixture {path}")
+        })?;
+    }
+    upsert_symbol_embedding_rows(
+        &relational,
+        &all_semantic_inputs,
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+        Arc::clone(&embedding_provider),
+    )
+    .await
+    .context("upsert summary symbol embedding rows for real-path fixture")?;
+    for (path, content_id, semantic_inputs) in &semantic_inputs_by_file {
+        crate::capability_packs::semantic_clones::upsert_current_symbol_embedding_rows(
+            &relational,
+            path,
+            content_id,
+            semantic_inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+            Arc::clone(&embedding_provider),
+        )
+        .await
+        .with_context(|| {
+            format!("upsert current summary symbol embedding rows for real-path fixture {path}")
+        })?;
+    }
 
     rebuild_symbol_clone_edges(&relational, &repo_id)
         .await
         .context("rebuild semantic clone edges for real-path fixture")?;
+    crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+        &relational,
+        &repo_id,
+    )
+    .await
+    .context("rebuild current semantic clone edges for real-path fixture")?;
 
     // Force WAL contents back into the main SQLite file so later copies are self-contained.
     rusqlite::Connection::open(&sqlite_path)
@@ -2080,6 +2200,13 @@ fn clone_metric_value(row: &Value, metric: &str) -> Option<f64> {
     }
 }
 
+fn explanation_value_at_path<'a>(row: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.')
+        .try_fold(row.get("explanation_json")?, |value, segment| {
+            value.get(segment)
+        })
+}
+
 fn then_clone_row_metric_at_least(
     world: &mut DevqlBddWorld,
     ctx: cucumber::step::Context,
@@ -2195,6 +2322,25 @@ fn then_clone_row_fact_is(
     })
 }
 
+fn then_clone_row_explanation_path_equals(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let target_symbol_fqn = &ctx.matches[1].1;
+        let path = &ctx.matches[2].1;
+        let expected = &ctx.matches[3].1;
+        let row = clone_row_for_target(world, target_symbol_fqn);
+        let actual = explanation_value_at_path(row, path)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("missing explanation path `{path}` in clone row {row:#?}"));
+        assert_eq!(
+            actual, expected,
+            "unexpected explanation value at `{path}` for clone row `{target_symbol_fqn}`"
+        );
+    })
+}
+
 fn then_clone_row_has_limiting_signal(
     world: &mut DevqlBddWorld,
     ctx: cucumber::step::Context,
@@ -2214,6 +2360,19 @@ fn then_clone_row_has_limiting_signal(
                 .filter_map(Value::as_str)
                 .any(|candidate| candidate == signal),
             "expected clone row `{target_symbol_fqn}` limiting signals to include `{signal}`, got {limiting_signals:?}"
+        );
+    })
+}
+
+fn then_clone_query_returns_no_rows(
+    world: &mut DevqlBddWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        assert!(
+            world.clone_query_rows.is_empty(),
+            "expected clone query to return no rows, got: {:#?}",
+            world.clone_query_rows
         );
     })
 }
@@ -2556,6 +2715,7 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
             &initial_inputs,
             &initial_summary_by_artefact_id,
             &initial_embeddings_by_artefact_id,
+            &initial_embeddings_by_artefact_id,
         )
         .expect("build snapshot one fixture embedding provider");
         let initial_stage2_stats = upsert_symbol_embedding_rows(
@@ -2616,6 +2776,7 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         let updated_embedding_provider = build_fixture_embedding_provider(
             &updated_inputs,
             &updated_summary_by_artefact_id,
+            &updated_embeddings_by_artefact_id,
             &updated_embeddings_by_artefact_id,
         )
         .expect("build snapshot two fixture embedding provider");
@@ -2795,7 +2956,7 @@ fn invalid_embedding_gateway(
     match case_name {
         "missing runtime command" => {
             inference.runtimes.insert(
-                crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID.to_string(),
+                crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
                 crate::config::InferenceRuntimeConfig {
                     command: "definitely-missing-embeddings-runtime".to_string(),
                     args: Vec::new(),
@@ -2810,11 +2971,13 @@ fn invalid_embedding_gateway(
                     task: crate::config::InferenceTask::Embeddings,
                     driver: crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string(),
                     runtime: Some(
-                        crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID.to_string(),
+                        crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
                     ),
                     model: Some("bge-m3".to_string()),
                     api_key: None,
                     base_url: None,
+                    temperature: None,
+                    max_output_tokens: None,
                     cache_dir: None,
                 },
             );
@@ -4568,6 +4731,11 @@ pub(super) fn collection() -> Collection<DevqlBddWorld> {
         )
         .then(
             None,
+            regex(r#"^the clone row for "([^"]+)" has explanation path "([^"]+)" equal to "([^"]+)"$"#),
+            step_fn(then_clone_row_explanation_path_equals),
+        )
+        .then(
+            None,
             regex(r#"^the clone row for "([^"]+)" has limiting signal "([^"]+)"$"#),
             step_fn(then_clone_row_has_limiting_signal),
         )
@@ -4580,6 +4748,11 @@ pub(super) fn collection() -> Collection<DevqlBddWorld> {
             None,
             regex(r#"^no clone row targets "([^"]+)"$"#),
             step_fn(then_no_clone_row_targets),
+        )
+        .then(
+            None,
+            regex(r"^the clone query returns no rows$"),
+            step_fn(then_clone_query_returns_no_rows),
         )
         .then(
             None,

@@ -1,8 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use serde_json::to_string;
 
-use super::plugin::{BITLOOPS_CMD_PLACEHOLDER, PLUGIN_TEMPLATE};
+use super::plugin::{
+    BITLOOPS_CMD_PLACEHOLDER, BOOTSTRAP_CONTEXT_PLACEHOLDER, PLUGIN_TEMPLATE,
+    session_bootstrap_text,
+};
 
 pub const PLUGIN_FILE_NAME: &str = "bitloops.ts";
 pub const PLUGIN_DIR_NAME: &str = "plugins";
@@ -21,6 +25,11 @@ pub fn render_plugin_template(local_dev: bool) -> Result<String> {
             "plugin template missing BITLOOPS command placeholder"
         ));
     }
+    if !PLUGIN_TEMPLATE.contains(BOOTSTRAP_CONTEXT_PLACEHOLDER) {
+        return Err(anyhow!(
+            "plugin template missing bootstrap context placeholder"
+        ));
+    }
 
     let bitloops_cmd = if local_dev {
         "cargo run --"
@@ -28,5 +37,45 @@ pub fn render_plugin_template(local_dev: bool) -> Result<String> {
         "bitloops"
     };
 
-    Ok(PLUGIN_TEMPLATE.replace(BITLOOPS_CMD_PLACEHOLDER, bitloops_cmd))
+    let bootstrap_context = to_string(&session_bootstrap_text())
+        .map_err(|err| anyhow!("failed to serialize bootstrap context: {err}"))?;
+
+    Ok(PLUGIN_TEMPLATE
+        .replace(BITLOOPS_CMD_PLACEHOLDER, bitloops_cmd)
+        .replace(BOOTSTRAP_CONTEXT_PLACEHOLDER, &bootstrap_context))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_plugin_template_injects_bootstrap_context_and_skill_path() {
+        let rendered = render_plugin_template(false).expect("render should succeed");
+
+        assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
+        assert!(
+            rendered.contains(".opencode/skills/bitloops/using-devql/SKILL.md"),
+            "bootstrap text should reference the repo-local skill path"
+        );
+        assert!(
+            rendered.contains("name: using-devql"),
+            "bootstrap text should include the canonical skill content"
+        );
+        assert!(
+            rendered.contains("\"experimental.chat.messages.transform\": async"),
+            "plugin should inject bootstrap context through OpenCode's messages transform"
+        );
+        assert!(
+            rendered.contains("config.skills.paths.push(repoSkillsDir)"),
+            "plugin should register the repo-local .opencode/skills directory"
+        );
+    }
+
+    #[test]
+    fn render_plugin_template_switches_to_local_dev_command() {
+        let rendered = render_plugin_template(true).expect("render should succeed");
+
+        assert!(rendered.contains(r#"const BITLOOPS_CMD = "cargo run --""#));
+    }
 }

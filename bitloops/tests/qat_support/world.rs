@@ -9,6 +9,75 @@ pub struct QatRunConfig {
     pub suite_root: PathBuf,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepresentationKindCounts {
+    pub code: usize,
+    pub summary: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticCloneHistoricalTableSnapshot {
+    pub artefacts_historical: usize,
+    pub symbol_features: usize,
+    pub symbol_semantics: usize,
+    pub symbol_embeddings: usize,
+    pub symbol_clone_edges: usize,
+    pub commit_ingest_ledger: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticCloneCurrentTableSnapshot {
+    pub artefacts_current: usize,
+    pub symbol_features_current: usize,
+    pub symbol_semantics_current: usize,
+    pub symbol_embeddings_current: usize,
+    pub symbol_clone_edges_current: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticCloneTableSnapshot {
+    pub historical: SemanticCloneHistoricalTableSnapshot,
+    pub current: SemanticCloneCurrentTableSnapshot,
+    pub historical_representation_counts: RepresentationKindCounts,
+    pub current_representation_counts: RepresentationKindCounts,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnrichmentStatusSnapshot {
+    pub mode: String,
+    pub pending_jobs: u64,
+    pub pending_semantic_jobs: u64,
+    pub pending_embedding_jobs: u64,
+    pub pending_clone_edges_rebuild_jobs: u64,
+    pub running_jobs: u64,
+    pub running_semantic_jobs: u64,
+    pub running_embedding_jobs: u64,
+    pub running_clone_edges_rebuild_jobs: u64,
+    pub failed_jobs: u64,
+    pub failed_semantic_jobs: u64,
+    pub failed_embedding_jobs: u64,
+    pub failed_clone_edges_rebuild_jobs: u64,
+    pub retried_failed_jobs: u64,
+    pub last_action: Option<String>,
+    pub paused_reason: Option<String>,
+    pub persisted: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticCloneProgressObservation {
+    pub status_samples: usize,
+    pub max_pending_embedding_jobs: u64,
+    pub max_pending_clone_edges_rebuild_jobs: u64,
+    pub embedding_pending_decreased: bool,
+    pub first_code_embedding_count: usize,
+    pub first_summary_embedding_count: usize,
+    pub code_embeddings_appeared_before_drain: bool,
+    pub summary_embeddings_appeared_before_drain: bool,
+    pub embedding_activity_observed: bool,
+    pub clone_edges_rebuild_observed: bool,
+    pub parallel_progress_observed: bool,
+}
+
 #[derive(Debug, Default, cucumber::World)]
 pub struct QatWorld {
     pub scenario_name: Option<String>,
@@ -36,6 +105,9 @@ pub struct QatWorld {
     pub completed_ledger_count_snapshot: Option<usize>,
     pub artefacts_current_count_snapshot: Option<usize>,
     pub semantic_clones_fallback_active: bool,
+    pub semantic_clone_table_snapshot: Option<SemanticCloneTableSnapshot>,
+    pub last_enrichment_status_snapshot: Option<EnrichmentStatusSnapshot>,
+    pub semantic_clone_progress_observation: Option<SemanticCloneProgressObservation>,
     pub knowledge_items_by_url: HashMap<String, String>,
     pub knowledge_versions_by_ref: HashMap<String, usize>,
     pub last_knowledge_add_had_commit_association: Option<bool>,
@@ -84,6 +156,9 @@ impl QatWorld {
         self.completed_ledger_count_snapshot = None;
         self.artefacts_current_count_snapshot = None;
         self.semantic_clones_fallback_active = false;
+        self.semantic_clone_table_snapshot = None;
+        self.last_enrichment_status_snapshot = None;
+        self.semantic_clone_progress_observation = None;
         self.knowledge_items_by_url = HashMap::new();
         self.knowledge_versions_by_ref = HashMap::new();
         self.last_knowledge_add_had_commit_association = None;

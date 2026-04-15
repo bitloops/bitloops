@@ -20,7 +20,11 @@ const SLOW_TEST_TARGETS: &[&str] = &[
     "testlens_gherkin",
     "testlens_sqlite_acceptance",
 ];
-const SLOW_LIB_TESTS: &[&str] = &["host::devql::cucumber_bdd::devql_bdd_features_pass"];
+const SLOW_LIB_TESTS: &[&str] = &[
+    "host::devql::cucumber_bdd::devql_bdd_features_pass",
+    "api::tests::devql_mutations_and_health::devql_mutations_manage_knowledge_and_apply_migrations",
+    "api::tests::devql_mutations_and_health::devql_mutations_surface_provider_and_reference_errors_for_knowledge_flows",
+];
 const MERGE_SMOKE_TARGETS: &[&str] = &[
     "agent_cli_smoke",
     "checkpoint_rewind_smoke",
@@ -128,6 +132,7 @@ fn run_dev_install() -> Result<(), String> {
 }
 
 fn run_test_lane(lane: &str) -> Result<(), String> {
+    ensure_cargo_subcommand_available("nextest", nextest_install_hint())?;
     let workspace_root = workspace_root()?;
     let lane_commands = test_lane_command_groups(lane)?;
     let test_threads = test_threads_for_lane(lane)?;
@@ -161,6 +166,33 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn ensure_cargo_subcommand_available(subcommand: &str, install_hint: &str) -> Result<(), String> {
+    let status = Command::new("cargo")
+        .arg(subcommand)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err(format!(
+            "required Cargo subcommand `cargo {subcommand}` is not available. Install it first, for example: {install_hint}"
+        )),
+        Err(err) => Err(format!(
+            "failed to check whether `cargo {subcommand}` is available: {err}"
+        )),
+    }
+}
+
+fn nextest_install_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "`brew install cargo-nextest` or `cargo install cargo-nextest --locked`"
+    } else {
+        "`cargo install cargo-nextest --locked`"
+    }
 }
 
 fn run_coverage_command(subcommand: &str, raw_args: Vec<String>) -> Result<(), String> {
@@ -1479,8 +1511,10 @@ mod tests {
         for alias in [
             "qat = ",
             "qat-smoke = ",
+            "qat-devql-capabilities = ",
             "qat-devql-sync = ",
             "qat-onboarding = ",
+            "qat-devql-ingest = ",
         ] {
             let line = config
                 .lines()
@@ -1653,5 +1687,16 @@ mod tests {
         let e = unknown_coverage_subcommand_error("foo");
         assert!(e.contains("foo"));
         assert!(e.contains("run-lcov"));
+    }
+
+    #[test]
+    fn ensure_cargo_subcommand_available_reports_install_hint_for_missing_subcommand() {
+        let err = super::ensure_cargo_subcommand_available(
+            "definitely-not-a-real-subcommand",
+            "brew install cargo-nextest",
+        )
+        .unwrap_err();
+        assert!(err.contains("cargo definitely-not-a-real-subcommand"));
+        assert!(err.contains("brew install cargo-nextest"));
     }
 }

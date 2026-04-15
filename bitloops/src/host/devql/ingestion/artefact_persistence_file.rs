@@ -35,6 +35,8 @@ pub(super) fn build_file_artefact_row_from_content(
     repo_id: &str,
     path: &str,
     blob_sha: &str,
+    language: &str,
+    extraction_fingerprint: &str,
     content: Option<&str>,
 ) -> FileArtefactRow {
     let line_count = content
@@ -46,7 +48,8 @@ pub(super) fn build_file_artefact_row_from_content(
     FileArtefactRow {
         artefact_id: revision_artefact_id(repo_id, blob_sha, &file_symbol_id(path)),
         symbol_id: file_symbol_id(path),
-        language: detect_language(path),
+        language: language.to_string(),
+        extraction_fingerprint: extraction_fingerprint.to_string(),
         end_line: line_count,
         end_byte: byte_count,
     }
@@ -54,35 +57,33 @@ pub(super) fn build_file_artefact_row_from_content(
 
 pub(super) async fn upsert_file_artefact_row(
     repo_id: &str,
-    repo_root: &Path,
     relational: &RelationalStorage,
     path: &str,
     blob_sha: &str,
+    language: &str,
+    extraction_fingerprint: &str,
+    blob_content: &DecodedFileContent,
 ) -> Result<FileArtefactRow> {
     let symbol_id = file_symbol_id(path);
     let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
-    let language = detect_language(path);
-    let line_count = git_blob_line_count(repo_root, blob_sha).unwrap_or(1).max(1);
-    let blob_content = git_blob_content(repo_root, blob_sha);
-    let byte_count = blob_content
-        .as_ref()
-        .map(|content| content.len() as i32)
-        .unwrap_or(0)
-        .max(0);
+    let line_count = blob_content.line_count().max(1);
+    let byte_count = blob_content.byte_count().max(0);
     let modifiers_sql = sql_json_text_array(relational, &[]);
     let file_docstring = blob_content
+        .text
         .as_deref()
-        .and_then(|content| extract_file_docstring_for_language_pack(path, &language, content));
+        .and_then(|content| extract_file_docstring_for_language_pack(path, language, content));
     let docstring_sql = sql_nullable_text(file_docstring.as_deref());
 
     let sql = format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, language = EXCLUDED.language, extraction_fingerprint = EXCLUDED.extraction_fingerprint, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&artefact_id),
         esc_pg(&symbol_id),
         esc_pg(repo_id),
-        esc_pg(&language),
+        esc_pg(language),
+        esc_pg(extraction_fingerprint),
         esc_pg(path),
         modifiers_sql,
         docstring_sql,
@@ -108,7 +109,8 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
     Ok(FileArtefactRow {
         artefact_id,
         symbol_id,
-        language,
+        language: language.to_string(),
+        extraction_fingerprint: extraction_fingerprint.to_string(),
         end_line: line_count,
         end_byte: byte_count,
     })

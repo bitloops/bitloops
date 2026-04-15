@@ -1,0 +1,167 @@
+type DashboardAgent {
+	key: String!
+}
+
+type DashboardBranchSummary {
+	branch: String!
+	checkpointCommits: Int!
+}
+
+type DashboardBundleVersion {
+	currentVersion: String
+	latestApplicableVersion: String
+	installAvailable: Boolean!
+	reason: String!
+}
+
+type DashboardCheckpoint {
+	checkpointId: String!
+	strategy: String!
+	branch: String!
+	checkpointsCount: Int!
+	filesTouched: [DashboardCommitFileDiff!]!
+	sessionCount: Int!
+	tokenUsage: DashboardTokenUsage
+	sessionId: String!
+	agents: [String!]!
+	firstPromptPreview: String!
+	createdAt: String!
+	isTask: Boolean!
+	toolUseId: String!
+}
+
+type DashboardCheckpointDetail {
+	checkpointId: String!
+	strategy: String!
+	branch: String!
+	checkpointsCount: Int!
+	filesTouched: [DashboardCommitFileDiff!]!
+	sessionCount: Int!
+	tokenUsage: DashboardTokenUsage
+	sessions: [DashboardCheckpointSessionDetail!]!
+}
+
+type DashboardCheckpointSessionDetail {
+	sessionIndex: Int!
+	sessionId: String!
+	agent: String!
+	createdAt: String!
+	isTask: Boolean!
+	toolUseId: String!
+	metadataJson: String!
+	transcriptJsonl: String!
+	promptsText: String!
+	contextText: String!
+}
+
+type DashboardCommit {
+	sha: String!
+	parents: [String!]!
+	authorName: String!
+	authorEmail: String!
+	timestamp: Int!
+	message: String!
+	filesTouched: [DashboardCommitFileDiff!]!
+}
+
+type DashboardCommitFileDiff {
+	filepath: String!
+	additionsCount: Int!
+	deletionsCount: Int!
+	changeKind: String
+	copiedFromPath: String
+	copiedFromBlobSha: String
+}
+
+type DashboardCommitRow {
+	commit: DashboardCommit!
+	checkpoint: DashboardCheckpoint!
+	checkpoints: [DashboardCheckpoint!]!
+}
+
+type DashboardFetchBundleResult {
+	installedVersion: String!
+	bundleDir: String!
+	status: String!
+	checksumVerified: Boolean!
+}
+
+type DashboardKpis {
+	totalCommits: Int!
+	totalCheckpoints: Int!
+	totalAgents: Int!
+	totalSessions: Int!
+	filesTouchedCount: Int!
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+	averageTokensPerCheckpoint: Float!
+	averageSessionsPerCheckpoint: Float!
+}
+
+type DashboardMutationRoot {
+	fetchBundle: DashboardFetchBundleResult!
+}
+
+type DashboardQueryRoot {
+	health: HealthStatus!
+	repositories: [DashboardRepository!]!
+	kpis(repoId: String, branch: String!, from: String, to: String, user: String, agent: String): DashboardKpis!
+	commits(repoId: String, branch: String!, from: String, to: String, user: String, agent: String, limit: Int, offset: Int): [DashboardCommitRow!]!
+	branches(repoId: String, from: String, to: String): [DashboardBranchSummary!]!
+	users(repoId: String, branch: String!, from: String, to: String, agent: String): [DashboardUser!]!
+	agents(repoId: String, branch: String!, from: String, to: String, user: String): [DashboardAgent!]!
+	checkpoint(repoId: String, checkpointId: String!): DashboardCheckpointDetail!
+	checkBundleVersion: DashboardBundleVersion!
+}
+
+type DashboardRepository {
+	repoId: String!
+	identity: String!
+	name: String!
+	provider: String!
+	organization: String!
+	defaultBranch: String
+}
+
+type DashboardTokenUsage {
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+}
+
+type DashboardUser {
+	key: String!
+	name: String!
+	email: String!
+}
+
+type HealthBackendStatus {
+	connected: Boolean!
+	backend: String!
+	status: String!
+	detail: String!
+}
+
+type HealthStatus {
+	relational: HealthBackendStatus!
+	events: HealthBackendStatus!
+	blob: HealthBackendStatus!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: DashboardQueryRoot
+	mutation: DashboardMutationRoot
+}

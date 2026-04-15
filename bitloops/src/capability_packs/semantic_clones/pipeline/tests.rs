@@ -26,6 +26,7 @@ fn semantic_clone_schema_includes_clone_edge_table() {
     assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));
     assert!(pg.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current"));
     assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current"));
+    assert!(pg.contains("PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id)"));
     assert!(pg.contains("PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)"));
 }
 
@@ -115,7 +116,7 @@ async fn rebuild_wrapper_matches_default_options_on_empty_snapshot() {
 }
 
 #[tokio::test]
-async fn rebuild_wrapper_syncs_empty_historical_result_into_current_projection() {
+async fn historical_rebuild_leaves_current_projection_unchanged() {
     let tmp = tempdir().expect("temp dir");
     let sqlite_path = tmp.path().join("devql.sqlite");
 
@@ -171,7 +172,7 @@ async fn rebuild_wrapper_syncs_empty_historical_result_into_current_projection()
             |row| row.get(0),
         )
         .expect("count current clone edges");
-    assert_eq!(current_count, 0);
+    assert_eq!(current_count, 1);
 }
 
 #[test]

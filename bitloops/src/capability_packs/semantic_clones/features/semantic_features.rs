@@ -18,12 +18,11 @@ pub use self::semantic::SymbolSemanticsRow;
 pub(crate) use self::semantic::synthesize_deterministic_summary;
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
-    SemanticSummaryProviderConfig, build_semantic_summary_provider,
-    resolve_semantic_summary_endpoint, summary_provider_from_service,
+    summary_provider_from_service,
 };
 use self::semantic::{build_semantics_row, normalize_summary_text};
 
-const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v3";
+const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v4";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
@@ -271,7 +270,7 @@ pub fn build_semantic_feature_rows(
 
 pub fn build_semantic_feature_input_hash(
     input: &SemanticFeatureInput,
-    _summary_provider: &dyn SemanticSummaryProvider,
+    summary_provider: &dyn SemanticSummaryProvider,
 ) -> String {
     let mut normalized_modifiers = input
         .modifiers
@@ -306,13 +305,14 @@ pub fn build_semantic_feature_input_hash(
             "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
             "dependency_signals": &input.dependency_signals,
             "content_hash": &input.content_hash,
+            "summary_provider": summary_provider.cache_key(),
         })
         .to_string(),
     )
 }
 
 // Incremental indexing rule: recompute enrichment when the persisted fingerprint no longer matches
-// the current deterministic symbol inputs or pipeline versions.
+// the current symbol inputs, summary provider contract, or pipeline version.
 pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_input_hash_stays_stable_when_summary_provider_changes() {
+    fn semantic_features_input_hash_changes_when_summary_provider_changes() {
         let input = SemanticFeatureInput {
             artefact_id: "artefact-1".to_string(),
             symbol_id: Some("symbol-1".to_string()),
@@ -469,9 +469,53 @@ mod tests {
             content_hash: Some("hash-1".to_string()),
         };
 
-        assert_eq!(
+        assert_ne!(
             build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=a" }),
             build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=b" })
+        );
+    }
+
+    #[test]
+    fn semantic_features_require_reindex_when_summary_provider_changes() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+            name: "normalizeEmail".to_string(),
+            signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return email.trim().toLowerCase();".to_string(),
+            docstring: Some("Normalize email addresses.".to_string()),
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:email::trim".to_string()],
+            content_hash: Some("hash-1".to_string()),
+        };
+        let existing_hash = build_semantic_feature_input_hash(
+            &input,
+            &HashTestProvider {
+                key: "provider=noop",
+            },
+        );
+        let next_hash = build_semantic_feature_input_hash(
+            &input,
+            &HashTestProvider {
+                key: "provider=ollama:ministral-3:3b",
+            },
+        );
+        let state = SemanticFeatureIndexState {
+            semantics_hash: Some(existing_hash.clone()),
+            features_hash: Some(existing_hash),
+        };
+
+        assert!(
+            semantic_features_require_reindex(&state, &next_hash),
+            "changing the summary provider should force semantic rows to be rebuilt"
         );
     }
 

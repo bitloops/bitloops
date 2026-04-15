@@ -231,7 +231,7 @@ where
     resolve_provider_string(raw, env_lookup).with_context(|| format!("resolving `{section}.{key}`"))
 }
 
-fn resolve_provider_string<F>(raw: &str, env_lookup: &F) -> Result<String>
+pub(super) fn resolve_provider_string<F>(raw: &str, env_lookup: &F) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
 {

@@ -1,13 +1,17 @@
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
 
-use crate::adapters::agents::AgentAdapterRegistry;
-use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
+use crate::cli::embeddings::{
+    EmbeddingsInstallState, EmbeddingsRuntime, inspect_embeddings_install_state,
+};
+use crate::cli::inference::{
+    SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
+};
 use crate::cli::telemetry_consent;
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
 use crate::devql_transport::SlimCliRepoScope;
@@ -51,9 +55,9 @@ pub struct InitArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
-    #[arg(long)]
-    pub agent: Option<String>,
+    /// Target specific agent setups (repeatable).
+    #[arg(long = "agent", value_name = "AGENT")]
+    pub agent: Vec<String>,
 
     /// Enable anonymous telemetry for this CLI version.
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
@@ -88,6 +92,26 @@ pub struct InitArgs {
         value_parser = parse_backfill_value
     )]
     pub backfill: Option<usize>,
+
+    /// Exclude repo-relative paths/globs from DevQL indexing (repeatable).
+    #[arg(long = "exclude")]
+    pub exclude: Vec<String>,
+
+    /// Load additional exclusion globs from files under the repo-policy root (repeatable).
+    #[arg(long = "exclude-from")]
+    pub exclude_from: Vec<String>,
+
+    /// Select which embeddings runtime to configure when embeddings are installed during init.
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub embeddings_runtime: EmbeddingsRuntime,
+
+    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
+    #[arg(long)]
+    pub embeddings_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token.
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub embeddings_api_key_env: String,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {
@@ -187,6 +211,29 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
     }
 }
 
+pub(super) async fn choose_summary_setup_during_init(
+    repo_root: &Path,
+    install_default_daemon: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<SummarySetupSelection> {
+    if summary_generation_configured(repo_root) {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
+
+    prompt_summary_setup_selection(
+        out,
+        input,
+        telemetry_consent::can_prompt_interactively(),
+        install_default_daemon,
+        cloud_logged_in,
+    )
+}
+
 fn should_run_initial_sync(
     sync: Option<bool>,
     out: &mut dyn Write,
@@ -248,6 +295,71 @@ fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {
         return Err("`--backfill` must be greater than zero".to_string());
     }
     Ok(parsed)
+}
+
+fn normalize_cli_exclusions(values: &[String]) -> Vec<String> {
+    let mut normalized = values
+        .iter()
+        .map(|value| value.trim().replace('\\', "/"))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn normalize_exclude_from_paths(policy_root: &Path, values: &[String]) -> Result<Vec<String>> {
+    let policy_root = policy_root
+        .canonicalize()
+        .unwrap_or_else(|_| policy_root.to_path_buf());
+    let mut normalized = Vec::new();
+
+    for raw_value in values {
+        let raw_value = raw_value.trim();
+        if raw_value.is_empty() {
+            continue;
+        }
+        let candidate = PathBuf::from(raw_value);
+        let absolute = if candidate.is_absolute() {
+            candidate
+        } else {
+            policy_root.join(candidate)
+        };
+        let absolute = normalize_lexical_path(&absolute);
+        if !absolute.starts_with(&policy_root) {
+            bail!(
+                "`--exclude-from` path `{}` must be under repo-policy root {}",
+                raw_value,
+                policy_root.display()
+            );
+        }
+        let relative = absolute
+            .strip_prefix(&policy_root)
+            .unwrap_or(absolute.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !relative.is_empty() {
+            normalized.push(relative);
+        }
+    }
+
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {
@@ -332,40 +444,6 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
 
     std::fs::write(&exclude_path, content)
         .with_context(|| format!("writing {}", exclude_path.display()))?;
-    Ok(())
-}
-
-fn reconcile_agent_hooks(
-    project_root: &Path,
-    selected_agents: &[String],
-    local_dev: bool,
-    force: bool,
-    out: &mut dyn Write,
-) -> Result<()> {
-    let registry = AgentAdapterRegistry::builtin();
-    let selected = selected_agents
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-
-    for agent in registry.installed_agents(project_root) {
-        if selected.contains(&agent) {
-            continue;
-        }
-        let label = registry.uninstall_agent_hooks(project_root, &agent)?;
-        writeln!(out, "Removed {label} hooks.")?;
-    }
-
-    for agent in selected_agents {
-        let (label, installed) =
-            registry.install_agent_hooks(project_root, agent, local_dev, force)?;
-        if installed > 0 {
-            writeln!(out, "Installed {installed} {label} hook(s).")?;
-        } else {
-            writeln!(out, "{label} hooks are already initialised.")?;
-        }
-    }
-
     Ok(())
 }
 

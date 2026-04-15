@@ -97,6 +97,27 @@ pub(super) fn given_init_bitloops_with_agent(
     })
 }
 
+pub(super) fn given_init_bitloops_with_agents(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let first_agent_name = ctx.matches[1].1.clone();
+        let second_agent_name = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I run bitloops init with agents",
+            helpers::run_init_bitloops_with_agents(
+                world,
+                &repo_name,
+                &[first_agent_name.as_str(), second_agent_name.as_str()],
+                false,
+                None,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_init_bitloops_with_agent_sync_false(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -603,6 +624,20 @@ pub(super) fn given_create_ts_similar_project(
     })
 }
 
+pub(super) fn given_create_ts_semantic_clone_quality_project(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a TypeScript project with semantic clone quality fixtures",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::create_ts_project_with_similar_impls(world.repo_dir())),
+        );
+    })
+}
+
 pub(super) fn given_add_semantic_clone_fixtures(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -617,6 +652,33 @@ pub(super) fn given_add_semantic_clone_fixtures(
     })
 }
 
+pub(super) fn given_modify_semantic_clone_fixture_source(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I modify a semantic clone fixture source file",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::modify_semantic_clone_fixture_source(world.repo_dir())),
+        );
+    })
+}
+
+pub(super) fn given_configure_semantic_clones_guide_aligned_fake_runtime(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I configure guide-aligned semantic clones with fake embeddings runtime",
+            helpers::configure_semantic_clones_with_guide_aligned_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_configure_semantic_clones_fake_runtime(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -626,6 +688,32 @@ pub(super) fn given_configure_semantic_clones_fake_runtime(
         run_step(
             "I configure semantic clones with fake embeddings runtime",
             helpers::configure_semantic_clones_with_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_daemon_enrichments_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run daemon enrichments status",
+            helpers::run_daemon_enrichments_status(world, &repo_name).map(|_| ()),
+        );
+    })
+}
+
+pub(super) fn given_wait_semantic_clone_enrichments_to_drain(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I wait for semantic clone enrichments to drain",
+            helpers::wait_for_semantic_clone_enrichments_to_drain(world, &repo_name),
         );
     })
 }
@@ -726,6 +814,19 @@ pub(super) fn given_devql_sync(
         run_step(
             "I run DevQL sync",
             helpers::run_devql_sync_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_devql_sync_without_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL sync without status",
+            helpers::run_devql_sync_without_status_for_repo(world, &repo_name),
         );
     })
 }

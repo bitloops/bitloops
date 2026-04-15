@@ -12,7 +12,13 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
 use crate::cli::embeddings::{
-    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
+    EmbeddingsInstallState, EmbeddingsRuntime, enqueue_embeddings_bootstrap_task,
+    inspect_embeddings_install_state, install_or_configure_platform_embeddings,
+};
+use crate::cli::inference::{
+    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
+    platform_summary_gateway_url_override, prompt_summary_setup_selection,
+    summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
 #[cfg(test)]
@@ -42,7 +48,8 @@ pub struct EnableArgs {
     #[arg(long, short = 'f', hide = true)]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
+    /// Deprecated hidden compatibility flag. Use `bitloops init --agent <agent>`
+    /// to persist supported agents before running `bitloops enable`.
     #[arg(long, hide = true)]
     pub agent: Option<String>,
 
@@ -61,6 +68,18 @@ pub struct EnableArgs {
     /// Configure and bootstrap local embeddings so sync can include them.
     #[arg(long, default_value_t = false)]
     pub install_embeddings: bool,
+
+    /// Select which managed embeddings runtime to configure when `--install-embeddings` is used.
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub embeddings_runtime: EmbeddingsRuntime,
+
+    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
+    #[arg(long)]
+    pub embeddings_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token.
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub embeddings_api_key_env: String,
 }
 
 /// Finds the git repository root by walking up from `start`.
@@ -161,6 +180,13 @@ pub(crate) async fn run_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
+    if let Some(agent) = args.agent.as_deref() {
+        bail!(
+            "`bitloops enable --agent {agent}` is no longer supported. \
+Run `bitloops init --agent {agent}` to persist supported agents before enabling Bitloops."
+        );
+    }
+
     let cwd = env::current_dir().context("getting current directory")?;
     let git_root = find_repo_root(&cwd)?;
     let telemetry_choice =
@@ -183,13 +209,32 @@ pub(crate) async fn run_with_io(
     }
 
     let policy = discover_repo_policy(&cwd)?;
+    let project_root = policy
+        .root
+        .clone()
+        .context("resolving Bitloops project root from repo policy")?;
     let target_path = policy
         .local_path
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    set_capture_enabled(&target_path, true)?;
+    let selected_agents = crate::cli::agent_surfaces::configured_agents_or_bail(&cwd)?;
     let settings = load_settings(&cwd).unwrap_or_default();
+    let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
+        &git_root,
+        settings.local_dev,
+    )?;
+    if git_count > 0 {
+        writeln!(out, "Installed {git_count} git hook(s).")?;
+    }
+    crate::cli::agent_surfaces::reconcile_project_agent_surfaces(
+        &project_root,
+        &selected_agents,
+        settings.local_dev,
+        args.force,
+        out,
+    )?;
+    set_capture_enabled(&target_path, true)?;
     restart_watcher_if_running(&git_root);
 
     writeln!(out, "Bitloops enabled in this project! :)")?;
@@ -197,33 +242,75 @@ pub(crate) async fn run_with_io(
     writeln!(out, "Updated project config: {}", target_path.display())?;
 
     if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
-        activate_embedding_pipeline_mailboxes(&git_root, "enable")
-            .context("activating semantic clones embedding mailboxes for enable")?;
-        let (scope, queued) = enqueue_embeddings_bootstrap_task(
-            &cwd,
-            None,
-            crate::daemon::DevqlTaskSource::ManualCli,
-        )
-        .await?;
-        match crate::cli::devql::graphql::watch_task_id_via_graphql(
-            &scope,
-            &queued.task.task_id,
-            false,
-        )
-        .await
-        {
-            Ok(Some(task)) => {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
+        match args.embeddings_runtime {
+            EmbeddingsRuntime::Local => {
+                activate_embedding_pipeline_mailboxes(&git_root, "enable")
+                    .context("activating semantic clones embedding mailboxes for enable")?;
+                let (scope, queued) = enqueue_embeddings_bootstrap_task(
+                    &cwd,
+                    None,
+                    crate::daemon::DevqlTaskSource::ManualCli,
+                )
+                .await?;
+                match crate::cli::devql::graphql::watch_task_id_via_graphql(
+                    &scope,
+                    &queued.task.task_id,
+                    false,
+                )
+                .await
+                {
+                    Ok(Some(task)) => {
+                        writeln!(
+                            out,
+                            "{}",
+                            crate::cli::devql::format_task_completion_summary(&task)
+                        )?;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        bail!(
+                            "Bitloops capture was enabled, but embeddings installation failed: {err:#}"
+                        );
+                    }
+                }
             }
-            Ok(None) => {}
-            Err(err) => {
-                bail!("Bitloops capture was enabled, but embeddings installation failed: {err:#}");
+            EmbeddingsRuntime::Platform => {
+                let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`bitloops enable --install-embeddings --embeddings-runtime platform` requires `--embeddings-gateway-url`"
+                    )
+                })?;
+                for line in install_or_configure_platform_embeddings(
+                    &cwd,
+                    gateway_url,
+                    &args.embeddings_api_key_env,
+                )? {
+                    writeln!(out, "{line}")?;
+                }
             }
         }
+    }
+
+    match choose_summary_setup(&cwd, out, input).await? {
+        SummarySetupSelection::Cloud => {
+            crate::cli::login::ensure_logged_in().await?;
+            let gateway_url_override = platform_summary_gateway_url_override();
+            let message = configure_cloud_summary_generation(&cwd, gateway_url_override.as_deref())
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+            writeln!(out, "{message}")?;
+        }
+        SummarySetupSelection::Local => {
+            configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                )
+            })?;
+        }
+        SummarySetupSelection::Skip => {}
     }
     Ok(())
 }
@@ -275,6 +362,26 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
     }
 }
 
+async fn choose_summary_setup(
+    repo_root: &Path,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<SummarySetupSelection> {
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
+    if summary_generation_configured(repo_root) {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
+
+    prompt_summary_setup_selection(out, input, true, false, cloud_logged_in)
+}
+
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
     AgentAdapterRegistry::builtin().installed_agents(repo_root)
 }
@@ -285,12 +392,22 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
 pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool) -> Result<()> {
     let _ = use_project_settings;
     let policy = discover_repo_policy(start)?;
+    let project_root = policy
+        .root
+        .clone()
+        .context("resolving Bitloops project root from repo policy")?;
     let target_path = policy
         .local_path
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
+    let configured_agents = crate::config::settings::supported_agents(start)?;
     set_capture_enabled(&target_path, false)?;
+    crate::cli::agent_surfaces::cleanup_project_agent_surfaces(
+        &project_root,
+        &configured_agents,
+        out,
+    )?;
     let repo_root = find_repo_root(start)?;
     restart_watcher_if_running(&repo_root);
     writeln!(
@@ -346,18 +463,6 @@ pub fn count_session_states(repo_root: &Path) -> usize {
 pub fn count_shadow_branches(repo_root: &Path) -> usize {
     let _ = repo_root;
     0
-}
-
-pub(crate) fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
-    let registry = AgentAdapterRegistry::builtin();
-    for agent in registry.available_agents() {
-        if registry.are_agent_hooks_installed(repo_root, &agent)? {
-            let label = registry.uninstall_agent_hooks(repo_root, &agent)?;
-            writeln!(out, "  Removed {label} hooks")?;
-        }
-    }
-
-    Ok(())
 }
 
 pub fn check_bitloops_dir_exists(repo_root: &Path) -> bool {

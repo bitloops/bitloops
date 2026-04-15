@@ -94,31 +94,36 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
         })),
         inference: Some(json!({
             "runtimes": {
-                "bitloops_embeddings": {
-                    "command": "bitloops-embeddings",
+                "bitloops_local_embeddings": {
+                    "command": "bitloops-local-embeddings",
                     "args": ["--verbose"]
+                },
+                "bitloops_inference": {
+                    "command": "bitloops-inference"
                 }
             },
             "profiles": {
                 "local_code": {
                     "task": "embeddings",
                     "driver": "bitloops_embeddings_ipc",
-                    "runtime": "bitloops_embeddings",
+                    "runtime": "bitloops_local_embeddings",
                     "model": "bge-m3",
                     "cache_dir": ".cache/embeddings"
                 },
                 "local_summary": {
                     "task": "embeddings",
                     "driver": "bitloops_embeddings_ipc",
-                    "runtime": "bitloops_embeddings",
+                    "runtime": "bitloops_local_embeddings",
                     "model": "bge-m3"
                 },
                 "summary_llm": {
                     "task": "text_generation",
-                    "driver": "openai",
+                    "driver": "ollama_chat",
+                    "runtime": "bitloops_inference",
                     "model": "gpt-5.4-mini",
-                    "api_key": "sk-test",
-                    "base_url": "https://api.openai.com/v1"
+                    "base_url": "https://api.openai.com/v1",
+                    "temperature": "0.1",
+                    "max_output_tokens": 200
                 }
             }
         })),
@@ -148,7 +153,7 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     assert_eq!(
         inference
             .runtimes
-            .get("bitloops_embeddings")
+            .get("bitloops_local_embeddings")
             .expect("runtime")
             .args,
         vec!["--verbose".to_string()]
@@ -156,7 +161,10 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     let code_profile = inference.profiles.get("local_code").expect("code profile");
     assert_eq!(code_profile.task, InferenceTask::Embeddings);
     assert_eq!(code_profile.driver, "bitloops_embeddings_ipc");
-    assert_eq!(code_profile.runtime.as_deref(), Some("bitloops_embeddings"));
+    assert_eq!(
+        code_profile.runtime.as_deref(),
+        Some("bitloops_local_embeddings")
+    );
     assert_eq!(code_profile.model.as_deref(), Some("bge-m3"));
     assert_eq!(
         code_profile.cache_dir.as_deref(),
@@ -164,8 +172,15 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     );
     let llm_profile = inference.profiles.get("summary_llm").expect("llm profile");
     assert_eq!(llm_profile.task, InferenceTask::TextGeneration);
-    assert_eq!(llm_profile.driver, "openai");
+    assert_eq!(llm_profile.driver, "ollama_chat");
+    assert_eq!(llm_profile.runtime.as_deref(), Some("bitloops_inference"));
     assert_eq!(llm_profile.model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(
+        llm_profile.base_url.as_deref(),
+        Some("https://api.openai.com/v1")
+    );
+    assert_eq!(llm_profile.temperature.as_deref(), Some("0.1"));
+    assert_eq!(llm_profile.max_output_tokens, Some(200));
     assert_eq!(capability.semantic_clones, semantic_clones);
     assert_eq!(capability.inference, inference);
 }

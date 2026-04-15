@@ -121,7 +121,10 @@ pub fn resolve_summary_provider(
 
     match inference.text_generation(&slot_name) {
         Ok(service) => Ok(SummaryProviderSelection {
-            provider: features::summary_provider_from_service(service),
+            provider: features::summary_provider_from_service(
+                service,
+                matches!(mode, SummaryProviderMode::ConfiguredStrict),
+            ),
             degraded_reason: None,
             slot_name: Some(slot_name),
             profile_name,
@@ -194,5 +197,106 @@ pub fn resolve_embedding_provider(
                     .unwrap_or_default()
             )
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use anyhow::{Result, bail};
+
+    use super::*;
+    use crate::config::{InferenceTask, SemanticCloneEmbeddingMode};
+    use crate::host::inference::{EmbeddingService, ResolvedInferenceSlot, TextGenerationService};
+
+    struct DummyTextGenerationService;
+
+    impl TextGenerationService for DummyTextGenerationService {
+        fn descriptor(&self) -> String {
+            "bitloops:dummy".to_string()
+        }
+
+        fn complete(&self, _system_prompt: &str, _user_prompt: &str) -> Result<String> {
+            Ok("{\"summary\":\"Summarises the symbol.\",\"confidence\":0.9}".to_string())
+        }
+    }
+
+    struct DummyInferenceGateway {
+        text_generation: Arc<dyn TextGenerationService>,
+    }
+
+    impl InferenceGateway for DummyInferenceGateway {
+        fn embeddings(&self, slot_name: &str) -> Result<Arc<dyn EmbeddingService>> {
+            bail!("embedding inference is not available for slot `{slot_name}`")
+        }
+
+        fn text_generation(&self, _slot_name: &str) -> Result<Arc<dyn TextGenerationService>> {
+            Ok(Arc::clone(&self.text_generation))
+        }
+
+        fn describe(&self, slot_name: &str) -> Option<ResolvedInferenceSlot> {
+            Some(ResolvedInferenceSlot {
+                capability_id: "semantic_clones".to_string(),
+                slot_name: slot_name.to_string(),
+                profile_name: "summary_llm".to_string(),
+                task: Some(InferenceTask::TextGeneration),
+                driver: Some("bitloops_platform_chat".to_string()),
+                runtime: Some("bitloops_inference".to_string()),
+                model: Some("ministral-3-3b-instruct".to_string()),
+            })
+        }
+    }
+
+    fn semantic_config() -> SemanticClonesConfig {
+        SemanticClonesConfig {
+            summary_mode: SemanticSummaryMode::Auto,
+            embedding_mode: SemanticCloneEmbeddingMode::Off,
+            ann_neighbors: 5,
+            enrichment_workers: 1,
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_generation: Some("summary_llm".to_string()),
+                code_embeddings: None,
+                summary_embeddings: None,
+            },
+        }
+    }
+
+    #[test]
+    fn configured_degrade_summary_provider_does_not_require_model_output() {
+        let gateway = DummyInferenceGateway {
+            text_generation: Arc::new(DummyTextGenerationService),
+        };
+
+        let selection = resolve_summary_provider(
+            &semantic_config(),
+            &gateway,
+            SummaryProviderMode::ConfiguredDegrade,
+        )
+        .expect("summary provider should resolve");
+
+        assert!(
+            !selection.provider.requires_model_output(),
+            "configured degrade should allow deterministic fallback when infer calls fail"
+        );
+    }
+
+    #[test]
+    fn configured_strict_summary_provider_requires_model_output() {
+        let gateway = DummyInferenceGateway {
+            text_generation: Arc::new(DummyTextGenerationService),
+        };
+
+        let selection = resolve_summary_provider(
+            &semantic_config(),
+            &gateway,
+            SummaryProviderMode::ConfiguredStrict,
+        )
+        .expect("summary provider should resolve");
+
+        assert!(
+            selection.provider.requires_model_output(),
+            "configured strict should continue to fail when model-backed output is missing"
+        );
     }
 }

@@ -41,15 +41,13 @@ pub(super) async fn upsert_language_artefacts(
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
+    source_content: &str,
 ) -> Result<()> {
-    let Some(source_content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
-        return Ok(());
-    };
     let (items, dependency_edges, file_docstring) = extract_language_pack_artefacts_and_edges(
         cfg,
         rev,
         &file_artefact.language,
-        &source_content,
+        source_content,
     )?
     .unwrap_or_default();
 
@@ -59,7 +57,7 @@ pub(super) async fn upsert_language_artefacts(
         rev.blob_sha,
         file_artefact,
         &items,
-        &source_content,
+        source_content,
     );
     let mut historical_sql_batch =
         Vec::with_capacity(symbol_records.len() + dependency_edges.len().saturating_mul(2));
@@ -70,6 +68,7 @@ pub(super) async fn upsert_language_artefacts(
             rev.path,
             rev.blob_sha,
             &file_artefact.language,
+            &file_artefact.extraction_fingerprint,
             record,
         ));
         historical_sql_batch.push(build_upsert_historical_artefact_snapshot_sql(

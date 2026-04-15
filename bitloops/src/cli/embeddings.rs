@@ -1,21 +1,22 @@
 mod args;
-mod managed;
+pub(crate) mod managed;
 mod profiles;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use args::enqueue_embeddings_bootstrap_task;
+pub(crate) use args::run_async;
 pub use args::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsDoctorArgs,
-    EmbeddingsInstallArgs, EmbeddingsPullArgs, run,
+    EmbeddingsInstallArgs, EmbeddingsPullArgs, EmbeddingsRuntime, run,
 };
 #[allow(unused_imports)]
 pub(crate) use managed::{
     ensure_managed_embeddings_runtime_with_progress, install_or_bootstrap_embeddings,
-    managed_embeddings_binary_dir, managed_embeddings_binary_path,
-    managed_embeddings_metadata_path, managed_runtime_command_is_eligible,
-    managed_runtime_version_for_command,
+    install_or_configure_platform_embeddings, managed_embeddings_binary_dir,
+    managed_embeddings_binary_path, managed_embeddings_metadata_path,
+    managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 pub(crate) use profiles::{
     EmbeddingsInstallState, PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
@@ -30,8 +31,3 @@ pub(crate) use managed::{
 
 #[cfg(test)]
 pub(crate) use profiles::{clear_cache_for_profile, doctor_profile, pull_profile};
-
-#[cfg(test)]
-pub(crate) async fn run_async(args: EmbeddingsArgs) -> anyhow::Result<()> {
-    args::run_async(args).await
-}

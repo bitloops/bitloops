@@ -24,5 +24,5 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
 }
 
 const POSTGRES_POOL_SIZE: usize = 4;
-/// Max time allowed per backend health ping so /api/db/health stays responsive.
+/// Max time allowed per backend health ping so dashboard health queries stay responsive.
 const HEALTH_CHECK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(10);

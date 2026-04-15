@@ -50,6 +50,25 @@ fn duckdb_path_for_repo(repo_root: &Path) -> std::path::PathBuf {
         .resolve_duckdb_db_path_for_repo(repo_root)
 }
 
+fn remove_loose_git_object(repo_root: &Path, object_id: &str) {
+    assert!(
+        object_id.len() > 2,
+        "expected non-empty git object id, got `{object_id}`"
+    );
+    let object_path = repo_root
+        .join(".git")
+        .join("objects")
+        .join(&object_id[..2])
+        .join(&object_id[2..]);
+    assert!(
+        object_path.is_file(),
+        "expected loose git object at {}",
+        object_path.display()
+    );
+    fs::remove_file(&object_path)
+        .unwrap_or_else(|err| panic!("remove loose git object {}: {err}", object_path.display()));
+}
+
 fn sync_state_value(conn: &rusqlite::Connection, repo_id: &str, key: &str) -> Option<String> {
     use rusqlite::OptionalExtension;
 
@@ -334,6 +353,40 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
         "historical ingest must not mutate repo_sync_state"
     );
 
+    let semantic_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical semantic rows");
+    let embedding_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical embedding rows");
+    let clone_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical clone rows");
+    assert_eq!(
+        semantic_rows, 0,
+        "historical ingest must not write semantic clone summaries"
+    );
+    assert_eq!(
+        embedding_rows, 0,
+        "historical ingest must not write semantic clone embeddings"
+    );
+    assert_eq!(
+        clone_rows, 0,
+        "historical ingest must not rebuild clone edges"
+    );
+
     let ledger_row: (String, String) = sqlite
         .query_row(
             "SELECT history_status, checkpoint_status
@@ -373,6 +426,173 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
     assert_eq!(
         checkpoint_event_rows, 0,
         "unmapped commits must not synthesize checkpoint events"
+    );
+}
+
+#[tokio::test]
+async fn execute_ingest_materialises_decode_degraded_commit_as_file_only() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-utf8-ingest-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::write(
+        repo.path().join("src/bad.rs"),
+        [
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66, 0x6e,
+            0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33, 0x32, 0x20,
+            0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+        ],
+    )
+    .expect("write invalid UTF-8 rust file");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add invalid utf8 file"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history decode-degraded file-only test")
+        .await
+        .expect("initialise local devql store for decode-degraded ingest test");
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest for decode-degraded commits");
+    assert!(summary.success, "ingest summary should report success");
+
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let bad_blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:src/bad.rs"]);
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+
+    let file_state_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count file_state rows for src/bad.rs");
+    let file_artefact_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts
+             WHERE repo_id = ?1 AND symbol_fqn = ?2 AND canonical_kind = 'file'",
+            rusqlite::params![cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count file artefact rows for src/bad.rs");
+    let nested_artefact_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts
+             WHERE repo_id = ?1 AND symbol_fqn LIKE ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), "src/bad.rs::%"],
+            |row| row.get(0),
+        )
+        .expect("count nested artefact rows for src/bad.rs");
+    let snapshot_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_snapshots
+             WHERE repo_id = ?1 AND blob_sha = ?2 AND path = ?3",
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                bad_blob_sha.as_str(),
+                "src/bad.rs"
+            ],
+            |row| row.get(0),
+        )
+        .expect("count artefact snapshots for src/bad.rs");
+    let edge_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges WHERE repo_id = ?1 AND blob_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), bad_blob_sha.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical edge rows for src/bad.rs");
+
+    assert_eq!(
+        file_state_rows, 1,
+        "ingest should persist file_state for src/bad.rs"
+    );
+    assert_eq!(
+        file_artefact_rows, 1,
+        "ingest should persist one file artefact for src/bad.rs"
+    );
+    assert_eq!(
+        nested_artefact_rows, 0,
+        "ingest should not persist nested artefacts for src/bad.rs"
+    );
+    assert_eq!(
+        snapshot_rows, 1,
+        "ingest should persist one snapshot row for src/bad.rs"
+    );
+    assert_eq!(
+        edge_rows, 0,
+        "ingest should not persist dependency edges for src/bad.rs"
+    );
+}
+
+#[tokio::test]
+async fn execute_ingest_errors_when_historical_blob_content_cannot_be_loaded() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn answer() -> i32 { 42 }\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add lib"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history missing-blob test")
+        .await
+        .expect("initialise local devql store for missing blob ingest test");
+
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let blob_sha = git_ok(repo.path(), &["rev-parse", "HEAD:src/lib.rs"]);
+    remove_loose_git_object(repo.path(), &blob_sha);
+
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest with one missing blob object");
+    assert!(
+        !summary.success,
+        "historical ingest should report partial failure when git blob bytes cannot be loaded"
+    );
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let ledger_row: (String, String, Option<String>) = sqlite
+        .query_row(
+            "SELECT history_status, checkpoint_status, last_error
+             FROM commit_ingest_ledger
+             WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), commit_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read failed commit ledger row");
+    let message = ledger_row.2.as_deref().unwrap_or_default();
+
+    assert_eq!(
+        ledger_row.0, "failed",
+        "historical ingest should mark the commit as failed when blob bytes cannot be loaded"
+    );
+    assert_eq!(
+        ledger_row.1, "failed",
+        "historical ingest should record the commit as failed before checkpoint completion"
+    );
+
+    assert!(
+        message.contains("failed to decode blob content for historical ingest path `src/lib.rs`"),
+        "unexpected historical ingest error: {message}"
+    );
+    assert!(
+        message.contains(commit_sha.as_str()),
+        "historical ingest error should include commit context: {message}"
+    );
+    assert!(
+        message.contains(blob_sha.as_str()),
+        "historical ingest error should include blob context: {message}"
     );
 }
 
@@ -530,10 +750,106 @@ async fn execute_ingest_runs_checkpoint_companion_work_once_for_mapped_commits()
 }
 
 #[tokio::test]
+async fn execute_ingest_continues_after_failed_checkpoint_companion_commit() {
+    let repo = seed_git_repo();
+    write_local_devql_config(repo.path());
+    std::fs::create_dir_all(repo.path().join("src")).expect("create src");
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\n",
+    )
+    .expect("write first revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add one"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\n",
+    )
+    .expect("write second revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add two"]);
+    let mapped_commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 { 1 }\npub fn two() -> i32 { 2 }\npub fn three() -> i32 { 3 }\n",
+    )
+    .expect("write third revision");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "add three"]);
+    let head_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    let cfg = cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "commit-history continue after failure test")
+        .await
+        .expect("initialise local devql store");
+    insert_commit_checkpoint_mapping(repo.path(), &mapped_commit_sha, "abcdef123456");
+
+    let summary = execute_ingest_with_observer(&cfg, false, 500, None, None)
+        .await
+        .expect("execute ingest with one failing mapped commit");
+
+    assert!(
+        !summary.success,
+        "ingest summary should report partial failure when at least one commit fails"
+    );
+
+    let sqlite =
+        rusqlite::Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let mapped_ledger_row: (String, String, Option<String>) = sqlite
+        .query_row(
+            "SELECT history_status, checkpoint_status, last_error
+             FROM commit_ingest_ledger
+             WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), mapped_commit_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read mapped commit ledger row");
+    let head_ledger_row: (String, String) = sqlite
+        .query_row(
+            "SELECT history_status, checkpoint_status
+             FROM commit_ingest_ledger
+             WHERE repo_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), head_sha.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read head commit ledger row");
+
+    assert_eq!(
+        mapped_ledger_row.0, "completed",
+        "history ingestion can complete before checkpoint companion fails"
+    );
+    assert_eq!(
+        mapped_ledger_row.1, "failed",
+        "mapped commit checkpoint status should record failure"
+    );
+    assert!(
+        mapped_ledger_row
+            .2
+            .as_deref()
+            .unwrap_or_default()
+            .contains("checkpoint mapping exists but metadata is missing"),
+        "expected checkpoint metadata failure in ledger error message"
+    );
+    assert_eq!(
+        head_ledger_row.0, "completed",
+        "ingest should continue processing commits after a failure"
+    );
+    assert_eq!(head_ledger_row.1, "not_applicable");
+}
+
+#[tokio::test]
 async fn execute_ingest_reuses_stable_symbol_ids_across_blob_only_changes_without_breaking_commit_queries()
  {
     let repo = seed_git_repo();
     write_local_devql_config(repo.path());
+    std::fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"commit-history-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
     std::fs::write(
         repo.path().join("src/lib.rs"),

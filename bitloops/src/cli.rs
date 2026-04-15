@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+pub(crate) mod agent_surfaces;
 pub mod checkpoints;
 pub mod clean;
 pub mod daemon;
@@ -13,12 +14,16 @@ pub mod doctor;
 pub mod embeddings;
 pub mod enable;
 pub mod explain;
+pub mod inference;
 pub mod init;
+pub mod login;
+pub mod logout;
 pub mod reset;
 pub mod resume;
 pub mod rewind;
 pub mod root;
 pub(crate) mod telemetry_consent;
+pub(crate) mod terminal_picker;
 pub mod uninstall;
 pub mod versioncheck;
 
@@ -73,6 +78,10 @@ pub enum Commands {
     Reset(root::ResetArgs),
     /// Initialise Bitloops for the current project.
     Init(init::InitArgs),
+    /// Authenticate the CLI with your Bitloops account.
+    Login(login::LoginArgs),
+    /// Remove the current CLI login session.
+    Logout(logout::LogoutArgs),
     /// Enable capture in the current Bitloops project.
     Enable(enable::EnableArgs),
     /// Disable capture in the current Bitloops project.
@@ -95,6 +104,8 @@ pub enum Commands {
     Devql(devql::DevqlArgs),
     /// Manage embedding profiles and caches.
     Embeddings(embeddings::EmbeddingsArgs),
+    /// Manage the standalone inference runtime used for semantic summaries.
+    Inference(inference::InferenceArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
@@ -199,6 +210,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Clean(args) => root::run_clean_command(&args),
         Commands::Reset(args) => root::run_reset_command(&args),
         Commands::Init(args) => init::run(args).await,
+        Commands::Login(args) => login::run(args).await,
+        Commands::Logout(args) => logout::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
         Commands::Disable(args) => root::run_disable_command(&args),
         Commands::Uninstall(args) => uninstall::run(args).await,
@@ -210,7 +223,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
-        Commands::Embeddings(args) => embeddings::run(args),
+        Commands::Embeddings(args) => embeddings::run_async(args).await,
+        Commands::Inference(args) => inference::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
         Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,

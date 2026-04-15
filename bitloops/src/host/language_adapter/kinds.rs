@@ -1,5 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LanguageKind {
+    CSharp(CSharpKind),
     Go(GoKind),
     Java(JavaKind),
     Python(PythonKind),
@@ -8,6 +9,10 @@ pub(crate) enum LanguageKind {
 }
 
 impl LanguageKind {
+    pub(crate) const fn csharp(kind: CSharpKind) -> Self {
+        Self::CSharp(kind)
+    }
+
     pub(crate) const fn go(kind: GoKind) -> Self {
         Self::Go(kind)
     }
@@ -30,6 +35,7 @@ impl LanguageKind {
 
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::CSharp(kind) => kind.as_str(),
             Self::Go(kind) => kind.as_str(),
             Self::Java(kind) => kind.as_str(),
             Self::Python(kind) => kind.as_str(),
@@ -42,6 +48,62 @@ impl LanguageKind {
 impl std::fmt::Display for LanguageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CSharpKind {
+    Class,
+    Constructor,
+    Method,
+    Property,
+    Field,
+    Interface,
+    Enum,
+    Struct,
+    Record,
+    Delegate,
+    Namespace,
+    FileScopedNamespace,
+    Using,
+}
+
+impl CSharpKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Class => "class_declaration",
+            Self::Constructor => "constructor_declaration",
+            Self::Method => "method_declaration",
+            Self::Property => "property_declaration",
+            Self::Field => "field_declaration",
+            Self::Interface => "interface_declaration",
+            Self::Enum => "enum_declaration",
+            Self::Struct => "struct_declaration",
+            Self::Record => "record_declaration",
+            Self::Delegate => "delegate_declaration",
+            Self::Namespace => "namespace_declaration",
+            Self::FileScopedNamespace => "file_scoped_namespace_declaration",
+            Self::Using => "using_directive",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "class_declaration" => Some(Self::Class),
+            "constructor_declaration" => Some(Self::Constructor),
+            "method_declaration" => Some(Self::Method),
+            "property_declaration" => Some(Self::Property),
+            "field_declaration" => Some(Self::Field),
+            "interface_declaration" => Some(Self::Interface),
+            "enum_declaration" => Some(Self::Enum),
+            "struct_declaration" => Some(Self::Struct),
+            "record_declaration" => Some(Self::Record),
+            "delegate_declaration" => Some(Self::Delegate),
+            "namespace_declaration" => Some(Self::Namespace),
+            "file_scoped_namespace_declaration" => Some(Self::FileScopedNamespace),
+            "using_directive" => Some(Self::Using),
+            _ => None,
+        }
     }
 }
 
@@ -274,6 +336,12 @@ impl TsJsKind {
     }
 }
 
+impl From<CSharpKind> for LanguageKind {
+    fn from(value: CSharpKind) -> Self {
+        Self::CSharp(value)
+    }
+}
+
 impl From<GoKind> for LanguageKind {
     fn from(value: GoKind) -> Self {
         Self::Go(value)
@@ -308,13 +376,14 @@ impl TryFrom<&str> for LanguageKind {
     type Error = ();
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let csharp = CSharpKind::from_tree_sitter_kind(value).map(Self::CSharp);
         let rust = RustKind::from_tree_sitter_kind(value).map(Self::Rust);
         let ts_js = TsJsKind::from_tree_sitter_kind(value).map(Self::TsJs);
         let python = PythonKind::from_tree_sitter_kind(value).map(Self::Python);
         let go = GoKind::from_tree_sitter_kind(value).map(Self::Go);
         let java = JavaKind::from_tree_sitter_kind(value).map(Self::Java);
 
-        match [rust, ts_js, python, go, java]
+        match [rust, ts_js, python, go, java, csharp]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
@@ -328,10 +397,29 @@ impl TryFrom<&str> for LanguageKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+    use super::{CSharpKind, GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind};
 
     #[test]
     fn per_language_kind_parsers_round_trip() {
+        let csharp_cases = [
+            CSharpKind::Class,
+            CSharpKind::Constructor,
+            CSharpKind::Method,
+            CSharpKind::Property,
+            CSharpKind::Field,
+            CSharpKind::Interface,
+            CSharpKind::Enum,
+            CSharpKind::Struct,
+            CSharpKind::Record,
+            CSharpKind::Delegate,
+            CSharpKind::Namespace,
+            CSharpKind::FileScopedNamespace,
+            CSharpKind::Using,
+        ];
+        for kind in csharp_cases {
+            assert_eq!(CSharpKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+
         let go_cases = [
             GoKind::FunctionDeclaration,
             GoKind::MethodDeclaration,

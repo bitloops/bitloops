@@ -46,6 +46,7 @@ while IFS= read -r line; do
   req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
     *'"cmd":"embed"'*)
+      sleep 0.15
       printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"qat-test-model"}\n' "$req_id"
       ;;
     *'"cmd":"shutdown"'*)
@@ -95,6 +96,7 @@ while (($line = $stdin.ReadLine()) -ne $null) {
   $request = $line | ConvertFrom-Json
   switch ($request.cmd) {
     "embed" {
+      Start-Sleep -Milliseconds 150
       $response = @{
         id = $request.id
         ok = $true
@@ -140,7 +142,11 @@ while (($line = $stdin.ReadLine()) -ne $null) {
     ))
 }
 
-fn render_semantic_clones_config(world: &QatWorld, command: &str, args: &[String]) -> String {
+fn render_guide_aligned_semantic_clones_config(
+    world: &QatWorld,
+    command: &str,
+    args: &[String],
+) -> String {
     let runtime_args = args
         .iter()
         .map(|arg| format!("{arg:?}"))
@@ -173,14 +179,15 @@ duckdb_path = {events_path:?}
 local_path = {blob_path:?}
 
 [semantic_clones]
-summary_mode = "off"
+summary_mode = "auto"
 embedding_mode = "deterministic"
+enrichment_workers = 2
 
 [semantic_clones.inference]
 code_embeddings = "fake"
 summary_embeddings = "fake"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -189,7 +196,7 @@ request_timeout_secs = 5
 [inference.profiles.fake]
 task = "embeddings"
 driver = "{driver}"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "qat-test-model"
 "#,
         relational_path = relational_path.display().to_string(),
@@ -263,14 +270,21 @@ pub fn configure_semantic_clones_with_fake_runtime(
     world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
+    configure_semantic_clones_with_guide_aligned_fake_runtime(world, repo_name)
+}
+
+pub fn configure_semantic_clones_with_guide_aligned_fake_runtime(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let (command, args, script_path) = fake_embeddings_runtime_command_and_args(world)?;
-    let config = render_semantic_clones_config(world, &command, &args);
+    let config = render_guide_aligned_semantic_clones_config(world, &command, &args);
     write_scenario_capability_config(world, &config)?;
     append_world_log(
         world,
         &format!(
-            "Configured semantic clones fake embeddings runtime at {}.\n",
+            "Configured guide-aligned semantic clones fake embeddings runtime at {}.\n",
             script_path.display()
         ),
     )?;

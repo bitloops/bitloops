@@ -164,7 +164,10 @@ mod tests {
     }
 
     fn test_context() -> Arc<EventHandlerContext> {
-        let db_path = std::env::temp_dir().join("bitloops-sync-event-dispatch-tests.sqlite");
+        let db_path = std::env::temp_dir().join(format!(
+            "bitloops-sync-event-dispatch-tests-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
         let sqlite_pool = crate::storage::SqliteConnectionPool::connect(db_path.clone())
             .expect("open sqlite pool for dispatch tests");
         Arc::new(EventHandlerContext {

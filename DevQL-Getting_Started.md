@@ -42,12 +42,19 @@ duckdb_path = "/absolute/path/to/bitloops/stores/event/events.duckdb"
 [stores.blob]
 local_path = "/absolute/path/to/bitloops/stores/blob"
 
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
 [inference.profiles.summary_llm]
 task = "text_generation"
-driver = "openai"
+runtime = "bitloops_inference"
+driver = "openai_chat_completions"
 model = "gpt-5.4-mini"
 api_key = "${OPENAI_API_KEY}"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1/chat/completions"
 
 [semantic_clones]
 summary_mode = "auto"
@@ -61,7 +68,10 @@ What this does:
 - uses SQLite for relational data
 - uses DuckDB for event data
 - uses local filesystem blob storage
+- routes semantic summaries through the standalone `bitloops-inference` runtime
 - keeps all machine-specific backend configuration in the daemon config rather than in the repo
+
+For local summaries, `bitloops init --install-default-daemon` and interactive `bitloops enable` can install a managed `bitloops-inference` binary and bind summaries to Ollama automatically when it is available.
 
 To use ClickHouse for events instead, configure `[stores.events]` with `clickhouse_url` and related settings. To use Postgres for relational data instead, configure `[stores.relational]` with `postgres_dsn`.
 

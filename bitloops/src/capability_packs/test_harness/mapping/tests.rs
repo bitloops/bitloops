@@ -1,6 +1,11 @@
+use std::collections::HashSet;
+use std::fs;
+use std::sync::Arc;
+
 use crate::adapters::languages::python::test_support::{
     collect_python_suites, resolve_python_import_to_repo_path,
 };
+use crate::adapters::languages::rust::test_support::RustTestMappingHelper;
 use crate::adapters::languages::rust::test_support::enumeration::parse_enumerated_doctests;
 use crate::adapters::languages::rust::test_support::imports::{
     collect_rust_import_paths_for, collect_rust_scoped_call_import_paths_for,
@@ -13,13 +18,18 @@ use crate::adapters::languages::ts_js::test_support::{
     collect_typescript_suites, extract_import_specifier, resolve_import_to_repo_path, unquote,
 };
 
+use tempfile::TempDir;
 use tree_sitter::Parser;
 use tree_sitter_python::LANGUAGE as LANGUAGE_PYTHON;
 use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 
+use super::execute;
 use super::linker::{imported_path_matches_production_path, symbol_match_key};
 use super::model::{ReferenceCandidate, ScenarioDiscoverySource};
+use crate::host::capability_host::gateways::LanguageServicesGateway;
+use crate::host::language_adapter::{DiscoveredTestFile, EnumerationResult, LanguageTestSupport};
+use crate::models::ProductionArtefact;
 
 #[test]
 fn extracts_import_specifier_from_statement() {
@@ -332,6 +342,107 @@ mod tests {
 }
 
 #[test]
+fn rust_suites_include_additional_test_case_string_arguments_in_scenario_names() {
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use test_case::test_case;
+
+    #[test_case(
+        Rule::PytestFixtureIncorrectParenthesesStyle,
+        Path::new("PT001.py"),
+        Settings::default(),
+        "PT001_default"
+    )]
+    #[test_case(
+        Rule::PytestFixtureIncorrectParenthesesStyle,
+        Path::new("PT001.py"),
+        Settings { fixture_parentheses: true, ..Settings::default() },
+        "PT001_parentheses"
+    )]
+    fn test_pytest_style(rule_code: Rule, path: &Path, plugin_settings: Settings, name: &str) {}
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_RUST.into())
+        .expect("failed setting rust parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing rust source");
+
+    let suites = collect_rust_suites(
+        tree.root_node(),
+        source,
+        "crates/ruff_linter/src/rules/flake8_pytest_style/mod.rs",
+    );
+    assert_eq!(suites.len(), 1, "expected one inline rust test suite");
+
+    let scenario_names: Vec<&str> = suites[0]
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(
+        scenario_names,
+        vec![
+            "test_pytest_style[PytestFixtureIncorrectParenthesesStyle, PT001.py, PT001_default]",
+            "test_pytest_style[PytestFixtureIncorrectParenthesesStyle, PT001.py, PT001_parentheses]",
+        ]
+    );
+}
+
+#[test]
+fn rust_suites_use_generic_test_case_labels_and_arguments_to_avoid_duplicate_names() {
+    let source = r#"
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    #[test_case(Type::Any)]
+    #[test_case(Type::Unknown)]
+    #[test_case(todo_type!())]
+    fn build_intersection_t_and_negative_t_does_not_simplify(ty: Type) {}
+
+    #[test_case("\"%s\"", "\"{}\""; "simple string")]
+    #[test_case("\"%%%s\"", "\"%{}\""; "three percents")]
+    fn test_percent_to_format(sample: &str, expected: &str) {}
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_RUST.into())
+        .expect("failed setting rust parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing rust source");
+
+    let suites = collect_rust_suites(tree.root_node(), source, "tests/parameterized.rs");
+    assert_eq!(suites.len(), 1, "expected one inline rust test suite");
+
+    let scenario_names: Vec<&str> = suites[0]
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(
+        scenario_names,
+        vec![
+            "build_intersection_t_and_negative_t_does_not_simplify[Type::Any]",
+            "build_intersection_t_and_negative_t_does_not_simplify[Type::Unknown]",
+            "build_intersection_t_and_negative_t_does_not_simplify[todo_type!()]",
+            "test_percent_to_format[simple string]",
+            "test_percent_to_format[three percents]",
+        ]
+    );
+}
+
+#[test]
 fn rust_suites_detect_wasm_bindgen_test_functions() {
     let source = r#"
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -415,6 +526,93 @@ mod stable {
             )),
         "expected quickcheck macro invocation to surface method-call symbols"
     );
+}
+
+#[test]
+fn rust_suites_extract_matched_macro_case_names() {
+    let source = r#"
+macro_rules! matched {
+    ($kind:ident, $name:ident, $glob:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(evaluate($glob), $expected);
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    matched!(not, matchnot1, "foo", true);
+    matched!(not, matchnot2, "bar", false);
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_RUST.into())
+        .expect("failed setting rust parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing rust source");
+
+    let suites = collect_rust_suites(tree.root_node(), source, "crates/ignore/src/types.rs");
+    assert_eq!(suites.len(), 1, "expected one matched! suite");
+    assert_eq!(suites[0].name, "tests");
+
+    let scenario_names: Vec<&str> = suites[0]
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(scenario_names, vec!["matchnot1", "matchnot2"]);
+}
+
+#[test]
+fn rust_suites_canonicalize_cfg_mirrored_macro_generated_cases() {
+    let source = r#"
+macro_rules! slash_case {
+    ($name:ident, $glob:expr) => {
+        #[test]
+        fn $name() {
+            assert!(compile($glob));
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    slash_case!(matchslash2, "foo/bar");
+    #[cfg(not(unix))]
+    slash_case!(matchslash2, "foo\\bar");
+
+    #[cfg(unix)]
+    slash_case!(normal3, "foo/bar");
+    #[cfg(not(unix))]
+    slash_case!(normal3, "foo\\bar");
+}
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_RUST.into())
+        .expect("failed setting rust parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing rust source");
+
+    let suites = collect_rust_suites(tree.root_node(), source, "crates/globset/src/glob.rs");
+    assert_eq!(suites.len(), 1, "expected one slash-case suite");
+    assert_eq!(suites[0].name, "tests");
+
+    let scenario_names: Vec<&str> = suites[0]
+        .scenarios
+        .iter()
+        .map(|scenario| scenario.name.as_str())
+        .collect();
+    assert_eq!(scenario_names, vec!["matchslash2", "normal3"]);
 }
 
 #[test]
@@ -571,7 +769,10 @@ fn parses_enumerated_doctest_output() {
 
     assert_eq!(scenarios.len(), 1);
     assert_eq!(scenarios[0].relative_path, "crates/sample/src/lib.rs");
-    assert_eq!(scenarios[0].scenario_name, "sample::documented_increment");
+    assert_eq!(
+        scenarios[0].scenario_name,
+        "sample::documented_increment[doctest:12]"
+    );
     assert!(
         scenarios[0]
             .reference_candidates
@@ -580,6 +781,24 @@ fn parses_enumerated_doctest_output() {
                 start_line: 12,
             }),
         "expected parsed doctest line target"
+    );
+}
+
+#[test]
+fn enumerated_doctests_preserve_line_identity_for_duplicate_items() {
+    let scenarios = parse_enumerated_doctests(
+        r#"crates/sample/src/lib.rs - sample::documented_increment (line 12): test
+crates/sample/src/lib.rs - sample::documented_increment (line 24): test"#,
+    );
+
+    assert_eq!(scenarios.len(), 2);
+    assert_eq!(
+        scenarios[0].scenario_name,
+        "sample::documented_increment[doctest:12]"
+    );
+    assert_eq!(
+        scenarios[1].scenario_name,
+        "sample::documented_increment[doctest:24]"
     );
 }
 
@@ -691,4 +910,182 @@ describe("outer", () => {
         "expected exactly one inner scenario"
     );
     assert_eq!(inner.scenarios[0].name, "inner test");
+}
+
+#[test]
+fn rust_mapping_canonicalizes_duplicate_macro_generated_scenarios() {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+
+    fs::create_dir_all(repo_root.join("tests")).expect("failed creating tests directory");
+    fs::create_dir_all(repo_root.join("src")).expect("failed creating src directory");
+    fs::write(
+        repo_root.join("tests/macro_cases.rs"),
+        r#"
+macro_rules! matched {
+    ($kind:ident, $name:ident, $glob:expr, $expected:expr) => {
+        #[test]
+        fn $name() {
+            assert_eq!(evaluate($glob), $expected);
+        }
+    };
+}
+
+macro_rules! slash_case {
+    ($name:ident, $glob:expr) => {
+        #[test]
+        fn $name() {
+            assert!(compile($glob));
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn direct_case() {
+        assert!(compile("baz"));
+    }
+
+    matched!(not, matchnot1, "foo", true);
+    matched!(not, matchnot2, "bar", false);
+
+    #[cfg(unix)]
+    slash_case!(matchslash2, "foo/bar");
+    #[cfg(not(unix))]
+    slash_case!(matchslash2, "foo\\bar");
+
+    #[cfg(unix)]
+    slash_case!(normal3, "foo/bar");
+    #[cfg(not(unix))]
+    slash_case!(normal3, "foo\\bar");
+}
+"#,
+    )
+    .expect("failed writing rust test fixture");
+    fs::write(
+        repo_root.join("src/lib.rs"),
+        r#"
+pub fn compile(value: &str) -> bool {
+    !value.is_empty()
+}
+
+pub fn evaluate(value: &str) -> bool {
+    !value.is_empty()
+}
+"#,
+    )
+    .expect("failed writing rust source fixture");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: Arc::new(SourceOnlyRustSupport),
+    };
+    let output = execute(
+        "repo-1",
+        repo_root,
+        "commit-1",
+        &[
+            ProductionArtefact {
+                artefact_id: "prod-compile".to_string(),
+                symbol_id: "prod-compile-symbol".to_string(),
+                symbol_fqn: "compile".to_string(),
+                path: "src/lib.rs".to_string(),
+                start_line: 1,
+            },
+            ProductionArtefact {
+                artefact_id: "prod-evaluate".to_string(),
+                symbol_id: "prod-evaluate-symbol".to_string(),
+                symbol_fqn: "evaluate".to_string(),
+                path: "src/lib.rs".to_string(),
+                start_line: 5,
+            },
+        ],
+        &gateway,
+    )
+    .expect("mapping execution should succeed");
+
+    let mut scenario_names: Vec<&str> = output
+        .test_artefacts
+        .iter()
+        .filter(|artefact| artefact.canonical_kind == "test_scenario")
+        .map(|artefact| artefact.name.as_str())
+        .collect();
+    scenario_names.sort_unstable();
+    assert_eq!(
+        scenario_names,
+        vec![
+            "direct_case",
+            "matchnot1",
+            "matchnot2",
+            "matchslash2",
+            "normal3"
+        ]
+    );
+
+    let scenario_artefacts: Vec<_> = output
+        .test_artefacts
+        .iter()
+        .filter(|artefact| artefact.canonical_kind == "test_scenario")
+        .collect();
+    let artefact_ids: HashSet<&str> = scenario_artefacts
+        .iter()
+        .map(|artefact| artefact.artefact_id.as_str())
+        .collect();
+    assert_eq!(artefact_ids.len(), scenario_artefacts.len());
+
+    let symbol_ids: HashSet<&str> = scenario_artefacts
+        .iter()
+        .map(|artefact| artefact.symbol_id.as_str())
+        .collect();
+    assert_eq!(symbol_ids.len(), scenario_artefacts.len());
+
+    assert!(
+        output
+            .test_edges
+            .iter()
+            .any(|edge| edge.to_symbol_id.as_deref() == Some("prod-compile-symbol")),
+        "expected at least one static link to the compile production artefact"
+    );
+}
+
+struct SourceOnlyLanguageServicesGateway {
+    support: Arc<dyn LanguageTestSupport>,
+}
+
+impl LanguageServicesGateway for SourceOnlyLanguageServicesGateway {
+    fn test_supports(&self) -> Vec<Arc<dyn LanguageTestSupport>> {
+        vec![self.support.clone()]
+    }
+}
+
+struct SourceOnlyRustSupport;
+
+impl LanguageTestSupport for SourceOnlyRustSupport {
+    fn language_id(&self) -> &'static str {
+        "rust"
+    }
+
+    fn priority(&self) -> u8 {
+        0
+    }
+
+    fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
+        RustTestMappingHelper::supports_path(absolute_path, relative_path)
+    }
+
+    fn discover_tests(
+        &self,
+        absolute_path: &std::path::Path,
+        relative_path: &str,
+    ) -> anyhow::Result<DiscoveredTestFile> {
+        let mut helper = RustTestMappingHelper::new()?;
+        helper.discover_tests(absolute_path, relative_path)
+    }
+
+    fn enumerate_tests(
+        &self,
+        _ctx: &crate::host::language_adapter::LanguageAdapterContext,
+    ) -> EnumerationResult {
+        EnumerationResult::default()
+    }
 }

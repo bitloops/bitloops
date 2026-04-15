@@ -2,9 +2,14 @@ use super::agent_hooks::{
     AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI, DEFAULT_AGENT,
 };
 use super::*;
+use crate::adapters::agents::{AGENT_NAME_COPILOT, AGENT_NAME_OPEN_CODE};
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+};
+use crate::cli::inference::{
+    ManagedInferenceBinaryInstallOutcome, OllamaAvailability, with_managed_inference_install_hook,
+    with_ollama_probe_hook, with_summary_generation_configured_hook,
 };
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
@@ -12,12 +17,14 @@ use crate::cli::telemetry_consent::{
 };
 use crate::cli::{Cli, Commands};
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ensure_daemon_config_exists};
-use crate::test_support::process_state::with_process_state;
+use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
 use clap::Parser;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn setup_git_repo(dir: &TempDir) {
@@ -72,11 +79,16 @@ fn with_temp_app_dirs<T>(
     assume_daemon_running: bool,
     f: impl FnOnce() -> T,
 ) -> T {
-    with_test_platform_dir_overrides(app_dir_overrides(temp), || {
-        with_test_tty_override(tty, || {
-            with_test_assume_daemon_running(assume_daemon_running, f)
-        })
-    })
+    with_summary_generation_configured_hook(
+        |_| true,
+        || {
+            with_test_platform_dir_overrides(app_dir_overrides(temp), || {
+                with_test_tty_override(tty, || {
+                    with_test_assume_daemon_running(assume_daemon_running, f)
+                })
+            })
+        },
+    )
 }
 
 fn test_runtime() -> tokio::runtime::Runtime {
@@ -222,7 +234,7 @@ fn write_runtime_only_daemon_config(config_path: &Path, command: &str, args: &[S
 [runtime]
 local_dev = false
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -362,14 +374,52 @@ fn completed_bootstrap_task_json(task_id: &str) -> serde_json::Value {
     })
 }
 
+fn running_bootstrap_task_json(task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "demo",
+        "repoIdentity": "local/demo",
+        "kind": "EMBEDDINGS_BOOTSTRAP",
+        "source": "init",
+        "status": "RUNNING",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": serde_json::Value::Null,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": {
+            "configPath": "/tmp/config.toml",
+            "profileName": "local_code"
+        },
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": {
+            "phase": "warming_profile",
+            "assetName": serde_json::Value::Null,
+            "bytesDownloaded": 0,
+            "bytesTotal": serde_json::Value::Null,
+            "version": serde_json::Value::Null,
+            "message": "Warming profile `local_code`"
+        },
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null
+    })
+}
+
 #[test]
-fn init_args_supports_agent_flag() {
-    let parsed =
-        Cli::try_parse_from(["bitloops", "init", "--agent", "cursor"]).expect("parse init");
+fn init_args_supports_repeated_agent_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--agent", "cursor", "--agent", "codex"])
+        .expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
         panic!("expected init command");
     };
-    assert_eq!(args.agent.as_deref(), Some("cursor"));
+    assert_eq!(args.agent, vec!["cursor".to_string(), "codex".to_string()]);
 }
 
 #[test]
@@ -442,6 +492,32 @@ fn init_args_support_backfill_flag_variants() {
 }
 
 #[test]
+fn init_args_support_repeated_exclusion_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--exclude",
+        "docs/**",
+        "--exclude",
+        "**/third_party/**",
+        "--exclude-from",
+        ".bitloopsignore",
+        "--exclude-from",
+        "configs/extra.ignore",
+    ])
+    .expect("parse init exclusion flags");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(args.exclude, vec!["docs/**", "**/third_party/**"]);
+    assert_eq!(
+        args.exclude_from,
+        vec![".bitloopsignore", "configs/extra.ignore"]
+    );
+}
+
+#[test]
 fn init_args_reject_zero_backfill() {
     let err = Cli::try_parse_from(["bitloops", "init", "--backfill=0"])
         .err()
@@ -479,13 +555,18 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: Some(DEFAULT_AGENT.to_string()),
+                agent: vec![DEFAULT_AGENT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -501,12 +582,129 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]
         );
+        let repo_skill = repo
+            .path()
+            .join(".claude/skills/bitloops/using-devql/SKILL.md");
+        assert!(
+            repo_skill.exists(),
+            "expected repo-local DevQL skill to be installed at {}",
+            repo_skill.display()
+        );
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
         assert!(!exclude.contains(".bitloops/"));
         assert!(!exclude.contains("config.local.json"));
         assert!(!exclude.contains(".bitloops/config.local.json"));
+    });
+}
+
+#[test]
+fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agents() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let select = |_choices: &[String]| -> std::result::Result<Vec<String>, String> {
+            panic!("selector should not run when --agent is provided")
+        };
+
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: vec![
+                    "Cursor".to_string(),
+                    AGENT_CURSOR.to_string(),
+                    "Gemini".to_string(),
+                ],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            Some(&select),
+        )
+        .expect("run init");
+
+        assert_eq!(
+            crate::cli::enable::initialized_agents(repo.path()),
+            vec![AGENT_CURSOR.to_string(), AGENT_GEMINI.to_string()]
+        );
+        assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(
+            repo.path()
+                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_persists_scope_exclusions_and_preserves_unrelated_local_settings() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+    std::fs::write(
+        repo.path().join(".bitloops.local.toml"),
+        r#"
+[custom]
+keep = true
+"#,
+    )
+    .expect("seed local policy");
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: Vec::new(),
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: vec!["docs/**".to_string(), "**/third_party/**".to_string()],
+                exclude_from: vec![".bitloopsignore".to_string()],
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let local_policy = std::fs::read_to_string(repo.path().join(".bitloops.local.toml"))
+            .expect("read local policy");
+        assert!(
+            local_policy.contains("exclude = [\"**/third_party/**\", \"docs/**\"]")
+                || local_policy.contains("exclude = [\"docs/**\", \"**/third_party/**\"]"),
+            "scope.exclude should be persisted, got:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("exclude_from = [\".bitloopsignore\"]"),
+            "scope.exclude_from should be persisted, got:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("[custom]") && local_policy.contains("keep = true"),
+            "init should preserve unrelated existing local policy settings, got:\n{local_policy}"
+        );
     });
 }
 
@@ -525,13 +723,18 @@ fn run_init_binds_repo_to_running_daemon_config() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -550,6 +753,47 @@ fn run_init_binds_repo_to_running_daemon_config() {
                     .as_ref()
             ),
             "expected daemon binding in local policy:\n{local_policy}"
+        );
+    });
+}
+
+#[test]
+fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    setup_git_repo(&repo);
+    let outside_path = outside.path().join("outside.ignore");
+    std::fs::write(&outside_path, "vendor/**\n").expect("write outside ignore file");
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let err = run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: Vec::new(),
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: false,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: vec![outside_path.display().to_string()],
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect_err("outside-root --exclude-from path should fail");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("must be under repo-policy root"),
+            "unexpected error for outside-root --exclude-from path: {rendered}"
         );
     });
 }
@@ -576,13 +820,18 @@ fn run_init_rewrites_existing_daemon_binding() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -627,13 +876,18 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_CURSOR.to_string()),
+                agent: vec![AGENT_CURSOR.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -645,12 +899,73 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         assert!(!rendered.contains("Initialised agents: cursor"));
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(
+            repo.path()
+                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .exists()
+        );
         assert!(!repo.path().join(".claude/settings.json").exists());
     });
 }
 
 #[test]
 fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let codex_home = tempfile::tempdir().expect("codex home tempdir");
+    setup_git_repo(&repo);
+    let codex_home_path = codex_home.path().to_string_lossy().to_string();
+
+    with_env_vars(
+        &[
+            ("HOME", Some(codex_home_path.as_str())),
+            ("USERPROFILE", Some(codex_home_path.as_str())),
+        ],
+        || {
+            with_temp_app_dirs(&app_dirs, false, true, || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: true,
+                        agent: vec![AGENT_CODEX.to_string()],
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: true,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo.path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init");
+
+                assert!(repo.path().join(".codex/hooks.json").exists());
+                let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
+                    .expect("read codex config");
+                assert!(config.contains("codex_hooks = true"));
+                let repo_skill = repo
+                    .path()
+                    .join(".agents/skills/bitloops/using-devql/SKILL.md");
+                assert!(
+                    repo_skill.exists(),
+                    "expected Codex repo-local skill to be installed"
+                );
+                assert!(!repo.path().join(".claude/settings.json").exists());
+            });
+        },
+    );
+}
+
+#[test]
+fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
@@ -661,13 +976,18 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_CODEX.to_string()),
+                agent: vec![AGENT_GEMINI.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
                 sync: Some(false),
                 ingest: Some(false),
                 backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -675,11 +995,132 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
         )
         .expect("run init");
 
-        assert!(repo.path().join(".codex/hooks.json").exists());
-        let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
-            .expect("read codex config");
-        assert!(config.contains("codex_hooks = true"));
-        assert!(!repo.path().join(".claude/settings.json").exists());
+        let gemini_md =
+            std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
+        assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+        assert!(
+            repo.path()
+                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: vec![AGENT_NAME_COPILOT.to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        assert!(repo.path().join(".github/hooks/bitloops.json").exists());
+        assert!(
+            repo.path()
+                .join(".github/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: vec![AGENT_NAME_OPEN_CODE.to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        assert!(repo.path().join(".opencode/plugins/bitloops.ts").exists());
+        assert!(
+            repo.path()
+                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_invalid_explicit_agent_errors() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let err = run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: vec![AGENT_CURSOR.to_string(), "not-a-real-agent".to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect_err("invalid explicit agent should fail");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("unknown agent name: not-a-real-agent"),
+            "unexpected error: {rendered}"
+        );
     });
 }
 
@@ -893,13 +1334,18 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
                             skip_baseline: false,
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -944,13 +1390,18 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
                             skip_baseline: false,
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -981,13 +1432,18 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                 InitArgs {
                     install_default_daemon: true,
                     force: false,
-                    agent: None,
+                    agent: Vec::new(),
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: false,
                     sync: Some(false),
                     ingest: Some(false),
                     backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
+                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
                 repo.path(),
                 &mut out,
@@ -1030,13 +1486,18 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -1063,7 +1524,7 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
 
     with_temp_app_dirs(&app_dirs, true, true, || {
         let config_path = ensure_daemon_config_exists().expect("create default daemon config");
-        write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+        write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
 
         with_global_graphql_executor_hook(
             |_runtime_root, _query, variables| {
@@ -1094,13 +1555,20 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
                                 InitArgs {
                                     install_default_daemon: false,
                                     force: false,
-                                    agent: None,
+                                    agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
                                     skip_baseline: false,
                                     sync: Some(false),
                                     ingest: Some(false),
                                     backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime:
+                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
                                 },
                                 repo.path(),
                                 &mut out,
@@ -1134,6 +1602,188 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
 }
 
 #[test]
+fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is_accepted() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_summary_generation_configured_hook(
+        |_| false,
+        || {
+            with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+                with_test_tty_override(true, || {
+                    with_test_assume_daemon_running(true, || {
+                        with_install_default_daemon_hook(
+                            move |install_default_daemon| {
+                                assert!(install_default_daemon);
+                                let config_path = ensure_daemon_config_exists()
+                                    .expect("create default daemon config");
+                                write_runtime_only_daemon_config(
+                                    &config_path,
+                                    "bitloops-local-embeddings",
+                                    &[],
+                                );
+                                Ok(())
+                            },
+                            || {
+                                with_global_graphql_executor_hook(
+                                    |_runtime_root, _query, variables| {
+                                        assert_eq!(
+                                            variables["telemetry"],
+                                            serde_json::json!(false)
+                                        );
+                                        Ok(serde_json::json!({
+                                            "updateCliTelemetryConsent": {
+                                                "telemetry": false,
+                                                "needsPrompt": false
+                                            }
+                                        }))
+                                    },
+                                    || {
+                                        let install_root = repo.path().to_path_buf();
+                                        with_managed_inference_install_hook(
+                                            move |_repo_root| {
+                                                Ok(ManagedInferenceBinaryInstallOutcome {
+                                                    version: "v1.2.3".to_string(),
+                                                    binary_path: install_root
+                                                        .join("bitloops-inference"),
+                                                    freshly_installed: true,
+                                                })
+                                            },
+                                            || {
+                                                with_ollama_probe_hook(
+                                                    || {
+                                                        Ok(OllamaAvailability::Running {
+                                                            models: vec![
+                                                                "ministral-3:3b".to_string(),
+                                                            ],
+                                                        })
+                                                    },
+                                                    || {
+                                                        with_ingest_daemon_bootstrap_hook(
+                                                            |_repo_root| Ok(()),
+                                                            || {
+                                                                with_graphql_executor_hook(
+                                                                    |_repo_root, query, variables| {
+                                                                        if query.contains("task(")
+                                                                            || query.contains("query Task")
+                                                                        {
+                                                                            let task_id = variables["id"]
+                                                                                .as_str()
+                                                                                .expect("task id");
+                                                                            if task_id.starts_with(
+                                                                                "embeddings_bootstrap-task-",
+                                                                            ) {
+                                                                                return Ok(
+                                                                                    serde_json::json!({
+                                                                                        "task": completed_bootstrap_task_json(task_id)
+                                                                                    }),
+                                                                                );
+                                                                            }
+                                                                        }
+
+                                                                        panic!(
+                                                                            "unexpected repo-scoped query: {query}"
+                                                                        );
+                                                                    },
+                                                                    || {
+                                                                        let mut out = Vec::new();
+                                                                        let mut input =
+                                                                            Cursor::new("2\n");
+                                                                        let select = |_items: &[String]| {
+                                                                            Ok(vec![
+                                                                                "claude-code"
+                                                                                    .to_string(),
+                                                                            ])
+                                                                        };
+                                                                        let runtime =
+                                                                            test_runtime();
+                                                                        runtime
+                                                                            .block_on(run_with_io_async_for_project_root(
+                                                                                InitArgs {
+                                                                                    install_default_daemon: true,
+                                                                                    force: false,
+                                                                                    agent: Vec::new(),
+                                                                                    telemetry: Some(false),
+                                                                                    no_telemetry: false,
+                                                                                    skip_baseline: false,
+                                                                                    sync: Some(false),
+                                                                                    ingest: Some(false),
+                                                                                    backfill: None,
+                                                                                    exclude: Vec::new(),
+                                                                                    exclude_from: Vec::new(),
+                                                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                                embeddings_gateway_url: None,
+                                                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                                                                },
+                                                                                repo.path(),
+                                                                                &mut out,
+                                                                                &mut input,
+                                                                                Some(&select),
+                                                                            ))
+                                                                            .expect("run init");
+
+                                                                        let rendered =
+                                                                            String::from_utf8(out)
+                                                                                .expect("utf8 output");
+                                                                        assert!(rendered.contains(
+                                                                            "How would you like Bitloops to configure semantic summaries?"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "1. Bitloops cloud (recommended)"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "2. Local Ollama"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "3. Skip for now"
+                                                                        ));
+
+                                                                        let daemon_config_path =
+                                                                            ensure_daemon_config_exists()
+                                                                                .expect("daemon config path");
+                                                                        let daemon_config = std::fs::read_to_string(
+                                                                            daemon_config_path,
+                                                                        )
+                                                                        .expect("read daemon config");
+                                                                        assert!(
+                                                                            daemon_config.contains(
+                                                                                "summary_generation = \"summary_local\""
+                                                                            ),
+                                                                            "expected summary generation binding after init:\n{daemon_config}"
+                                                                        );
+                                                                        assert!(
+                                                                            daemon_config.contains(
+                                                                                "[inference.profiles.summary_local]"
+                                                                            ),
+                                                                            "expected summary profile after init:\n{daemon_config}"
+                                                                        );
+                                                                        assert!(
+                                                                            daemon_config.contains(
+                                                                                "model = \"ministral-3:3b\""
+                                                                            ),
+                                                                            "expected Ollama model after init:\n{daemon_config}"
+                                                                        );
+                                                                    },
+                                                                )
+                                                            },
+                                                        );
+                                                    },
+                                                )
+                                            },
+                                        )
+                                    },
+                                );
+                            },
+                        );
+                    })
+                })
+            })
+        },
+    );
+}
+
+#[test]
 fn run_init_with_install_default_daemon_auto_installs_embeddings() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
@@ -1145,7 +1795,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                 assert!(install_default_daemon);
                 let config_path =
                     ensure_daemon_config_exists().expect("create default daemon config");
-                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
                 Ok(())
             },
             || {
@@ -1168,13 +1818,20 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 InitArgs {
                                     install_default_daemon: true,
                                     force: false,
-                                    agent: None,
+                                    agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
                                     skip_baseline: false,
                                     sync: Some(false),
                                     ingest: Some(false),
                                     backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime:
+                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
                                 },
                                 repo.path(),
                                 &mut out,
@@ -1185,13 +1842,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
 
                         let rendered = String::from_utf8(out).expect("utf8 output");
                         assert!(
-                            rendered.contains("Queueing embeddings bootstrap in the daemon...")
+                            !rendered.contains("Queueing embeddings bootstrap in the daemon...")
                         );
-                        assert!(
-                            rendered
-                                .contains("Embeddings bootstrap task: embeddings_bootstrap-task-")
-                        );
-                        assert!(rendered.contains("Embeddings bootstrap phase: queued"));
+                        assert!(!rendered.contains("Embeddings bootstrap task:"));
+                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
                         assert!(
                             rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                         );
@@ -1239,7 +1893,7 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                 assert!(install_default_daemon);
                 let config_path =
                     ensure_daemon_config_exists().expect("create default daemon config");
-                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
                 Ok(())
             },
             || {
@@ -1404,13 +2058,18 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    agent: None,
+                                                    agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
                                                     skip_baseline: false,
                                                     sync: Some(true),
                                                     ingest: Some(true),
                                                     backfill: None,
+                                                    exclude: Vec::new(),
+                                                    exclude_from: Vec::new(),
+                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                embeddings_gateway_url: None,
+                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                 },
                                                 repo.path(),
                                                 &mut out,
@@ -1420,9 +2079,6 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                             .expect("run init");
 
                                         let rendered = String::from_utf8(out).expect("utf8 output");
-                                        let bootstrap_index = rendered
-                                            .find("Queueing embeddings bootstrap in the daemon...")
-                                            .expect("bootstrap output");
                                         let handoff_index = rendered
                                             .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                                             .expect("handoff output");
@@ -1437,12 +2093,16 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         let embeddings_description_index = rendered
                                             .find("Creating code embeddings for fast search using our local embeddings provider")
                                             .expect("embeddings description output");
-                                        assert!(bootstrap_index < checklist_index);
                                         assert!(handoff_index < checklist_index);
                                         assert!(checklist_index < sync_description_index);
                                         assert!(
                                             sync_description_index < embeddings_description_index
                                         );
+                                        assert!(!rendered.contains(
+                                            "Queueing embeddings bootstrap in the daemon..."
+                                        ));
+                                        assert!(!rendered.contains("Embeddings bootstrap task:"));
+                                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
                                         assert!(
                                             !rendered.contains("Starting initial DevQL sync...")
                                         );
@@ -1464,6 +2124,404 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
             },
         );
     });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_readiness() {
+    let sync_events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let bootstrap_query_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        with_ingest_daemon_bootstrap_hook(
+                            |_repo_root| Ok(()),
+                            || {
+                                with_graphql_executor_hook(
+                                    {
+                                        let sync_events = std::rc::Rc::clone(&sync_events);
+                                        let bootstrap_query_count =
+                                            std::rc::Rc::clone(&bootstrap_query_count);
+                                        move |_repo_root, query, variables| {
+                                            if query.contains("enqueueTask")
+                                                && variables["input"]["kind"] == "SYNC"
+                                            {
+                                                let mut sync_events = sync_events.borrow_mut();
+                                                let task_number = sync_events.len() + 1;
+                                                sync_events.push(
+                                                    variables["input"]["sync"]["source"]
+                                                        .as_str()
+                                                        .expect("sync source")
+                                                        .to_string(),
+                                                );
+                                                return Ok(serde_json::json!({
+                                                    "enqueueTask": {
+                                                        "merged": false,
+                                                        "task": {
+                                                            "taskId": format!("sync-task-{task_number}"),
+                                                            "repoId": "repo-1",
+                                                            "repoName": "demo",
+                                                            "repoIdentity": "local/demo",
+                                                            "kind": "SYNC",
+                                                            "source": variables["input"]["sync"]["source"],
+                                                            "status": "QUEUED",
+                                                            "submittedAtUnix": 1,
+                                                            "startedAtUnix": serde_json::Value::Null,
+                                                            "updatedAtUnix": 1,
+                                                            "completedAtUnix": serde_json::Value::Null,
+                                                            "queuePosition": 1,
+                                                            "tasksAhead": 0,
+                                                            "error": serde_json::Value::Null,
+                                                            "syncSpec": {
+                                                                "mode": "auto",
+                                                                "paths": []
+                                                            },
+                                                            "ingestSpec": serde_json::Value::Null,
+                                                            "embeddingsBootstrapSpec": serde_json::Value::Null,
+                                                            "syncProgress": {
+                                                                "phase": "queued",
+                                                                "currentPath": serde_json::Value::Null,
+                                                                "pathsTotal": 0,
+                                                                "pathsCompleted": 0,
+                                                                "pathsRemaining": 0,
+                                                                "pathsUnchanged": 0,
+                                                                "pathsAdded": 0,
+                                                                "pathsChanged": 0,
+                                                                "pathsRemoved": 0,
+                                                                "cacheHits": 0,
+                                                                "cacheMisses": 0,
+                                                                "parseErrors": 0
+                                                            },
+                                                            "ingestProgress": serde_json::Value::Null,
+                                                            "embeddingsBootstrapProgress": serde_json::Value::Null,
+                                                            "syncResult": serde_json::Value::Null,
+                                                            "ingestResult": serde_json::Value::Null,
+                                                            "embeddingsBootstrapResult": serde_json::Value::Null
+                                                        }
+                                                    }
+                                                }));
+                                            }
+
+                                            if query.contains("task(")
+                                                || query.contains("query Task")
+                                            {
+                                                let task_id =
+                                                    variables["id"].as_str().expect("task id");
+                                                let task = if task_id.starts_with("sync-task-") {
+                                                    completed_sync_task_json(task_id)
+                                                } else if task_id
+                                                    .starts_with("embeddings_bootstrap-task-")
+                                                {
+                                                    let mut count =
+                                                        bootstrap_query_count.borrow_mut();
+                                                    *count += 1;
+                                                    if *count == 1 {
+                                                        running_bootstrap_task_json(task_id)
+                                                    } else {
+                                                        completed_bootstrap_task_json(task_id)
+                                                    }
+                                                } else {
+                                                    panic!("unexpected task id: {task_id}");
+                                                };
+                                                return Ok(serde_json::json!({ "task": task }));
+                                            }
+
+                                            panic!("unexpected repo-scoped query: {query}");
+                                        }
+                                    },
+                                    || {
+                                        let mut out = Vec::new();
+                                        let mut input = Cursor::new("");
+                                        let runtime = test_runtime();
+                                        runtime
+                                            .block_on(run_with_io_async_for_project_root(
+                                                InitArgs {
+                                                    install_default_daemon: true,
+                                                    force: false,
+                                                    agent: Vec::new(),
+                                                    telemetry: Some(false),
+                                                    no_telemetry: false,
+                                                    skip_baseline: false,
+                                                    sync: Some(true),
+                                                    ingest: Some(false),
+                                                    backfill: None,
+                                                    exclude: Vec::new(),
+                                                    exclude_from: Vec::new(),
+                                                    embeddings_runtime:
+                                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                    embeddings_gateway_url: None,
+                                                    embeddings_api_key_env:
+                                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                            .to_string(),
+                                                },
+                                                repo.path(),
+                                                &mut out,
+                                                &mut input,
+                                                None,
+                                            ))
+                                            .expect("run init");
+
+                                        assert_eq!(
+                                            &*sync_events.borrow(),
+                                            &["init".to_string(), "init".to_string()]
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_renders_separate_lane() {
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_summary_generation_configured_hook(
+        |_| false,
+        || {
+            with_test_platform_dir_overrides(app_dir_overrides(&app_dirs), || {
+                with_test_tty_override(false, || {
+                    with_test_assume_daemon_running(true, || {
+                        with_install_default_daemon_hook(
+                            move |install_default_daemon| {
+                                assert!(install_default_daemon);
+                                let config_path = ensure_daemon_config_exists()
+                                    .expect("create default daemon config");
+                                write_runtime_only_daemon_config(
+                                    &config_path,
+                                    "bitloops-local-embeddings",
+                                    &[],
+                                );
+                                Ok(())
+                            },
+                            || {
+                                with_global_graphql_executor_hook(
+                                    |_runtime_root, _query, variables| {
+                                        assert_eq!(
+                                            variables["telemetry"],
+                                            serde_json::json!(false)
+                                        );
+                                        Ok(serde_json::json!({
+                                            "updateCliTelemetryConsent": {
+                                                "telemetry": false,
+                                                "needsPrompt": false
+                                            }
+                                        }))
+                                    },
+                                    || {
+                                        let install_root = repo.path().to_path_buf();
+                                        with_managed_inference_install_hook(
+                                            {
+                                                let events = Arc::clone(&events);
+                                                move |_repo_root| {
+                                                    events
+                                                        .lock()
+                                                        .expect("lock inference events")
+                                                        .push("inference_start".to_string());
+                                                    std::thread::sleep(Duration::from_millis(250));
+                                                    events
+                                                        .lock()
+                                                        .expect("lock inference events")
+                                                        .push("inference_finish".to_string());
+                                                    Ok(ManagedInferenceBinaryInstallOutcome {
+                                                        version: "v1.2.3".to_string(),
+                                                        binary_path: install_root
+                                                            .join("bitloops-inference"),
+                                                        freshly_installed: true,
+                                                    })
+                                                }
+                                            },
+                                            || {
+                                                with_ollama_probe_hook(
+                                                    || Ok(OllamaAvailability::MissingCli),
+                                                    || {
+                                                        with_ingest_daemon_bootstrap_hook(
+                                                            |_repo_root| Ok(()),
+                                                            || {
+                                                                with_graphql_executor_hook(
+                                                                    {
+                                                                        let events =
+                                                                            Arc::clone(&events);
+                                                                        move |_repo_root, query, variables| {
+                                                                            if query.contains("enqueueTask")
+                                                                                && variables["input"]["kind"] == "SYNC"
+                                                                            {
+                                                                                events
+                                                                                    .lock()
+                                                                                    .expect("lock sync events")
+                                                                                    .push("sync".to_string());
+                                                                                return Ok(serde_json::json!({
+                                                                                    "enqueueTask": {
+                                                                                        "merged": false,
+                                                                                        "task": {
+                                                                                            "taskId": "sync-task-1",
+                                                                                            "repoId": "repo-1",
+                                                                                            "repoName": "demo",
+                                                                                            "repoIdentity": "local/demo",
+                                                                                            "kind": "SYNC",
+                                                                                            "source": "init",
+                                                                                            "status": "QUEUED",
+                                                                                            "submittedAtUnix": 1,
+                                                                                            "startedAtUnix": null,
+                                                                                            "updatedAtUnix": 1,
+                                                                                            "completedAtUnix": null,
+                                                                                            "queuePosition": 1,
+                                                                                            "tasksAhead": 0,
+                                                                                            "error": null,
+                                                                                            "syncSpec": {
+                                                                                                "mode": "auto",
+                                                                                                "paths": []
+                                                                                            },
+                                                                                            "ingestSpec": null,
+                                                                                            "embeddingsBootstrapSpec": null,
+                                                                                            "syncProgress": {
+                                                                                                "phase": "queued",
+                                                                                                "currentPath": null,
+                                                                                                "pathsTotal": 0,
+                                                                                                "pathsCompleted": 0,
+                                                                                                "pathsRemaining": 0,
+                                                                                                "pathsUnchanged": 0,
+                                                                                                "pathsAdded": 0,
+                                                                                                "pathsChanged": 0,
+                                                                                                "pathsRemoved": 0,
+                                                                                                "cacheHits": 0,
+                                                                                                "cacheMisses": 0,
+                                                                                                "parseErrors": 0
+                                                                                            },
+                                                                                            "ingestProgress": null,
+                                                                                            "embeddingsBootstrapProgress": null,
+                                                                                            "syncResult": null,
+                                                                                            "ingestResult": null,
+                                                                                            "embeddingsBootstrapResult": null
+                                                                                        }
+                                                                                    }
+                                                                                }));
+                                                                            }
+
+                                                                            if query.contains("task(")
+                                                                                || query.contains("query Task")
+                                                                            {
+                                                                                let task_id = variables["id"].as_str().expect("task id");
+                                                                                let task = if task_id == "sync-task-1" {
+                                                                                    completed_sync_task_json(task_id)
+                                                                                } else if task_id.starts_with("embeddings_bootstrap-task-") {
+                                                                                    completed_bootstrap_task_json(task_id)
+                                                                                } else {
+                                                                                    panic!("unexpected task id: {task_id}");
+                                                                                };
+                                                                                return Ok(serde_json::json!({
+                                                                                    "task": task
+                                                                                }));
+                                                                            }
+
+                                                                            panic!("unexpected repo-scoped query: {query}");
+                                                                        }
+                                                                    },
+                                                                    || {
+                                                                        let mut out = Vec::new();
+                                                                        let mut input =
+                                                                            Cursor::new("");
+                                                                        let runtime =
+                                                                            test_runtime();
+                                                                        runtime
+                                                                            .block_on(run_with_io_async_for_project_root(
+                                                                                InitArgs {
+                                                                                    install_default_daemon: true,
+                                                                                    force: false,
+                                                                                    agent: Vec::new(),
+                                                                                    telemetry: Some(false),
+                                                                                    no_telemetry: false,
+                                                                                    skip_baseline: false,
+                                                                                    sync: Some(true),
+                                                                                    ingest: Some(false),
+                                                                                    backfill: None,
+                                                                                    exclude: Vec::new(),
+                                                                                    exclude_from: Vec::new(),
+                                                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                                embeddings_gateway_url: None,
+                                                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                                                                },
+                                                                                repo.path(),
+                                                                                &mut out,
+                                                                                &mut input,
+                                                                                None,
+                                                                            ))
+                                                                            .expect("run init");
+
+                                                                        let rendered =
+                                                                            String::from_utf8(out)
+                                                                                .expect(
+                                                                                    "utf8 output",
+                                                                                );
+                                                                        assert!(
+                                                                            rendered.contains("Creating code embeddings for fast search using our local embeddings provider")
+                                                                        );
+                                                                        assert!(
+                                                                            rendered.contains("Configuring semantic summaries with bitloops-inference")
+                                                                        );
+                                                                        assert!(
+                                                                            !rendered.contains("Starting initial DevQL sync...")
+                                                                        );
+                                                                    },
+                                                                )
+                                                            },
+                                                        );
+                                                    },
+                                                )
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    })
+                })
+            })
+        },
+    );
+
+    let events = events.lock().expect("lock events");
+    let sync_index = events
+        .iter()
+        .position(|event| event == "sync")
+        .expect("sync event");
+    let inference_finish_index = events
+        .iter()
+        .position(|event| event == "inference_finish")
+        .expect("inference finish event");
+    assert!(
+        sync_index < inference_finish_index,
+        "summary setup should not block sync enqueueing, saw events: {:?}",
+        *events
+    );
 }
 
 #[test]
@@ -1494,13 +2552,18 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
                             sync: Some(false),
                             ingest: Some(false),
                             backfill: None,
+                            exclude: Vec::new(),
+                            exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -1531,13 +2594,18 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                 InitArgs {
                     install_default_daemon: false,
                     force: false,
-                    agent: None,
+                    agent: Vec::new(),
                     telemetry: Some(false),
                     no_telemetry: false,
                     skip_baseline: false,
                     sync: None,
                     ingest: Some(false),
                     backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
+                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
                 repo.path(),
                 &mut out,
@@ -1664,13 +2732,20 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            agent: None,
+                                            agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
                                             skip_baseline: false,
                                             sync: Some(false),
                                             ingest: Some(true),
                                             backfill: None,
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
+                                            embeddings_runtime:
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                         },
                                         repo.path(),
                                         &mut out,
@@ -1808,13 +2883,20 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            agent: None,
+                                            agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
                                             skip_baseline: false,
                                             sync: Some(false),
                                             ingest: None,
                                             backfill: Some(10),
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
+                                            embeddings_runtime:
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                         },
                                         repo.path(),
                                         &mut out,

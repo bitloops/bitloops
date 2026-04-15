@@ -25,11 +25,45 @@ brew tap bitloops/tap && brew install bitloops
 cargo install bitloops
 ```
 
-## 2. Start The Daemon
+## 2. Fastest Start: Initialise A Project
+
+```bash
+bitloops init --install-default-daemon
+```
+
+This is the fastest way to get started from inside a git repository or subproject. It bootstraps the default daemon service if needed, creates or updates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
+
+Use `--sync=true` when you want the initial current-state sync immediately:
+
+```bash
+bitloops init --install-default-daemon --sync=true
+```
+
+When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile, installs the managed standalone `bitloops-local-embeddings` runtime when the default local runtime is selected, and warms that profile. If init also runs sync or ingest, the managed runtime download happens afterwards.
+
+In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
+
+`bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
+
+In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
+
+That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` separately, when you want checkpoint, commit, and event history materialised.
+
+If you want to pin the supported agent set during bootstrap, repeat `--agent <name>` for each supported agent. For example:
+
+```bash
+bitloops init --sync=false --agent claude-code --agent codex
+```
+
+If telemetry consent is unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
+
+## 3. Start The Daemon Explicitly When You Need To
 
 ```bash
 bitloops start --create-default-config
 ```
+
+Use this path when you want to bootstrap the default daemon before initialising a repo, or when you want to inspect or customise the daemon config separately.
 
 On a fresh machine, use `--create-default-config` once. This writes the default global daemon config at the platform config location and creates the default local SQLite, DuckDB, and blob-store paths.
 
@@ -40,33 +74,6 @@ If you are using a repo-scoped or test-specific daemon config instead of the def
 ```bash
 bitloops start --config ./config.toml --bootstrap-local-stores
 ```
-
-## 3. Initialise A Project
-
-From inside a git repository or subproject:
-
-```bash
-bitloops init --sync=true
-bitloops init --install-default-daemon --sync=true
-```
-
-Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service first.
-
-This creates or updates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
-
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile, installs the managed standalone `bitloops-embeddings` runtime when the default local runtime is selected, and warms that profile. If init also runs sync or ingest, the managed runtime download happens afterwards.
-
-In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
-
-`bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
-
-In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
-
-That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` separately, when you want checkpoint, commit, and event history materialised.
-
-If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
-
-If telemetry consent is unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
 
 ## 4. Add Optional Shared Project Policy
 
@@ -151,7 +158,7 @@ bitloops daemon enable --install-embeddings
 
 These commands edit the nearest discovered project policy and leave installed hooks in place. `bitloops daemon enable` is an alias to the same implementation.
 
-Use `--install-embeddings` when you want Bitloops to add the default local embeddings profile to the effective daemon config and run the existing runtime warm/bootstrap path. When that path targets the default local runtime, Bitloops installs the managed standalone `bitloops-embeddings` binary automatically. In an interactive terminal, plain `bitloops enable` offers that setup automatically with a default-yes `[Y/n]` prompt when embeddings are not already configured.
+Use `--install-embeddings` when you want Bitloops to add the default local embeddings profile to the effective daemon config and run the existing runtime warm/bootstrap path. When that path targets the default local runtime, Bitloops installs the managed standalone `bitloops-local-embeddings` binary automatically. In an interactive terminal, plain `bitloops enable` offers that setup automatically with a default-yes `[Y/n]` prompt when embeddings are not already configured.
 
 If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask again before it edits project policy.
 

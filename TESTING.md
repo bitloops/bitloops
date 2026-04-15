@@ -35,6 +35,7 @@ For other platforms, follow the official installation guide:
 | Quality Assurance Tests                          | `cargo qat`                  |
 | DevQL capabilities suite                         | `cargo qat-devql-capabilities` |
 | DevQL sync suite                                 | `cargo qat-devql-sync`       |
+| DevQL ingest suite                               | `cargo qat-devql-ingest`     |
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
@@ -46,10 +47,38 @@ CI uses the `ci` `nextest` profile, pinned to `6` test threads.
 `cargo dev-test-slow` runs all slow targets only.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
-`cargo qat` runs onboarding and DevQL sync in parallel, then smoke, then the DevQL capabilities suite.
+`cargo qat` runs onboarding, smoke, DevQL sync, DevQL capabilities, and DevQL ingest in parallel.
 `cargo qat` forces `--no-capture` so the bundled ignored QAT journey streams progress reliably during long daemon-backed runs.
 `cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
+`cargo qat-devql-ingest` is the focused DevQL ingest alias.
 `cargo qat-devql-sync` is the focused DevQL sync alias.
+
+### QAT scenario filtering
+
+QAT suites support opt-in Cucumber tag filtering via `CUCUMBER_FILTER_TAGS`. If the variable is unset, the full suite runs as before.
+
+- Run only tagged scenarios in the focused DevQL sync suite:
+
+```bash
+CUCUMBER_FILTER_TAGS='@test_harness_sync' cargo qat-devql-sync
+```
+
+- Use the direct `cargo test` form when you want the suite to stream step-by-step output:
+
+```bash
+CUCUMBER_FILTER_TAGS='@test_harness_sync' \
+cargo test \
+  --manifest-path bitloops/Cargo.toml \
+  --features qat-tests \
+  --test qat_acceptance \
+  qat_devql_sync \
+  -- --ignored --nocapture
+```
+
+- Tag expressions use standard Cucumber syntax, for example:
+  - `@test_harness_sync`
+  - `@devql and @sync`
+  - `@test_harness_sync and not @slow`
 
 ### Fast-lane thread tuning
 

@@ -11,7 +11,7 @@ fn count_rows(conn: &rusqlite::Connection, sql: &str, repo_id: &str) -> i64 {
 }
 
 #[test]
-fn discover_baseline_files_keeps_supported_extensions_only() {
+fn discover_baseline_files_keeps_all_tracked_non_excluded_files() {
     let repo = seed_git_repo();
     std::fs::create_dir_all(repo.path().join("src")).expect("create src");
     std::fs::write(repo.path().join("src/lib.rs"), "pub fn run() {}\n").expect("write rust file");
@@ -32,6 +32,26 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
         "export const C = () => null;\n",
     )
     .expect("write jsx file");
+    std::fs::write(
+        repo.path().join("src/service.py"),
+        "def run():\n    return 'ok'\n",
+    )
+    .expect("write python file");
+    std::fs::write(
+        repo.path().join("src/service.go"),
+        "package service\n\nfunc Run() string { return \"ok\" }\n",
+    )
+    .expect("write go file");
+    std::fs::write(
+        repo.path().join("src/Main.java"),
+        "class Main { String run() { return \"ok\"; } }\n",
+    )
+    .expect("write java file");
+    std::fs::write(
+        repo.path().join("src/service.cs"),
+        "public class Service { public string Run() => \"ok\"; }\n",
+    )
+    .expect("write csharp file");
     std::fs::write(repo.path().join("README.md"), "# docs\n").expect("write markdown file");
 
     git_ok(repo.path(), &["add", "."]);
@@ -41,10 +61,17 @@ fn discover_baseline_files_keeps_supported_extensions_only() {
     assert_eq!(
         files,
         vec![
+            ".bitloops.local.toml".to_string(),
+            "README.md".to_string(),
+            "config.toml".to_string(),
+            "src/Main.java".to_string(),
             "src/component.jsx".to_string(),
             "src/index.ts".to_string(),
             "src/lib.rs".to_string(),
             "src/node.js".to_string(),
+            "src/service.cs".to_string(),
+            "src/service.go".to_string(),
+            "src/service.py".to_string(),
             "src/view.tsx".to_string(),
         ]
     );
@@ -64,6 +91,16 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
         "export function sum(a: number, b: number) { return a + b; }\n",
     )
     .expect("write ts file");
+    std::fs::write(
+        repo.path().join("src/service.cs"),
+        "using System;\n\npublic class Service {\n    public string Run() {\n        return DateTime.UtcNow.ToString();\n    }\n}\n",
+    )
+    .expect("write csharp file");
+    std::fs::write(
+        repo.path().join("src/service.go"),
+        "package service\n\nfunc Run() string { return \"ok\" }\n",
+    )
+    .expect("write go file");
     git_ok(repo.path(), &["add", "."]);
     git_ok(repo.path(), &["commit", "-m", "add baseline files"]);
 
@@ -85,7 +122,10 @@ async fn baseline_ingestion_populates_current_state_and_sync_state_for_active_br
             |row| row.get(0),
         )
         .expect("count current_file_state rows");
-    assert_eq!(current_file_state_count, 2);
+    let tracked_files_count = discover_baseline_files(repo.path())
+        .expect("discover tracked files")
+        .len() as i64;
+    assert_eq!(current_file_state_count, tracked_files_count);
 
     let current_count = count_rows(
         &conn,

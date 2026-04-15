@@ -397,7 +397,17 @@ pub fn run_init_bitloops_with_agent(
     force: bool,
     sync: Option<bool>,
 ) -> Result<()> {
-    run_init_bitloops_with_agent_config(world, repo_name, agent_name, force, sync, None, None)
+    run_init_bitloops_with_agents(world, repo_name, &[agent_name], force, sync)
+}
+
+pub fn run_init_bitloops_with_agents(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_names: &[&str],
+    force: bool,
+    sync: Option<bool>,
+) -> Result<()> {
+    run_init_bitloops_with_agent_config(world, repo_name, agent_names, force, sync, None, None)
 }
 
 pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
@@ -411,7 +421,7 @@ pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
     run_init_bitloops_with_agent_config(
         world,
         repo_name,
-        agent_name,
+        &[agent_name],
         false,
         Some(sync),
         Some(ingest),
@@ -422,18 +432,28 @@ pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
 fn run_init_bitloops_with_agent_config(
     world: &mut QatWorld,
     repo_name: &str,
-    agent_name: &str,
+    agent_names: &[&str],
     force: bool,
     sync: Option<bool>,
     ingest: Option<bool>,
     backfill: Option<usize>,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
-    world.agent_name = Some(normalised_agent_name.to_string());
+    ensure!(
+        !agent_names.is_empty(),
+        "at least one agent must be provided for init"
+    );
+
+    let normalised_agent_names = agent_names
+        .iter()
+        .map(|agent_name| normalise_onboarding_agent_name(agent_name))
+        .collect::<Vec<_>>();
+    world.agent_name = normalised_agent_names
+        .first()
+        .map(|agent_name| (*agent_name).to_string());
 
     let args_owned = build_init_bitloops_args_with_options(
-        normalised_agent_name,
+        &normalised_agent_names,
         force,
         sync,
         ingest,
@@ -464,21 +484,23 @@ fn run_init_bitloops_with_agent_config(
 }
 
 fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -> Vec<String> {
-    build_init_bitloops_args_with_options(agent_name, force, sync, None, None)
+    build_init_bitloops_args_with_options(&[agent_name], force, sync, None, None)
 }
 
 fn build_init_bitloops_args_with_options(
-    agent_name: &str,
+    agent_names: &[&str],
     force: bool,
     sync: Option<bool>,
     ingest: Option<bool>,
     backfill: Option<usize>,
 ) -> Vec<String> {
-    let mut args = vec![
-        "init".to_string(),
-        "--agent".to_string(),
-        agent_name.to_string(),
-    ];
+    debug_assert!(!agent_names.is_empty(), "init requires at least one agent");
+
+    let mut args = vec!["init".to_string()];
+    for agent_name in agent_names {
+        args.push("--agent".to_string());
+        args.push((*agent_name).to_string());
+    }
 
     let sync_choice = sync.unwrap_or(false);
     let ingest_choice = if backfill.is_some() {
@@ -592,7 +614,10 @@ pub fn run_devql_ingest_for_repo(world: &mut QatWorld, repo_name: &str) -> Resul
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     world.last_command_stdout = Some(stdout);
-    ensure_success(&output, "bitloops devql tasks enqueue --kind ingest --status")
+    ensure_success(
+        &output,
+        "bitloops devql tasks enqueue --kind ingest --status",
+    )
 }
 
 pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
@@ -1140,7 +1165,15 @@ const DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS: u64 = 250;
 
 pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_devql_sync_with_flags(world, repo_name, &[])
+    run_devql_sync_command(world, repo_name, &[], true)
+}
+
+pub fn run_devql_sync_without_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_devql_sync_command(world, repo_name, &[], false)
 }
 
 pub fn run_devql_sync_with_flags(
@@ -1148,10 +1181,19 @@ pub fn run_devql_sync_with_flags(
     repo_name: &str,
     flags: &[&str],
 ) -> Result<()> {
+    run_devql_sync_command(world, repo_name, flags, true)
+}
+
+fn run_devql_sync_command(
+    world: &mut QatWorld,
+    repo_name: &str,
+    flags: &[&str],
+    include_status: bool,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let mut args = vec!["devql", "tasks", "enqueue", "--kind", "sync"];
     args.extend_from_slice(flags);
-    if !args.contains(&"--status") {
+    if include_status && !args.contains(&"--status") {
         args.push("--status");
     }
     let label = format!("bitloops {}", args.join(" "));
@@ -1375,7 +1417,9 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
                     let run_id = persisted_run.run_id;
                     let handler_id = persisted_run.handler_id;
                     let event_kind = persisted_run.event_kind;
-                    let error = persisted_run.error.unwrap_or_else(|| "<no error>".to_string());
+                    let error = persisted_run
+                        .error
+                        .unwrap_or_else(|| "<no error>".to_string());
                     bail!(
                         "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
                     );
@@ -1402,92 +1446,34 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
 
 fn load_latest_test_harness_capability_event_run(
     world: &QatWorld,
-) -> Result<Option<(std::path::PathBuf, bitloops::daemon::CapabilityEventRunRecord)>> {
+) -> Result<
+    Option<(
+        std::path::PathBuf,
+        bitloops::daemon::CapabilityEventRunRecord,
+    )>,
+> {
     let candidates = daemon_runtime_store_candidate_paths(world.run_dir());
 
-    let mut latest: Option<(std::path::PathBuf, bitloops::daemon::CapabilityEventRunRecord)> =
-        None;
+    let mut latest: Option<(
+        std::path::PathBuf,
+        bitloops::daemon::CapabilityEventRunRecord,
+    )> = None;
     for path in &candidates {
         if !path.exists() {
             continue;
         }
-        use rusqlite::OptionalExtension;
 
         let store = bitloops::host::runtime_store::DaemonSqliteRuntimeStore::open_at(path.clone())
             .with_context(|| format!("opening daemon runtime store {}", path.display()))?;
-
-        let Some(run) = store.with_connection(|conn| {
-            conn.query_row(
-                "SELECT run_id, repo_id, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
-                 FROM pack_reconcile_runs \
-                 WHERE capability_id = ?1 AND consumer_id = ?2 \
-                 ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
-                 LIMIT 1",
-                rusqlite::params!["test_harness", "test_harness.current_state"],
-                |row| {
-                    let as_u64 = |index| -> rusqlite::Result<u64> {
-                        row.get::<_, i64>(index)
-                            .map(|value| u64::try_from(value).unwrap_or_default())
-                    };
-                    let opt_u64 = |index| -> rusqlite::Result<Option<u64>> {
-                        row.get::<_, Option<i64>>(index).map(|value| {
-                            value.map(|value| u64::try_from(value).unwrap_or_default())
-                        })
-                    };
-                    let consumer_id = row.get::<_, String>(3)?;
-                    let status = match row.get::<_, String>(7)?.as_str() {
-                        "queued" => bitloops::daemon::CapabilityEventRunStatus::Queued,
-                        "running" => bitloops::daemon::CapabilityEventRunStatus::Running,
-                        "completed" => bitloops::daemon::CapabilityEventRunStatus::Completed,
-                        "failed" => bitloops::daemon::CapabilityEventRunStatus::Failed,
-                        "cancelled" => bitloops::daemon::CapabilityEventRunStatus::Cancelled,
-                        other => {
-                            return Err(rusqlite::Error::FromSqlConversionFailure(
-                                11,
-                                rusqlite::types::Type::Text,
-                                Box::new(std::io::Error::other(format!(
-                                    "unknown capability-event run status `{other}`"
-                                ))),
-                            ));
-                        }
-                    };
-
-                    Ok(bitloops::daemon::CapabilityEventRunRecord {
-                        run_id: row.get(0)?,
-                        repo_id: row.get(1)?,
-                        capability_id: row.get(2)?,
-                        consumer_id: consumer_id.clone(),
-                        handler_id: consumer_id.clone(),
-                        from_generation_seq: as_u64(4)?,
-                        to_generation_seq: as_u64(5)?,
-                        reconcile_mode: row.get(6)?,
-                        event_kind: String::new(),
-                        lane_key: format!("{}:{consumer_id}", row.get::<_, String>(1)?),
-                        event_payload_json: String::new(),
-                        status,
-                        attempts: row.get(8)?,
-                        submitted_at_unix: as_u64(9)?,
-                        started_at_unix: opt_u64(10)?,
-                        updated_at_unix: as_u64(11)?,
-                        completed_at_unix: opt_u64(12)?,
-                        error: row.get(13)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(anyhow::Error::from)
-        })?
-        else {
+        let Some(run) = latest_capability_event_run(
+            load_latest_test_harness_current_state_run(&store)?,
+            load_latest_test_harness_pack_reconcile_run(&store)?,
+        ) else {
             continue;
         };
 
         let replace = latest.as_ref().is_none_or(|(_, current)| {
-            (run.updated_at_unix, run.completed_at_unix.unwrap_or_default(), run.submitted_at_unix)
-                > (
-                    current.updated_at_unix,
-                    current.completed_at_unix.unwrap_or_default(),
-                    current.submitted_at_unix,
-                )
+            capability_event_run_sort_key(&run) > capability_event_run_sort_key(current)
         });
         if replace {
             latest = Some((path.clone(), run));
@@ -1495,6 +1481,161 @@ fn load_latest_test_harness_capability_event_run(
     }
 
     Ok(latest)
+}
+
+fn latest_capability_event_run(
+    current_state_run: Option<bitloops::daemon::CapabilityEventRunRecord>,
+    legacy_run: Option<bitloops::daemon::CapabilityEventRunRecord>,
+) -> Option<bitloops::daemon::CapabilityEventRunRecord> {
+    match (current_state_run, legacy_run) {
+        (Some(current_state), Some(legacy)) => {
+            if capability_event_run_sort_key(&legacy)
+                > capability_event_run_sort_key(&current_state)
+            {
+                Some(legacy)
+            } else {
+                Some(current_state)
+            }
+        }
+        (Some(current_state), None) => Some(current_state),
+        (None, Some(legacy)) => Some(legacy),
+        (None, None) => None,
+    }
+}
+
+fn capability_event_run_sort_key(
+    run: &bitloops::daemon::CapabilityEventRunRecord,
+) -> (u64, u64, u64) {
+    (
+        run.updated_at_unix,
+        run.completed_at_unix.unwrap_or_default(),
+        run.submitted_at_unix,
+    )
+}
+
+fn load_latest_test_harness_current_state_run(
+    store: &bitloops::host::runtime_store::DaemonSqliteRuntimeStore,
+) -> Result<Option<bitloops::daemon::CapabilityEventRunRecord>> {
+    use rusqlite::OptionalExtension;
+
+    store.with_connection(|conn| {
+        conn.query_row(
+            "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
+             FROM capability_workplane_cursor_runs \
+             WHERE capability_id = ?1 AND mailbox_name = ?2 \
+             ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
+             LIMIT 1",
+            rusqlite::params!["test_harness", "test_harness.current_state"],
+            |row| {
+                let as_u64 = |index| -> rusqlite::Result<u64> {
+                    row.get::<_, i64>(index)
+                        .map(|value| u64::try_from(value).unwrap_or_default())
+                };
+                let opt_u64 = |index| -> rusqlite::Result<Option<u64>> {
+                    row.get::<_, Option<i64>>(index).map(|value| {
+                        value.and_then(|value| u64::try_from(value).ok())
+                    })
+                };
+                let repo_id = row.get::<_, String>(1)?;
+                let consumer_id = row.get::<_, String>(3)?;
+
+                Ok(bitloops::daemon::CapabilityEventRunRecord {
+                    run_id: row.get(0)?,
+                    repo_id: repo_id.clone(),
+                    capability_id: row.get(4)?,
+                    consumer_id: consumer_id.clone(),
+                    handler_id: consumer_id.clone(),
+                    from_generation_seq: as_u64(5)?,
+                    to_generation_seq: as_u64(6)?,
+                    reconcile_mode: row.get(7)?,
+                    event_kind: "current_state_consumer".to_string(),
+                    lane_key: format!("{repo_id}:{consumer_id}"),
+                    event_payload_json: String::new(),
+                    status: parse_capability_event_run_status(&row.get::<_, String>(8)?)?,
+                    attempts: row.get(9)?,
+                    submitted_at_unix: as_u64(10)?,
+                    started_at_unix: opt_u64(11)?,
+                    updated_at_unix: as_u64(12)?,
+                    completed_at_unix: opt_u64(13)?,
+                    error: row.get(14)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(anyhow::Error::from)
+    })
+}
+
+fn load_latest_test_harness_pack_reconcile_run(
+    store: &bitloops::host::runtime_store::DaemonSqliteRuntimeStore,
+) -> Result<Option<bitloops::daemon::CapabilityEventRunRecord>> {
+    use rusqlite::OptionalExtension;
+
+    store.with_connection(|conn| {
+        conn.query_row(
+            "SELECT run_id, repo_id, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
+             FROM pack_reconcile_runs \
+             WHERE capability_id = ?1 AND consumer_id = ?2 \
+             ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
+             LIMIT 1",
+            rusqlite::params!["test_harness", "test_harness.current_state"],
+            |row| {
+                let as_u64 = |index| -> rusqlite::Result<u64> {
+                    row.get::<_, i64>(index)
+                        .map(|value| u64::try_from(value).unwrap_or_default())
+                };
+                let opt_u64 = |index| -> rusqlite::Result<Option<u64>> {
+                    row.get::<_, Option<i64>>(index).map(|value| {
+                        value.and_then(|value| u64::try_from(value).ok())
+                    })
+                };
+                let repo_id = row.get::<_, String>(1)?;
+                let consumer_id = row.get::<_, String>(3)?;
+
+                Ok(bitloops::daemon::CapabilityEventRunRecord {
+                    run_id: row.get(0)?,
+                    repo_id: repo_id.clone(),
+                    capability_id: row.get(2)?,
+                    consumer_id: consumer_id.clone(),
+                    handler_id: consumer_id.clone(),
+                    from_generation_seq: as_u64(4)?,
+                    to_generation_seq: as_u64(5)?,
+                    reconcile_mode: row.get(6)?,
+                    event_kind: String::new(),
+                    lane_key: format!("{repo_id}:{consumer_id}"),
+                    event_payload_json: String::new(),
+                    status: parse_capability_event_run_status(&row.get::<_, String>(7)?)?,
+                    attempts: row.get(8)?,
+                    submitted_at_unix: as_u64(9)?,
+                    started_at_unix: opt_u64(10)?,
+                    updated_at_unix: as_u64(11)?,
+                    completed_at_unix: opt_u64(12)?,
+                    error: row.get(13)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(anyhow::Error::from)
+    })
+}
+
+fn parse_capability_event_run_status(
+    value: &str,
+) -> rusqlite::Result<bitloops::daemon::CapabilityEventRunStatus> {
+    match value {
+        "queued" => Ok(bitloops::daemon::CapabilityEventRunStatus::Queued),
+        "running" => Ok(bitloops::daemon::CapabilityEventRunStatus::Running),
+        "completed" => Ok(bitloops::daemon::CapabilityEventRunStatus::Completed),
+        "failed" => Ok(bitloops::daemon::CapabilityEventRunStatus::Failed),
+        "cancelled" => Ok(bitloops::daemon::CapabilityEventRunStatus::Cancelled),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::other(format!(
+                "unknown capability-event run status `{other}`"
+            ))),
+        )),
+    }
 }
 
 fn resolve_qat_sync_state_path(
@@ -2011,6 +2152,7 @@ fn build_chat_history_query(path: &str) -> String {
 }
 
 fn count_chat_history_edges_for_agent(value: &serde_json::Value, agent_name: &str) -> usize {
+    let candidates = checkpoint_agent_candidates(agent_name);
     value.as_array().map_or(0, |rows| {
         rows.iter()
             .flat_map(|row| {
@@ -2024,7 +2166,7 @@ fn count_chat_history_edges_for_agent(value: &serde_json::Value, agent_name: &st
                 edge.get("node")
                     .and_then(|node| node.get("agent"))
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(|candidate| candidate == agent_name)
+                    .is_some_and(|candidate| candidates.iter().any(|value| value == candidate))
             })
             .count()
     })
@@ -2064,18 +2206,33 @@ pub fn assert_devql_chat_history_returns_results(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let target_path = smoke_target_relative_path(world);
-    let query = build_chat_history_query(&target_path);
-    let value = run_devql_query(world, &query)?;
     let agent_name = world
         .agent_name
         .as_deref()
         .ok_or_else(|| anyhow!("no agent name captured for chat history assertion"))?;
-    let count = count_chat_history_edges_for_agent(&value, agent_name);
-    world.last_query_result_count = Some(count);
+    let agent_name = agent_name.to_string();
+    let candidate_paths = chat_history_candidate_paths(world)?;
+    let mut best_path = String::new();
+    let mut best_count = 0_usize;
+
+    for target_path in candidate_paths {
+        let query = build_chat_history_query(&target_path);
+        let value = run_devql_query(world, &query)?;
+        let count = count_chat_history_edges_for_agent(&value, &agent_name);
+        if count > best_count {
+            best_count = count;
+            best_path = target_path.clone();
+        }
+        if count >= 1 {
+            world.last_query_result_count = Some(count);
+            return Ok(());
+        }
+    }
+
+    world.last_query_result_count = Some(best_count);
     ensure!(
-        count >= 1,
-        "expected at least 1 chat history result for agent `{agent_name}` in `{target_path}`, got {count}"
+        best_count >= 1,
+        "expected at least 1 chat history result for agent `{agent_name}` across queryable touched paths, best path `{best_path}` produced {best_count}"
     );
     Ok(())
 }
@@ -2116,7 +2273,10 @@ fn open_relational_connection(world: &QatWorld) -> Result<rusqlite::Connection> 
 
 fn query_repo_id_optional(conn: &rusqlite::Connection, sql: &str) -> Result<Option<String>> {
     use rusqlite::OptionalExtension;
-    match conn.query_row(sql, [], |row| row.get::<_, String>(0)).optional() {
+    match conn
+        .query_row(sql, [], |row| row.get::<_, String>(0))
+        .optional()
+    {
         Ok(value) => Ok(value),
         Err(err) => {
             let message = err.to_string();
@@ -2130,17 +2290,70 @@ fn query_repo_id_optional(conn: &rusqlite::Connection, sql: &str) -> Result<Opti
 
 fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
     for sql in [
-        "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
-        "SELECT repo_id FROM commits ORDER BY committed_at DESC LIMIT 1",
         "SELECT repo_id FROM commit_ingest_ledger ORDER BY updated_at DESC LIMIT 1",
+        "SELECT repo_id FROM commits ORDER BY committed_at DESC LIMIT 1",
+        "SELECT repo_id FROM artefacts_historical LIMIT 1",
+        "SELECT repo_id FROM symbol_features LIMIT 1",
+        "SELECT repo_id FROM symbol_semantics LIMIT 1",
+        "SELECT repo_id FROM symbol_embeddings LIMIT 1",
         "SELECT repo_id FROM artefacts_current LIMIT 1",
         "SELECT repo_id FROM current_file_state LIMIT 1",
+        "SELECT repo_id FROM repositories WHERE provider = 'local' ORDER BY created_at DESC LIMIT 1",
+        "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
     ] {
         if let Some(repo_id) = query_repo_id_optional(conn, sql)? {
             return Ok(repo_id);
         }
     }
     bail!("unable to resolve repo_id from relational store for ingest assertions")
+}
+
+fn checkpoint_touched_paths_for_repo(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<Vec<String>> {
+    let sql = "SELECT COALESCE(path_after, path_before) \
+               FROM checkpoint_files \
+               WHERE repo_id = ?1 \
+               ORDER BY event_time DESC, checkpoint_id DESC, relation_id DESC \
+               LIMIT 20";
+    let mut stmt = match conn.prepare(sql) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("no such table") || message.contains("no such column") {
+                return Ok(Vec::new());
+            }
+            return Err(err).with_context(|| format!("preparing `{sql}`"));
+        }
+    };
+    let rows = stmt
+        .query_map([repo_id], |row| row.get::<_, Option<String>>(0))
+        .with_context(|| format!("querying checkpoint touched paths for repo `{repo_id}`"))?;
+    let mut paths = Vec::new();
+    for row in rows {
+        let Some(path) = row.context("reading checkpoint touched path")? else {
+            continue;
+        };
+        let path = path.trim();
+        if path.is_empty() || paths.iter().any(|existing| existing == path) {
+            continue;
+        }
+        paths.push(path.to_string());
+    }
+    Ok(paths)
+}
+
+fn chat_history_candidate_paths(world: &QatWorld) -> Result<Vec<String>> {
+    let mut candidates = vec![smoke_target_relative_path(world)];
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    for path in checkpoint_touched_paths_for_repo(&conn, &repo_id)? {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    }
+    Ok(candidates)
 }
 
 fn git_reachable_shas(world: &QatWorld, max_count: Option<usize>) -> Result<Vec<String>> {
@@ -2296,7 +2509,10 @@ fn current_branch_name(world: &QatWorld) -> Result<String> {
 }
 
 fn post_commit_devql_refresh_disabled_env() -> [(&'static str, OsString); 1] {
-    [("BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH", OsString::from("1"))]
+    [(
+        "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH",
+        OsString::from("1"),
+    )]
 }
 
 fn write_and_commit_rust_file(
@@ -2314,9 +2530,7 @@ fn write_and_commit_rust_file(
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     fs::write(
         &path,
-        format!(
-            "pub fn {function_name}() -> usize {{\n    {body_value}\n}}\n"
-        ),
+        format!("pub fn {function_name}() -> usize {{\n    {body_value}\n}}\n"),
     )
     .with_context(|| format!("writing {}", path.display()))?;
     run_git_success(world, &["add", "-A"], env, "git add -A")?;
@@ -2338,10 +2552,7 @@ fn refresh_rewrite_delta(world: &mut QatWorld, expected_segment_len: usize) -> R
     let post = git_reachable_shas(world, Some(expected_segment_len))?;
     world.post_rewrite_shas = post.clone();
     let pre: std::collections::BTreeSet<String> = world.pre_rewrite_shas.iter().cloned().collect();
-    world.rewrite_new_shas = post
-        .into_iter()
-        .filter(|sha| !pre.contains(sha))
-        .collect();
+    world.rewrite_new_shas = post.into_iter().filter(|sha| !pre.contains(sha)).collect();
     Ok(())
 }
 
@@ -2653,7 +2864,10 @@ pub fn reset_and_rewrite_last_commits_for_repo(
     Ok(())
 }
 
-pub fn assert_all_reachable_shas_completed_in_ledger(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_all_reachable_shas_completed_in_ledger(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let reachable = git_reachable_shas(world, None)?;
     let completed: std::collections::BTreeSet<String> =
@@ -2737,10 +2951,16 @@ pub fn assert_expected_shas_have_file_state_rows(world: &QatWorld, repo_name: &s
     Ok(())
 }
 
-pub fn assert_no_new_completed_shas_since_snapshot(world: &QatWorld, repo_name: &str) -> Result<()> {
+pub fn assert_no_new_completed_shas_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let before: std::collections::BTreeSet<String> =
-        world.completed_ledger_shas_snapshot.iter().cloned().collect();
+    let before: std::collections::BTreeSet<String> = world
+        .completed_ledger_shas_snapshot
+        .iter()
+        .cloned()
+        .collect();
     let after: std::collections::BTreeSet<String> =
         completed_ledger_shas(world)?.into_iter().collect();
     let new_shas: Vec<String> = after.difference(&before).cloned().collect();
@@ -2761,11 +2981,15 @@ pub fn assert_exact_expected_shas_newly_completed_since_snapshot(
         !world.expected_commit_shas.is_empty(),
         "no expected commit SHAs captured for new-ledger assertion"
     );
-    let before: std::collections::BTreeSet<String> =
-        world.completed_ledger_shas_snapshot.iter().cloned().collect();
+    let before: std::collections::BTreeSet<String> = world
+        .completed_ledger_shas_snapshot
+        .iter()
+        .cloned()
+        .collect();
     let after: std::collections::BTreeSet<String> =
         completed_ledger_shas(world)?.into_iter().collect();
-    let actual_new: std::collections::BTreeSet<String> = after.difference(&before).cloned().collect();
+    let actual_new: std::collections::BTreeSet<String> =
+        after.difference(&before).cloned().collect();
     let expected_new: std::collections::BTreeSet<String> =
         world.expected_commit_shas.iter().cloned().collect();
     ensure!(
@@ -2841,16 +3065,15 @@ pub fn assert_only_latest_reachable_shas_completed_in_ledger(
         "expected at least {latest_count} reachable commits, found {}",
         reachable.len()
     );
-    let expected_latest: std::collections::BTreeSet<String> = reachable
-        .iter()
-        .take(latest_count)
-        .cloned()
-        .collect();
+    let expected_latest: std::collections::BTreeSet<String> =
+        reachable.iter().take(latest_count).cloned().collect();
     let completed_set: std::collections::BTreeSet<String> =
         completed_ledger_shas(world)?.into_iter().collect();
     let reachable_set: std::collections::BTreeSet<String> = reachable.into_iter().collect();
-    let completed_reachable: std::collections::BTreeSet<String> =
-        completed_set.intersection(&reachable_set).cloned().collect();
+    let completed_reachable: std::collections::BTreeSet<String> = completed_set
+        .intersection(&reachable_set)
+        .cloned()
+        .collect();
     ensure!(
         completed_reachable == expected_latest,
         "expected completed reachable SHAs {:?}, got {:?}",
@@ -2886,7 +3109,8 @@ pub fn assert_pre_rewrite_shas_absent_from_post_segment(
         !world.pre_rewrite_shas.is_empty() && !world.post_rewrite_shas.is_empty(),
         "pre/post rewrite SHA segments are not populated"
     );
-    let post: std::collections::BTreeSet<String> = world.post_rewrite_shas.iter().cloned().collect();
+    let post: std::collections::BTreeSet<String> =
+        world.post_rewrite_shas.iter().cloned().collect();
     let retained_old: Vec<String> = world
         .pre_rewrite_shas
         .iter()

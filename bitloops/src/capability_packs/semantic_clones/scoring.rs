@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup;
 
-const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v2";
+const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v3";
 const MAX_CLONE_EDGES_PER_SOURCE: usize = 20;
 const MIN_SIMILAR_IMPLEMENTATION_SCORE: f32 = 0.55;
 const MIN_SEMANTIC_SCORE: f32 = 0.40;
@@ -42,12 +42,8 @@ const STRUCTURAL_SCORE_FLOOR_SAME_KIND_WEIGHT: f32 = 0.25;
 const STRUCTURAL_SCORE_FLOOR_NAME_MATCH_WEIGHT: f32 = 0.10;
 
 const DIVERGED_NAME_MATCH_THRESHOLD: f32 = 0.75;
-const DIVERGED_SUMMARY_SIMILARITY_THRESHOLD: f32 = 0.25;
 const DIVERGED_IDENTIFIER_OVERLAP_THRESHOLD: f32 = 0.30;
-const DIVERGED_MIN_SEMANTIC_SCORE: f32 = 0.55;
 const DIVERGED_MIN_BODY_OVERLAP: f32 = 0.08;
-const DIVERGED_MAX_CALL_OVERLAP: f32 = 0.25;
-const DIVERGED_MAX_BODY_OVERLAP: f32 = 0.45;
 
 const SHARED_LOGIC_MIN_LEXICAL_SCORE: f32 = 0.68;
 const SHARED_LOGIC_MIN_BODY_OVERLAP: f32 = 0.50;
@@ -559,10 +555,7 @@ fn build_symbol_clone_edge(
         RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string()
     } else if likely_contextual_neighbor(score, semantic_score, &derived) {
         RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string()
-    } else if score >= MIN_SIMILAR_IMPLEMENTATION_SCORE
-        && semantic_score >= MIN_SEMANTIC_SCORE
-        && derived.clone_confidence >= CLONE_CONFIDENCE_MEDIUM_THRESHOLD
-    {
+    } else if likely_similar_implementation(score, semantic_score, &derived) {
         RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string()
     } else {
         return None;
@@ -582,6 +575,7 @@ fn build_symbol_clone_edge(
     }
 
     let explanation = build_explanation(&ExplanationContext {
+        relation_kind: relation_kind.as_str(),
         source,
         target,
         candidate_score: score,

@@ -11,42 +11,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
+pub(crate) use self::types::{MaterializedArtefact, MaterializedEdge, PreparedMaterialisationRows};
 use super::content_cache::{CachedArtefact, CachedExtraction};
 use super::types::DesiredFileState;
-
-#[derive(Debug, Clone)]
-pub(crate) struct MaterializedArtefact {
-    pub(crate) artifact_key: String,
-    pub(crate) symbol_id: String,
-    pub(crate) artefact_id: String,
-    pub(crate) canonical_kind: Option<String>,
-    pub(crate) language_kind: String,
-    pub(crate) symbol_fqn: String,
-    pub(crate) parent_symbol_id: Option<String>,
-    pub(crate) parent_artefact_id: Option<String>,
-    pub(crate) start_line: i32,
-    pub(crate) end_line: i32,
-    pub(crate) start_byte: i32,
-    pub(crate) end_byte: i32,
-    pub(crate) signature: Option<String>,
-    pub(crate) modifiers: Vec<String>,
-    pub(crate) docstring: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct MaterializedEdge {
-    pub(crate) edge_id: String,
-    pub(crate) from_symbol_id: String,
-    pub(crate) from_artefact_id: String,
-    pub(crate) to_symbol_id: Option<String>,
-    pub(crate) to_artefact_id: Option<String>,
-    pub(crate) to_symbol_ref: Option<String>,
-    pub(crate) edge_kind: String,
-    pub(crate) language: String,
-    pub(crate) start_line: Option<i32>,
-    pub(crate) end_line: Option<i32>,
-    pub(crate) metadata: Value,
-}
 
 pub(crate) async fn materialize_path(
     cfg: &crate::host::devql::DevqlConfig,
@@ -75,14 +42,17 @@ pub(crate) async fn materialize_path(
         delete_artefacts_sql(&cfg.repo.repo_id, &desired.path),
     ];
     statements.extend(materialized_artefacts.iter().map(|artefact| {
-        insert_artefact_sql(
+        sql::insert_artefact_sql(
             relational,
-            &cfg.repo.repo_id,
-            &desired.path,
-            &desired.effective_content_id,
-            &extraction.language,
-            artefact,
-            now_sql,
+            &sql::ArtefactInsertSqlInput {
+                repo_id: &cfg.repo.repo_id,
+                path: &desired.path,
+                content_id: &desired.effective_content_id,
+                language: &extraction.language,
+                extraction_fingerprint: &desired.extraction_fingerprint,
+                artefact,
+                now_sql,
+            },
         )
     }));
     statements.extend(materialized_edges.iter().map(|edge| {
@@ -140,6 +110,14 @@ fn validate_materialization_inputs(
             desired.path,
             desired.language,
             extraction.language
+        ));
+    }
+    if desired.extraction_fingerprint != extraction.extraction_fingerprint {
+        return Err(anyhow!(
+            "extraction fingerprint mismatch for `{}`: desired `{}` != cached `{}`",
+            desired.path,
+            desired.extraction_fingerprint,
+            extraction.extraction_fingerprint
         ));
     }
     if extraction.parser_version != parser_version {
@@ -291,33 +269,6 @@ fn resolve_artefact(
     Ok(materialized)
 }
 
-fn parse_cached_language_kind(
-    language: &str,
-    raw_kind: &str,
-) -> Result<crate::host::language_adapter::LanguageKind> {
-    use crate::host::language_adapter::{
-        GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
-    };
-
-    let parsed = match language {
-        "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
-        "java" => JavaKind::from_tree_sitter_kind(raw_kind)
-            .or(match raw_kind {
-                "class_declaration" => Some(JavaKind::Class),
-                _ => None,
-            })
-            .map(LanguageKind::java),
-        "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
-        "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
-        "typescript" | "javascript" => {
-            TsJsKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::ts_js)
-        }
-        _ => LanguageKind::try_from(raw_kind).ok(),
-    };
-
-    parsed.ok_or_else(|| anyhow!("unsupported cached language_kind `{raw_kind}` for `{language}`"))
-}
-
 pub(crate) fn derive_materialized_edges(
     cfg: &crate::host::devql::DevqlConfig,
     desired: &DesiredFileState,
@@ -371,6 +322,13 @@ pub(crate) fn derive_materialized_edges(
     let mut edges = deduped.into_values().collect::<Vec<_>>();
     edges.sort_by(|lhs, rhs| lhs.edge_id.cmp(&rhs.edge_id));
     Ok(edges)
+}
+
+fn parse_cached_language_kind(
+    language: &str,
+    raw_kind: &str,
+) -> Result<crate::host::language_adapter::LanguageKind> {
+    derive::parse_cached_language_kind(language, raw_kind)
 }
 
 fn dedupe_materialized_edges_by_edge_id(edges: Vec<MaterializedEdge>) -> Vec<MaterializedEdge> {
@@ -441,50 +399,6 @@ fn is_file_artefact(artefact: &MaterializedArtefact) -> bool {
     artefact.canonical_kind.as_deref() == Some("file") && artefact.language_kind == "file"
 }
 
-fn insert_artefact_sql(
-    relational: &crate::host::devql::RelationalStorage,
-    repo_id: &str,
-    path: &str,
-    content_id: &str,
-    language: &str,
-    artefact: &MaterializedArtefact,
-    now_sql: &str,
-) -> String {
-    let canonical_kind_sql = nullable_text_sql(artefact.canonical_kind.as_deref());
-    let parent_symbol_id_sql = nullable_text_sql(artefact.parent_symbol_id.as_deref());
-    let parent_artefact_id_sql = nullable_text_sql(artefact.parent_artefact_id.as_deref());
-    let signature_sql = nullable_text_sql(artefact.signature.as_deref());
-    let modifiers_sql = crate::host::devql::sql_json_value(
-        relational,
-        &serde_json::to_value(&artefact.modifiers).unwrap_or(Value::Array(Vec::new())),
-    );
-    let docstring_sql = nullable_text_sql(artefact.docstring.as_deref());
-
-    format!(
-        "INSERT INTO artefacts_current (repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-        crate::host::devql::esc_pg(repo_id),
-        crate::host::devql::esc_pg(path),
-        crate::host::devql::esc_pg(content_id),
-        crate::host::devql::esc_pg(&artefact.symbol_id),
-        crate::host::devql::esc_pg(&artefact.artefact_id),
-        crate::host::devql::esc_pg(language),
-        canonical_kind_sql,
-        crate::host::devql::esc_pg(&artefact.language_kind),
-        crate::host::devql::esc_pg(&artefact.symbol_fqn),
-        parent_symbol_id_sql,
-        parent_artefact_id_sql,
-        artefact.start_line,
-        artefact.end_line,
-        artefact.start_byte,
-        artefact.end_byte,
-        signature_sql,
-        modifiers_sql,
-        docstring_sql,
-        now_sql,
-    )
-}
-
 fn insert_edge_sql(
     relational: &crate::host::devql::RelationalStorage,
     repo_id: &str,
@@ -531,13 +445,34 @@ fn upsert_current_file_state_sql(
     let head_content_id_sql = nullable_text_sql(desired.head_content_id.as_deref());
     let index_content_id_sql = nullable_text_sql(desired.index_content_id.as_deref());
     let worktree_content_id_sql = nullable_text_sql(desired.worktree_content_id.as_deref());
+    let dialect_sql = nullable_text_sql(desired.dialect.as_deref());
+    let primary_context_sql = nullable_text_sql(desired.primary_context_id.as_deref());
+    let runtime_profile_sql = nullable_text_sql(desired.runtime_profile.as_deref());
+    let context_fingerprint_sql = nullable_text_sql(desired.context_fingerprint.as_deref());
     format!(
-        "INSERT INTO current_file_state (repo_id, path, language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
-VALUES ('{}', '{}', '{}', {}, {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, {}) \
-ON CONFLICT (repo_id, path) DO UPDATE SET language = EXCLUDED.language, head_content_id = EXCLUDED.head_content_id, index_content_id = EXCLUDED.index_content_id, worktree_content_id = EXCLUDED.worktree_content_id, effective_content_id = EXCLUDED.effective_content_id, effective_source = EXCLUDED.effective_source, parser_version = EXCLUDED.parser_version, extractor_version = EXCLUDED.extractor_version, exists_in_head = EXCLUDED.exists_in_head, exists_in_index = EXCLUDED.exists_in_index, exists_in_worktree = EXCLUDED.exists_in_worktree, last_synced_at = EXCLUDED.last_synced_at",
+        "INSERT INTO current_file_state (repo_id, path, analysis_mode, file_role, text_index_mode, language, resolved_language, dialect, primary_context_id, secondary_context_ids_json, frameworks_json, runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, '{}', '{}', {}, '{}', {}, '{}', {}, {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, {}) \
+ON CONFLICT (repo_id, path) DO UPDATE SET analysis_mode = EXCLUDED.analysis_mode, file_role = EXCLUDED.file_role, text_index_mode = EXCLUDED.text_index_mode, language = EXCLUDED.language, resolved_language = EXCLUDED.resolved_language, dialect = EXCLUDED.dialect, primary_context_id = EXCLUDED.primary_context_id, secondary_context_ids_json = EXCLUDED.secondary_context_ids_json, frameworks_json = EXCLUDED.frameworks_json, runtime_profile = EXCLUDED.runtime_profile, classification_reason = EXCLUDED.classification_reason, context_fingerprint = EXCLUDED.context_fingerprint, extraction_fingerprint = EXCLUDED.extraction_fingerprint, head_content_id = EXCLUDED.head_content_id, index_content_id = EXCLUDED.index_content_id, worktree_content_id = EXCLUDED.worktree_content_id, effective_content_id = EXCLUDED.effective_content_id, effective_source = EXCLUDED.effective_source, parser_version = EXCLUDED.parser_version, extractor_version = EXCLUDED.extractor_version, exists_in_head = EXCLUDED.exists_in_head, exists_in_index = EXCLUDED.exists_in_index, exists_in_worktree = EXCLUDED.exists_in_worktree, last_synced_at = EXCLUDED.last_synced_at",
         crate::host::devql::esc_pg(repo_id),
         crate::host::devql::esc_pg(&desired.path),
+        crate::host::devql::esc_pg(desired.analysis_mode.as_str()),
+        crate::host::devql::esc_pg(desired.file_role.as_str()),
+        crate::host::devql::esc_pg(desired.text_index_mode.as_str()),
         crate::host::devql::esc_pg(&desired.language),
+        crate::host::devql::esc_pg(&desired.resolved_language),
+        dialect_sql,
+        primary_context_sql,
+        crate::host::devql::esc_pg(
+            &serde_json::to_string(&desired.secondary_context_ids)
+                .unwrap_or_else(|_| "[]".to_string()),
+        ),
+        crate::host::devql::esc_pg(
+            &serde_json::to_string(&desired.frameworks).unwrap_or_else(|_| "[]".to_string()),
+        ),
+        runtime_profile_sql,
+        crate::host::devql::esc_pg(&desired.classification_reason),
+        context_fingerprint_sql,
+        crate::host::devql::esc_pg(&desired.extraction_fingerprint),
         head_content_id_sql,
         index_content_id_sql,
         worktree_content_id_sql,
@@ -603,4 +538,3 @@ fn non_empty_text(value: &str) -> Option<String> {
 
 pub(crate) use self::derive::prepare_materialization_rows;
 pub(crate) use self::persist::{persist_prepared_materialisation_tx, remove_paths_tx};
-pub(crate) use self::types::PreparedMaterialisationRows;

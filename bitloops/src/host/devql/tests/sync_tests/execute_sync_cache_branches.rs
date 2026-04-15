@@ -23,6 +23,13 @@ async fn cached_parse_error_hit_updates_manifest_and_clears_materialized_rows() 
     .expect("execute baseline full sync");
 
     let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let baseline_fingerprint: String = db
+        .query_row(
+            "SELECT extraction_fingerprint FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| row.get(0),
+        )
+        .expect("read baseline extraction fingerprint");
     let baseline_rows: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
@@ -41,6 +48,7 @@ async fn cached_parse_error_hit_updates_manifest_and_clears_materialized_rows() 
     let parse_error_payload = crate::host::devql::sync::content_cache::CachedExtraction {
         content_id: broken_content_id.clone(),
         language: "rust".to_string(),
+        extraction_fingerprint: baseline_fingerprint,
         parser_version: baseline.parser_version.clone(),
         extractor_version: baseline.extractor_version.clone(),
         parse_status: crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR.to_string(),

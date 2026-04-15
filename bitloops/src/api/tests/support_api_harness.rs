@@ -317,6 +317,20 @@ pub(super) async fn request_json(app: axum::Router, uri: &str) -> (StatusCode, V
     request_json_with_method(app, Method::GET, uri, Body::empty()).await
 }
 
+pub(super) async fn request_dashboard_graphql(
+    app: axum::Router,
+    query: &str,
+) -> (StatusCode, Value) {
+    request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/dashboard",
+        "application/json",
+        Body::from(json!({ "query": query }).to_string()),
+    )
+    .await
+}
+
 pub(super) async fn request_json_with_method(
     app: axum::Router,
     method: Method,

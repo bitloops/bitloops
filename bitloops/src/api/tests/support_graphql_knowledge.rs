@@ -373,6 +373,7 @@ pub(super) fn seed_graphql_mutation_repo() -> TempDir {
     dir
 }
 
+#[cfg(feature = "slow-tests")]
 pub(super) fn seed_graphql_knowledge_mutation_repo(jira_site_url: &str) -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
@@ -416,6 +417,7 @@ pub(super) fn seed_graphql_knowledge_mutation_repo(jira_site_url: &str) -> TempD
     dir
 }
 
+#[cfg(feature = "slow-tests")]
 pub(super) fn knowledge_duckdb_path(repo_root: &Path) -> PathBuf {
     crate::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config")

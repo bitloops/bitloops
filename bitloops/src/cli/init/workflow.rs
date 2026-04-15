@@ -5,10 +5,19 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
-use crate::cli::embeddings::{enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings};
+use crate::cli::embeddings::{
+    EmbeddingsRuntime, enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings,
+    install_or_configure_platform_embeddings,
+};
+use crate::cli::inference::{
+    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
+    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
+    prepare_local_summary_generation_plan,
+};
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
-    DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings_with_daemon_binding,
+    DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
+    write_project_bootstrap_settings_with_daemon_binding,
 };
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
@@ -16,10 +25,25 @@ use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_i
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
-    detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
-    reconcile_agent_hooks, should_install_embeddings_during_init, should_run_initial_ingest,
-    should_run_initial_sync,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
+    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
+    should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
 };
+
+fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
+    let registry = AgentAdapterRegistry::builtin();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut resolved = Vec::new();
+
+    for value in values {
+        let normalized = registry.normalise_agent_name(value)?;
+        if seen.insert(normalized.clone()) {
+            resolved.push(normalized);
+        }
+    }
+
+    Ok(resolved)
+}
 
 pub(super) async fn run_for_project_root(
     args: InitArgs,
@@ -78,14 +102,16 @@ pub(super) async fn run_for_project_root(
     }
     ensure_repo_local_policy_excluded(&git_root, project_root)?;
 
-    let selected_agents = if let Some(agent) = args.agent.as_deref() {
-        vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
+    let selected_agents = if !args.agent.is_empty() {
+        resolve_cli_agents(&args.agent)?
     } else {
         detect_or_select_agent(project_root, out, select_fn)?
     };
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
+    let scope_exclude = normalize_cli_exclusions(&args.exclude);
+    let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
     write_project_bootstrap_settings_with_daemon_binding(
         &local_policy_path,
@@ -93,6 +119,9 @@ pub(super) async fn run_for_project_root(
         &selected_agents,
         Some(&daemon_config_path),
     )?;
+    if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
+        set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
+    }
 
     let settings = load_settings(project_root).unwrap_or_default();
     let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
@@ -103,7 +132,7 @@ pub(super) async fn run_for_project_root(
         writeln!(out, "Installed {git_count} git hook(s).")?;
     }
 
-    reconcile_agent_hooks(
+    crate::cli::agent_surfaces::reconcile_project_agent_surfaces(
         project_root,
         &selected_agents,
         settings.local_dev,
@@ -116,6 +145,7 @@ pub(super) async fn run_for_project_root(
     }
 
     let mut queued_embeddings_bootstrap = None;
+    let mut prepared_summary_setup = None;
     let should_install_embeddings = should_install_embeddings_during_init(
         project_root,
         args.install_default_daemon,
@@ -123,22 +153,89 @@ pub(super) async fn run_for_project_root(
         input,
     )?;
     if should_install_embeddings {
-        if args.install_default_daemon {
+        if args.embeddings_runtime == EmbeddingsRuntime::Platform {
+            let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`bitloops init --embeddings-runtime platform` requires `--embeddings-gateway-url`"
+                )
+            })?;
+            for line in install_or_configure_platform_embeddings(
+                project_root,
+                gateway_url,
+                &args.embeddings_api_key_env,
+            )? {
+                writeln!(out, "{line}")?;
+            }
+        } else if args.install_default_daemon {
             queued_embeddings_bootstrap =
                 Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
         } else {
             install_embeddings_during_init(project_root, out)?;
         }
     }
+    match choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
+        .await?
+    {
+        SummarySetupSelection::Cloud => {
+            crate::cli::login::ensure_logged_in().await?;
+            let gateway_url_override = platform_summary_gateway_url_override();
+            if args.install_default_daemon {
+                prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(
+                    gateway_url_override.as_deref(),
+                ));
+            } else {
+                let message = configure_cloud_summary_generation(
+                    project_root,
+                    gateway_url_override.as_deref(),
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+                writeln!(out, "{message}")?;
+            }
+        }
+        SummarySetupSelection::Local => {
+            if args.install_default_daemon {
+                prepared_summary_setup = Some(
+                    prepare_local_summary_generation_plan(
+                        out,
+                        input,
+                        telemetry_consent::can_prompt_interactively(),
+                    )
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                        )
+                    })?,
+                );
+            } else {
+                configure_local_summary_generation(
+                    project_root,
+                    out,
+                    input,
+                    telemetry_consent::can_prompt_interactively(),
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+            }
+        }
+        SummarySetupSelection::Skip => {}
+    }
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
     if args.install_default_daemon {
         write_init_setup_handoff(out).await?;
     }
-    if should_sync || should_ingest {
+    let run_concurrent_init_progress = args.install_default_daemon
+        && (prepared_summary_setup.is_some()
+            || (queued_embeddings_bootstrap.is_some() && (should_sync || should_ingest)));
+    if should_sync || should_ingest || prepared_summary_setup.is_some() {
         let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(project_root))?;
-        let run_concurrent_init_progress =
-            args.install_default_daemon && queued_embeddings_bootstrap.is_some();
         if run_concurrent_init_progress {
             let initial_top_task = if should_sync {
                 let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
@@ -167,6 +264,7 @@ pub(super) async fn run_for_project_root(
                     enqueue_ingest_after_sync: should_sync && should_ingest,
                     ingest_backfill: args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL),
                     queued_embeddings_bootstrap,
+                    prepared_summary_setup,
                 },
             )
             .await?;
@@ -269,17 +367,9 @@ async fn enqueue_embeddings_bootstrap_during_init(
     project_root: &Path,
     out: &mut dyn Write,
 ) -> Result<QueuedEmbeddingsBootstrapTask> {
-    writeln!(out, "Queueing embeddings bootstrap in the daemon...")?;
     let (scope, queued) =
         enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
             .await?;
-    let phase = queued
-        .task
-        .embeddings_bootstrap_progress()
-        .map(|progress| progress.phase.as_str())
-        .unwrap_or("queued");
-    writeln!(out, "Embeddings bootstrap task: {}", queued.task.task_id)?;
-    writeln!(out, "Embeddings bootstrap phase: {phase}")?;
     out.flush()?;
     Ok(QueuedEmbeddingsBootstrapTask {
         scope,

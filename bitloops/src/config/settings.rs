@@ -1,6 +1,6 @@
 //! Thin-CLI policy settings resolved from repo policy TOML plus global daemon CLI config.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -82,6 +82,36 @@ pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
 
 pub fn load_required_settings(repo_root: &Path) -> Result<BitloopsSettings> {
     load_settings_from_policy(discover_repo_policy(repo_root)?)
+}
+
+pub fn supported_agents(start: &Path) -> Result<Vec<String>> {
+    let policy = discover_repo_policy(start)?;
+    supported_agents_from_policy(&policy)
+}
+
+pub fn supported_agents_from_policy(policy: &super::RepoPolicySnapshot) -> Result<Vec<String>> {
+    let Some(raw) = policy.agents.get("supported") else {
+        return Ok(Vec::new());
+    };
+    let raw = raw
+        .as_array()
+        .ok_or_else(|| anyhow!("`[agents].supported` must be an array of strings"))?;
+
+    let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut resolved = Vec::new();
+
+    for value in raw {
+        let name = value
+            .as_str()
+            .ok_or_else(|| anyhow!("`[agents].supported` must contain only strings"))?;
+        let normalized = registry.normalise_agent_name(name)?;
+        if seen.insert(normalized.clone()) {
+            resolved.push(normalized);
+        }
+    }
+
+    Ok(resolved)
 }
 
 fn load_settings_from_policy(policy: super::RepoPolicySnapshot) -> Result<BitloopsSettings> {
@@ -232,6 +262,19 @@ pub fn write_repo_daemon_binding(path: &Path, daemon_config_path: &Path) -> Resu
     })
 }
 
+pub fn set_scope_exclusions(
+    path: &Path,
+    exclude: &[String],
+    exclude_from: &[String],
+) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_scope_table(doc);
+        doc["scope"]["exclude"] = string_array_item(exclude);
+        doc["scope"]["exclude_from"] = string_array_item(exclude_from);
+        Ok(())
+    })
+}
+
 pub fn set_capture_enabled(path: &Path, enabled: bool) -> Result<()> {
     write_repo_policy_file(path, |doc| {
         ensure_capture_table(doc);
@@ -332,6 +375,12 @@ fn ensure_capture_table(doc: &mut DocumentMut) {
 fn ensure_agents_table(doc: &mut DocumentMut) {
     if doc.get("agents").is_none_or(|item| !item.is_table()) {
         doc["agents"] = Item::Table(Table::new());
+    }
+}
+
+fn ensure_scope_table(doc: &mut DocumentMut) {
+    if doc.get("scope").is_none_or(|item| !item.is_table()) {
+        doc["scope"] = Item::Table(Table::new());
     }
 }
 

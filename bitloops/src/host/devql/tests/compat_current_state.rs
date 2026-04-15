@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 
 const COMPAT_PARSER_VERSION: &str = "compat-parser";
 const COMPAT_EXTRACTOR_VERSION: &str = "compat-extractor";
+const COMPAT_EXTRACTION_FINGERPRINT: &str = "compat-fingerprint";
 
 async fn ensure_current_state_repo_catalog_row(
     cfg: &DevqlConfig,
@@ -42,11 +43,15 @@ pub(crate) async fn upsert_current_state_for_content(
     let language = detect_language(rev.path);
     let extraction = match crate::host::devql::sync::extraction::extract_to_cache_format(
         cfg,
-        rev.path,
-        &content_id,
-        COMPAT_PARSER_VERSION,
-        COMPAT_EXTRACTOR_VERSION,
-        content,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path: rev.path,
+            language: &language,
+            content_id: &content_id,
+            extraction_fingerprint: COMPAT_EXTRACTION_FINGERPRINT,
+            parser_version: COMPAT_PARSER_VERSION,
+            extractor_version: COMPAT_EXTRACTOR_VERSION,
+            content,
+        },
     )? {
         Some(value) => value,
         None => {
@@ -54,6 +59,8 @@ pub(crate) async fn upsert_current_state_for_content(
                 &cfg.repo.repo_id,
                 rev.path,
                 rev.blob_sha,
+                &language,
+                COMPAT_EXTRACTION_FINGERPRINT,
                 Some(content),
             );
             let file_record =
@@ -61,6 +68,7 @@ pub(crate) async fn upsert_current_state_for_content(
             CachedExtraction {
                 content_id: content_id.clone(),
                 language: language.to_string(),
+                extraction_fingerprint: COMPAT_EXTRACTION_FINGERPRINT.to_string(),
                 parser_version: COMPAT_PARSER_VERSION.to_string(),
                 extractor_version: COMPAT_EXTRACTOR_VERSION.to_string(),
                 parse_status: "ok".to_string(),
@@ -70,18 +78,7 @@ pub(crate) async fn upsert_current_state_for_content(
         }
     };
 
-    let desired = DesiredFileState {
-        path: rev.path.to_string(),
-        language: language.to_string(),
-        head_content_id: Some(content_id.clone()),
-        index_content_id: Some(content_id.clone()),
-        worktree_content_id: Some(content_id.clone()),
-        effective_content_id: content_id,
-        effective_source: EffectiveSource::Worktree,
-        exists_in_head: true,
-        exists_in_index: true,
-        exists_in_worktree: true,
-    };
+    let desired = compat_desired_state(rev.path, &language, &content_id);
     crate::host::devql::sync::materializer::materialize_path(
         cfg,
         relational,
@@ -129,6 +126,7 @@ pub(crate) async fn refresh_current_state_for_path(
     let extraction = CachedExtraction {
         content_id: rev.blob_sha.to_string(),
         language: file_artefact.language.clone(),
+        extraction_fingerprint: COMPAT_EXTRACTION_FINGERPRINT.to_string(),
         parser_version: COMPAT_PARSER_VERSION.to_string(),
         extractor_version: COMPAT_EXTRACTOR_VERSION.to_string(),
         parse_status: "ok".to_string(),
@@ -141,18 +139,7 @@ pub(crate) async fn refresh_current_state_for_path(
             .map(cached_edge_from_record)
             .collect::<Vec<_>>(),
     };
-    let desired = DesiredFileState {
-        path: rev.path.to_string(),
-        language: file_artefact.language.clone(),
-        head_content_id: Some(rev.blob_sha.to_string()),
-        index_content_id: Some(rev.blob_sha.to_string()),
-        worktree_content_id: Some(rev.blob_sha.to_string()),
-        effective_content_id: rev.blob_sha.to_string(),
-        effective_source: EffectiveSource::Worktree,
-        exists_in_head: true,
-        exists_in_index: true,
-        exists_in_worktree: true,
-    };
+    let desired = compat_desired_state(rev.path, &file_artefact.language, rev.blob_sha);
     crate::host::devql::sync::materializer::materialize_path(
         cfg,
         relational,
@@ -184,6 +171,33 @@ fn cached_artefact_from_record(record: &PersistedArtefactRecord) -> CachedArtefa
         modifiers: record.modifiers.clone(),
         docstring: record.docstring.clone(),
         metadata: Value::Object(Map::new()),
+    }
+}
+
+fn compat_desired_state(path: &str, language: &str, content_id: &str) -> DesiredFileState {
+    DesiredFileState {
+        path: path.to_string(),
+        analysis_mode: crate::host::devql::AnalysisMode::Code,
+        file_role: crate::host::devql::FileRole::SourceCode,
+        text_index_mode: crate::host::devql::TextIndexMode::None,
+        language: language.to_string(),
+        resolved_language: language.to_string(),
+        dialect: None,
+        primary_context_id: None,
+        secondary_context_ids: Vec::new(),
+        frameworks: Vec::new(),
+        runtime_profile: None,
+        classification_reason: "compat_test".to_string(),
+        context_fingerprint: None,
+        extraction_fingerprint: COMPAT_EXTRACTION_FINGERPRINT.to_string(),
+        head_content_id: Some(content_id.to_string()),
+        index_content_id: Some(content_id.to_string()),
+        worktree_content_id: Some(content_id.to_string()),
+        effective_content_id: content_id.to_string(),
+        effective_source: EffectiveSource::Worktree,
+        exists_in_head: true,
+        exists_in_index: true,
+        exists_in_worktree: true,
     }
 }
 

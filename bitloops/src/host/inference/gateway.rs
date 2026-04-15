@@ -4,14 +4,16 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::adapters::model_providers::llm;
-use crate::config::{InferenceConfig, InferenceProfileConfig, InferenceTask};
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, InferenceConfig, InferenceProfileConfig, InferenceRuntimeConfig,
+    InferenceTask, resolve_preferred_daemon_config_path_for_repo,
+};
 
 use super::embeddings::BitloopsEmbeddingsIpcService;
-use super::text_generation::LlmTextGenerationService;
+use super::text_generation::BitloopsInferenceTextGenerationService;
 use super::{
-    BITLOOPS_EMBEDDINGS_IPC_DRIVER, EmbeddingService, InferenceGateway, ResolvedInferenceSlot,
-    TextGenerationService,
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER, EmbeddingService,
+    InferenceGateway, ResolvedInferenceSlot, TextGenerationService,
 };
 
 pub struct EmptyInferenceGateway;
@@ -27,7 +29,6 @@ impl InferenceGateway for EmptyInferenceGateway {
 }
 
 pub struct LocalInferenceGateway {
-    #[allow(dead_code)]
     repo_root: PathBuf,
     inference: InferenceConfig,
     slot_bindings: HashMap<String, BTreeMap<String, String>>,
@@ -126,11 +127,7 @@ impl LocalInferenceGateway {
                     .runtime
                     .as_deref()
                     .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
-                let runtime = self
-                    .inference
-                    .runtimes
-                    .get(runtime_name)
-                    .ok_or_else(|| anyhow!("runtime `{runtime_name}` is not defined"))?;
+                let runtime = self.configured_runtime(profile_name, runtime_name)?;
                 let model = profile
                     .model
                     .as_deref()
@@ -164,26 +161,68 @@ impl LocalInferenceGateway {
         profile_name: &str,
         profile: &InferenceProfileConfig,
     ) -> Result<Arc<dyn TextGenerationService>> {
+        let runtime_name = profile
+            .runtime
+            .as_deref()
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
+        let runtime = self.configured_runtime(profile_name, runtime_name)?;
         let model = profile
             .model
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?
-            .trim()
-            .to_string();
-        let api_key = profile
-            .api_key
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?;
+        let temperature = profile
+            .temperature
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires an api_key"))?
-            .trim()
-            .to_string();
-        let provider =
-            llm::build_llm_provider(&profile.driver, model, api_key, profile.base_url.as_deref())
-                .with_context(|| {
-                format!("building text-generation service for profile `{profile_name}`")
-            })?;
-        Ok(Arc::new(LlmTextGenerationService { inner: provider }))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
+        let max_output_tokens = profile
+            .max_output_tokens
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+        if profile.driver != BITLOOPS_PLATFORM_CHAT_DRIVER
+            && profile
+                .base_url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            bail!("profile `{profile_name}` requires a base_url");
+        }
+        let config_path = self.resolve_runtime_config_path()?;
+        let service = BitloopsInferenceTextGenerationService::new(
+            profile_name,
+            &profile.driver,
+            runtime,
+            &config_path,
+        )
+        .with_context(|| {
+            format!("building text-generation service for profile `{profile_name}`")
+        })?;
+        let _ = (model, temperature, max_output_tokens);
+        Ok(Arc::new(service))
+    }
+
+    fn configured_runtime(
+        &self,
+        profile_name: &str,
+        runtime_name: &str,
+    ) -> Result<&InferenceRuntimeConfig> {
+        let runtime = self
+            .inference
+            .runtimes
+            .get(runtime_name)
+            .ok_or_else(|| anyhow!("runtime `{runtime_name}` is not defined"))?;
+        if runtime.command.trim().is_empty() {
+            bail!(
+                "runtime `{runtime_name}` for profile `{profile_name}` has no command configured"
+            );
+        }
+        Ok(runtime)
+    }
+
+    fn resolve_runtime_config_path(&self) -> Result<PathBuf> {
+        resolve_preferred_daemon_config_path_for_repo(&self.repo_root)
+            .or_else(|_| Ok(self.repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
     }
 }
 

@@ -2,10 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Error as AnyhowError;
 
-use crate::api::DashboardState;
-use crate::api::dto::ApiError;
+use crate::api::{ApiError, DashboardState};
 
-fn map_resolve_repository_error(repo_id: &str, err: AnyhowError) -> ApiError {
+pub(crate) fn map_resolve_repository_error(repo_id: &str, err: AnyhowError) -> ApiError {
     let root = err
         .chain()
         .last()
