@@ -127,8 +127,8 @@ pub(crate) fn decode_error_file_only_to_cache_format(
     extractor_version: &str,
     raw_bytes: &[u8],
 ) -> CachedExtraction {
-    file_only_to_cache_format(
-        PARSE_STATUS_DECODE_ERROR,
+    file_only_to_cache_format(FileOnlyCacheFormatInput {
+        parse_status: PARSE_STATUS_DECODE_ERROR,
         path,
         content_id,
         language,
@@ -136,7 +136,7 @@ pub(crate) fn decode_error_file_only_to_cache_format(
         parser_version,
         extractor_version,
         raw_bytes,
-    )
+    })
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -149,8 +149,8 @@ pub(crate) fn degraded_file_only_to_cache_format(
     extractor_version: &str,
     raw_bytes: &[u8],
 ) -> CachedExtraction {
-    file_only_to_cache_format(
-        PARSE_STATUS_DEGRADED_FILE_ONLY,
+    file_only_to_cache_format(FileOnlyCacheFormatInput {
+        parse_status: PARSE_STATUS_DEGRADED_FILE_ONLY,
         path,
         content_id,
         language,
@@ -158,40 +158,42 @@ pub(crate) fn degraded_file_only_to_cache_format(
         parser_version,
         extractor_version,
         raw_bytes,
-    )
+    })
 }
 
-fn file_only_to_cache_format(
-    parse_status: &str,
-    path: &str,
-    content_id: &str,
-    language: &str,
-    extraction_fingerprint: &str,
-    parser_version: &str,
-    extractor_version: &str,
-    raw_bytes: &[u8],
-) -> CachedExtraction {
+struct FileOnlyCacheFormatInput<'a> {
+    parse_status: &'a str,
+    path: &'a str,
+    content_id: &'a str,
+    language: &'a str,
+    extraction_fingerprint: &'a str,
+    parser_version: &'a str,
+    extractor_version: &'a str,
+    raw_bytes: &'a [u8],
+}
+
+fn file_only_to_cache_format(input: FileOnlyCacheFormatInput<'_>) -> CachedExtraction {
     CachedExtraction {
-        content_id: content_id.to_string(),
-        language: language.to_string(),
-        extraction_fingerprint: extraction_fingerprint.to_string(),
-        parser_version: parser_version.to_string(),
-        extractor_version: extractor_version.to_string(),
-        parse_status: parse_status.to_string(),
+        content_id: input.content_id.to_string(),
+        language: input.language.to_string(),
+        extraction_fingerprint: input.extraction_fingerprint.to_string(),
+        parser_version: input.parser_version.to_string(),
+        extractor_version: input.extractor_version.to_string(),
+        parse_status: input.parse_status.to_string(),
         artefacts: vec![CachedArtefact {
-            artifact_key: file_artifact_key_from_bytes(raw_bytes),
+            artifact_key: file_artifact_key_from_bytes(input.raw_bytes),
             canonical_kind: Some("file".to_string()),
             language_kind: "file".to_string(),
-            name: path.to_string(),
+            name: input.path.to_string(),
             parent_artifact_key: None,
             start_line: 1,
-            end_line: file_end_line_from_bytes(raw_bytes),
+            end_line: file_end_line_from_bytes(input.raw_bytes),
             start_byte: 0,
-            end_byte: i32::try_from(raw_bytes.len()).unwrap_or(i32::MAX),
+            end_byte: i32::try_from(input.raw_bytes.len()).unwrap_or(i32::MAX),
             signature: String::new(),
             modifiers: Vec::new(),
             docstring: None,
-            metadata: json!({ "symbol_fqn": path }),
+            metadata: json!({ "symbol_fqn": input.path }),
         }],
         edges: Vec::new(),
     }
