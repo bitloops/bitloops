@@ -580,8 +580,18 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^semantic clone ingest does not populate historical semantic tables in (\S+)$"),
+            step_fn(then_semantic_clone_ingest_skips_historical_semantic_tables),
+        )
+        .then(
+            None,
             regex(r"^semantic clone historical and current embeddings expose code and summary channels in (\S+)$"),
             step_fn(then_semantic_clone_representation_channels_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone current embeddings expose code and summary channels in (\S+)$"),
+            step_fn(then_current_semantic_clone_representation_channels_populated),
         )
         .then(
             None,

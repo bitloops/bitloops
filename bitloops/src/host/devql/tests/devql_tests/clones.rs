@@ -319,6 +319,21 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     .expect("insert target current artefact");
 
     conn.execute(
+        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, template_summary, summary, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            "artefact::invoice_doc",
+            repo_id,
+            "blob-2",
+            "historical-hash-2",
+            "Historical invoice document summary.",
+            "Historical invoice document summary that should not be returned for current neighbors.",
+            0.4_f64,
+        ],
+    )
+    .expect("insert conflicting historical target semantics");
+
+    conn.execute(
         "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, template_summary, summary, confidence)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
@@ -455,6 +470,13 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
         on_demand_rows[0]["relation_kind"],
         Value::String("similar_implementation".to_string())
     );
+    assert_eq!(
+        on_demand_rows[0]["target_summary"],
+        Value::String(
+            "Function render invoice document. Renders the invoice document for an order."
+                .to_string()
+        )
+    );
     assert!(on_demand_rows[0]["score"].is_number());
     assert!(on_demand_rows[0]["semantic_score"].is_number());
     assert!(on_demand_rows[0]["lexical_score"].is_number());
@@ -489,6 +511,13 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     assert_eq!(
         rows[0]["relation_kind"],
         Value::String("similar_implementation".to_string())
+    );
+    assert_eq!(
+        rows[0]["target_summary"],
+        Value::String(
+            "Function render invoice document. Renders the invoice document for an order."
+                .to_string()
+        )
     );
     assert!(rows[0]["explanation_json"].is_object());
 }

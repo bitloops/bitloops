@@ -563,6 +563,7 @@ fn migrate_legacy_sync_queue_state(
                 source: task.source,
                 spec: crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
                     mode: task.mode,
+                    post_commit_snapshot: None,
                 }),
                 status: task.status,
                 submitted_at_unix: task.submitted_at_unix,

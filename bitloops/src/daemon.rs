@@ -79,9 +79,9 @@ pub use self::types::{
     EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
     EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
     EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
-    InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, RepoTaskControlState,
-    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncTaskMode, SyncTaskSpec,
+    InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, PostCommitSnapshotSpec,
+    RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
+    SupervisorServiceMetadata, SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -340,19 +340,36 @@ pub fn enqueue_sync_for_config(
     source: DevqlTaskSource,
     mode: crate::host::devql::SyncMode,
 ) -> Result<DevqlTaskEnqueueResult> {
+    enqueue_sync_for_config_with_snapshot(cfg, source, mode, None)
+}
+
+pub fn enqueue_sync_for_config_with_snapshot(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: DevqlTaskSource,
+    mode: crate::host::devql::SyncMode,
+    post_commit_snapshot: Option<PostCommitSnapshotSpec>,
+) -> Result<DevqlTaskEnqueueResult> {
     enqueue_task_for_config(
         cfg,
         source,
-        DevqlTaskSpec::Sync(SyncTaskSpec {
-            mode: match mode {
-                crate::host::devql::SyncMode::Auto => SyncTaskMode::Auto,
-                crate::host::devql::SyncMode::Full => SyncTaskMode::Full,
-                crate::host::devql::SyncMode::Paths(paths) => SyncTaskMode::Paths { paths },
-                crate::host::devql::SyncMode::Repair => SyncTaskMode::Repair,
-                crate::host::devql::SyncMode::Validate => SyncTaskMode::Validate,
-            },
-        }),
+        DevqlTaskSpec::Sync(build_sync_task_spec(mode, post_commit_snapshot)),
     )
+}
+
+fn build_sync_task_spec(
+    mode: crate::host::devql::SyncMode,
+    post_commit_snapshot: Option<PostCommitSnapshotSpec>,
+) -> SyncTaskSpec {
+    SyncTaskSpec {
+        mode: match mode {
+            crate::host::devql::SyncMode::Auto => SyncTaskMode::Auto,
+            crate::host::devql::SyncMode::Full => SyncTaskMode::Full,
+            crate::host::devql::SyncMode::Paths(paths) => SyncTaskMode::Paths { paths },
+            crate::host::devql::SyncMode::Repair => SyncTaskMode::Repair,
+            crate::host::devql::SyncMode::Validate => SyncTaskMode::Validate,
+        },
+        post_commit_snapshot,
+    }
 }
 
 pub fn enqueue_ingest_for_config(

@@ -398,6 +398,7 @@ fn prune_excluded_paths_from_payload(
             spec:
                 DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
                     mode: SyncTaskMode::Paths { paths },
+                    ..
                 }),
         } => {
             let paths = paths
@@ -411,6 +412,7 @@ fn prune_excluded_paths_from_payload(
                     source,
                     spec: DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
                         mode: SyncTaskMode::Paths { paths },
+                        post_commit_snapshot: None,
                     }),
                 })
             }
@@ -664,6 +666,7 @@ fn merge_pending_payload(
                             SyncTaskMode::Paths {
                                 paths: existing_paths,
                             },
+                        ..
                     }),
             },
             ProducerSpoolJobPayload::Task {
@@ -674,6 +677,7 @@ fn merge_pending_payload(
                             SyncTaskMode::Paths {
                                 paths: incoming_paths,
                             },
+                        ..
                     }),
             },
         ) if existing_source == incoming_source => {
@@ -685,6 +689,7 @@ fn merge_pending_payload(
                 source: existing_source,
                 spec: DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
                     mode: SyncTaskMode::Paths { paths },
+                    post_commit_snapshot: None,
                 }),
             }
         }
@@ -729,6 +734,7 @@ fn sync_task_spec_from_mode(mode: crate::host::devql::SyncMode) -> crate::daemon
             crate::host::devql::SyncMode::Repair => SyncTaskMode::Repair,
             crate::host::devql::SyncMode::Validate => SyncTaskMode::Validate,
         },
+        post_commit_snapshot: None,
     }
 }
 
@@ -871,6 +877,7 @@ mod tests {
                 spec:
                     DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
                         mode: SyncTaskMode::Paths { paths },
+                        ..
                     }),
             } => {
                 assert_eq!(*source, DevqlTaskSource::Watcher);

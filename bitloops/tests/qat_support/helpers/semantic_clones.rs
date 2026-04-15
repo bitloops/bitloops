@@ -933,6 +933,37 @@ pub fn assert_semantic_clone_historical_tables_populated(
     Ok(())
 }
 
+pub fn assert_semantic_clone_ingest_skips_historical_semantic_tables(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let snapshot = load_semantic_clone_table_snapshot(world)?;
+    let message = describe_semantic_clone_table_snapshot(&snapshot);
+    store_semantic_clone_table_snapshot(world, snapshot.clone());
+    ensure!(
+        snapshot.historical.symbol_features == 0,
+        "expected ingest to leave historical symbol features empty, got {message}"
+    );
+    ensure!(
+        snapshot.historical.symbol_semantics == 0,
+        "expected ingest to leave historical symbol semantics empty, got {message}"
+    );
+    ensure!(
+        snapshot.historical.symbol_embeddings == 0,
+        "expected ingest to leave historical symbol embeddings empty, got {message}"
+    );
+    ensure!(
+        snapshot.historical.symbol_clone_edges == 0,
+        "expected ingest to leave historical symbol clone edges empty, got {message}"
+    );
+    ensure!(
+        snapshot.historical.commit_ingest_ledger > 0,
+        "expected ingest to keep commit history bookkeeping, got {message}"
+    );
+    Ok(())
+}
+
 pub fn assert_semantic_clone_current_tables_populated(
     world: &mut QatWorld,
     repo_name: &str,
@@ -980,6 +1011,33 @@ pub fn assert_semantic_clone_representation_channels_populated(
         snapshot.historical_representation_counts.summary > 0,
         "expected historical `summary` embeddings, got {message}"
     );
+    ensure!(
+        snapshot.current_representation_counts.code > 0,
+        "expected current `code` embeddings, got {message}"
+    );
+    ensure!(
+        snapshot.current_representation_counts.summary > 0,
+        "expected current `summary` embeddings, got {message}"
+    );
+    ensure!(
+        snapshot.current.symbol_embeddings_current > 0,
+        "expected current inline embedding rows to be populated, got {message}"
+    );
+    ensure!(
+        snapshot.current.symbol_clone_edges_current > 0,
+        "expected current clone edges to remain populated, got {message}"
+    );
+    Ok(())
+}
+
+pub fn assert_current_semantic_clone_representation_channels_populated(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let snapshot = load_semantic_clone_table_snapshot(world)?;
+    let message = describe_semantic_clone_table_snapshot(&snapshot);
+    store_semantic_clone_table_snapshot(world, snapshot.clone());
     ensure!(
         snapshot.current_representation_counts.code > 0,
         "expected current `code` embeddings, got {message}"

@@ -79,12 +79,17 @@ fn build_persist_symbol_clone_edge_statement(
         .map(|row| build_symbol_clone_edge_values_sql(relational, row))
         .collect::<Vec<_>>()
         .join(", ");
+    let conflict_target = match projection {
+        CloneProjection::Historical => "(repo_id, source_artefact_id, target_artefact_id)",
+        CloneProjection::Current => "(repo_id, source_symbol_id, target_symbol_id)",
+    };
     format!(
         "INSERT INTO {table} (repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id, relation_kind, score, semantic_score, lexical_score, structural_score, clone_input_hash, explanation_json) \
 VALUES {values} \
-ON CONFLICT (repo_id, source_symbol_id, target_symbol_id) DO UPDATE SET source_artefact_id = EXCLUDED.source_artefact_id, target_artefact_id = EXCLUDED.target_artefact_id, relation_kind = EXCLUDED.relation_kind, score = EXCLUDED.score, semantic_score = EXCLUDED.semantic_score, lexical_score = EXCLUDED.lexical_score, structural_score = EXCLUDED.structural_score, clone_input_hash = EXCLUDED.clone_input_hash, explanation_json = EXCLUDED.explanation_json, generated_at = {generated_at}",
+ON CONFLICT {conflict_target} DO UPDATE SET source_symbol_id = EXCLUDED.source_symbol_id, source_artefact_id = EXCLUDED.source_artefact_id, target_symbol_id = EXCLUDED.target_symbol_id, target_artefact_id = EXCLUDED.target_artefact_id, relation_kind = EXCLUDED.relation_kind, score = EXCLUDED.score, semantic_score = EXCLUDED.semantic_score, lexical_score = EXCLUDED.lexical_score, structural_score = EXCLUDED.structural_score, clone_input_hash = EXCLUDED.clone_input_hash, explanation_json = EXCLUDED.explanation_json, generated_at = {generated_at}",
         table = projection.clone_edges_table(),
         values = values,
+        conflict_target = conflict_target,
         generated_at = generated_at,
     )
 }

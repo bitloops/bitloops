@@ -1,14 +1,11 @@
 use crate::host::capability_host::{
     CapabilityConfigView, CurrentStateConsumer, CurrentStateConsumerContext,
     CurrentStateConsumerFuture, CurrentStateConsumerRequest, CurrentStateConsumerResult,
-    ReconcileMode,
 };
 
 use super::runtime_config::resolve_semantic_clones_config;
 use super::types::{SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID};
-use super::workplane::{
-    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
-};
+use super::workplane::resolve_effective_mailbox_intent;
 pub struct SemanticClonesCurrentStateConsumer;
 
 impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
@@ -49,38 +46,6 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 .await?;
             }
 
-            let inputs = match request.reconcile_mode {
-                ReconcileMode::MergedDelta => {
-                    let artefact_ids = request
-                        .artefact_upserts
-                        .iter()
-                        .map(|artefact| artefact.artefact_id.clone())
-                        .collect::<Vec<_>>();
-                    crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_artefacts(
-                        context.storage.as_ref(),
-                        request.repo_root.as_path(),
-                        &artefact_ids,
-                    )
-                    .await?
-                }
-                ReconcileMode::FullReconcile => {
-                    crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
-                        context.storage.as_ref(),
-                        request.repo_root.as_path(),
-                        &request.repo_id,
-                    )
-                    .await?
-                }
-            };
-
-            if inputs.is_empty() {
-                return Ok(CurrentStateConsumerResult::applied(
-                    request.to_generation_seq_inclusive,
-                ));
-            }
-
-            enqueue_summary_refresh_jobs(context.workplane.as_ref(), &inputs, &intent)?;
-            enqueue_embedding_jobs(context.workplane.as_ref(), &inputs, &intent)?;
             Ok(CurrentStateConsumerResult::applied(
                 request.to_generation_seq_inclusive,
             ))

@@ -1,6 +1,5 @@
 use super::*;
 
-const DEFAULT_POST_COMMIT_HISTORY_BACKFILL: usize = 50;
 const DISABLE_POST_COMMIT_DEVQL_REFRESH_ENV: &str = "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH";
 
 fn should_skip_post_commit_devql_refresh() -> bool {
@@ -55,15 +54,6 @@ pub(crate) async fn execute_devql_post_commit_refresh(
         return Ok(());
     }
 
-    crate::host::devql::execute_ingest_with_backfill_window(
-        cfg,
-        false,
-        DEFAULT_POST_COMMIT_HISTORY_BACKFILL,
-        None,
-        None,
-    )
-    .await
-    .context("catching up DevQL historical commit ingest for post-commit")?;
     let stats =
         crate::host::devql::run_post_commit_artefact_refresh(cfg, commit_sha, changed_files)
             .await
