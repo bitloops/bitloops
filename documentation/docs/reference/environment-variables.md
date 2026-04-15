@@ -18,6 +18,8 @@ Bitloops prefers daemon config and repo policy over environment variables. The l
 | `BITLOOPS_INFERENCE_VERSION_OVERRIDE` | Overrides the managed `bitloops-inference` release tag the CLI installs. When unset, the CLI resolves the latest release from GitHub on the first managed install. |
 | `BITLOOPS_DISABLE_VERSION_CHECK` | Skips update checks |
 | `BITLOOPS_LOG_LEVEL` | Sets the log level for both the daemon log (`daemon.log`) and the telemetry file logger |
+| `BITLOOPS_WORKOS_CLIENT_ID` | Overrides the built-in WorkOS AuthKit client id used by `bitloops login` |
+| `BITLOOPS_WORKOS_BASE_URL` | Overrides the built-in WorkOS API base URL used by CLI auth. This is mainly useful for development and tests |
 | `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |
 
 ## Inference Configuration

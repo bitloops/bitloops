@@ -15,6 +15,8 @@ pub mod enable;
 pub mod explain;
 pub mod inference;
 pub mod init;
+pub mod login;
+pub mod logout;
 pub mod reset;
 pub mod resume;
 pub mod rewind;
@@ -74,6 +76,10 @@ pub enum Commands {
     Reset(root::ResetArgs),
     /// Initialise Bitloops for the current project.
     Init(init::InitArgs),
+    /// Authenticate the CLI with WorkOS.
+    Login(login::LoginArgs),
+    /// Remove the current CLI login session.
+    Logout(logout::LogoutArgs),
     /// Enable capture in the current Bitloops project.
     Enable(enable::EnableArgs),
     /// Disable capture in the current Bitloops project.
@@ -202,6 +208,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Clean(args) => root::run_clean_command(&args),
         Commands::Reset(args) => root::run_reset_command(&args),
         Commands::Init(args) => init::run(args).await,
+        Commands::Login(args) => login::run(args).await,
+        Commands::Logout(args) => logout::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
         Commands::Disable(args) => root::run_disable_command(&args),
         Commands::Uninstall(args) => uninstall::run(args).await,

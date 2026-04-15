@@ -108,6 +108,38 @@ Notes:
 - Hooks and watchers remain installed and become no-ops while capture is disabled.
 - Use `bitloops uninstall --agent-hooks --git-hooks` if you want to remove hooks themselves.
 
+## Authentication
+
+### `bitloops login`
+
+Starts the WorkOS device-login flow for the CLI.
+
+```bash
+bitloops login
+bitloops login status
+```
+
+Notes:
+
+- `bitloops login` opens the verification URL in your browser when possible, and always prints the URL and user code as a fallback.
+- `bitloops login` works out of the box with the built-in WorkOS client id.
+- `BITLOOPS_WORKOS_CLIENT_ID` and `BITLOOPS_WORKOS_BASE_URL` are advanced overrides for non-default WorkOS environments.
+- Token material is stored in the platform secure credential store.
+- Session metadata is stored in the daemon runtime store.
+- `bitloops login status` refreshes the access token automatically when the stored refresh token is still valid.
+
+### `bitloops logout`
+
+Removes the current CLI login session.
+
+```bash
+bitloops logout
+```
+
+Notes:
+
+- `logout` removes the stored daemon session metadata and deletes the secure-store credential entry for the active WorkOS client id.
+
 ### `bitloops uninstall`
 
 Removes Bitloops-managed artefacts from your machine and, for hook targets, from known repositories.

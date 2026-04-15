@@ -129,6 +129,19 @@ The current daemon parser accepts these top-level surfaces:
 - `inference`
 - `dashboard`
 
+### CLI Auth
+
+Bitloops CLI auth uses WorkOS AuthKit’s device flow.
+
+Notes:
+
+- CLI auth is not configured through `config.toml`.
+- `bitloops login` works out of the box with the built-in WorkOS client id.
+- `BITLOOPS_WORKOS_CLIENT_ID` overrides that built-in client id when you need a non-default WorkOS application.
+- `BITLOOPS_WORKOS_BASE_URL` overrides the default `https://api.workos.com` base URL when you need a non-default WorkOS environment.
+- Tokens are stored in the platform secure credential store, not in `config.toml`.
+- Session metadata is stored in the daemon runtime store under the platform state directory.
+
 ### Text-Generation Profiles
 
 - `task = "text_generation"` profiles must declare `runtime`.

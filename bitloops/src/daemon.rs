@@ -24,6 +24,8 @@ use tokio::sync::Mutex;
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
+#[path = "daemon/auth.rs"]
+mod auth;
 #[path = "daemon/capability_events.rs"]
 mod capability_events;
 #[path = "daemon/config.rs"]
@@ -61,6 +63,11 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub(crate) use self::auth::PersistedWorkosAuthSessionState;
+pub use self::auth::{
+    WorkosDeviceLoginStart, WorkosLoginStart, WorkosSessionDetails, complete_workos_device_login,
+    logout_workos_session, prepare_workos_device_login, resolve_workos_session_status,
+};
 pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
