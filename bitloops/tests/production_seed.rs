@@ -8,7 +8,7 @@ use tempfile::tempdir;
 use test_harness_support::production_seed::seed_production_artefacts_for_repo;
 
 #[test]
-fn discovers_typescript_and_rust_artefacts_and_ignores_tests() {
+fn discovers_supported_production_artefacts_and_ignores_tests() {
     let temp = tempdir().expect("failed to create temp dir");
     let repo_dir = temp.path().join("repo");
     let db_path = temp.path().join("testlens.db");
@@ -50,6 +50,18 @@ pub fn normalize(input: &str) -> String {
     .expect("failed writing lib.rs");
 
     fs::write(
+        repo_dir.join("src/service.go"),
+        r#"
+package service
+
+func Run() string {
+    return "ok"
+}
+"#,
+    )
+    .expect("failed writing service.go");
+
+    fs::write(
         repo_dir.join("tests/service.test.ts"),
         r#"
 describe("service", () => {
@@ -73,7 +85,7 @@ describe("service", () => {
             |row| row.get(0),
         )
         .expect("failed querying file count");
-    assert_eq!(file_count, 2, "expected only src files, not test files");
+    assert_eq!(file_count, 3, "expected only src files, not test files");
 
     assert_has_symbol(&conn, "c1", "function", "src/service.ts::validateEmail");
     assert_has_symbol(&conn, "c1", "<null>", "src/service.ts::UserService");
@@ -87,6 +99,7 @@ describe("service", () => {
     assert_has_symbol(&conn, "c1", "type", "src/service.ts::UserId");
     assert_has_symbol(&conn, "c1", "variable", "src/service.ts::MAX_RETRIES");
     assert_has_symbol(&conn, "c1", "function", "src/lib.rs::normalize");
+    assert_has_symbol(&conn, "c1", "function", "src/service.go::Run");
 
     let test_path_rows: i64 = conn
         .query_row(

@@ -18,6 +18,7 @@ impl CoreExtensionHost {
     }
 
     pub fn bootstrap_builtins(&mut self) -> Result<(), CoreExtensionHostError> {
+        self.register_language_pack(CSHARP_LANGUAGE_PACK)?;
         self.register_language_pack(RUST_LANGUAGE_PACK)?;
         self.register_language_pack(TS_JS_LANGUAGE_PACK)?;
         self.register_language_pack(PYTHON_LANGUAGE_PACK)?;

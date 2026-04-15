@@ -219,13 +219,7 @@ pub fn execute(
         let language = extraction
             .as_ref()
             .map(|file| file.language.clone())
-            .unwrap_or_else(|| {
-                if relative_path.ends_with(".rs") {
-                    "rust".to_string()
-                } else {
-                    "typescript".to_string()
-                }
-            });
+            .unwrap_or_else(|| production_source_language(&relative_path).to_string());
 
         builder.push_file_state(
             &repo.repo_id,
@@ -537,11 +531,7 @@ ON CONFLICT(repo_id, path) DO UPDATE SET
                         || msg.contains("no column named commit_sha")
                 } =>
             {
-                let language = if row.path.ends_with(".rs") {
-                    "rust"
-                } else {
-                    "typescript"
-                };
+                let language = production_source_language(&row.path);
                 tx.execute(
                     r#"
 INSERT INTO current_file_state (
@@ -839,14 +829,30 @@ fn is_production_source_file(path: &Path) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
-    let is_source_extension = filename.ends_with(".ts") || filename.ends_with(".rs");
-    if !is_source_extension {
+    if production_source_language(filename).is_empty() {
         return false;
     }
     if filename.ends_with(".d.ts") {
         return false;
     }
     !is_test_file(path, &normalized)
+}
+
+fn production_source_language(path: &str) -> &'static str {
+    let Some(extension) = Path::new(path).extension().and_then(|value| value.to_str()) else {
+        return "";
+    };
+
+    match extension.trim().to_ascii_lowercase().as_str() {
+        "rs" => "rust",
+        "ts" | "tsx" => "typescript",
+        "js" | "jsx" => "javascript",
+        "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "cs" => "csharp",
+        _ => "",
+    }
 }
 
 fn is_ignored_path(path: &Path) -> bool {

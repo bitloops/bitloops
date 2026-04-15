@@ -3,6 +3,10 @@ use super::*;
 #[test]
 fn devql_extension_host_resolves_built_in_language_pack_ownership() {
     assert_eq!(
+        resolve_language_pack_owner("csharp"),
+        Some(CSHARP_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
         resolve_language_pack_owner("rust"),
         Some(RUST_LANGUAGE_PACK_ID)
     );
@@ -44,6 +48,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/Main.java"),
         Some("java")
     );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.cs"),
+        Some("csharp")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -53,6 +61,7 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     assert_eq!(
         registry.registered_pack_ids(),
         vec![
+            CSHARP_LANGUAGE_PACK_ID,
             GO_LANGUAGE_PACK_ID,
             JAVA_LANGUAGE_PACK_ID,
             PYTHON_LANGUAGE_PACK_ID,
@@ -60,6 +69,7 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
             TS_JS_LANGUAGE_PACK_ID
         ]
     );
+    assert!(registry.get(CSHARP_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(GO_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(JAVA_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(RUST_LANGUAGE_PACK_ID).is_some());
@@ -69,8 +79,85 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
 }
 
 #[test]
-fn devql_language_adapter_registry_executes_rust_ts_js_python_go_and_java_built_ins() {
+fn devql_language_adapter_registry_executes_rust_ts_js_python_go_java_and_csharp_built_ins() {
+    let count_kind = |edges: &[DependencyEdge], kind: EdgeKind| -> usize {
+        edges.iter().filter(|edge| edge.edge_kind == kind).count()
+    };
+
     let registry = language_adapter_registry().expect("initialize language adapter registry");
+    let csharp_pack = registry
+        .get(CSHARP_LANGUAGE_PACK_ID)
+        .expect("resolve csharp built-in language adapter pack");
+    let csharp_content = r#"using System.Collections.Generic;
+
+namespace Acme.Services;
+
+public interface IRepository {}
+
+public class BaseService {}
+
+public class UserService : BaseService, IRepository
+{
+    private readonly Helper _helper;
+
+    public UserService(Helper helper)
+    {
+        _helper = helper;
+    }
+
+    public User GetUser()
+    {
+        return _helper.Load();
+    }
+}
+
+public class Helper
+{
+    public User Load()
+    {
+        return new User();
+    }
+}
+
+public class User {}
+"#;
+    let csharp_artefacts = csharp_pack
+        .extract_artefacts(csharp_content, "src/UserService.cs")
+        .expect("extract csharp artefacts via language adapter registry");
+    assert!(
+        csharp_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "UserService"),
+        "csharp built-in registry pack should surface type artefacts"
+    );
+    let csharp_edges = csharp_pack
+        .extract_dependency_edges(csharp_content, "src/UserService.cs", &csharp_artefacts)
+        .expect("extract csharp dependency edges via language adapter registry");
+    assert_eq!(count_kind(&csharp_edges, EdgeKind::Calls), 1);
+    assert_eq!(count_kind(&csharp_edges, EdgeKind::Imports), 1);
+    assert_eq!(count_kind(&csharp_edges, EdgeKind::Extends), 1);
+    assert_eq!(count_kind(&csharp_edges, EdgeKind::Implements), 1);
+    assert!(csharp_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Imports
+            && edge.from_symbol_fqn == "src/UserService.cs"
+            && edge.to_symbol_ref.as_deref() == Some("System.Collections.Generic")
+    }));
+    assert!(csharp_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Calls
+            && edge.from_symbol_fqn == "src/UserService.cs::UserService::GetUser"
+            && edge.to_symbol_ref.as_deref() == Some("src/UserService.cs::member::_helper::Load")
+    }));
+    assert!(csharp_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Extends
+            && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/UserService.cs::BaseService")
+    }));
+    assert!(csharp_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Implements
+            && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/UserService.cs::IRepository")
+    }));
+
     let rust_pack = registry
         .get(RUST_LANGUAGE_PACK_ID)
         .expect("resolve rust built-in language adapter pack");
@@ -116,12 +203,12 @@ function helper() {
     let ts_edges = ts_pack
         .extract_dependency_edges(ts_content, "src/main.ts", &ts_artefacts)
         .expect("extract ts dependency edges via language adapter registry");
-    assert!(
-        ts_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Calls),
-        "ts/js built-in registry pack should emit call edges"
-    );
+    assert_eq!(count_kind(&ts_edges, EdgeKind::Calls), 1);
+    assert!(ts_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Calls
+            && edge.from_symbol_fqn == "src/main.ts::greet"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/main.ts::helper")
+    }));
 
     let python_pack = registry
         .get(PYTHON_LANGUAGE_PACK_ID)
@@ -154,24 +241,24 @@ def run():
     let python_edges = python_pack
         .extract_dependency_edges(python_content, "src/main.py", &python_artefacts)
         .expect("extract python dependency edges via language adapter registry");
-    assert!(
-        python_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Calls),
-        "python built-in registry pack should emit call edges"
-    );
-    assert!(
-        python_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Imports),
-        "python built-in registry pack should emit import edges"
-    );
-    assert!(
-        python_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Extends),
-        "python built-in registry pack should emit extends edges"
-    );
+    assert_eq!(count_kind(&python_edges, EdgeKind::Calls), 2);
+    assert_eq!(count_kind(&python_edges, EdgeKind::Imports), 1);
+    assert_eq!(count_kind(&python_edges, EdgeKind::Extends), 1);
+    assert!(python_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Imports
+            && edge.from_symbol_fqn == "src/main.py"
+            && edge.to_symbol_ref.as_deref() == Some("pkg.helpers")
+    }));
+    assert!(python_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Calls
+            && edge.from_symbol_fqn == "src/main.py::Greeter::greet"
+            && edge.to_symbol_ref.as_deref() == Some("pkg.helpers::helper")
+    }));
+    assert!(python_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Extends
+            && edge.from_symbol_fqn == "src/main.py::Greeter"
+            && edge.to_symbol_ref.as_deref() == Some("BaseGreeter")
+    }));
 
     let go_pack = registry
         .get(GO_LANGUAGE_PACK_ID)
@@ -208,24 +295,24 @@ func Run() {
     let go_edges = go_pack
         .extract_dependency_edges(go_content, "service/run.go", &go_artefacts)
         .expect("extract go dependency edges via language adapter registry");
-    assert!(
-        go_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Calls),
-        "go built-in registry pack should emit call edges"
-    );
-    assert!(
-        go_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Imports),
-        "go built-in registry pack should emit import edges"
-    );
-    assert!(
-        go_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Extends),
-        "go built-in registry pack should emit embedding edges"
-    );
+    assert_eq!(count_kind(&go_edges, EdgeKind::Calls), 2);
+    assert_eq!(count_kind(&go_edges, EdgeKind::Imports), 2);
+    assert_eq!(count_kind(&go_edges, EdgeKind::Extends), 1);
+    assert!(go_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Imports
+            && edge.from_symbol_fqn == "service/run.go"
+            && edge.to_symbol_ref.as_deref() == Some("context")
+    }));
+    assert!(go_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Calls
+            && edge.from_symbol_fqn == "service/run.go::Run"
+            && edge.to_target_symbol_fqn.as_deref() == Some("service/run.go::helper")
+    }));
+    assert!(go_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Extends
+            && edge.from_symbol_fqn == "service/run.go::Handler"
+            && edge.to_target_symbol_fqn.as_deref() == Some("service/run.go::Base")
+    }));
 
     let java_pack = registry
         .get(JAVA_LANGUAGE_PACK_ID)
@@ -270,28 +357,29 @@ class Greeter extends Base implements Runner {
     let java_edges = java_pack
         .extract_dependency_edges(java_content, "src/com/acme/Greeter.java", &java_artefacts)
         .expect("extract java dependency edges via language adapter registry");
-    assert!(
-        java_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Calls),
-        "java built-in registry pack should emit call edges"
-    );
-    assert!(
-        java_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Imports),
-        "java built-in registry pack should emit import edges"
-    );
-    assert!(
-        java_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Extends),
-        "java built-in registry pack should emit extends edges"
-    );
-    assert!(
-        java_edges
-            .iter()
-            .any(|edge| edge.edge_kind == EdgeKind::Implements),
-        "java built-in registry pack should emit implements edges"
-    );
+    assert_eq!(count_kind(&java_edges, EdgeKind::Calls), 4);
+    assert_eq!(count_kind(&java_edges, EdgeKind::Imports), 1);
+    assert_eq!(count_kind(&java_edges, EdgeKind::Extends), 1);
+    assert_eq!(count_kind(&java_edges, EdgeKind::Implements), 1);
+    assert!(java_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Imports
+            && edge.from_symbol_fqn == "src/com/acme/Greeter.java"
+            && edge.to_symbol_ref.as_deref() == Some("java.util.List")
+    }));
+    assert!(java_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Calls
+            && edge.from_symbol_fqn == "src/com/acme/Greeter.java::Greeter::greet"
+            && edge.to_target_symbol_fqn.as_deref()
+                == Some("src/com/acme/Greeter.java::Greeter::helper")
+    }));
+    assert!(java_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Extends
+            && edge.from_symbol_fqn == "src/com/acme/Greeter.java::Greeter"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/com/acme/Greeter.java::Base")
+    }));
+    assert!(java_edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Implements
+            && edge.from_symbol_fqn == "src/com/acme/Greeter.java::Greeter"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/com/acme/Greeter.java::Runner")
+    }));
 }

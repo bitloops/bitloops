@@ -269,33 +269,6 @@ fn resolve_artefact(
     Ok(materialized)
 }
 
-fn parse_cached_language_kind(
-    language: &str,
-    raw_kind: &str,
-) -> Result<crate::host::language_adapter::LanguageKind> {
-    use crate::host::language_adapter::{
-        GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
-    };
-
-    let parsed = match language {
-        "go" => GoKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::go),
-        "java" => JavaKind::from_tree_sitter_kind(raw_kind)
-            .or(match raw_kind {
-                "class_declaration" => Some(JavaKind::Class),
-                _ => None,
-            })
-            .map(LanguageKind::java),
-        "python" => PythonKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::python),
-        "rust" => RustKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::rust),
-        "typescript" | "javascript" => {
-            TsJsKind::from_tree_sitter_kind(raw_kind).map(LanguageKind::ts_js)
-        }
-        _ => LanguageKind::try_from(raw_kind).ok(),
-    };
-
-    parsed.ok_or_else(|| anyhow!("unsupported cached language_kind `{raw_kind}` for `{language}`"))
-}
-
 pub(crate) fn derive_materialized_edges(
     cfg: &crate::host::devql::DevqlConfig,
     desired: &DesiredFileState,
@@ -349,6 +322,13 @@ pub(crate) fn derive_materialized_edges(
     let mut edges = deduped.into_values().collect::<Vec<_>>();
     edges.sort_by(|lhs, rhs| lhs.edge_id.cmp(&rhs.edge_id));
     Ok(edges)
+}
+
+fn parse_cached_language_kind(
+    language: &str,
+    raw_kind: &str,
+) -> Result<crate::host::language_adapter::LanguageKind> {
+    derive::parse_cached_language_kind(language, raw_kind)
 }
 
 fn dedupe_materialized_edges_by_edge_id(edges: Vec<MaterializedEdge>) -> Vec<MaterializedEdge> {
