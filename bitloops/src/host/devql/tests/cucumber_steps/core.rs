@@ -1257,6 +1257,7 @@ async fn build_prepared_real_clone_fixture_db(
         .map(|symbol| symbol.artefact_id.as_str())
         .collect::<HashSet<_>>();
 
+    let mut semantic_inputs_by_file = Vec::new();
     let mut all_semantic_inputs = Vec::new();
     for file in &materialized_files {
         let pre_stage_artefacts =
@@ -1276,7 +1277,8 @@ async fn build_prepared_real_clone_fixture_db(
             .into_iter()
             .filter(|input| fixture_artefact_ids.contains(input.artefact_id.as_str()))
             .collect::<Vec<_>>();
-        all_semantic_inputs.extend(semantic_inputs);
+        all_semantic_inputs.extend(semantic_inputs.iter().cloned());
+        semantic_inputs_by_file.push((file.path.clone(), file.blob_sha.clone(), semantic_inputs));
     }
 
     upsert_semantic_feature_rows(
@@ -1286,6 +1288,19 @@ async fn build_prepared_real_clone_fixture_db(
     )
     .await
     .context("upsert semantic feature rows for real-path fixture")?;
+    for (path, content_id, semantic_inputs) in &semantic_inputs_by_file {
+        crate::capability_packs::semantic_clones::upsert_current_semantic_feature_rows(
+            &relational,
+            path,
+            content_id,
+            semantic_inputs,
+            Arc::clone(&summary_provider),
+        )
+        .await
+        .with_context(|| {
+            format!("upsert current semantic feature rows for real-path fixture {path}")
+        })?;
+    }
     let summary_by_artefact_id = load_persisted_summary_map(
         &relational,
         &all_semantic_inputs
@@ -1320,18 +1335,52 @@ async fn build_prepared_real_clone_fixture_db(
     )
     .await
     .context("upsert code symbol embedding rows for real-path fixture")?;
+    for (path, content_id, semantic_inputs) in &semantic_inputs_by_file {
+        crate::capability_packs::semantic_clones::upsert_current_symbol_embedding_rows(
+            &relational,
+            path,
+            content_id,
+            semantic_inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+            Arc::clone(&embedding_provider),
+        )
+        .await
+        .with_context(|| {
+            format!("upsert current code symbol embedding rows for real-path fixture {path}")
+        })?;
+    }
     upsert_symbol_embedding_rows(
         &relational,
         &all_semantic_inputs,
         crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-        embedding_provider,
+        Arc::clone(&embedding_provider),
     )
     .await
     .context("upsert summary symbol embedding rows for real-path fixture")?;
+    for (path, content_id, semantic_inputs) in &semantic_inputs_by_file {
+        crate::capability_packs::semantic_clones::upsert_current_symbol_embedding_rows(
+            &relational,
+            path,
+            content_id,
+            semantic_inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+            Arc::clone(&embedding_provider),
+        )
+        .await
+        .with_context(|| {
+            format!("upsert current summary symbol embedding rows for real-path fixture {path}")
+        })?;
+    }
 
     rebuild_symbol_clone_edges(&relational, &repo_id)
         .await
         .context("rebuild semantic clone edges for real-path fixture")?;
+    crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+        &relational,
+        &repo_id,
+    )
+    .await
+    .context("rebuild current semantic clone edges for real-path fixture")?;
 
     // Force WAL contents back into the main SQLite file so later copies are self-contained.
     rusqlite::Connection::open(&sqlite_path)
