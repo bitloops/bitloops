@@ -491,5 +491,5 @@ fn non_empty_text(value: &str) -> Option<String> {
 pub(crate) use self::derive::prepare_materialization_rows;
 pub(crate) use self::persist::{
     persist_prepared_materialisation_tx, remove_paths_tx,
-    resolve_prepared_rust_local_edges_with_connection,
+    resolve_prepared_local_edges_with_connection,
 };

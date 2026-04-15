@@ -596,4 +596,35 @@ public class UserService : IDisposable
                 && edge.from_symbol_fqn == "src/UserService.cs::UserService"
         }));
     }
+
+    #[test]
+    fn extract_csharp_dependency_edges_keep_cross_file_namespace_relationships_as_symbol_refs() {
+        let content = r#"namespace MyApp.Services;
+
+public class UserService : BaseService, IRepository
+{
+}
+"#;
+
+        let path = "src/UserService.cs";
+        let artefacts = extract_csharp_artefacts(content, path).unwrap();
+        let edges = extract_csharp_dependency_edges(content, path, &artefacts).unwrap();
+
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Implements
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+                && edge.to_symbol_ref.as_deref() == Some("BaseService")
+                && edge.to_target_symbol_fqn.is_none()
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Implements
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+                && edge.to_symbol_ref.as_deref() == Some("IRepository")
+                && edge.to_target_symbol_fqn.is_none()
+        }));
+        assert!(!edges.iter().any(|edge| {
+            edge.edge_kind == EdgeKind::Extends
+                && edge.from_symbol_fqn == "src/UserService.cs::UserService"
+        }));
+    }
 }

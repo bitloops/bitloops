@@ -11,28 +11,113 @@ pub(super) fn build_historical_edge_records(
 ) -> Vec<PersistedEdgeRecord> {
     let mut out = Vec::new();
     let provenance = CanonicalProvenanceRef::for_blob(&cfg.repo.repo_id, blob_sha);
+    let targets = current_by_fqn
+        .values()
+        .map(|record| crate::host::language_adapter::LocalTargetInfo {
+            symbol_fqn: record.symbol_fqn.clone(),
+            symbol_id: record.symbol_id.clone(),
+            artefact_id: record.artefact_id.clone(),
+            language_kind: record.language_kind.clone(),
+        })
+        .collect::<Vec<_>>();
+    let import_refs_by_path = edges
+        .iter()
+        .filter(|edge| edge.edge_kind == EdgeKind::Imports)
+        .filter_map(|edge| {
+            edge.to_symbol_ref
+                .clone()
+                .map(|symbol_ref| (edge.from_symbol_fqn.clone(), symbol_ref))
+        })
+        .fold(
+            HashMap::<String, Vec<String>>::new(),
+            |mut acc, (from_symbol_fqn, symbol_ref)| {
+                let source_path = from_symbol_fqn
+                    .split_once("::")
+                    .map(|(path, _)| path)
+                    .unwrap_or(from_symbol_fqn.as_str())
+                    .to_string();
+                acc.entry(source_path).or_default().push(symbol_ref);
+                acc
+            },
+        );
+    let package_refs_by_path = current_by_fqn
+        .values()
+        .filter(|record| record.language_kind == "package_declaration")
+        .filter_map(|record| {
+            let source_path = record.symbol_fqn.split_once("::")?.0.to_string();
+            let package_ref = record.symbol_fqn.split_once("::")?.1.to_string();
+            Some((source_path, package_ref))
+        })
+        .fold(
+            HashMap::<String, Vec<String>>::new(),
+            |mut acc, (path, package_ref)| {
+                acc.entry(path).or_default().push(package_ref);
+                acc
+            },
+        );
+    let namespace_refs_by_path = current_by_fqn
+        .values()
+        .filter(|record| {
+            matches!(
+                record.language_kind.as_str(),
+                "namespace_declaration" | "file_scoped_namespace_declaration"
+            )
+        })
+        .filter_map(|record| {
+            let source_path = record.symbol_fqn.split_once("::ns::")?.0.to_string();
+            let namespace_ref = record.symbol_fqn.split_once("::ns::")?.1.to_string();
+            Some((source_path, namespace_ref))
+        })
+        .fold(
+            HashMap::<String, Vec<String>>::new(),
+            |mut acc, (path, namespace_ref)| {
+                acc.entry(path).or_default().push(namespace_ref);
+                acc
+            },
+        );
 
     for edge in edges {
         let Some(from_record) = current_by_fqn.get(&edge.from_symbol_fqn) else {
             continue;
         };
+        let source_path = from_record
+            .symbol_fqn
+            .split_once("::")
+            .map(|(path, _)| path)
+            .unwrap_or(from_record.symbol_fqn.as_str());
+        let source_facts = crate::host::language_adapter::LocalSourceFacts {
+            import_refs: import_refs_by_path
+                .get(source_path)
+                .cloned()
+                .unwrap_or_default(),
+            package_refs: package_refs_by_path
+                .get(source_path)
+                .cloned()
+                .unwrap_or_default(),
+            namespace_refs: namespace_refs_by_path
+                .get(source_path)
+                .cloned()
+                .unwrap_or_default(),
+        };
 
+        let resolved_local = edge.to_symbol_ref.as_deref().and_then(|symbol_ref| {
+            crate::host::language_adapter::resolve_local_symbol_ref(
+                language,
+                source_path,
+                edge.edge_kind.as_str(),
+                symbol_ref,
+                &source_facts,
+                &targets,
+            )
+        });
         let resolved_target = edge
             .to_target_symbol_fqn
             .as_ref()
             .and_then(|fqn| current_by_fqn.get(fqn))
             .or_else(|| {
-                if language != "rust" {
-                    return None;
-                }
-                let source_path = from_record.symbol_fqn.split("::").next()?;
-                let symbol_ref = edge.to_symbol_ref.as_deref()?;
-                crate::host::language_adapter::rust_local_symbol_fqn_candidates(
-                    source_path,
-                    symbol_ref,
-                )
-                .into_iter()
-                .find_map(|candidate| current_by_fqn.get(&candidate))
+                resolved_local
+                    .as_ref()
+                    .and_then(|resolved| current_by_fqn.get(&resolved.symbol_fqn))
             });
         let to_artefact_id = resolved_target.map(|record| record.artefact_id.clone());
         let to_symbol_ref = if let Some(record) = resolved_target {
@@ -44,6 +129,10 @@ pub(super) fn build_historical_edge_records(
         } else {
             edge.to_symbol_ref.clone()
         };
+        let edge_kind = resolved_local
+            .as_ref()
+            .map(|resolved| resolved.edge_kind.as_str())
+            .unwrap_or(edge.edge_kind.as_str());
         if to_artefact_id.is_none() && to_symbol_ref.is_none() {
             continue;
         }
@@ -53,7 +142,7 @@ pub(super) fn build_historical_edge_records(
                 "{}|{}|{}|{}|{}|{}|{}",
                 provenance.artefact_identity_scope(),
                 from_record.artefact_id,
-                edge.edge_kind.as_str(),
+                edge_kind,
                 to_artefact_id.clone().unwrap_or_default(),
                 to_symbol_ref.clone().unwrap_or_default(),
                 edge.start_line.unwrap_or(-1),
@@ -64,7 +153,7 @@ pub(super) fn build_historical_edge_records(
             to_symbol_id: resolved_target.map(|record| record.symbol_id.clone()),
             to_artefact_id,
             to_symbol_ref,
-            edge_kind: edge.edge_kind.as_str().to_string(),
+            edge_kind: edge_kind.to_string(),
             language: language.to_string(),
             start_line: edge.start_line,
             end_line: edge.end_line,

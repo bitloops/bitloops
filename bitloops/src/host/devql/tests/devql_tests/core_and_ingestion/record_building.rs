@@ -1,6 +1,56 @@
 use super::*;
 use crate::host::language_adapter::{LanguageKind, TsJsKind};
 
+fn test_symbol_record_with_fqn(
+    cfg: &DevqlConfig,
+    path: &str,
+    blob_sha: &str,
+    symbol_id: &str,
+    symbol_fqn: &str,
+    canonical_kind: &str,
+    language_kind: &str,
+    start_line: i32,
+    end_line: i32,
+) -> PersistedArtefactRecord {
+    let file_symbol_id = file_symbol_id(path);
+    let file_artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &file_symbol_id);
+    PersistedArtefactRecord {
+        symbol_id: symbol_id.to_string(),
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_sha, symbol_id),
+        canonical_kind: Some(canonical_kind.to_string()),
+        language_kind: language_kind.to_string(),
+        symbol_fqn: symbol_fqn.to_string(),
+        parent_symbol_id: Some(file_symbol_id),
+        parent_artefact_id: Some(file_artefact_id),
+        start_line,
+        end_line,
+        start_byte: (start_line - 1) * 10,
+        end_byte: (end_line * 10) + 5,
+        signature: Some(symbol_fqn.rsplit("::").next().unwrap_or("").to_string()),
+        modifiers: vec![],
+        docstring: None,
+        content_hash: format!("hash-{blob_sha}-{symbol_id}"),
+    }
+}
+
+fn unresolved_edge(
+    edge_kind: EdgeKind,
+    from_symbol_fqn: &str,
+    symbol_ref: &str,
+    line: i32,
+    metadata: EdgeMetadata,
+) -> DependencyEdge {
+    DependencyEdge {
+        edge_kind,
+        from_symbol_fqn: from_symbol_fqn.to_string(),
+        to_target_symbol_fqn: None,
+        to_symbol_ref: Some(symbol_ref.to_string()),
+        start_line: Some(line),
+        end_line: Some(line),
+        metadata,
+    }
+}
+
 #[test]
 fn build_file_current_record_preserves_file_metadata() {
     let cfg = test_cfg();
@@ -273,6 +323,297 @@ fn build_historical_edge_records_resolve_explicit_local_rust_symbol_refs() {
         records[0].to_symbol_ref.as_deref(),
         Some(to.symbol_fqn.as_str())
     );
+}
+
+#[test]
+fn build_historical_edge_records_resolve_typescript_relative_symbol_refs() {
+    let cfg = test_cfg();
+    let helper_path = "src/utils.ts";
+    let caller_path = "src/caller.ts";
+    let blob_sha = "blob-ts";
+    let from = test_symbol_record(&cfg, caller_path, blob_sha, "caller-symbol", "caller", 1, 3);
+    let to = test_symbol_record(&cfg, helper_path, blob_sha, "helper-symbol", "helper", 1, 1);
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "typescript",
+        vec![unresolved_edge(
+            EdgeKind::Calls,
+            &from.symbol_fqn,
+            "./utils::helper",
+            2,
+            EdgeMetadata::call(CallForm::Identifier, Resolution::Import),
+        )],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_symbol_ref.as_deref(),
+        Some(to.symbol_fqn.as_str())
+    );
+}
+
+#[test]
+fn build_historical_edge_records_resolve_python_module_symbol_refs() {
+    let cfg = test_cfg();
+    let helper_path = "pkg/helpers.py";
+    let caller_path = "pkg/main.py";
+    let blob_sha = "blob-py";
+    let from = test_symbol_record(&cfg, caller_path, blob_sha, "caller-symbol", "caller", 1, 3);
+    let to = test_symbol_record(&cfg, helper_path, blob_sha, "helper-symbol", "helper", 1, 1);
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "python",
+        vec![unresolved_edge(
+            EdgeKind::Calls,
+            &from.symbol_fqn,
+            "pkg.helpers::helper",
+            2,
+            EdgeMetadata::call(CallForm::Function, Resolution::Import),
+        )],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_symbol_ref.as_deref(),
+        Some(to.symbol_fqn.as_str())
+    );
+}
+
+#[test]
+fn build_historical_edge_records_resolve_go_same_package_symbol_refs() {
+    let cfg = test_cfg();
+    let helper_path = "service/helper.go";
+    let caller_path = "service/run.go";
+    let blob_sha = "blob-go";
+    let from = test_symbol_record(&cfg, caller_path, blob_sha, "caller-symbol", "run", 1, 3);
+    let to = test_symbol_record(&cfg, helper_path, blob_sha, "helper-symbol", "helper", 1, 1);
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "go",
+        vec![unresolved_edge(
+            EdgeKind::Calls,
+            &from.symbol_fqn,
+            "package::service::helper",
+            2,
+            EdgeMetadata::call(CallForm::Function, Resolution::Unresolved),
+        )],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_symbol_ref.as_deref(),
+        Some(to.symbol_fqn.as_str())
+    );
+}
+
+#[test]
+fn build_historical_edge_records_resolve_java_imported_type_call_symbol_refs() {
+    let cfg = test_cfg();
+    let helper_path = "src/com/acme/Util.java";
+    let caller_path = "src/com/acme/Greeter.java";
+    let blob_sha = "blob-java";
+    let from = test_symbol_record_with_fqn(
+        &cfg,
+        caller_path,
+        blob_sha,
+        "caller-symbol",
+        "src/com/acme/Greeter.java::Greeter::greet",
+        "method",
+        "method_declaration",
+        1,
+        3,
+    );
+    let to = test_symbol_record_with_fqn(
+        &cfg,
+        helper_path,
+        blob_sha,
+        "helper-symbol",
+        "src/com/acme/Util.java::Util::helper",
+        "method",
+        "method_declaration",
+        1,
+        1,
+    );
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "java",
+        vec![unresolved_edge(
+            EdgeKind::Calls,
+            &from.symbol_fqn,
+            "com.acme.Util::helper",
+            2,
+            EdgeMetadata::call(CallForm::Associated, Resolution::Import),
+        )],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_symbol_ref.as_deref(),
+        Some(to.symbol_fqn.as_str())
+    );
+}
+
+#[test]
+fn build_historical_edge_records_resolve_csharp_same_namespace_type_symbol_refs() {
+    let cfg = test_cfg();
+    let base_path = "src/BaseService.cs";
+    let caller_path = "src/UserService.cs";
+    let blob_sha = "blob-csharp";
+    let source_namespace = test_symbol_record_with_fqn(
+        &cfg,
+        caller_path,
+        blob_sha,
+        "caller-namespace",
+        "src/UserService.cs::ns::MyApp.Services",
+        "namespace",
+        "file_scoped_namespace_declaration",
+        1,
+        1,
+    );
+    let from = test_symbol_record_with_fqn(
+        &cfg,
+        caller_path,
+        blob_sha,
+        "caller-symbol",
+        "src/UserService.cs::UserService",
+        "class",
+        "class_declaration",
+        2,
+        4,
+    );
+    let target_namespace = test_symbol_record_with_fqn(
+        &cfg,
+        base_path,
+        blob_sha,
+        "target-namespace",
+        "src/BaseService.cs::ns::MyApp.Services",
+        "namespace",
+        "file_scoped_namespace_declaration",
+        1,
+        1,
+    );
+    let to = test_symbol_record_with_fqn(
+        &cfg,
+        base_path,
+        blob_sha,
+        "base-symbol",
+        "src/BaseService.cs::BaseService",
+        "class",
+        "class_declaration",
+        2,
+        2,
+    );
+    let current_by_fqn = [
+        (
+            source_namespace.symbol_fqn.clone(),
+            source_namespace.clone(),
+        ),
+        (from.symbol_fqn.clone(), from.clone()),
+        (
+            target_namespace.symbol_fqn.clone(),
+            target_namespace.clone(),
+        ),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "csharp",
+        vec![unresolved_edge(
+            EdgeKind::Implements,
+            &from.symbol_fqn,
+            "BaseService",
+            2,
+            EdgeMetadata::none(),
+        )],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_symbol_ref.as_deref(),
+        Some(to.symbol_fqn.as_str())
+    );
+    assert_eq!(records[0].edge_kind, "extends");
 }
 
 #[test]
