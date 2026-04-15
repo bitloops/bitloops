@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
-    read_committed, read_session_content, run_git,
+    read_committed, read_session_content, run_git, run_git_bytes,
 };
 use crate::host::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,

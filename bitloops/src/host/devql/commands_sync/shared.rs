@@ -212,7 +212,7 @@ fn parse_json_string_array(raw: Option<&str>) -> Vec<String> {
 pub(super) fn read_effective_content(
     cfg: &DevqlConfig,
     desired: &sync::types::DesiredFileState,
-) -> Result<String> {
+) -> Result<DecodedFileContent> {
     match desired.effective_source {
         sync::types::EffectiveSource::Head => read_blob_content(
             &cfg.repo_root,
@@ -235,8 +235,7 @@ pub(super) fn read_effective_content(
         sync::types::EffectiveSource::Worktree => {
             let raw = fs::read(cfg.repo_root.join(&desired.path))
                 .with_context(|| format!("reading `{}` from worktree", desired.path))?;
-            String::from_utf8(raw)
-                .with_context(|| format!("decoding `{}` from worktree as UTF-8", desired.path))
+            Ok(DecodedFileContent::from_raw_bytes(raw))
         }
     }
 }
@@ -246,8 +245,8 @@ fn read_blob_content(
     blob_sha: &str,
     path: &str,
     source: &str,
-) -> Result<String> {
-    super::git_blob_content(repo_root, blob_sha)
+) -> Result<DecodedFileContent> {
+    super::git_blob_decoded_content(repo_root, blob_sha)
         .ok_or_else(|| anyhow!("missing {source} blob `{blob_sha}` for sync path `{path}`"))
 }
 
