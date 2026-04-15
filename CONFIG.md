@@ -220,11 +220,8 @@ Storage behavior:
 ### Enable / Disable
 
 ```bash
-bitloops enable              # writes to config.json (or config.local.json if shared exists)
-bitloops enable --local      # writes to config.local.json
-bitloops enable --project    # writes to config.json
-bitloops disable             # writes enabled: false to config.local.json
-bitloops disable --project   # writes enabled: false to config.json
+bitloops enable              # writes capture.enabled=true to the nearest repo policy and restores persisted agent surfaces
+bitloops disable             # writes capture.enabled=false to the nearest repo policy and removes persisted agent surfaces
 ```
 
 ### Status

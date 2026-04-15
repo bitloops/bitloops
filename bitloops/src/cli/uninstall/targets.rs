@@ -96,7 +96,7 @@ impl UninstallTarget {
 
     pub(super) fn picker_label(self) -> &'static str {
         match self {
-            Self::AgentHooks => "Agent hooks in known repositories",
+            Self::AgentHooks => "Agent hooks in known Bitloops projects",
             Self::GitHooks => "Git hooks in known repositories",
             Self::Shell => "Shell completion integration",
             Self::Data => "Global data and repo-local `.bitloops/` data",
@@ -109,7 +109,7 @@ impl UninstallTarget {
 
     pub(super) fn summary(self, hook_repo_count: usize, repo_data_count: usize) -> String {
         match self {
-            Self::AgentHooks => format!("Agent hooks in {hook_repo_count} repo(s)"),
+            Self::AgentHooks => format!("Agent hooks in {hook_repo_count} Bitloops project(s)"),
             Self::GitHooks => format!("Git hooks in {hook_repo_count} repo(s)"),
             Self::Shell => "Shell completion integration".to_string(),
             Self::Data => {

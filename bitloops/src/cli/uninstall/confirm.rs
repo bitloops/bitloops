@@ -9,17 +9,26 @@ use super::targets::{ALL_TARGETS, UninstallTarget};
 pub(super) fn confirm_uninstall(
     out: &mut dyn Write,
     targets: &BTreeSet<UninstallTarget>,
+    agent_project_roots: &[PathBuf],
     hook_repo_roots: &[PathBuf],
     repo_data_roots: &[PathBuf],
 ) -> Result<bool> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
-    confirm_uninstall_with_input(out, targets, hook_repo_roots, repo_data_roots, &mut input)
+    confirm_uninstall_with_input(
+        out,
+        targets,
+        agent_project_roots,
+        hook_repo_roots,
+        repo_data_roots,
+        &mut input,
+    )
 }
 
 fn confirm_uninstall_with_input(
     out: &mut dyn Write,
     targets: &BTreeSet<UninstallTarget>,
+    agent_project_roots: &[PathBuf],
     hook_repo_roots: &[PathBuf],
     repo_data_roots: &[PathBuf],
     input: &mut dyn BufRead,
@@ -31,11 +40,16 @@ fn confirm_uninstall_with_input(
         .copied()
         .filter(|target| targets.contains(target))
     {
-        writeln!(
-            out,
-            "  - {}",
-            target.summary(hook_repo_roots.len(), repo_data_roots.len())
-        )?;
+        let summary = match target {
+            UninstallTarget::AgentHooks => {
+                format!(
+                    "Agent hooks in {} Bitloops project(s)",
+                    agent_project_roots.len()
+                )
+            }
+            _ => target.summary(hook_repo_roots.len(), repo_data_roots.len()),
+        };
+        writeln!(out, "  - {summary}")?;
     }
     write!(out, "\nContinue? [y/N]: ")?;
     out.flush()?;
@@ -68,6 +82,7 @@ mod tests {
                 &targets(&[UninstallTarget::AgentHooks]),
                 &[],
                 &[],
+                &[],
                 &mut input,
             )
             .expect("confirmation should succeed");
@@ -83,6 +98,10 @@ mod tests {
         let confirmed = confirm_uninstall_with_input(
             &mut out,
             &targets(&[UninstallTarget::AgentHooks, UninstallTarget::Data]),
+            &[
+                PathBuf::from("/tmp/project-a"),
+                PathBuf::from("/tmp/project-b"),
+            ],
             &[PathBuf::from("/tmp/repo-a"), PathBuf::from("/tmp/repo-b")],
             &[PathBuf::from("/tmp/repo-a")],
             &mut input,
@@ -93,7 +112,7 @@ mod tests {
 
         let output = String::from_utf8(out).expect("output should be utf-8");
         assert!(output.contains("This will remove the following Bitloops artefacts:"));
-        assert!(output.contains("Agent hooks in 2 repo(s)"));
+        assert!(output.contains("Agent hooks in 2 Bitloops project(s)"));
         assert!(output.contains("Global data directory and .bitloops dirs in 1 repo(s)"));
         assert!(output.contains("Continue? [y/N]: "));
     }
