@@ -413,13 +413,13 @@ fn running_bootstrap_task_json(task_id: &str) -> serde_json::Value {
 }
 
 #[test]
-fn init_args_supports_agent_flag() {
-    let parsed =
-        Cli::try_parse_from(["bitloops", "init", "--agent", "cursor"]).expect("parse init");
+fn init_args_supports_repeated_agent_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--agent", "cursor", "--agent", "codex"])
+        .expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
         panic!("expected init command");
     };
-    assert_eq!(args.agent.as_deref(), Some("cursor"));
+    assert_eq!(args.agent, vec!["cursor".to_string(), "codex".to_string()]);
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: Some(DEFAULT_AGENT.to_string()),
+                agent: vec![DEFAULT_AGENT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -597,6 +597,55 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
 }
 
 #[test]
+fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agents() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let select = |_choices: &[String]| -> std::result::Result<Vec<String>, String> {
+            panic!("selector should not run when --agent is provided")
+        };
+
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: vec![
+                    "Cursor".to_string(),
+                    AGENT_CURSOR.to_string(),
+                    "Gemini".to_string(),
+                ],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+            },
+            repo.path(),
+            &mut out,
+            Some(&select),
+        )
+        .expect("run init");
+
+        assert_eq!(
+            crate::cli::enable::initialized_agents(repo.path()),
+            vec![AGENT_CURSOR.to_string(), AGENT_GEMINI.to_string()]
+        );
+        assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(
+            repo.path()
+                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
 fn run_init_persists_scope_exclusions_and_preserves_unrelated_local_settings() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
@@ -616,7 +665,7 @@ keep = true
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -665,7 +714,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -711,7 +760,7 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -756,7 +805,7 @@ fn run_init_rewrites_existing_daemon_binding() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -809,7 +858,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_CURSOR.to_string()),
+                agent: vec![AGENT_CURSOR.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -858,7 +907,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                     InitArgs {
                         install_default_daemon: false,
                         force: true,
-                        agent: Some(AGENT_CODEX.to_string()),
+                        agent: vec![AGENT_CODEX.to_string()],
                         telemetry: None,
                         no_telemetry: false,
                         skip_baseline: true,
@@ -903,7 +952,7 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_GEMINI.to_string()),
+                agent: vec![AGENT_GEMINI.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -942,7 +991,7 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_NAME_COPILOT.to_string()),
+                agent: vec![AGENT_NAME_COPILOT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -979,7 +1028,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_NAME_OPEN_CODE.to_string()),
+                agent: vec![AGENT_NAME_OPEN_CODE.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -1000,6 +1049,41 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
             repo.path()
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_invalid_explicit_agent_errors() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let err = run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: vec![AGENT_CURSOR.to_string(), "not-a-real-agent".to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect_err("invalid explicit agent should fail");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("unknown agent name: not-a-real-agent"),
+            "unexpected error: {rendered}"
         );
     });
 }
@@ -1214,7 +1298,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
                             skip_baseline: false,
@@ -1267,7 +1351,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
                             skip_baseline: false,
@@ -1306,7 +1390,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                 InitArgs {
                     install_default_daemon: true,
                     force: false,
-                    agent: None,
+                    agent: Vec::new(),
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: false,
@@ -1357,7 +1441,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
@@ -1423,7 +1507,7 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
                                 InitArgs {
                                     install_default_daemon: false,
                                     force: false,
-                                    agent: None,
+                                    agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
                                     skip_baseline: false,
@@ -1566,7 +1650,7 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                                 InitArgs {
                                                                                     install_default_daemon: true,
                                                                                     force: false,
-                                                                                    agent: None,
+                                                                                    agent: Vec::new(),
                                                                                     telemetry: Some(false),
                                                                                     no_telemetry: false,
                                                                                     skip_baseline: false,
@@ -1672,7 +1756,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 InitArgs {
                                     install_default_daemon: true,
                                     force: false,
-                                    agent: None,
+                                    agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
                                     skip_baseline: false,
@@ -1910,7 +1994,7 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    agent: None,
+                                                    agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
                                                     skip_baseline: false,
@@ -2107,7 +2191,7 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    agent: None,
+                                                    agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
                                                     skip_baseline: false,
@@ -2298,7 +2382,7 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                                                                 InitArgs {
                                                                                     install_default_daemon: true,
                                                                                     force: false,
-                                                                                    agent: None,
+                                                                                    agent: Vec::new(),
                                                                                     telemetry: Some(false),
                                                                                     no_telemetry: false,
                                                                                     skip_baseline: false,
@@ -2391,7 +2475,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
@@ -2430,7 +2514,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                 InitArgs {
                     install_default_daemon: false,
                     force: false,
-                    agent: None,
+                    agent: Vec::new(),
                     telemetry: Some(false),
                     no_telemetry: false,
                     skip_baseline: false,
@@ -2565,7 +2649,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            agent: None,
+                                            agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
                                             skip_baseline: false,
@@ -2711,7 +2795,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            agent: None,
+                                            agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
                                             skip_baseline: false,
