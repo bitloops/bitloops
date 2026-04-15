@@ -195,17 +195,18 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                     job.mailbox_name
                 ));
             };
-            let inputs = match load_workplane_job_inputs(&relational, job).await {
-                Ok(inputs) => inputs,
-                Err(err) => return JobExecutionOutcome::failed(err),
-            };
+            let (scope, path, content_id, inputs) =
+                match load_workplane_embedding_refresh_inputs(&relational, job).await {
+                    Ok(inputs) => inputs,
+                    Err(err) => return JobExecutionOutcome::failed(err),
+                };
             if inputs.is_empty() {
                 return JobExecutionOutcome::ok();
             }
             let payload = SymbolEmbeddingsRefreshPayload {
-                scope: SymbolEmbeddingsRefreshScope::Historical,
-                path: None,
-                content_id: None,
+                scope,
+                path,
+                content_id,
                 inputs,
                 expected_input_hashes: BTreeMap::new(),
                 representation_kind,
@@ -447,6 +448,55 @@ async fn load_workplane_job_inputs(
         std::slice::from_ref(&artefact_id),
     )
     .await
+}
+
+async fn load_workplane_embedding_refresh_inputs(
+    relational: &RelationalStorage,
+    job: &WorkplaneJobRecord,
+) -> Result<(
+    SymbolEmbeddingsRefreshScope,
+    Option<String>,
+    Option<String>,
+    Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>,
+)> {
+    if payload_is_repo_backfill(&job.payload) {
+        return Ok((
+            SymbolEmbeddingsRefreshScope::Historical,
+            None,
+            None,
+            load_repo_backfill_inputs(relational, job).await?,
+        ));
+    }
+
+    let Some(artefact_id) = payload_artefact_id(&job.payload) else {
+        anyhow::bail!("workplane mailbox job missing artefact id");
+    };
+    let current_inputs =
+        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
+            .await?
+            .into_iter()
+            .filter(|input| input.artefact_id == artefact_id)
+            .collect::<Vec<_>>();
+    if let Some(first) = current_inputs.first() {
+        let single_path = current_inputs
+            .iter()
+            .all(|input| input.path == first.path && input.blob_sha == first.blob_sha);
+        if single_path {
+            return Ok((
+                SymbolEmbeddingsRefreshScope::CurrentPath,
+                Some(first.path.clone()),
+                Some(first.blob_sha.clone()),
+                current_inputs,
+            ));
+        }
+    }
+
+    Ok((
+        SymbolEmbeddingsRefreshScope::Historical,
+        None,
+        None,
+        load_workplane_job_inputs(relational, job).await?,
+    ))
 }
 
 async fn load_repo_backfill_inputs(

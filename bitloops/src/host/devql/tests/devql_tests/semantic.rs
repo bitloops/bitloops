@@ -390,7 +390,10 @@ fn load_current_embedding_rows(sqlite_path: &Path, repo_id: &str) -> Vec<Current
         .prepare(
             "SELECT a.symbol_fqn, a.path, e.representation_kind, e.provider, e.model, e.dimension, e.embedding_input_hash
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY a.path, a.start_line, a.symbol_fqn, e.representation_kind",
         )
@@ -432,7 +435,10 @@ fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(Stri
         .prepare(
             "SELECT DISTINCT e.provider, e.model, e.dimension
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY e.provider, e.model, e.dimension",
         )
@@ -446,7 +452,7 @@ fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(Stri
 fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
     conn.query_row(
-        "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+        "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
         [repo_id],
         |row| row.get(0),
     )
@@ -506,13 +512,26 @@ async fn run_direct_ingest_with_env(
     let relational = RelationalStorage::connect(&cfg, &backends.relational, "direct ingest test")
         .await
         .expect("connect relational storage for direct ingest test");
-    execute_sync(
-        &cfg,
-        &relational,
-        crate::host::devql::sync::types::SyncMode::Full,
-    )
-    .await
-    .expect("seed current state before direct ingest");
+    let current_state_seeded = {
+        let conn = rusqlite::Connection::open(checkpoint_sqlite_path(repo_root))
+            .expect("open sqlite db for current-state seed check");
+        conn.query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count current artefacts before direct ingest")
+            > 0
+    };
+    if !current_state_seeded {
+        execute_sync(
+            &cfg,
+            &relational,
+            crate::host::devql::sync::types::SyncMode::Full,
+        )
+        .await
+        .expect("seed current state before direct ingest");
+    }
     let capability = crate::config::resolve_embedding_capability_config_for_repo(repo_root);
     let gateway = crate::host::inference::LocalInferenceGateway::new(
         repo_root,
@@ -593,7 +612,11 @@ async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
     let active_setup =
         load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
 
-    assert_eq!(second.symbol_embedding_rows_upserted, first_rows.len());
+    assert_eq!(
+        second.symbol_embedding_rows_upserted,
+        second_hashes.len() * 2
+    );
+    assert!(!second_hashes.is_empty());
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
         vec![(TEST_EMBEDDINGS_DRIVER.to_string(), "model-b".to_string(), 3)]
@@ -612,12 +635,12 @@ async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
             .setup_fingerprint,
         )
     );
-    for (symbol_fqn, first_hash) in first_hashes {
+    for (symbol_fqn, second_hash) in &second_hashes {
         assert_ne!(
-            second_hashes
-                .get(&symbol_fqn)
-                .expect("symbol hash after refresh"),
-            &first_hash
+            first_hashes
+                .get(symbol_fqn)
+                .expect("symbol hash before refresh"),
+            second_hash
         );
     }
     assert!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0);
@@ -698,7 +721,11 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
     let active_setup =
         load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
 
-    assert_eq!(second.symbol_embedding_rows_upserted, first_rows.len());
+    assert_eq!(
+        second.symbol_embedding_rows_upserted,
+        second_hashes.len() * 2
+    );
+    assert!(!second_hashes.is_empty());
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
         vec![(
@@ -721,12 +748,12 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
             .setup_fingerprint,
         )
     );
-    for (symbol_fqn, first_hash) in first_hashes {
+    for (symbol_fqn, second_hash) in &second_hashes {
         assert_ne!(
-            second_hashes
-                .get(&symbol_fqn)
-                .expect("symbol hash after dimension refresh"),
-            &first_hash
+            first_hashes
+                .get(symbol_fqn)
+                .expect("symbol hash before dimension refresh"),
+            second_hash
         );
     }
     assert!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0);

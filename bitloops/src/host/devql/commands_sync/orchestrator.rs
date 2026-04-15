@@ -4,10 +4,16 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
-use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
+#[path = "orchestrator/semantic_projection.rs"]
+mod semantic_projection;
+
+use self::semantic_projection::{
+    build_current_projection_context, finalize_semantic_clone_projection_after_sync,
+    project_materialized_items,
+};
 use super::diff_collector::SyncDiffCollector;
 use super::progress::{SyncObserver, SyncProgressPhase, emit_progress};
 use super::shared::{
@@ -355,6 +361,7 @@ async fn execute_sync_inner(
         .await
         .context("opening persistent SQLite sync writer")?;
     let current_projection = build_current_projection_context(cfg)?;
+    let mut current_projection_changed = false;
     let removals = classified
         .iter()
         .filter(|path| matches!(path.action, sync::types::PathAction::Removed))
@@ -382,6 +389,9 @@ async fn execute_sync_inner(
                 .with_context(|| {
                     format!("removing current semantic clone projection for `{path}`")
                 })?;
+        }
+        if !outcome.removed_paths.is_empty() {
+            current_projection_changed = true;
         }
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
@@ -500,6 +510,7 @@ async fn execute_sync_inner(
                                 extracted_completed,
                                 &mut materialized_completed,
                                 &mut paths_completed,
+                                &mut current_projection_changed,
                             )
                             .await?;
                         }
@@ -524,6 +535,7 @@ async fn execute_sync_inner(
                             extracted_completed,
                             &mut materialized_completed,
                             &mut paths_completed,
+                            &mut current_projection_changed,
                         )
                         .await?;
                     }
@@ -577,6 +589,7 @@ async fn execute_sync_inner(
                         extracted_completed,
                         &mut materialized_completed,
                         &mut paths_completed,
+                        &mut current_projection_changed,
                     )
                     .await?;
                 }
@@ -603,6 +616,7 @@ async fn execute_sync_inner(
         extracted_completed,
         &mut materialized_completed,
         &mut paths_completed,
+        &mut current_projection_changed,
     )
     .await?;
 
@@ -616,6 +630,14 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
+
+    finalize_semantic_clone_projection_after_sync(
+        cfg,
+        relational,
+        &current_projection,
+        current_projection_changed,
+    )
+    .await?;
 
     emit_progress(
         observer,
@@ -822,6 +844,7 @@ async fn flush_pending_materialisations(
     extracted_completed: usize,
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
+    current_projection_changed: &mut bool,
 ) -> Result<()> {
     if !writer.has_pending_items() {
         return Ok(());
@@ -841,6 +864,7 @@ async fn flush_pending_materialisations(
         )
         .await
         .context("projecting current semantic clone rows for synced paths")?;
+        *current_projection_changed = true;
     }
     for artefact in outcome.pre_artefacts.clone() {
         diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
@@ -910,64 +934,6 @@ fn estimate_sync_progress_paths_completed(
     unchanged_total
         .saturating_add(removed_completed)
         .saturating_add(transform_credit)
-}
-
-fn build_current_projection_context(cfg: &DevqlConfig) -> Result<DevqlCapabilityHost> {
-    build_capability_host(&cfg.repo_root, cfg.repo.clone())
-}
-
-async fn project_materialized_items(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    current_projection: &DevqlCapabilityHost,
-    items: &[super::sqlite_writer::PreparedSyncItem],
-) -> Result<()> {
-    for item in items {
-        if !item.semantic_projection_allowed {
-            sync::semantic_projector::remove_path(cfg, relational, &item.desired.path)
-                .await
-                .with_context(|| {
-                    format!(
-                        "clearing current semantic clone projection for `{}`",
-                        item.desired.path
-                    )
-                })?;
-            continue;
-        }
-        let inputs =
-            semantic_features::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-                &sync::semantic_projector::pre_stage_artefacts_for_projection(
-                    cfg,
-                    &item.desired,
-                    &item.extraction,
-                )?,
-                &sync::semantic_projector::pre_stage_dependencies_for_projection(
-                    cfg,
-                    &item.desired,
-                    &item.extraction,
-                )?,
-                &item.effective_content,
-            );
-        current_projection
-            .invoke_ingester_with_relational(
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
-                serde_json::to_value(
-                    crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshPayload {
-                        scope: crate::capability_packs::semantic_clones::ingesters::SemanticFeaturesRefreshScope::CurrentPath,
-                        path: Some(item.desired.path.clone()),
-                        content_id: Some(item.desired.effective_content_id.clone()),
-                        inputs: inputs.clone(),
-                        mode: crate::capability_packs::semantic_clones::ingesters::SemanticSummaryRefreshMode::ConfiguredDegrade,
-                    }
-                )?,
-                Some(relational),
-            )
-            .await
-            .with_context(|| format!("refreshing current semantic features for `{}`", item.desired.path))?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

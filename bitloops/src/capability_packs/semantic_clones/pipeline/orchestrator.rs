@@ -10,8 +10,7 @@ use super::persistence::replace_repo_symbol_clone_edges_for_projection;
 use super::schema::{CloneProjection, ensure_semantic_clones_schema};
 use super::state::resolve_active_embedding_states_for_clone_rebuild;
 
-/// Rebuilds the historical clone-edge projection and synchronises the current
-/// projection from the persisted historical result.
+/// Rebuilds the historical clone-edge projection.
 pub(crate) async fn rebuild_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -24,22 +23,19 @@ pub(crate) async fn rebuild_symbol_clone_edges(
     .await
 }
 
-/// Rebuilds the historical clone-edge projection and synchronises the current
-/// projection from the persisted historical result.
+/// Rebuilds the historical clone-edge projection.
 pub(crate) async fn rebuild_symbol_clone_edges_with_options(
     relational: &RelationalStorage,
     repo_id: &str,
     options: scoring::CloneScoringOptions,
 ) -> Result<scoring::SymbolCloneBuildResult> {
-    let historical = rebuild_symbol_clone_edges_for_projection(
+    rebuild_symbol_clone_edges_for_projection(
         relational,
         repo_id,
         CloneProjection::Historical,
         options,
     )
-    .await?;
-    sync_current_symbol_clone_edges_from_historical(relational, repo_id, &historical).await?;
-    Ok(historical)
+    .await
 }
 
 #[allow(dead_code)]
@@ -88,22 +84,6 @@ async fn rebuild_symbol_clone_edges_for_projection(
     )
     .await?;
     Ok(build_result)
-}
-
-async fn sync_current_symbol_clone_edges_from_historical(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    historical: &scoring::SymbolCloneBuildResult,
-) -> Result<()> {
-    // Keep current projection in sync with the default historical rebuild path used by
-    // ingestion and fixtures, even when Stage 1 and 2 current tables are not populated.
-    replace_repo_symbol_clone_edges_for_projection(
-        relational,
-        repo_id,
-        CloneProjection::Current,
-        &historical.edges,
-    )
-    .await
 }
 
 pub(crate) async fn score_symbol_clone_edges_for_source_with_options(
