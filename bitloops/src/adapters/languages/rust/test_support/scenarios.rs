@@ -136,12 +136,64 @@ fn collect_rust_test_scenarios(
     ));
     scenarios.extend(collect_rust_proptest_scenarios(root, source, relative_path));
     scenarios.extend(collect_rust_doctest_scenarios(root, source, relative_path));
+    scenarios = canonicalize_rust_discovered_scenarios(scenarios);
     scenarios.sort_by(|a, b| {
         a.suite_start_line
             .cmp(&b.suite_start_line)
             .then(a.scenario.start_line.cmp(&b.scenario.start_line))
+            .then(a.scenario.name.cmp(&b.scenario.name))
     });
     scenarios
+}
+
+fn canonicalize_rust_discovered_scenarios(
+    scenarios: Vec<RustDiscoveredScenario>,
+) -> Vec<RustDiscoveredScenario> {
+    let mut merged: Vec<RustDiscoveredScenario> = Vec::new();
+    let mut index_by_identity: std::collections::HashMap<(String, String, String), usize> =
+        std::collections::HashMap::new();
+
+    for scenario in scenarios {
+        let key = (
+            scenario.suite_name.clone(),
+            scenario.scenario.name.clone(),
+            scenario.scenario.discovery_source.as_str().to_string(),
+        );
+
+        if let Some(existing_index) = index_by_identity.get(&key).copied() {
+            let existing = &mut merged[existing_index];
+            existing.suite_start_line = existing.suite_start_line.min(scenario.suite_start_line);
+            existing.suite_end_line = existing.suite_end_line.max(scenario.suite_end_line);
+            existing.scenario.start_line = existing
+                .scenario
+                .start_line
+                .min(scenario.scenario.start_line);
+            existing.scenario.end_line = existing.scenario.end_line.max(scenario.scenario.end_line);
+            merge_reference_candidates(
+                &mut existing.scenario.reference_candidates,
+                scenario.scenario.reference_candidates,
+            );
+            continue;
+        }
+
+        index_by_identity.insert(key, merged.len());
+        merged.push(scenario);
+    }
+
+    merged
+}
+
+fn merge_reference_candidates(
+    target: &mut Vec<ReferenceCandidate>,
+    additional: Vec<ReferenceCandidate>,
+) {
+    let mut seen: std::collections::HashSet<ReferenceCandidate> = target.iter().cloned().collect();
+
+    for candidate in additional {
+        if seen.insert(candidate.clone()) {
+            target.push(candidate);
+        }
+    }
 }
 
 fn rust_test_scenarios_for_function(

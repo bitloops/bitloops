@@ -6,7 +6,7 @@ use crate::host::language_adapter::{
     DiscoveredTestScenario, ReferenceCandidate, ScenarioDiscoverySource,
 };
 
-use super::attributes::find_matching_delimiter;
+use super::attributes::{find_matching_delimiter, split_top_level_arguments};
 use super::scenarios::{RustDiscoveredScenario, rust_suite_for_node};
 
 pub(crate) fn collect_rust_macro_generated_scenarios(
@@ -28,7 +28,7 @@ pub(crate) fn collect_rust_macro_generated_scenarios(
             && let Some(macro_name) = extract_rust_macro_invocation_name(raw_invocation)
             && test_macro_names.contains(macro_name)
             && let Some(body) = extract_rust_macro_invocation_body(raw_invocation)
-            && let Some(scenario_name) = extract_first_identifier_token(body)
+            && let Some(scenario_name) = extract_macro_generated_scenario_name(macro_name, body)
         {
             let (suite_name, suite_start_line, suite_end_line) =
                 rust_suite_for_node(node, source, relative_path);
@@ -56,6 +56,31 @@ pub(crate) fn collect_rust_macro_generated_scenarios(
     }
 
     scenarios
+}
+
+fn extract_macro_generated_scenario_name(macro_name: &str, body: &str) -> Option<String> {
+    let arguments = split_top_level_arguments(body);
+    if arguments.is_empty() {
+        return None;
+    }
+
+    match macro_name {
+        "matched" => extract_matched_macro_case_name(&arguments),
+        _ => extract_identifier_argument(arguments[0]),
+    }
+}
+
+fn extract_matched_macro_case_name(arguments: &[&str]) -> Option<String> {
+    match arguments {
+        [first, second, ..] if first.trim() == "not" => extract_identifier_argument(second),
+        [first, ..] => extract_identifier_argument(first),
+        [] => None,
+    }
+}
+
+fn extract_identifier_argument(argument: &str) -> Option<String> {
+    let trimmed = argument.trim();
+    is_rust_identifier(trimmed).then(|| trimmed.to_string())
 }
 
 pub(crate) fn collect_rust_proptest_scenarios(
@@ -201,29 +226,6 @@ fn extract_rust_macro_invocation_name(raw_invocation: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-fn extract_first_identifier_token(raw: &str) -> Option<String> {
-    let mut chars = raw.char_indices().peekable();
-
-    while let Some((start, ch)) = chars.next() {
-        if !is_rust_identifier_start(ch) {
-            continue;
-        }
-
-        let mut end = start + ch.len_utf8();
-        while let Some((idx, next)) = chars.peek().copied() {
-            if !is_rust_identifier_continue(next) {
-                break;
-            }
-            end = idx + next.len_utf8();
-            chars.next();
-        }
-
-        return Some(raw[start..end].to_string());
-    }
-
-    None
-}
-
 fn extract_callable_symbols_from_rust_text(raw: &str) -> HashSet<String> {
     let mut symbols = HashSet::new();
     let chars: Vec<char> = raw.chars().collect();
@@ -279,6 +281,11 @@ fn is_rust_identifier_start(ch: char) -> bool {
 
 fn is_rust_identifier_continue(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn is_rust_identifier(raw: &str) -> bool {
+    raw.chars().next().is_some_and(is_rust_identifier_start)
+        && raw.chars().all(is_rust_identifier_continue)
 }
 
 fn is_rust_non_callable_token(token: &str) -> bool {
