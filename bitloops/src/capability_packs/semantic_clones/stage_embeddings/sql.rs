@@ -49,10 +49,18 @@ pub(super) fn build_current_repo_embedding_states_sql(
         })
         .unwrap_or_default();
     format!(
-        "SELECT DISTINCT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
-FROM artefacts_current a \
-JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
-WHERE a.repo_id = '{repo_id}' {representation_filter} \
+        "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
+FROM ( \
+    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
+    FROM artefacts_current a \
+    JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
+    WHERE a.repo_id = '{repo_id}' {representation_filter} \
+    UNION \
+    SELECT e.representation_kind AS representation_kind, e.provider AS provider, e.model AS model, e.dimension AS dimension, e.setup_fingerprint AS setup_fingerprint \
+    FROM artefacts_current a \
+    JOIN symbol_embeddings e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
+    WHERE a.repo_id = '{repo_id}' {representation_filter} \
+) setups \
 ORDER BY representation_kind, provider, model, dimension, setup_fingerprint",
         repo_id = esc_pg(repo_id),
         representation_filter = representation_filter,

@@ -1982,10 +1982,7 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
 
                                         assert_eq!(
                                             &*sync_events.borrow(),
-                                            &[
-                                                "init".to_string(),
-                                                "init".to_string()
-                                            ]
+                                            &["init".to_string(), "init".to_string()]
                                         );
                                     },
                                 );

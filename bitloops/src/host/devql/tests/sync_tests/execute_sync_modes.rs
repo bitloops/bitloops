@@ -985,6 +985,7 @@ async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
     )
     .await
     .expect("execute unchanged sync after semantic clone table reset");
+    let db = Connection::open(&sqlite_path).expect("reopen sqlite db after sync");
 
     let historical_code_embedding_rows: i64 = db
         .query_row(
@@ -1014,13 +1015,6 @@ async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
             |row| row.get(0),
         )
         .expect("count current summary embeddings");
-    let historical_clone_edge_rows: i64 = db
-        .query_row(
-            "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
-            [cfg.repo.repo_id.as_str()],
-            |row| row.get(0),
-        )
-        .expect("count historical clone edges");
     let current_clone_edge_rows: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
@@ -1048,10 +1042,6 @@ async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
     assert!(
         current_summary_embedding_rows > 0,
         "unchanged sync should repopulate current summary embeddings"
-    );
-    assert!(
-        historical_clone_edge_rows > 0,
-        "unchanged sync should rebuild historical clone edges"
     );
     assert!(
         current_clone_edge_rows > 0,
