@@ -22,6 +22,7 @@ pub mod root;
 pub(crate) mod telemetry_consent;
 pub mod uninstall;
 pub mod versioncheck;
+pub(crate) mod agent_surfaces;
 
 /// Bitloops CLI
 #[derive(Parser)]

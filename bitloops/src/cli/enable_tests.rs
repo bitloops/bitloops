@@ -473,6 +473,38 @@ enabled = true
 }
 
 #[test]
+fn run_disable_removes_selected_agent_surfaces_and_preserves_git_hooks() {
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["codex"]
+"#,
+        );
+        git_hooks::install_git_hooks(dir.path(), false).unwrap();
+        crate::adapters::agents::codex::hooks::install_hooks_at(dir.path(), false, false).unwrap();
+
+        let mut out = Vec::new();
+        run_disable(dir.path(), &mut out, false).unwrap();
+
+        assert!(!crate::adapters::agents::codex::hooks::are_hooks_installed_at(dir.path()));
+        assert!(!dir.path().join(".agents/skills/bitloops/using-devql/SKILL.md").exists());
+        assert!(git_hooks::is_git_hook_installed(dir.path()));
+
+        let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+        assert!(policy.contains("enabled = false"));
+        assert!(policy.contains("supported = [\"codex\"]"));
+    });
+}
+
+#[test]
 fn run_disable_already_disabled() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -631,6 +663,41 @@ enabled = true
         project_content.contains("enabled = false"),
         "project settings should be disabled in place: {project_content}"
     );
+}
+
+#[test]
+fn supported_agents_normalizes_aliases_and_deduplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["Gemini", "gemini", "cursor"]
+"#,
+    );
+
+    let agents = crate::config::settings::supported_agents(dir.path()).unwrap();
+    assert_eq!(agents, vec!["gemini".to_string(), "cursor".to_string()]);
+}
+
+#[test]
+fn supported_agents_returns_empty_when_agents_supported_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+enabled = true
+"#,
+    );
+
+    let agents = crate::config::settings::supported_agents(dir.path()).unwrap();
+    assert!(agents.is_empty());
 }
 
 #[test]
@@ -1364,6 +1431,81 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
         assert!(!dir.path().join(".claude/settings.json").exists());
         assert!(!git_hooks::is_git_hook_installed(dir.path()));
     });
+}
+
+#[test]
+fn run_enable_requires_persisted_supported_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+"#,
+    );
+
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
+        let err = run_enable_command(EnableArgs {
+            local: false,
+            project: false,
+            force: false,
+            agent: None,
+            telemetry: Some(false),
+            no_telemetry: false,
+            install_embeddings: false,
+        })
+        .unwrap_err();
+
+        assert!(format!("{err:#}").contains("bitloops init"));
+        assert!(!dir.path().join(".claude/settings.json").exists());
+    });
+}
+
+#[test]
+fn run_enable_reinstalls_supported_agent_surfaces_from_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+
+[agents]
+supported = ["cursor", "gemini"]
+"#,
+    );
+
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
+        let mut out = Vec::new();
+        let mut input = std::io::Cursor::new("");
+        let runtime = test_runtime();
+        runtime
+            .block_on(run_with_io(
+                EnableArgs {
+                    local: false,
+                    project: false,
+                    force: false,
+                    agent: None,
+                    telemetry: Some(false),
+                    no_telemetry: false,
+                    install_embeddings: false,
+                },
+                &mut out,
+                &mut input,
+            ))
+            .unwrap();
+    });
+
+    assert!(dir.path().join(".cursor/hooks.json").exists());
+    assert!(dir.path().join(".cursor/rules/bitloops-using-devql.mdc").exists());
+    assert!(dir.path().join(".gemini/skills/bitloops/using-devql/SKILL.md").exists());
+    let gemini_md = std::fs::read_to_string(dir.path().join("GEMINI.md")).unwrap();
+    assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+    assert!(git_hooks::is_git_hook_installed(dir.path()));
 }
 
 #[test]

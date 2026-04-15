@@ -4,29 +4,32 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::adapters::agents::claude_code::git_hooks;
-use crate::cli::enable;
 
-pub(super) fn uninstall_agent_hooks(repo_roots: &[PathBuf], out: &mut dyn Write) -> Result<()> {
-    if repo_roots.is_empty() {
-        writeln!(out, "  No known repositories found for agent hook removal.")?;
+pub(super) fn uninstall_agent_hooks(project_roots: &[PathBuf], out: &mut dyn Write) -> Result<()> {
+    if project_roots.is_empty() {
+        writeln!(out, "  No known Bitloops projects found for agent hook removal.")?;
         return Ok(());
     }
 
-    let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
-    let mut removed = 0usize;
-
-    for repo_root in repo_roots {
-        let installed = registry.installed_agents(repo_root);
-        if installed.is_empty() {
+    let mut removed_projects = 0usize;
+    for project_root in project_roots {
+        let configured = crate::config::settings::supported_agents(project_root).unwrap_or_default();
+        let mut project_out = Vec::new();
+        let removed = crate::cli::agent_surfaces::uninstall_project_agent_surfaces(
+            project_root,
+            &configured,
+            &mut project_out,
+        )?;
+        if removed == 0 {
             continue;
         }
 
-        writeln!(out, "  Agent hooks: {}", repo_root.display())?;
-        enable::remove_agent_hooks(repo_root, out)?;
-        removed += installed.len();
+        writeln!(out, "  Agent hooks: {}", project_root.display())?;
+        write!(out, "{}", String::from_utf8(project_out).unwrap())?;
+        removed_projects += 1;
     }
 
-    if removed == 0 {
+    if removed_projects == 0 {
         writeln!(out, "  No agent hooks found.")?;
     }
 

@@ -21,7 +21,7 @@ use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
     detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
-    normalize_cli_exclusions, normalize_exclude_from_paths, reconcile_agent_hooks,
+    normalize_cli_exclusions, normalize_exclude_from_paths,
     should_configure_summaries_during_init, should_install_embeddings_during_init,
     should_run_initial_ingest, should_run_initial_sync,
 };
@@ -113,7 +113,7 @@ pub(super) async fn run_for_project_root(
         writeln!(out, "Installed {git_count} git hook(s).")?;
     }
 
-    reconcile_agent_hooks(
+    crate::cli::agent_surfaces::reconcile_project_agent_surfaces(
         project_root,
         &selected_agents,
         settings.local_dev,

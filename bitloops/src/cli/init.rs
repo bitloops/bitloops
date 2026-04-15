@@ -6,7 +6,6 @@ use clap::Args;
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
 
-use crate::adapters::agents::AgentAdapterRegistry;
 use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
 use crate::cli::inference::summary_generation_configured;
 use crate::cli::telemetry_consent;
@@ -448,40 +447,6 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
 
     std::fs::write(&exclude_path, content)
         .with_context(|| format!("writing {}", exclude_path.display()))?;
-    Ok(())
-}
-
-fn reconcile_agent_hooks(
-    project_root: &Path,
-    selected_agents: &[String],
-    local_dev: bool,
-    force: bool,
-    out: &mut dyn Write,
-) -> Result<()> {
-    let registry = AgentAdapterRegistry::builtin();
-    let selected = selected_agents
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-
-    for agent in registry.installed_agents(project_root) {
-        if selected.contains(&agent) {
-            continue;
-        }
-        let label = registry.uninstall_agent_hooks(project_root, &agent)?;
-        writeln!(out, "Removed {label} hooks.")?;
-    }
-
-    for agent in selected_agents {
-        let (label, installed) =
-            registry.install_agent_hooks(project_root, agent, local_dev, force)?;
-        if installed > 0 {
-            writeln!(out, "Installed {installed} {label} hook(s).")?;
-        } else {
-            writeln!(out, "{label} hooks are already initialised.")?;
-        }
-    }
-
     Ok(())
 }
 
