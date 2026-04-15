@@ -127,13 +127,16 @@ fn discover_bitloops_project_roots() -> Result<Vec<PathBuf>> {
         if !registry.installed_agents(&git_root).is_empty() {
             roots.insert(git_root.clone());
         }
-        for entry in walkdir::WalkDir::new(&git_root).into_iter().filter_entry(|entry| {
-            if !entry.file_type().is_dir() {
-                return true;
-            }
-            let name = entry.file_name().to_string_lossy();
-            !should_skip_project_discovery_dir(name.as_ref())
-        }) {
+        for entry in walkdir::WalkDir::new(&git_root)
+            .into_iter()
+            .filter_entry(|entry| {
+                if !entry.file_type().is_dir() {
+                    return true;
+                }
+                let name = entry.file_name().to_string_lossy();
+                !should_skip_project_discovery_dir(name.as_ref())
+            })
+        {
             let Ok(entry) = entry else {
                 continue;
             };
@@ -182,7 +185,10 @@ mod tests {
             "dist",
             "build",
         ] {
-            assert!(should_skip_project_discovery_dir(name), "{name} should be skipped");
+            assert!(
+                should_skip_project_discovery_dir(name),
+                "{name} should be skipped"
+            );
         }
     }
 

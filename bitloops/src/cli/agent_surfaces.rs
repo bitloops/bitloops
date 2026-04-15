@@ -31,7 +31,10 @@ pub(crate) fn reconcile_project_agent_surfaces(
             continue;
         }
         let label = registry.uninstall_agent_hooks(project_root, &agent)?;
-        writeln!(out, "Ensured {label} hooks and prompt surfaces are removed.")?;
+        writeln!(
+            out,
+            "Ensured {label} hooks and prompt surfaces are removed."
+        )?;
     }
 
     for agent in selected_agents {
@@ -79,7 +82,10 @@ pub(crate) fn cleanup_project_agent_surfaces(
 
     for agent in &candidates {
         let label = registry.uninstall_agent_hooks(project_root, agent)?;
-        writeln!(out, "Ensured {label} hooks and prompt surfaces are removed.")?;
+        writeln!(
+            out,
+            "Ensured {label} hooks and prompt surfaces are removed."
+        )?;
     }
 
     Ok(candidates.len())
