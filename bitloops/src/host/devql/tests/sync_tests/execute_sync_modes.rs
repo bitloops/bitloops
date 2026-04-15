@@ -143,6 +143,10 @@ model = "sync-test-model"
     .expect("write sync semantic clone config");
 }
 
+fn ruff_e501_4_python_fixture_bytes() -> &'static [u8] {
+    b"# Regression test for https://github.com/astral-sh/ruff/issues/12130\naaaaaaaaaaaaaaaaaaaaaaaa ://aaaaaaaaaaaaaaaaaaaaaaaa\x00\x00\x00\x00\x00\x00\x00aa\x00a\x00\x00\x00\x00\x00aaaaaaaaaaaaaaaaaaaaaa\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00aaaaaaaaaaaaaaaaa\n"
+}
+
 #[tokio::test]
 async fn unborn_head_syncs_from_index_and_worktree() {
     let repo = tempdir().expect("temp dir");
@@ -390,6 +394,135 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
     assert_eq!(
         bad_edge_rows, 0,
         "bad.rs should not materialize dependency edges"
+    );
+    assert_eq!(bad_file_kind, "file");
+}
+
+#[tokio::test]
+async fn full_sync_keeps_utf8_nul_python_paths_as_file_only() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("scripts")).expect("create scripts dir");
+    fs::write(
+        repo.path().join("scripts/good.py"),
+        "def good() -> int:\n    return 1\n",
+    )
+    .expect("write good python file");
+    fs::write(
+        repo.path().join("scripts/E501_4.py"),
+        "def seed() -> int:\n    return 2\n",
+    )
+    .expect("write seed python file");
+    fs::write(
+        repo.path().join("scripts/pyproject.toml"),
+        "[project]\nname = \"scripts\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
+    )
+    .expect("write pyproject.toml");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed python files"]);
+
+    fs::write(
+        repo.path().join("scripts/E501_4.py"),
+        ruff_e501_4_python_fixture_bytes(),
+    )
+    .expect("overwrite E501_4.py with NUL-containing UTF-8");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with NUL-containing python file");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let good_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/good.py"],
+            |row| row.get(0),
+        )
+        .expect("count good.py rows");
+    let bad_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/E501_4.py"],
+            |row| row.get(0),
+        )
+        .expect("count E501_4.py rows");
+    let bad_artefact_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/E501_4.py"],
+            |row| row.get(0),
+        )
+        .expect("count artefacts_current rows for E501_4.py");
+    let bad_edge_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/E501_4.py"],
+            |row| row.get(0),
+        )
+        .expect("count artefact_edges_current rows for E501_4.py");
+    let bad_semantics_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/E501_4.py"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_semantics_current rows for E501_4.py");
+    let bad_feature_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/E501_4.py"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_features_current rows for E501_4.py");
+    let bad_file_kind: String = db
+        .query_row(
+            "SELECT canonical_kind FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "scripts/E501_4.py"],
+            |row| row.get(0),
+        )
+        .expect("read canonical_kind for E501_4.py");
+
+    assert!(
+        result.success,
+        "sync should continue even when one UTF-8 code file degrades during extraction"
+    );
+    assert!(
+        result.parse_errors >= 1,
+        "expected at least one parse error for NUL-containing Python input"
+    );
+    assert_eq!(good_rows, 1, "good path should still be materialized");
+    assert_eq!(
+        bad_rows, 1,
+        "NUL-containing UTF-8 path should still be persisted in current_file_state"
+    );
+    assert_eq!(
+        bad_artefact_rows, 1,
+        "E501_4.py should materialize one file artefact"
+    );
+    assert_eq!(
+        bad_edge_rows, 0,
+        "E501_4.py should not materialize dependency edges"
+    );
+    assert_eq!(
+        bad_semantics_rows, 0,
+        "E501_4.py should not materialize semantic summaries"
+    );
+    assert_eq!(
+        bad_feature_rows, 0,
+        "E501_4.py should not materialize semantic feature rows"
     );
     assert_eq!(bad_file_kind, "file");
 }

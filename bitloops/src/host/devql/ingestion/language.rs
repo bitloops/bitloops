@@ -27,6 +27,10 @@ impl DecodedFileContent {
     pub(super) fn byte_count(&self) -> i32 {
         i32::try_from(self.raw_bytes.len()).unwrap_or(i32::MAX)
     }
+
+    pub(super) fn contains_nul_bytes(&self) -> bool {
+        self.raw_bytes.contains(&0)
+    }
 }
 
 pub(super) fn git_blob_sha_at_commit(
