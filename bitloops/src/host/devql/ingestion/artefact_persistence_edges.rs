@@ -20,10 +20,27 @@ pub(super) fn build_historical_edge_records(
         let resolved_target = edge
             .to_target_symbol_fqn
             .as_ref()
-            .and_then(|fqn| current_by_fqn.get(fqn));
+            .and_then(|fqn| current_by_fqn.get(fqn))
+            .or_else(|| {
+                if language != "rust" {
+                    return None;
+                }
+                let source_path = from_record.symbol_fqn.split("::").next()?;
+                let symbol_ref = edge.to_symbol_ref.as_deref()?;
+                crate::host::language_adapter::rust_local_symbol_fqn_candidates(
+                    source_path,
+                    symbol_ref,
+                )
+                .into_iter()
+                .find_map(|candidate| current_by_fqn.get(&candidate))
+            });
         let to_artefact_id = resolved_target.map(|record| record.artefact_id.clone());
-        let to_symbol_ref = if resolved_target.is_some() {
-            None
+        let to_symbol_ref = if let Some(record) = resolved_target {
+            if edge.to_target_symbol_fqn.is_some() {
+                None
+            } else {
+                Some(record.symbol_fqn.clone())
+            }
         } else {
             edge.to_symbol_ref.clone()
         };

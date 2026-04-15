@@ -6,6 +6,44 @@ use super::fixtures::{
     sqlite_relational_store_with_sync_schema, sync_test_cfg,
 };
 
+async fn materialize_cached_rust_path(
+    cfg: &crate::host::devql::DevqlConfig,
+    relational: &crate::host::devql::RelationalStorage,
+    path: &str,
+    content: &str,
+    parser_version: &str,
+    extractor_version: &str,
+) {
+    let content_id =
+        crate::host::devql::sync::content_identity::compute_blob_oid(content.as_bytes());
+    let desired = desired_file_state(path, "rust", &content_id);
+    let extraction = crate::host::devql::sync::extraction::extract_to_cache_format(
+        cfg,
+        crate::host::devql::sync::extraction::CacheExtractionRequest {
+            path,
+            language: "rust",
+            content_id: &content_id,
+            extraction_fingerprint: &desired.extraction_fingerprint,
+            parser_version,
+            extractor_version,
+            content,
+        },
+    )
+    .expect("extract Rust content into cache format")
+    .expect("Rust cache extraction should be supported");
+
+    crate::host::devql::sync::materializer::materialize_path(
+        cfg,
+        relational,
+        &desired,
+        &extraction,
+        parser_version,
+        extractor_version,
+    )
+    .await
+    .expect("materialize Rust path");
+}
+
 #[tokio::test]
 async fn materialize_writes_artefacts_current_with_correct_symbol_id() {
     let cfg = sync_test_cfg();
@@ -503,4 +541,157 @@ function localHelper(): number {
     assert_eq!(artefact_count, 0);
     assert_eq!(edge_count, 0);
     assert_eq!(current_file_state_count, 0);
+}
+
+#[tokio::test]
+async fn materialize_resolves_rust_explicit_local_call_targets_across_files() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-rust@1";
+    let extractor_version = "rust-language-pack@1";
+    let helper_path = "crates/ruff_linter/src/rules/pyflakes/fixes.rs";
+    let caller_path = "crates/ruff_linter/src/rules/pyflakes/rules/strings.rs";
+    let helper_content = r#"pub(crate) fn remove_unused_positional_arguments_from_format_call() {}
+"#;
+    let caller_content = r#"use super::super::fixes::remove_unused_positional_arguments_from_format_call;
+
+fn string_dot_format_extra_positional_arguments() {
+    remove_unused_positional_arguments_from_format_call();
+}
+"#;
+
+    materialize_cached_rust_path(
+        &cfg,
+        &relational,
+        helper_path,
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_rust_path(
+        &cfg,
+        &relational,
+        caller_path,
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_symbol_fqn =
+        format!("{helper_path}::remove_unused_positional_arguments_from_format_call");
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load helper artefact row");
+    let call_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'calls'",
+            [cfg.repo.repo_id.as_str(), caller_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load caller call edge");
+
+    assert_eq!(call_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(call_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(call_edge.2.as_deref(), Some(helper_symbol_fqn.as_str()));
+
+    let mut stmt = db
+        .prepare(
+            "SELECT af.symbol_fqn \
+             FROM artefact_edges_current e \
+             JOIN artefacts_current af \
+               ON af.repo_id = e.repo_id AND af.artefact_id = e.from_artefact_id \
+             JOIN artefacts_current at \
+               ON at.repo_id = e.repo_id AND at.artefact_id = e.to_artefact_id \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND at.symbol_fqn = ?2 \
+             ORDER BY af.symbol_fqn",
+        )
+        .expect("prepare inbound call query");
+    let inbound_callers = stmt
+        .query_map(
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("query inbound call rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect inbound call rows");
+
+    assert_eq!(
+        inbound_callers,
+        vec![format!(
+            "{caller_path}::string_dot_format_extra_positional_arguments"
+        )]
+    );
+}
+
+#[tokio::test]
+async fn materialize_resolves_rust_explicit_local_export_targets_across_files() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-rust@1";
+    let extractor_version = "rust-language-pack@1";
+    let support_path = "src/support.rs";
+    let lib_path = "src/lib.rs";
+    let support_content = r#"pub struct Thing;
+"#;
+    let lib_content = r#"pub use crate::support::Thing;
+"#;
+
+    materialize_cached_rust_path(
+        &cfg,
+        &relational,
+        support_path,
+        support_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_rust_path(
+        &cfg,
+        &relational,
+        lib_path,
+        lib_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let support_symbol_fqn = format!("{support_path}::Thing");
+    let support_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), support_symbol_fqn.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load exported support artefact row");
+    let export_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'exports'",
+            [cfg.repo.repo_id.as_str(), lib_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load export edge");
+
+    assert_eq!(export_edge.0.as_deref(), Some(support_row.0.as_str()));
+    assert_eq!(export_edge.1.as_deref(), Some(support_row.1.as_str()));
+    assert_eq!(export_edge.2.as_deref(), Some(support_symbol_fqn.as_str()));
 }

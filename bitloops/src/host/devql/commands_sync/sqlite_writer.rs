@@ -15,7 +15,7 @@ use crate::host::devql::sync::content_cache::{
 };
 use crate::host::devql::sync::materializer::{
     PreparedMaterialisationRows, persist_prepared_materialisation_tx, prepare_materialization_rows,
-    remove_paths_tx,
+    remove_paths_tx, resolve_prepared_rust_local_edges_with_connection,
 };
 use crate::host::devql::sync::types::DesiredFileState;
 use crate::host::devql::{DecodedFileContent, DevqlConfig};
@@ -551,6 +551,13 @@ fn prepare_sync_item_with_connection(
             parser_version,
             extractor_version,
         )?;
+        let mut prepared_rows = prepared_rows;
+        resolve_prepared_rust_local_edges_with_connection(
+            connection,
+            cfg,
+            &desired,
+            &mut prepared_rows,
+        )?;
         stats.materialisation_prep = materialisation_prep_started.elapsed();
         return Ok(PreparedSyncOutcome {
             path,
@@ -731,6 +738,13 @@ fn prepare_sync_item_with_connection(
         &extraction,
         parser_version,
         extractor_version,
+    )?;
+    let mut prepared_rows = prepared_rows;
+    resolve_prepared_rust_local_edges_with_connection(
+        connection,
+        cfg,
+        &desired,
+        &mut prepared_rows,
     )?;
     stats.materialisation_prep = materialisation_prep_started.elapsed();
 

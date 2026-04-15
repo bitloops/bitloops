@@ -10,6 +10,7 @@ mod kinds;
 mod migrations;
 mod pack;
 mod registry;
+mod rust_local_refs;
 mod test_support;
 mod types;
 
@@ -21,5 +22,6 @@ pub(crate) use kinds::*;
 pub(crate) use migrations::*;
 pub(crate) use pack::*;
 pub(crate) use registry::*;
+pub(crate) use rust_local_refs::*;
 pub(crate) use test_support::*;
 pub(crate) use types::*;

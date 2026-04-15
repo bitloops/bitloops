@@ -211,6 +211,71 @@ fn build_current_edge_records_resolve_local_and_external_targets() {
 }
 
 #[test]
+fn build_historical_edge_records_resolve_explicit_local_rust_symbol_refs() {
+    let cfg = test_cfg();
+    let helper_path = "crates/ruff_linter/src/rules/pyflakes/fixes.rs";
+    let caller_path = "crates/ruff_linter/src/rules/pyflakes/rules/strings.rs";
+    let blob_sha = "blob-rust";
+    let from = test_symbol_record(
+        &cfg,
+        caller_path,
+        blob_sha,
+        "caller-symbol",
+        "string_dot_format_extra_positional_arguments",
+        1,
+        4,
+    );
+    let to = test_symbol_record(
+        &cfg,
+        helper_path,
+        blob_sha,
+        "helper-symbol",
+        "remove_unused_positional_arguments_from_format_call",
+        1,
+        1,
+    );
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "rust",
+        vec![DependencyEdge {
+            edge_kind: EdgeKind::Calls,
+            from_symbol_fqn: from.symbol_fqn.clone(),
+            to_target_symbol_fqn: None,
+            to_symbol_ref: Some(
+                "super::super::fixes::remove_unused_positional_arguments_from_format_call"
+                    .to_string(),
+            ),
+            start_line: Some(3),
+            end_line: Some(3),
+            metadata: EdgeMetadata::call(CallForm::Function, Resolution::Import),
+        }],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_symbol_ref.as_deref(),
+        Some(to.symbol_fqn.as_str())
+    );
+}
+
+#[test]
 fn incoming_revision_is_newer_prefers_revision_kind_then_timestamp_then_sha() {
     let state =
         |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {

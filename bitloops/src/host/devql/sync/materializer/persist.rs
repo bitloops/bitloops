@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context, Result};
-use rusqlite::{Transaction, params, params_from_iter};
+use rusqlite::{Connection, Transaction, params, params_from_iter};
 
 use super::super::content_cache::CachedExtraction;
 use super::super::types::DesiredFileState;
@@ -20,8 +22,9 @@ pub(crate) async fn materialize_path(
     parser_version: &str,
     extractor_version: &str,
 ) -> Result<()> {
-    let prepared =
+    let mut prepared =
         prepare_materialization_rows(cfg, desired, extraction, parser_version, extractor_version)?;
+    resolve_prepared_rust_local_edges(cfg, relational, desired, &mut prepared).await?;
 
     let now_sql = crate::host::devql::sql_now(relational);
     let mut statements = vec![
@@ -61,6 +64,211 @@ pub(crate) async fn materialize_path(
     ));
 
     relational.exec_batch_transactional(&statements).await
+}
+
+pub(crate) async fn resolve_prepared_rust_local_edges(
+    cfg: &crate::host::devql::DevqlConfig,
+    relational: &crate::host::devql::RelationalStorage,
+    desired: &DesiredFileState,
+    prepared: &mut PreparedMaterialisationRows,
+) -> Result<()> {
+    let pending =
+        pending_rust_local_resolutions(desired.path.as_str(), &prepared.materialized_edges);
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let candidate_fqns = pending
+        .iter()
+        .flat_map(|(_, candidates)| candidates.iter().cloned())
+        .collect::<HashSet<_>>();
+    let current_targets = load_current_targets_for_fqns(
+        relational,
+        &cfg.repo.repo_id,
+        &desired.path,
+        &candidate_fqns,
+    )
+    .await?;
+    apply_rust_local_edge_resolutions(cfg, desired, prepared, &pending, &current_targets);
+    Ok(())
+}
+
+pub(crate) fn resolve_prepared_rust_local_edges_with_connection(
+    connection: &Connection,
+    cfg: &crate::host::devql::DevqlConfig,
+    desired: &DesiredFileState,
+    prepared: &mut PreparedMaterialisationRows,
+) -> Result<()> {
+    let pending =
+        pending_rust_local_resolutions(desired.path.as_str(), &prepared.materialized_edges);
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let candidate_fqns = pending
+        .iter()
+        .flat_map(|(_, candidates)| candidates.iter().cloned())
+        .collect::<HashSet<_>>();
+    let current_targets = load_current_targets_for_fqns_with_connection(
+        connection,
+        &cfg.repo.repo_id,
+        &desired.path,
+        &candidate_fqns,
+    )?;
+    apply_rust_local_edge_resolutions(cfg, desired, prepared, &pending, &current_targets);
+    Ok(())
+}
+
+fn pending_rust_local_resolutions(
+    source_path: &str,
+    edges: &[super::types::MaterializedEdge],
+) -> Vec<(usize, Vec<String>)> {
+    edges
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, edge)| {
+            if edge.language != "rust" || edge.to_symbol_id.is_some() {
+                return None;
+            }
+            let symbol_ref = edge.to_symbol_ref.as_deref()?;
+            let candidates = crate::host::language_adapter::rust_local_symbol_fqn_candidates(
+                source_path,
+                symbol_ref,
+            );
+            (!candidates.is_empty()).then_some((idx, candidates))
+        })
+        .collect()
+}
+
+fn apply_rust_local_edge_resolutions(
+    cfg: &crate::host::devql::DevqlConfig,
+    desired: &DesiredFileState,
+    prepared: &mut PreparedMaterialisationRows,
+    pending: &[(usize, Vec<String>)],
+    current_targets: &HashMap<String, (String, String)>,
+) {
+    let in_flight_targets = prepared
+        .materialized_artefacts
+        .iter()
+        .map(|artefact| {
+            (
+                artefact.symbol_fqn.clone(),
+                (artefact.symbol_id.clone(), artefact.artefact_id.clone()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (edge_idx, candidates) in pending {
+        let resolved = candidates
+            .iter()
+            .find_map(|candidate| {
+                in_flight_targets
+                    .get(candidate)
+                    .cloned()
+                    .map(|target| (candidate.clone(), target))
+            })
+            .or_else(|| {
+                candidates.iter().find_map(|candidate| {
+                    current_targets
+                        .get(candidate)
+                        .cloned()
+                        .map(|target| (candidate.clone(), target))
+                })
+            });
+        let Some((resolved_fqn, (symbol_id, artefact_id))) = resolved else {
+            continue;
+        };
+        let edge = &mut prepared.materialized_edges[*edge_idx];
+        edge.to_symbol_id = Some(symbol_id);
+        edge.to_artefact_id = Some(artefact_id);
+        edge.to_symbol_ref = Some(resolved_fqn);
+        edge.edge_id = crate::host::devql::deterministic_uuid(&format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            cfg.repo.repo_id,
+            desired.path,
+            edge.from_symbol_id,
+            edge.edge_kind,
+            edge.to_symbol_id.clone().unwrap_or_default(),
+            edge.to_symbol_ref.clone().unwrap_or_default(),
+            edge.start_line.unwrap_or(-1),
+            edge.end_line.unwrap_or(-1),
+            edge.metadata,
+        ));
+    }
+}
+
+async fn load_current_targets_for_fqns(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    current_path: &str,
+    candidate_fqns: &HashSet<String>,
+) -> Result<HashMap<String, (String, String)>> {
+    if candidate_fqns.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let in_list = candidate_fqns
+        .iter()
+        .map(|candidate| format!("'{}'", crate::host::devql::esc_pg(candidate)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT symbol_fqn, symbol_id, artefact_id \
+         FROM artefacts_current \
+         WHERE repo_id = '{}' AND path != '{}' AND symbol_fqn IN ({in_list})",
+        crate::host::devql::esc_pg(repo_id),
+        crate::host::devql::esc_pg(current_path),
+    );
+    let rows = relational.query_rows(&sql).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let obj = row.as_object()?;
+            Some((
+                obj.get("symbol_fqn")?.as_str()?.to_string(),
+                (
+                    obj.get("symbol_id")?.as_str()?.to_string(),
+                    obj.get("artefact_id")?.as_str()?.to_string(),
+                ),
+            ))
+        })
+        .collect())
+}
+
+fn load_current_targets_for_fqns_with_connection(
+    connection: &Connection,
+    repo_id: &str,
+    current_path: &str,
+    candidate_fqns: &HashSet<String>,
+) -> Result<HashMap<String, (String, String)>> {
+    if candidate_fqns.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let in_list = candidate_fqns
+        .iter()
+        .map(|candidate| format!("'{}'", crate::host::devql::esc_pg(candidate)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT symbol_fqn, symbol_id, artefact_id \
+         FROM artefacts_current \
+         WHERE repo_id = '{}' AND path != '{}' AND symbol_fqn IN ({in_list})",
+        crate::host::devql::esc_pg(repo_id),
+        crate::host::devql::esc_pg(current_path),
+    );
+    let mut stmt = connection
+        .prepare(&sql)
+        .context("preparing current Rust target lookup query")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, String>(1)?, row.get::<_, String>(2)?),
+            ))
+        })
+        .context("querying current Rust target lookup rows")?
+        .collect::<Result<Vec<_>, _>>()
+        .context("collecting current Rust target lookup rows")?;
+    Ok(rows.into_iter().collect())
 }
 
 pub(crate) async fn remove_path(
