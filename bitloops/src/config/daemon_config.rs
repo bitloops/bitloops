@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue, de::from_str};
 
 use crate::host::inference::{
-    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_EMBEDDINGS_RUNTIME_ID, BITLOOPS_INFERENCE_RUNTIME_ID,
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_INFERENCE_RUNTIME_ID,
+    BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID, BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID,
 };
 use crate::utils::platform_dirs::{bitloops_config_file_path, ensure_dir, ensure_parent_dir};
 
@@ -48,6 +49,7 @@ pub(crate) enum DaemonEmbeddingsInstallMode {
 pub(crate) struct DaemonEmbeddingsInstallPlan {
     pub config_path: PathBuf,
     pub profile_name: String,
+    pub runtime_name: String,
     pub profile_driver: Option<String>,
     pub mode: DaemonEmbeddingsInstallMode,
     pub config_modified: bool,
@@ -64,7 +66,6 @@ pub(crate) struct DaemonInferenceInstallPlan {
 }
 
 impl DaemonEmbeddingsInstallPlan {
-    #[cfg(test)]
     pub fn apply(&self) -> Result<()> {
         self.write_prepared_contents(self.prepared_contents.as_deref())
     }
@@ -83,16 +84,15 @@ impl DaemonEmbeddingsInstallPlan {
         })?;
         let inference = ensure_table(&mut staged_doc, "inference");
         let runtimes = ensure_child_table(inference, "runtimes");
-        let runtime = ensure_child_table(runtimes, BITLOOPS_EMBEDDINGS_RUNTIME_ID);
+        let runtime = ensure_child_table(runtimes, &self.runtime_name);
         runtime["command"] = Item::Value(binary_path.to_string_lossy().to_string().into());
-        runtime["args"] = Item::Value(TomlValue::Array(Array::new()));
 
         let desired_runtime = staged_doc
             .get("inference")
             .and_then(Item::as_table)
             .and_then(|table| table.get("runtimes"))
             .and_then(Item::as_table)
-            .and_then(|table| table.get(BITLOOPS_EMBEDDINGS_RUNTIME_ID))
+            .and_then(|table| table.get(&self.runtime_name))
             .cloned()
             .context("staged embeddings runtime missing from prepared config")?;
         let desired_profile = staged_doc
@@ -151,7 +151,7 @@ impl DaemonEmbeddingsInstallPlan {
         {
             let inference = ensure_table(&mut current_doc, "inference");
             let runtimes = ensure_child_table(inference, "runtimes");
-            runtimes[BITLOOPS_EMBEDDINGS_RUNTIME_ID] = desired_runtime;
+            runtimes[&self.runtime_name] = desired_runtime;
             let profiles = ensure_child_table(inference, "profiles");
             profiles[&self.profile_name] = desired_profile;
         }
@@ -546,6 +546,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
         return Ok(DaemonEmbeddingsInstallPlan {
             config_path: config_path.to_path_buf(),
             profile_name,
+            runtime_name: BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
             profile_driver,
             mode,
             config_modified: false,
@@ -590,7 +591,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
         let inference = ensure_table(&mut doc, "inference");
 
         let runtimes = ensure_child_table(inference, "runtimes");
-        let runtime = ensure_child_table(runtimes, BITLOOPS_EMBEDDINGS_RUNTIME_ID);
+        let runtime = ensure_child_table(runtimes, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID);
         let current_runtime_command = runtime
             .get("command")
             .and_then(Item::as_value)
@@ -603,14 +604,16 @@ pub(crate) fn prepare_daemon_embeddings_install(
             .and_then(|value| value.as_str())
             .is_none()
         {
-            runtime["command"] = Item::Value("bitloops-embeddings".into());
+            runtime["command"] = Item::Value("bitloops-local-embeddings".into());
             modified = true;
         }
 
         let manages_default_args = current_runtime_command.is_none()
             || matches!(
                 current_runtime_command.as_deref(),
-                Some("") | Some("bitloops-embeddings") | Some("bitloops-embeddings.exe")
+                Some("")
+                    | Some("bitloops-local-embeddings")
+                    | Some("bitloops-local-embeddings.exe")
             );
         let runtime_args_are_empty = runtime
             .get("args")
@@ -668,7 +671,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
             .and_then(|value| value.as_str())
             .is_none()
         {
-            local_profile["runtime"] = Item::Value(BITLOOPS_EMBEDDINGS_RUNTIME_ID.into());
+            local_profile["runtime"] = Item::Value(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.into());
             modified = true;
         }
         if local_profile
@@ -687,11 +690,100 @@ pub(crate) fn prepare_daemon_embeddings_install(
     Ok(DaemonEmbeddingsInstallPlan {
         config_path: config_path.to_path_buf(),
         profile_name: DEFAULT_LOCAL_PROFILE.to_string(),
+        runtime_name: BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
         profile_driver: Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string()),
         mode: DaemonEmbeddingsInstallMode::Bootstrap,
         config_modified: modified,
         original_contents,
         prepared_contents,
+    })
+}
+
+pub(crate) fn prepare_daemon_platform_embeddings_install(
+    config_path: &Path,
+    gateway_url: &str,
+    api_key_env: &str,
+) -> Result<DaemonEmbeddingsInstallPlan> {
+    const DEFAULT_PLATFORM_PROFILE: &str = "platform_code";
+    const DEFAULT_PLATFORM_MODEL: &str = "bge-m3";
+
+    ensure_parent_dir(config_path)?;
+
+    let original_contents = match fs::read_to_string(config_path) {
+        Ok(contents) => Some(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("reading Bitloops daemon config {}", config_path.display())
+            });
+        }
+    };
+
+    let mut doc = match original_contents.as_deref() {
+        Some(existing) => existing
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?,
+        None => DocumentMut::new(),
+    };
+
+    {
+        let semantic_clones = ensure_table(&mut doc, "semantic_clones");
+        let inference = ensure_child_table(semantic_clones, "inference");
+        if inference
+            .get("code_embeddings")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            != Some(DEFAULT_PLATFORM_PROFILE)
+        {
+            inference["code_embeddings"] = Item::Value(DEFAULT_PLATFORM_PROFILE.into());
+        }
+        if inference
+            .get("summary_embeddings")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            != Some(DEFAULT_PLATFORM_PROFILE)
+        {
+            inference["summary_embeddings"] = Item::Value(DEFAULT_PLATFORM_PROFILE.into());
+        }
+    }
+
+    {
+        let inference = ensure_table(&mut doc, "inference");
+        let runtimes = ensure_child_table(inference, "runtimes");
+        let runtime = ensure_child_table(runtimes, BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID);
+        runtime["command"] = Item::Value("bitloops-platform-embeddings".into());
+
+        let mut args = Array::new();
+        args.push("--gateway-url");
+        args.push(gateway_url);
+        args.push("--api-key-env");
+        args.push(api_key_env);
+        runtime["args"] = Item::Value(TomlValue::Array(args));
+        runtime["startup_timeout_secs"] = Item::Value(60.into());
+        runtime["request_timeout_secs"] = Item::Value(300.into());
+
+        let profiles = ensure_child_table(inference, "profiles");
+        let platform_profile = ensure_child_table(profiles, DEFAULT_PLATFORM_PROFILE);
+        platform_profile["task"] = Item::Value("embeddings".into());
+        platform_profile["driver"] = Item::Value(BITLOOPS_EMBEDDINGS_IPC_DRIVER.into());
+        platform_profile["runtime"] = Item::Value(BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID.into());
+        platform_profile["model"] = Item::Value(DEFAULT_PLATFORM_MODEL.into());
+    }
+
+    let prepared_contents = doc.to_string();
+    let config_modified = original_contents
+        .as_deref()
+        .is_none_or(|existing| existing != prepared_contents);
+
+    Ok(DaemonEmbeddingsInstallPlan {
+        config_path: config_path.to_path_buf(),
+        profile_name: DEFAULT_PLATFORM_PROFILE.to_string(),
+        runtime_name: BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID.to_string(),
+        profile_driver: Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string()),
+        mode: DaemonEmbeddingsInstallMode::Bootstrap,
+        config_modified,
+        original_contents,
+        prepared_contents: config_modified.then_some(prepared_contents),
     })
 }
 

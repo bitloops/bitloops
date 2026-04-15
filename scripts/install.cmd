@@ -34,7 +34,7 @@ set "ASSET_PATH=%TMP_DIR%\%ASSET_NAME%"
 set "CHECKSUMS_PATH=%TMP_DIR%\%CHECKSUMS_NAME%"
 set "EXTRACT_DIR=%TMP_DIR%\extract"
 set "TARGET_PATH=%INSTALL_DIR%\bitloops.exe"
-set "EMBEDDINGS_TARGET_PATH=%INSTALL_DIR%\bitloops-embeddings.exe"
+set "EMBEDDINGS_TARGET_PATH=%INSTALL_DIR%\bitloops-local-embeddings.exe"
 
 if /I "%INSTALL_MODE%"=="latest" (
   set "ASSET_URL=https://github.com/%REPO%/releases/latest/download/%ASSET_NAME%"
@@ -84,7 +84,7 @@ if errorlevel 1 (
   goto :fail
 )
 
-call :find_binary "%EXTRACT_DIR%" "bitloops-embeddings.exe" EMBEDDINGS_BIN_PATH
+call :find_binary "%EXTRACT_DIR%" "bitloops-local-embeddings.exe" EMBEDDINGS_BIN_PATH
 if errorlevel 1 set "EMBEDDINGS_BIN_PATH="
 
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
@@ -111,9 +111,9 @@ call :ensure_user_path "%INSTALL_DIR%"
 
 echo Installed bitloops (%DISPLAY_VERSION%) to %TARGET_PATH%
 if defined EMBEDDINGS_BIN_PATH (
-  echo Installed bitloops-embeddings (%DISPLAY_VERSION%) to %EMBEDDINGS_TARGET_PATH%
+  echo Installed bitloops-local-embeddings (%DISPLAY_VERSION%) to %EMBEDDINGS_TARGET_PATH%
 ) else (
-  echo Note: this release archive did not contain bitloops-embeddings; installing bitloops only.
+  echo Note: this release archive did not contain bitloops-local-embeddings; installing bitloops only.
 )
 if "%PATH_ADDED%"=="1" (
   echo Added %INSTALL_DIR% to user PATH. Restart your terminal for PATH changes to apply.

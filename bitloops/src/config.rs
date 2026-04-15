@@ -21,7 +21,7 @@ pub use daemon_config::{
 };
 pub(crate) use daemon_config::{
     DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
-    prepare_daemon_inference_install,
+    prepare_daemon_inference_install, prepare_daemon_platform_embeddings_install,
 };
 pub use repo_policy::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,

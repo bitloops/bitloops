@@ -126,7 +126,7 @@ embedding_mode = "deterministic"
 code_embeddings = "alpha"
 summary_embeddings = "alpha"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -135,7 +135,7 @@ request_timeout_secs = 5
 [inference.profiles.alpha]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "sync-test-model"
 "#
         ),

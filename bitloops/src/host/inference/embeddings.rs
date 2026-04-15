@@ -91,7 +91,7 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
         let texts = vec![input.to_string()];
         let mut vectors = self.shared_session.embed(&texts).with_context(|| {
             format!(
-                "requesting standalone `bitloops-embeddings` runtime for profile `{}`",
+                "requesting standalone `bitloops-local-embeddings` runtime for profile `{}`",
                 self.profile_name
             )
         })?;
@@ -218,8 +218,9 @@ impl SharedBitloopsEmbeddingsSession {
             }
             Err(first_err) => {
                 state.session = None;
-                let restarted = PythonEmbeddingsSession::start(&self.config)
-                    .context("restarting standalone `bitloops-embeddings` runtime after failure")?;
+                let restarted = PythonEmbeddingsSession::start(&self.config).context(
+                    "restarting standalone `bitloops-local-embeddings` runtime after failure",
+                )?;
                 state.session = Some(restarted);
                 let retry = state
                     .session
@@ -228,7 +229,7 @@ impl SharedBitloopsEmbeddingsSession {
                     .embed(texts)
                     .with_context(|| {
                         format!(
-                            "retrying standalone `bitloops-embeddings` runtime request after failure: {first_err:#}"
+                            "retrying standalone `bitloops-local-embeddings` runtime request after failure: {first_err:#}"
                         )
                     });
                 match retry {
@@ -279,7 +280,7 @@ fn shared_bitloops_embeddings_session_registry()
         });
         let sweeper_registry = Arc::clone(&registry);
         let _ = thread::Builder::new()
-            .name("bitloops-embeddings-ipc-sweeper".to_string())
+            .name("bitloops-local-embeddings-ipc-sweeper".to_string())
             .spawn(move || {
                 loop {
                     thread::sleep(SHARED_EMBEDDINGS_SWEEP_INTERVAL);
@@ -383,7 +384,7 @@ impl PythonEmbeddingsSession {
 
         let mut child = command.spawn().with_context(|| {
             format!(
-                "spawning standalone `bitloops-embeddings` runtime `{}` for model `{}`",
+                "spawning standalone `bitloops-local-embeddings` runtime `{}` for model `{}`",
                 config.command, config.model
             )
         })?;

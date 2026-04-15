@@ -5,7 +5,10 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
-use crate::cli::embeddings::{enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings};
+use crate::cli::embeddings::{
+    EmbeddingsRuntime, enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings,
+    install_or_configure_platform_embeddings,
+};
 use crate::cli::inference::{
     configure_local_summary_generation, prepare_local_summary_generation_plan,
 };
@@ -134,7 +137,20 @@ pub(super) async fn run_for_project_root(
         input,
     )?;
     if should_install_embeddings {
-        if args.install_default_daemon {
+        if args.embeddings_runtime == EmbeddingsRuntime::Platform {
+            let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`bitloops init --embeddings-runtime platform` requires `--embeddings-gateway-url`"
+                )
+            })?;
+            for line in install_or_configure_platform_embeddings(
+                project_root,
+                gateway_url,
+                &args.embeddings_api_key_env,
+            )? {
+                writeln!(out, "{line}")?;
+            }
+        } else if args.install_default_daemon {
             queued_embeddings_bootstrap =
                 Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
         } else {

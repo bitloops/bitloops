@@ -729,7 +729,7 @@ embedding_mode = "deterministic"
 code_embeddings = "local"
 summary_embeddings = "local"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = "bitloops-embeddings"
 args = []
 startup_timeout_secs = ${DEFAULT_EMBEDDINGS_STARTUP_TIMEOUT_SECS}
@@ -738,7 +738,7 @@ request_timeout_secs = ${DEFAULT_EMBEDDINGS_REQUEST_TIMEOUT_SECS}
 [inference.profiles.local]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "${DEFAULT_LOCAL_EMBEDDING_MODEL}"
 cache_dir = "$mode_state/embeddings/models"
 CFG

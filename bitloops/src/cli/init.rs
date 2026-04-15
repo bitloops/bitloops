@@ -7,7 +7,9 @@ use clap::Args;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
+use crate::cli::embeddings::{
+    EmbeddingsInstallState, EmbeddingsRuntime, inspect_embeddings_install_state,
+};
 use crate::cli::inference::summary_generation_configured;
 use crate::cli::telemetry_consent;
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
@@ -97,6 +99,18 @@ pub struct InitArgs {
     /// Load additional exclusion globs from files under the repo-policy root (repeatable).
     #[arg(long = "exclude-from")]
     pub exclude_from: Vec<String>,
+
+    /// Select which embeddings runtime to configure when embeddings are installed during init.
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub embeddings_runtime: EmbeddingsRuntime,
+
+    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
+    #[arg(long)]
+    pub embeddings_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token.
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub embeddings_api_key_env: String,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {

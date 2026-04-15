@@ -104,9 +104,9 @@ fn prepare_daemon_embeddings_install_applies_staged_runtime_args_cleanup() {
 [runtime]
 local_dev = false
 
-[inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
-args = ["-B", "-m", "bitloops_embeddings"]
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+args = ["-B", "-m", "bitloops_local_embeddings"]
 startup_timeout_secs = 60
 request_timeout_secs = 300
 "#,
@@ -138,8 +138,8 @@ fn apply_with_managed_runtime_path_preserves_concurrent_summary_profile_updates(
 [runtime]
 local_dev = false
 
-[inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
 args = []
 startup_timeout_secs = 60
 request_timeout_secs = 300
@@ -160,8 +160,8 @@ local_dev = false
 [semantic_clones.inference]
 summary_generation = "summary_local"
 
-[inference.runtimes.bitloops_embeddings]
-command = "bitloops-embeddings"
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
 args = []
 startup_timeout_secs = 60
 request_timeout_secs = 300
@@ -178,7 +178,7 @@ max_output_tokens = 200
     )
     .expect("write concurrent summary config update");
 
-    plan.apply_with_managed_runtime_path(Path::new("/tmp/bitloops-embeddings"))
+    plan.apply_with_managed_runtime_path(Path::new("/tmp/bitloops-local-embeddings"))
         .expect("apply staged embeddings config");
 
     let rendered = fs::read_to_string(config.path()).expect("read updated config");
@@ -191,7 +191,81 @@ max_output_tokens = 200
         "expected embeddings apply to preserve summary profile:\n{rendered}"
     );
     assert!(
-        rendered.contains("command = \"/tmp/bitloops-embeddings\""),
+        rendered.contains("command = \"/tmp/bitloops-local-embeddings\""),
         "expected embeddings runtime command to be rewritten:\n{rendered}"
+    );
+}
+
+#[test]
+fn prepare_daemon_platform_embeddings_install_writes_platform_runtime_config() {
+    let config = NamedTempFile::new().expect("create temp config");
+    fs::write(
+        config.path(),
+        r#"
+[runtime]
+local_dev = false
+"#,
+    )
+    .expect("write temp config");
+
+    let plan = prepare_daemon_platform_embeddings_install(
+        config.path(),
+        "https://gateway.example/v1/embeddings",
+        "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+    )
+    .expect("prepare platform embeddings install");
+    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::Bootstrap);
+    plan.apply()
+        .expect("apply staged platform embeddings config");
+
+    let rendered = fs::read_to_string(config.path()).expect("read updated config");
+    assert!(
+        rendered.contains("[inference.runtimes.bitloops_platform_embeddings]"),
+        "expected platform runtime table:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("command = \"bitloops-platform-embeddings\""),
+        "expected platform runtime command:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "args = [\"--gateway-url\", \"https://gateway.example/v1/embeddings\", \"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]"
+        ),
+        "expected hosted runtime args:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("runtime = \"bitloops_platform_embeddings\""),
+        "expected platform profile runtime binding:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("code_embeddings = \"platform_code\"")
+            && rendered.contains("summary_embeddings = \"platform_code\""),
+        "expected semantic clone bindings:\n{rendered}"
+    );
+}
+
+#[test]
+fn apply_with_managed_runtime_path_preserves_platform_runtime_args() {
+    let config = NamedTempFile::new().expect("create temp config");
+
+    let plan = prepare_daemon_platform_embeddings_install(
+        config.path(),
+        "https://gateway.example/v1/embeddings",
+        "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+    )
+    .expect("prepare platform embeddings install");
+    plan.apply_with_managed_runtime_path(Path::new("/tmp/bitloops-platform-embeddings"))
+        .expect("apply managed platform runtime path");
+
+    let rendered = fs::read_to_string(config.path()).expect("read updated config");
+    assert!(
+        rendered.contains("command = \"/tmp/bitloops-platform-embeddings\""),
+        "expected managed platform runtime path:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "args = [\"--gateway-url\", \"https://gateway.example/v1/embeddings\", \"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]"
+        ),
+        "expected platform runtime args to be preserved:\n{rendered}"
     );
 }

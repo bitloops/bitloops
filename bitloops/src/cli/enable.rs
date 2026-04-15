@@ -12,7 +12,8 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
 use crate::cli::embeddings::{
-    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
+    EmbeddingsInstallState, EmbeddingsRuntime, enqueue_embeddings_bootstrap_task,
+    inspect_embeddings_install_state, install_or_configure_platform_embeddings,
 };
 use crate::cli::inference::{configure_local_summary_generation, summary_generation_configured};
 use crate::cli::telemetry_consent;
@@ -62,6 +63,18 @@ pub struct EnableArgs {
     /// Configure and bootstrap local embeddings so sync can include them.
     #[arg(long, default_value_t = false)]
     pub install_embeddings: bool,
+
+    /// Select which managed embeddings runtime to configure when `--install-embeddings` is used.
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub embeddings_runtime: EmbeddingsRuntime,
+
+    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
+    #[arg(long)]
+    pub embeddings_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token.
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub embeddings_api_key_env: String,
 }
 
 /// Finds the git repository root by walking up from `start`.
@@ -198,31 +211,51 @@ pub(crate) async fn run_with_io(
     writeln!(out, "Updated project config: {}", target_path.display())?;
 
     if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
-        activate_embedding_pipeline_mailboxes(&git_root, "enable")
-            .context("activating semantic clones embedding mailboxes for enable")?;
-        let (scope, queued) = enqueue_embeddings_bootstrap_task(
-            &cwd,
-            None,
-            crate::daemon::DevqlTaskSource::ManualCli,
-        )
-        .await?;
-        match crate::cli::devql::graphql::watch_task_id_via_graphql(
-            &scope,
-            &queued.task.task_id,
-            false,
-        )
-        .await
-        {
-            Ok(Some(task)) => {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
+        match args.embeddings_runtime {
+            EmbeddingsRuntime::Local => {
+                activate_embedding_pipeline_mailboxes(&git_root, "enable")
+                    .context("activating semantic clones embedding mailboxes for enable")?;
+                let (scope, queued) = enqueue_embeddings_bootstrap_task(
+                    &cwd,
+                    None,
+                    crate::daemon::DevqlTaskSource::ManualCli,
+                )
+                .await?;
+                match crate::cli::devql::graphql::watch_task_id_via_graphql(
+                    &scope,
+                    &queued.task.task_id,
+                    false,
+                )
+                .await
+                {
+                    Ok(Some(task)) => {
+                        writeln!(
+                            out,
+                            "{}",
+                            crate::cli::devql::format_task_completion_summary(&task)
+                        )?;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        bail!(
+                            "Bitloops capture was enabled, but embeddings installation failed: {err:#}"
+                        );
+                    }
+                }
             }
-            Ok(None) => {}
-            Err(err) => {
-                bail!("Bitloops capture was enabled, but embeddings installation failed: {err:#}");
+            EmbeddingsRuntime::Platform => {
+                let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`bitloops enable --install-embeddings --embeddings-runtime platform` requires `--embeddings-gateway-url`"
+                    )
+                })?;
+                for line in install_or_configure_platform_embeddings(
+                    &cwd,
+                    gateway_url,
+                    &args.embeddings_api_key_env,
+                )? {
+                    writeln!(out, "{line}")?;
+                }
             }
         }
     }

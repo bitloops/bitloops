@@ -2907,7 +2907,7 @@ fn invalid_embedding_gateway(
     match case_name {
         "missing runtime command" => {
             inference.runtimes.insert(
-                crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID.to_string(),
+                crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
                 crate::config::InferenceRuntimeConfig {
                     command: "definitely-missing-embeddings-runtime".to_string(),
                     args: Vec::new(),
@@ -2922,7 +2922,7 @@ fn invalid_embedding_gateway(
                     task: crate::config::InferenceTask::Embeddings,
                     driver: crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER.to_string(),
                     runtime: Some(
-                        crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID.to_string(),
+                        crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID.to_string(),
                     ),
                     model: Some("bge-m3".to_string()),
                     api_key: None,

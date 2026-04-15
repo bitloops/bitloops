@@ -549,9 +549,11 @@ fn format_embeddings_bootstrap_completion_summary(
         (result.version.as_deref(), result.binary_path.as_deref())
     {
         let status_line = if result.freshly_installed {
-            format!("Installed managed standalone `bitloops-embeddings` runtime {version}.")
+            format!("Installed managed standalone `bitloops-local-embeddings` runtime {version}.")
         } else {
-            format!("Managed standalone `bitloops-embeddings` runtime {version} already installed.")
+            format!(
+                "Managed standalone `bitloops-local-embeddings` runtime {version} already installed."
+            )
         };
         lines.push(status_line);
         lines.push(format!("Binary path: {binary_path}"));
