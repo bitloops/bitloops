@@ -43,7 +43,8 @@ pub struct EnableArgs {
     #[arg(long, short = 'f', hide = true)]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
+    /// Deprecated hidden compatibility flag. Use `bitloops init --agent <agent>`
+    /// to persist supported agents before running `bitloops enable`.
     #[arg(long, hide = true)]
     pub agent: Option<String>,
 
@@ -162,6 +163,13 @@ pub(crate) async fn run_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
+    if let Some(agent) = args.agent.as_deref() {
+        bail!(
+            "`bitloops enable --agent {agent}` is no longer supported. \
+Run `bitloops init --agent {agent}` to persist supported agents before enabling Bitloops."
+        );
+    }
+
     let cwd = env::current_dir().context("getting current directory")?;
     let git_root = find_repo_root(&cwd)?;
     let telemetry_choice =
@@ -365,7 +373,7 @@ pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool
         .context("resolving editable Bitloops project config")?;
     let configured_agents = crate::config::settings::supported_agents(start)?;
     set_capture_enabled(&target_path, false)?;
-    crate::cli::agent_surfaces::uninstall_project_agent_surfaces(
+    crate::cli::agent_surfaces::cleanup_project_agent_surfaces(
         &project_root,
         &configured_agents,
         out,

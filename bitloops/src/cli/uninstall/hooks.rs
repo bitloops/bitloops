@@ -19,12 +19,12 @@ pub(super) fn uninstall_agent_hooks(project_roots: &[PathBuf], out: &mut dyn Wri
         let configured =
             crate::config::settings::supported_agents(project_root).unwrap_or_default();
         let mut project_out = Vec::new();
-        let removed = crate::cli::agent_surfaces::uninstall_project_agent_surfaces(
+        let attempted = crate::cli::agent_surfaces::cleanup_project_agent_surfaces(
             project_root,
             &configured,
             &mut project_out,
         )?;
-        if removed == 0 {
+        if attempted == 0 {
             continue;
         }
 

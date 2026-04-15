@@ -31,7 +31,7 @@ pub(crate) fn reconcile_project_agent_surfaces(
             continue;
         }
         let label = registry.uninstall_agent_hooks(project_root, &agent)?;
-        writeln!(out, "Removed {label} hooks and prompt surfaces.")?;
+        writeln!(out, "Ensured {label} hooks and prompt surfaces are removed.")?;
     }
 
     for agent in selected_agents {
@@ -53,7 +53,12 @@ pub(crate) fn reconcile_project_agent_surfaces(
     Ok(())
 }
 
-pub(crate) fn uninstall_project_agent_surfaces(
+/// Attempts cleanup for configured and already-detected agents and returns the
+/// number of agent families considered for cleanup.
+///
+/// This is not an exact "files removed" count; adapter uninstall routines are
+/// currently best-effort and do not report no-op vs changed.
+pub(crate) fn cleanup_project_agent_surfaces(
     project_root: &Path,
     configured_agents: &[String],
     out: &mut dyn Write,
@@ -74,7 +79,7 @@ pub(crate) fn uninstall_project_agent_surfaces(
 
     for agent in &candidates {
         let label = registry.uninstall_agent_hooks(project_root, agent)?;
-        writeln!(out, "Removed {label} hooks and prompt surfaces.")?;
+        writeln!(out, "Ensured {label} hooks and prompt surfaces are removed.")?;
     }
 
     Ok(candidates.len())

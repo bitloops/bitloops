@@ -384,6 +384,57 @@ supported = ["codex"]
 }
 
 #[test]
+fn uninstall_agent_hooks_reports_cleanup_attempts_without_claiming_real_removals() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            fs::write(
+                repo.path().join(".bitloops.local.toml"),
+                r#"
+[capture]
+enabled = false
+
+[agents]
+supported = ["codex"]
+"#,
+            )
+            .unwrap();
+
+            let output = run_uninstall_for_test(
+                UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                None,
+                None,
+                &|| Box::pin(async { Ok(()) }),
+                &|| Ok(()),
+                &|| Ok(Vec::new()),
+            )
+            .unwrap();
+
+            assert!(output.contains("Ensured Codex hooks and prompt surfaces are removed."));
+            assert!(!output.contains("Removed Codex hooks and prompt surfaces."));
+        },
+    );
+}
+
+#[test]
 fn uninstall_agent_hooks_discovers_nested_bitloops_project_roots() {
     let repo = tempfile::tempdir().unwrap();
     let app = repo.path().join("packages/app");
@@ -396,6 +447,12 @@ fn uninstall_agent_hooks_discovers_nested_bitloops_project_roots() {
     fs::create_dir_all(&app).unwrap();
 
     with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        fs::create_dir_all(repo.path().join("node_modules/left-pad")).unwrap();
+        fs::create_dir_all(repo.path().join("target/debug/deps")).unwrap();
+        fs::create_dir_all(repo.path().join("vendor/cache/pkg")).unwrap();
+        fs::write(repo.path().join("node_modules/left-pad/package.json"), "{}").unwrap();
+        fs::write(repo.path().join("target/debug/deps/app"), "bin").unwrap();
+        fs::write(repo.path().join("vendor/cache/pkg/lib.txt"), "vendored").unwrap();
         fs::write(
             app.join(".bitloops.local.toml"),
             r#"

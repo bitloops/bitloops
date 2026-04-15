@@ -1583,7 +1583,7 @@ supported = ["cursor", "gemini"]
 }
 
 #[test]
-fn run_enable_with_legacy_agent_flag_installs_requested_agent_hooks() {
+fn run_enable_with_legacy_agent_flag_returns_guidance_error() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     with_ready_daemon_and_repo_cwd(dir.path(), || {
@@ -1598,7 +1598,9 @@ fn run_enable_with_legacy_agent_flag_installs_requested_agent_hooks() {
         })
         .unwrap_err();
 
-        assert!(format!("{err:#}").contains("bitloops init"));
+        let rendered = format!("{err:#}");
+        assert!(rendered.contains("bitloops enable --agent cursor"));
+        assert!(rendered.contains("bitloops init --agent cursor"));
         assert!(!dir.path().join(".cursor/hooks.json").exists());
         assert!(!git_hooks::is_git_hook_installed(dir.path()));
     });

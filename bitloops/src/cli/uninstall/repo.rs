@@ -99,6 +99,22 @@ fn current_bitloops_project_root() -> Result<Option<PathBuf>> {
         .map(|root| root.canonicalize().unwrap_or(root)))
 }
 
+fn should_skip_project_discovery_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "target"
+            | "vendor"
+            | ".venv"
+            | "venv"
+            | "__pycache__"
+            | ".next"
+            | "dist"
+            | "build"
+    )
+}
+
 fn discover_bitloops_project_roots() -> Result<Vec<PathBuf>> {
     let mut roots = BTreeSet::new();
     let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
@@ -111,10 +127,13 @@ fn discover_bitloops_project_roots() -> Result<Vec<PathBuf>> {
         if !registry.installed_agents(&git_root).is_empty() {
             roots.insert(git_root.clone());
         }
-        for entry in walkdir::WalkDir::new(&git_root)
-            .into_iter()
-            .filter_entry(|entry| entry.file_name() != ".git")
-        {
+        for entry in walkdir::WalkDir::new(&git_root).into_iter().filter_entry(|entry| {
+            if !entry.file_type().is_dir() {
+                return true;
+            }
+            let name = entry.file_name().to_string_lossy();
+            !should_skip_project_discovery_dir(name.as_ref())
+        }) {
             let Ok(entry) = entry else {
                 continue;
             };
@@ -143,4 +162,37 @@ fn repo_registry_path() -> Option<PathBuf> {
     bitloops_state_dir()
         .ok()
         .map(|state_dir| state_dir.join("daemon").join("repo-path-registry.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_discovery_skips_known_heavy_directories() {
+        for name in [
+            ".git",
+            "node_modules",
+            "target",
+            "vendor",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".next",
+            "dist",
+            "build",
+        ] {
+            assert!(should_skip_project_discovery_dir(name), "{name} should be skipped");
+        }
+    }
+
+    #[test]
+    fn project_discovery_keeps_normal_source_directories() {
+        for name in ["packages", "apps", "src", "services", "repo"] {
+            assert!(
+                !should_skip_project_discovery_dir(name),
+                "{name} should remain discoverable"
+            );
+        }
+    }
 }
