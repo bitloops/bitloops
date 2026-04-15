@@ -1,17 +1,29 @@
 use super::*;
 use crate::host::language_adapter::{LanguageKind, TsJsKind};
 
+struct TestSymbolRecordSpec<'a> {
+    symbol_id: &'a str,
+    symbol_fqn: &'a str,
+    canonical_kind: &'a str,
+    language_kind: &'a str,
+    start_line: i32,
+    end_line: i32,
+}
+
 fn test_symbol_record_with_fqn(
     cfg: &DevqlConfig,
     path: &str,
     blob_sha: &str,
-    symbol_id: &str,
-    symbol_fqn: &str,
-    canonical_kind: &str,
-    language_kind: &str,
-    start_line: i32,
-    end_line: i32,
+    spec: TestSymbolRecordSpec<'_>,
 ) -> PersistedArtefactRecord {
+    let TestSymbolRecordSpec {
+        symbol_id,
+        symbol_fqn,
+        canonical_kind,
+        language_kind,
+        start_line,
+        end_line,
+    } = spec;
     let file_symbol_id = file_symbol_id(path);
     let file_artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &file_symbol_id);
     PersistedArtefactRecord {
@@ -467,23 +479,27 @@ fn build_historical_edge_records_resolve_java_imported_type_call_symbol_refs() {
         &cfg,
         caller_path,
         blob_sha,
-        "caller-symbol",
-        "src/com/acme/Greeter.java::Greeter::greet",
-        "method",
-        "method_declaration",
-        1,
-        3,
+        TestSymbolRecordSpec {
+            symbol_id: "caller-symbol",
+            symbol_fqn: "src/com/acme/Greeter.java::Greeter::greet",
+            canonical_kind: "method",
+            language_kind: "method_declaration",
+            start_line: 1,
+            end_line: 3,
+        },
     );
     let to = test_symbol_record_with_fqn(
         &cfg,
         helper_path,
         blob_sha,
-        "helper-symbol",
-        "src/com/acme/Util.java::Util::helper",
-        "method",
-        "method_declaration",
-        1,
-        1,
+        TestSymbolRecordSpec {
+            symbol_id: "helper-symbol",
+            symbol_fqn: "src/com/acme/Util.java::Util::helper",
+            canonical_kind: "method",
+            language_kind: "method_declaration",
+            start_line: 1,
+            end_line: 1,
+        },
     );
     let current_by_fqn = [
         (from.symbol_fqn.clone(), from.clone()),
@@ -531,45 +547,53 @@ fn build_historical_edge_records_resolve_csharp_same_namespace_type_symbol_refs(
         &cfg,
         caller_path,
         blob_sha,
-        "caller-namespace",
-        "src/UserService.cs::ns::MyApp.Services",
-        "namespace",
-        "file_scoped_namespace_declaration",
-        1,
-        1,
+        TestSymbolRecordSpec {
+            symbol_id: "caller-namespace",
+            symbol_fqn: "src/UserService.cs::ns::MyApp.Services",
+            canonical_kind: "namespace",
+            language_kind: "file_scoped_namespace_declaration",
+            start_line: 1,
+            end_line: 1,
+        },
     );
     let from = test_symbol_record_with_fqn(
         &cfg,
         caller_path,
         blob_sha,
-        "caller-symbol",
-        "src/UserService.cs::UserService",
-        "class",
-        "class_declaration",
-        2,
-        4,
+        TestSymbolRecordSpec {
+            symbol_id: "caller-symbol",
+            symbol_fqn: "src/UserService.cs::UserService",
+            canonical_kind: "class",
+            language_kind: "class_declaration",
+            start_line: 2,
+            end_line: 4,
+        },
     );
     let target_namespace = test_symbol_record_with_fqn(
         &cfg,
         base_path,
         blob_sha,
-        "target-namespace",
-        "src/BaseService.cs::ns::MyApp.Services",
-        "namespace",
-        "file_scoped_namespace_declaration",
-        1,
-        1,
+        TestSymbolRecordSpec {
+            symbol_id: "target-namespace",
+            symbol_fqn: "src/BaseService.cs::ns::MyApp.Services",
+            canonical_kind: "namespace",
+            language_kind: "file_scoped_namespace_declaration",
+            start_line: 1,
+            end_line: 1,
+        },
     );
     let to = test_symbol_record_with_fqn(
         &cfg,
         base_path,
         blob_sha,
-        "base-symbol",
-        "src/BaseService.cs::BaseService",
-        "class",
-        "class_declaration",
-        2,
-        2,
+        TestSymbolRecordSpec {
+            symbol_id: "base-symbol",
+            symbol_fqn: "src/BaseService.cs::BaseService",
+            canonical_kind: "class",
+            language_kind: "class_declaration",
+            start_line: 2,
+            end_line: 2,
+        },
     );
     let current_by_fqn = [
         (
