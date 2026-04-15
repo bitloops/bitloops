@@ -64,6 +64,7 @@ mod types;
 mod tests;
 
 pub(crate) use self::auth::PersistedWorkosAuthSessionState;
+pub(crate) use self::auth::{PLATFORM_GATEWAY_TOKEN_ENV, platform_gateway_bearer_token};
 pub use self::auth::{
     WorkosDeviceLoginStart, WorkosLoginStart, WorkosSessionDetails, complete_workos_device_login,
     logout_workos_session, prepare_workos_device_login, resolve_workos_session_status,

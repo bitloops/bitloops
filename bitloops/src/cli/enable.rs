@@ -15,7 +15,11 @@ use crate::cli::embeddings::{
     EmbeddingsInstallState, EmbeddingsRuntime, enqueue_embeddings_bootstrap_task,
     inspect_embeddings_install_state, install_or_configure_platform_embeddings,
 };
-use crate::cli::inference::{configure_local_summary_generation, summary_generation_configured};
+use crate::cli::inference::{
+    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
+    platform_summary_gateway_url_override, prompt_summary_setup_selection,
+    summary_generation_configured,
+};
 use crate::cli::telemetry_consent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
@@ -260,12 +264,26 @@ pub(crate) async fn run_with_io(
         }
     }
 
-    if should_install_summaries(&cwd, out, input)? {
-        configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
-            anyhow::anyhow!(
-                "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
-            )
-        })?;
+    match choose_summary_setup(&cwd, out, input).await? {
+        SummarySetupSelection::Cloud => {
+            crate::cli::login::ensure_logged_in().await?;
+            let gateway_url_override = platform_summary_gateway_url_override();
+            let message = configure_cloud_summary_generation(&cwd, gateway_url_override.as_deref())
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+            writeln!(out, "{message}")?;
+        }
+        SummarySetupSelection::Local => {
+            configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                )
+            })?;
+        }
+        SummarySetupSelection::Skip => {}
     }
     Ok(())
 }
@@ -317,45 +335,24 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
     }
 }
 
-fn should_install_summaries(
+async fn choose_summary_setup(
     repo_root: &Path,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
+) -> Result<SummarySetupSelection> {
     if !telemetry_consent::can_prompt_interactively() {
-        return Ok(false);
+        return Ok(SummarySetupSelection::Skip);
     }
 
     if summary_generation_configured(repo_root) {
-        return Ok(false);
+        return Ok(SummarySetupSelection::Skip);
     }
 
-    prompt_install_summaries(out, input)
-}
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
 
-fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
-    writeln!(out)?;
-    writeln!(out, "Configure local semantic summaries as well?")?;
-    writeln!(
-        out,
-        "Bitloops will install `bitloops-inference` and try to bind summaries to a local Ollama model."
-    )?;
-
-    loop {
-        writeln!(out, "Configure semantic summaries now? (Y/n)")?;
-        write!(out, "> ")?;
-        out.flush()?;
-
-        let mut line = String::new();
-        input
-            .read_line(&mut line)
-            .context("reading semantic summary install prompt response")?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => writeln!(out, "Please answer yes or no.")?,
-        }
-    }
+    prompt_summary_setup_selection(out, input, true, false, cloud_logged_in)
 }
 
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {

@@ -1561,7 +1561,7 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                     || {
                                                                         let mut out = Vec::new();
                                                                         let mut input =
-                                                                            Cursor::new("y\n");
+                                                                            Cursor::new("2\n");
                                                                         let select = |_items: &[String]| {
                                                                             Ok(vec![
                                                                                 "claude-code"
@@ -1599,10 +1599,16 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                             String::from_utf8(out)
                                                                                 .expect("utf8 output");
                                                                         assert!(rendered.contains(
-                                                                            "Configure local semantic summaries as well?"
+                                                                            "How would you like Bitloops to configure semantic summaries?"
                                                                         ));
                                                                         assert!(rendered.contains(
-                                                                            "Configure semantic summaries now? (Y/n)"
+                                                                            "1. Bitloops cloud (recommended)"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "2. Local Ollama"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "3. Skip for now"
                                                                         ));
 
                                                                         let daemon_config_path =

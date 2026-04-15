@@ -16,6 +16,7 @@ pub use gateway::{EmptyInferenceGateway, LocalInferenceGateway, ScopedInferenceG
 pub const BITLOOPS_EMBEDDINGS_IPC_DRIVER: &str = "bitloops_embeddings_ipc";
 pub const BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID: &str = "bitloops_local_embeddings";
 pub const BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID: &str = "bitloops_platform_embeddings";
+pub const BITLOOPS_PLATFORM_CHAT_DRIVER: &str = "bitloops_platform_chat";
 pub const BITLOOPS_INFERENCE_RUNTIME_ID: &str = "bitloops_inference";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

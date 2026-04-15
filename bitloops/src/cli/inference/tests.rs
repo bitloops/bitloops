@@ -5,9 +5,12 @@ use tempfile::TempDir;
 use toml_edit::{DocumentMut, Item};
 
 use crate::cli::inference::{
-    OllamaAvailability, SummarySetupOutcome, configure_local_summary_generation,
-    summary_generation_configured, with_managed_inference_install_hook, with_ollama_probe_hook,
+    OllamaAvailability, SummarySetupOutcome, SummarySetupSelection,
+    configure_cloud_summary_generation, configure_local_summary_generation,
+    prompt_summary_setup_selection, summary_generation_configured,
+    with_managed_inference_install_hook, with_ollama_probe_hook,
 };
+use crate::cli::terminal_picker::with_single_select_hook;
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_inference_capability_config_for_repo};
 
 #[test]
@@ -92,6 +95,162 @@ fn summary_setup_prefers_ministral_3_3b_when_available() {
 }
 
 #[test]
+fn prompt_summary_setup_selection_defaults_to_cloud() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+
+    let selection = with_single_select_hook(
+        |_options, default_index| Ok(default_index),
+        || prompt_summary_setup_selection(&mut out, &mut input, true, false, false),
+    )
+    .expect("selection");
+
+    assert_eq!(selection, SummarySetupSelection::Cloud);
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Use ↑/↓ to move and enter to confirm."));
+    assert!(rendered.contains("Bitloops cloud (recommended)"));
+    assert!(rendered.contains(
+        "Requires you to create or use your free Bitloops account. No local model needed."
+    ));
+    assert!(rendered.contains(
+        "No code leaves your machine but requires RAM >32GB and GPU acceleration (64GB+ recommended)."
+    ));
+}
+
+#[test]
+fn summary_setup_can_write_platform_profile() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    let message = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || configure_cloud_summary_generation(&configure_root, None),
+    )
+    .expect("configure cloud summaries");
+
+    assert_eq!(
+        message,
+        "Configured semantic summaries to use Bitloops cloud summaries."
+    );
+    assert!(summary_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(rendered.contains("[inference.runtimes.bitloops_inference]"));
+    assert!(rendered.contains(&format!(
+        "command = \"{}\"",
+        repo_root.join("bitloops-inference").display()
+    )));
+    assert!(rendered.contains("args = []"));
+    assert!(rendered.contains("startup_timeout_secs = 60"));
+    assert!(rendered.contains("request_timeout_secs = 300"));
+    assert!(rendered.contains("driver = \"bitloops_platform_chat\""));
+    assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
+    assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
+    assert!(!rendered.contains("base_url = "));
+}
+
+#[test]
+fn summary_setup_can_write_platform_profile_with_url_override() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            configure_cloud_summary_generation(
+                &configure_root,
+                Some("https://platform.example.com/v1/chat/completions"),
+            )
+        },
+    )
+    .expect("configure cloud summaries");
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
+}
+
+#[test]
+fn interactive_summary_setup_lists_available_ollama_models() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    let outcome = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            with_ollama_probe_hook(
+                || {
+                    Ok(OllamaAvailability::Running {
+                        models: vec![
+                            "qwen2.5-coder:14b".to_string(),
+                            "ministral-3:3b".to_string(),
+                        ],
+                    })
+                },
+                || configure_local_summary_generation(&configure_root, &mut out, &mut input, true),
+            )
+        },
+    )
+    .expect("summary setup outcome");
+
+    assert_eq!(
+        outcome,
+        SummarySetupOutcome::Configured {
+            model_name: "ministral-3:3b".to_string()
+        }
+    );
+
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Select an Ollama model for semantic summaries:"));
+    assert!(rendered.contains("1. qwen2.5-coder:14b"));
+    assert!(rendered.contains("2. ministral-3:3b (mistral-3-3b recommended)"));
+}
+
+#[test]
 fn summary_setup_reprobes_ollama_after_runtime_install_when_initial_probe_misses_it() {
     let repo = TempDir::new().expect("tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -172,6 +331,37 @@ max_output_tokens = 200
     assert!(
         !summary_generation_configured(&repo_root),
         "legacy hosted text-generation profile should require migration"
+    );
+}
+
+#[test]
+fn summary_generation_configured_rejects_missing_runtime_definition() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(
+        &config_path,
+        r#"
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "bitloops_platform_chat"
+runtime = "bitloops_inference"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write config");
+
+    assert!(
+        !summary_generation_configured(&repo_root),
+        "summary generation should require a defined runtime entry"
     );
 }
 

@@ -386,6 +386,17 @@ fn runtime_launch_artifact_fingerprint(command: &str, args: &[String]) -> String
     sha256_hex(artefacts.join("\n").as_bytes())
 }
 
+fn platform_runtime_auth_environment() -> Vec<(String, String)> {
+    match crate::daemon::platform_gateway_bearer_token() {
+        Ok(Some(token)) => vec![(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(), token)],
+        Ok(None) => Vec::new(),
+        Err(err) => {
+            log::debug!("skipping platform gateway auth injection: {err:#}");
+            Vec::new()
+        }
+    }
+}
+
 fn runtime_command_uses_script_argument(command: &Path) -> bool {
     command
         .file_name()
@@ -434,6 +445,7 @@ impl BitloopsInferenceSession {
         command.arg("run");
         command.arg("--config").arg(&config.config_path);
         command.arg("--profile").arg(&config.profile_name);
+        command.envs(platform_runtime_auth_environment());
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::inherit());

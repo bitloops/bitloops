@@ -16,9 +16,10 @@ pub(crate) use managed::{
 };
 pub(crate) use setup::{
     PreparedSummarySetupPlan, SummarySetupExecutionResult, SummarySetupOutcome, SummarySetupPhase,
-    SummarySetupProgress, configure_local_summary_generation,
-    execute_prepared_summary_setup_with_progress, prepare_local_summary_generation_plan,
-    summary_generation_configured,
+    SummarySetupProgress, SummarySetupSelection, configure_cloud_summary_generation,
+    configure_local_summary_generation, execute_prepared_summary_setup_with_progress,
+    platform_summary_gateway_url_override, prepare_local_summary_generation_plan,
+    prompt_summary_setup_selection, summary_generation_configured,
 };
 
 #[cfg(test)]

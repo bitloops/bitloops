@@ -22,6 +22,7 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub(crate) mod telemetry_consent;
+pub(crate) mod terminal_picker;
 pub mod uninstall;
 pub mod versioncheck;
 
@@ -76,7 +77,7 @@ pub enum Commands {
     Reset(root::ResetArgs),
     /// Initialise Bitloops for the current project.
     Init(init::InitArgs),
-    /// Authenticate the CLI with WorkOS.
+    /// Authenticate the CLI with your Bitloops account.
     Login(login::LoginArgs),
     /// Remove the current CLI login session.
     Logout(logout::LogoutArgs),
