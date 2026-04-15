@@ -14,6 +14,7 @@ use super::storage::{
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::sync::content_cache::lookup_cached_content;
+use crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR;
 use crate::host::devql::sync::semantic_projector::{
     pre_stage_artefacts_for_projection, pre_stage_dependencies_for_projection,
 };
@@ -136,6 +137,9 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
         else {
             continue;
         };
+        if extraction.parse_status == PARSE_STATUS_DECODE_ERROR {
+            continue;
+        }
 
         let content = load_current_projection_content(repo_root, state)?;
         let desired = desired_file_state_from_current_projection(state);

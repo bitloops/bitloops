@@ -1162,6 +1162,20 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
             |row| row.get(0),
         )
         .expect("count symbol_features_current rows for good.rs");
+    let bad_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_embeddings_current rows for bad.rs");
+    let good_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/good.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_embeddings_current rows for good.rs");
 
     assert!(
         result.success,
@@ -1183,8 +1197,16 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
         bad_feature_rows, 0,
         "bad.rs should not project semantic features"
     );
+    assert_eq!(
+        bad_embedding_rows, 0,
+        "bad.rs should not project current embeddings"
+    );
     assert!(
         good_feature_rows > 0,
         "good.rs should still populate semantic features"
+    );
+    assert!(
+        good_embedding_rows > 0,
+        "good.rs should still populate current embeddings"
     );
 }
