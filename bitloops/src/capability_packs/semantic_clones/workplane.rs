@@ -3,12 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
-use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::config::{
     SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
     resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
 };
-use crate::host::capability_host::gateways::{CapabilityWorkplaneGateway, CapabilityWorkplaneJob};
+use crate::host::capability_host::gateways::CapabilityWorkplaneGateway;
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 use super::runtime_config::{embedding_slot_for_representation, resolve_selected_summary_slot};
@@ -146,60 +145,6 @@ fn resolve_effective_mailbox_intent_from_status(
     }
 }
 
-pub fn enqueue_summary_refresh_jobs(
-    workplane: &dyn CapabilityWorkplaneGateway,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    intent: &SemanticClonesMailboxIntentState,
-) -> Result<()> {
-    if !intent.summary_refresh_active {
-        return Ok(());
-    }
-    enqueue_artefact_jobs(workplane, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, inputs)
-}
-
-pub fn enqueue_summary_refresh_repo_backfill_for_repo(repo_root: &Path) -> Result<()> {
-    let store = open_workplane_store_for_repo(repo_root)?;
-    let _ = store.enqueue_capability_workplane_jobs(
-        SEMANTIC_CLONES_CAPABILITY_ID,
-        vec![
-            crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
-                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-                Some(repo_backfill_dedupe_key(
-                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-                )),
-                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)
-                    .expect("summary repo backfill payload should serialize"),
-            ),
-        ],
-    )?;
-    Ok(())
-}
-
-pub fn enqueue_embedding_jobs(
-    workplane: &dyn CapabilityWorkplaneGateway,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    intent: &SemanticClonesMailboxIntentState,
-) -> Result<()> {
-    let mut jobs = Vec::new();
-    if intent.code_embeddings_active {
-        jobs.extend(build_embedding_jobs(
-            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-            inputs,
-        ));
-    }
-    if intent.summary_embeddings_active && !intent.summary_refresh_active {
-        jobs.extend(build_embedding_jobs(
-            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-            inputs,
-        ));
-    }
-    if jobs.is_empty() {
-        return Ok(());
-    }
-    let _ = workplane.enqueue_jobs(jobs)?;
-    Ok(())
-}
-
 pub fn payload_artefact_id(payload: &serde_json::Value) -> Option<String> {
     match serde_json::from_value::<LegacySemanticClonesMailboxPayload>(payload.clone()).ok()? {
         LegacySemanticClonesMailboxPayload::Structured(
@@ -238,50 +183,6 @@ fn open_workplane_store_for_repo(repo_root: &Path) -> Result<RepoSqliteRuntimeSt
         .or_else(|_| resolve_daemon_config_path_for_repo(repo_root))?;
     let config_root = config_path.parent().unwrap_or(repo_root);
     RepoSqliteRuntimeStore::open_for_roots(config_root, repo_root)
-}
-
-fn enqueue_artefact_jobs(
-    workplane: &dyn CapabilityWorkplaneGateway,
-    mailbox_name: &str,
-    inputs: &[semantic_features::SemanticFeatureInput],
-) -> Result<()> {
-    let jobs = inputs
-        .iter()
-        .map(|input| {
-            CapabilityWorkplaneJob::new(
-                mailbox_name,
-                Some(format!("{mailbox_name}:{}", input.artefact_id)),
-                serde_json::to_value(SemanticClonesMailboxPayload::Artefact {
-                    artefact_id: input.artefact_id.clone(),
-                })
-                .expect("workplane payload should serialize"),
-            )
-        })
-        .collect::<Vec<_>>();
-    if jobs.is_empty() {
-        return Ok(());
-    }
-    let _ = workplane.enqueue_jobs(jobs)?;
-    Ok(())
-}
-
-fn build_embedding_jobs(
-    mailbox_name: &str,
-    inputs: &[semantic_features::SemanticFeatureInput],
-) -> Vec<CapabilityWorkplaneJob> {
-    inputs
-        .iter()
-        .map(|input| {
-            CapabilityWorkplaneJob::new(
-                mailbox_name,
-                Some(format!("{mailbox_name}:{}", input.artefact_id)),
-                serde_json::to_value(SemanticClonesMailboxPayload::Artefact {
-                    artefact_id: input.artefact_id.clone(),
-                })
-                .expect("embedding workplane payload should serialize"),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

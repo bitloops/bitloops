@@ -79,7 +79,10 @@ pub(super) fn merge_existing_task(
                 && (source != DevqlTaskSource::RepoPolicyChange
                     || task.status == DevqlTaskStatus::Queued)
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| {
-                    match (&existing_spec.mode, mode) {
+                    sync_specs_have_compatible_snapshots(
+                        existing_spec,
+                        sync_spec_from_task_spec(spec).expect("sync spec"),
+                    ) && match (&existing_spec.mode, mode) {
                         (SyncTaskMode::Repair, _) => true,
                         (existing_mode, incoming_mode)
                             if is_full_like(existing_mode)
@@ -97,6 +100,10 @@ pub(super) fn merge_existing_task(
         }
         if let Some(existing_spec) = sync_spec_from_task_spec_mut(&mut existing.spec) {
             existing_spec.mode = merge_sync_modes(&existing_spec.mode, mode);
+            merge_sync_snapshot_metadata(
+                existing_spec,
+                sync_spec_from_task_spec(spec).expect("sync spec"),
+            );
         }
         existing.updated_at_unix = unix_timestamp_now();
         existing.error = None;
@@ -108,19 +115,36 @@ pub(super) fn merge_existing_task(
             task.repo_id == cfg.repo.repo_id
                 && task.kind == DevqlTaskKind::Sync
                 && task.status == DevqlTaskStatus::Queued
-                && sync_spec_from_task_spec(&task.spec)
-                    .is_some_and(|existing| matches!(existing.mode, SyncTaskMode::Paths { .. }))
+                && sync_spec_from_task_spec(&task.spec).is_some_and(|existing| {
+                    matches!(existing.mode, SyncTaskMode::Paths { .. })
+                        && sync_specs_have_compatible_snapshots(
+                            existing,
+                            sync_spec_from_task_spec(spec).expect("sync spec"),
+                        )
+                })
         })
     {
         if let Some(SyncTaskSpec {
             mode: SyncTaskMode::Paths {
                 paths: existing_paths,
             },
+            post_commit_snapshot,
         }) = sync_spec_from_task_spec_mut(&mut existing.spec)
         {
             existing_paths.extend(paths.iter().cloned());
             existing_paths.sort();
             existing_paths.dedup();
+            if let (Some(existing_snapshot), Some(incoming_snapshot)) = (
+                post_commit_snapshot.as_mut(),
+                sync_spec_from_task_spec(spec)
+                    .and_then(|sync_spec| sync_spec.post_commit_snapshot.as_ref()),
+            ) {
+                existing_snapshot
+                    .changed_paths
+                    .extend(incoming_snapshot.changed_paths.iter().cloned());
+                existing_snapshot.changed_paths.sort();
+                existing_snapshot.changed_paths.dedup();
+            }
         }
         existing.updated_at_unix = unix_timestamp_now();
         existing.error = None;
@@ -566,6 +590,40 @@ fn merge_sync_modes(existing: &SyncTaskMode, incoming: &SyncTaskMode) -> SyncTas
         (SyncTaskMode::Full, _) | (_, SyncTaskMode::Full) => SyncTaskMode::Full,
         (SyncTaskMode::Auto, _) => SyncTaskMode::Auto,
         (_, mode) => mode.clone(),
+    }
+}
+
+fn sync_specs_have_compatible_snapshots(existing: &SyncTaskSpec, incoming: &SyncTaskSpec) -> bool {
+    match (
+        &existing.post_commit_snapshot,
+        &incoming.post_commit_snapshot,
+    ) {
+        (None, None) => true,
+        (Some(existing_snapshot), Some(incoming_snapshot)) => {
+            existing_snapshot.commit_sha == incoming_snapshot.commit_sha
+        }
+        _ => false,
+    }
+}
+
+fn merge_sync_snapshot_metadata(existing: &mut SyncTaskSpec, incoming: &SyncTaskSpec) {
+    match (
+        existing.post_commit_snapshot.as_mut(),
+        incoming.post_commit_snapshot.as_ref(),
+    ) {
+        (None, Some(incoming_snapshot)) => {
+            existing.post_commit_snapshot = Some(incoming_snapshot.clone());
+        }
+        (Some(existing_snapshot), Some(incoming_snapshot))
+            if existing_snapshot.commit_sha == incoming_snapshot.commit_sha =>
+        {
+            existing_snapshot
+                .changed_paths
+                .extend(incoming_snapshot.changed_paths.iter().cloned());
+            existing_snapshot.changed_paths.sort();
+            existing_snapshot.changed_paths.dedup();
+        }
+        _ => {}
     }
 }
 

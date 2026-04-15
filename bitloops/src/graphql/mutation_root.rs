@@ -688,6 +688,7 @@ fn resolve_enqueue_task_input(
                             crate::daemon::SyncTaskMode::Validate
                         }
                     },
+                    post_commit_snapshot: None,
                 }),
             ))
         }

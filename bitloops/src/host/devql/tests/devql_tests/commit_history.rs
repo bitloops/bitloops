@@ -353,6 +353,40 @@ async fn execute_ingest_materialises_unmapped_commit_history_without_current_sta
         "historical ingest must not mutate repo_sync_state"
     );
 
+    let semantic_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical semantic rows");
+    let embedding_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical embedding rows");
+    let clone_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical clone rows");
+    assert_eq!(
+        semantic_rows, 0,
+        "historical ingest must not write semantic clone summaries"
+    );
+    assert_eq!(
+        embedding_rows, 0,
+        "historical ingest must not write semantic clone embeddings"
+    );
+    assert_eq!(
+        clone_rows, 0,
+        "historical ingest must not rebuild clone edges"
+    );
+
     let ledger_row: (String, String) = sqlite
         .query_row(
             "SELECT history_status, checkpoint_status

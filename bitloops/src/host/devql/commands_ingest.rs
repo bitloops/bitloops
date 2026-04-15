@@ -1,18 +1,22 @@
 #[allow(unused_imports)]
 use super::*;
+#[allow(unused_imports)]
 use crate::capability_packs::semantic_clones::embeddings;
+#[allow(unused_imports)]
 use crate::capability_packs::semantic_clones::features as semantic;
+#[allow(unused_imports)]
 use crate::capability_packs::semantic_clones::ingesters::{
     EmbeddingRefreshMode, SemanticFeaturesRefreshPayload, SemanticFeaturesRefreshScope,
     SemanticSummaryRefreshMode, SymbolEmbeddingsRefreshPayload, SymbolEmbeddingsRefreshScope,
 };
+#[allow(unused_imports)]
 use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, SummaryProviderMode, embeddings_enabled, resolve_embedding_provider,
     resolve_semantic_clones_config, resolve_summary_provider,
 };
-use crate::capability_packs::semantic_clones::workplane::{
-    enqueue_embedding_jobs, enqueue_summary_refresh_jobs, resolve_effective_mailbox_intent,
-};
+#[allow(unused_imports)]
+use crate::capability_packs::semantic_clones::workplane::resolve_effective_mailbox_intent;
+#[allow(unused_imports)]
 use crate::capability_packs::semantic_clones::{
     RepoEmbeddingSyncAction, clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
     determine_repo_embedding_sync_action, load_active_embedding_setup,
@@ -24,6 +28,7 @@ use crate::capability_packs::semantic_clones::{
 mod orchestrator;
 #[path = "commands_ingest/progress.rs"]
 mod progress;
+#[allow(dead_code)]
 #[path = "commands_ingest/semantic_refresh.rs"]
 mod semantic_refresh;
 #[path = "commands_ingest/shared.rs"]
