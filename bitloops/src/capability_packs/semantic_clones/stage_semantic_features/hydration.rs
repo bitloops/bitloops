@@ -13,12 +13,12 @@ use super::storage::{
 };
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
-use crate::host::devql::{self, RelationalStorage, esc_pg};
 use crate::host::devql::sync::content_cache::lookup_cached_content;
 use crate::host::devql::sync::semantic_projector::{
     pre_stage_artefacts_for_projection, pre_stage_dependencies_for_projection,
 };
 use crate::host::devql::sync::types::{DesiredFileState, EffectiveSource};
+use crate::host::devql::{self, RelationalStorage, esc_pg};
 
 pub(crate) async fn load_pre_stage_artefacts_for_blob(
     relational: &RelationalStorage,
@@ -421,7 +421,9 @@ fn current_projection_cfg(repo_root: &Path, repo_id: &str) -> devql::DevqlConfig
     }
 }
 
-fn desired_file_state_from_current_projection(state: &CurrentProjectionPathState) -> DesiredFileState {
+fn desired_file_state_from_current_projection(
+    state: &CurrentProjectionPathState,
+) -> DesiredFileState {
     DesiredFileState {
         path: state.path.clone(),
         analysis_mode: devql::AnalysisMode::Code,

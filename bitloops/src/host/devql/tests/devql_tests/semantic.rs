@@ -612,7 +612,10 @@ async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
     let active_setup =
         load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
 
-    assert_eq!(second.symbol_embedding_rows_upserted, second_hashes.len() * 2);
+    assert_eq!(
+        second.symbol_embedding_rows_upserted,
+        second_hashes.len() * 2
+    );
     assert!(!second_hashes.is_empty());
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
@@ -718,7 +721,10 @@ async fn direct_ingest_treats_dimension_change_as_setup_change() {
     let active_setup =
         load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
 
-    assert_eq!(second.symbol_embedding_rows_upserted, second_hashes.len() * 2);
+    assert_eq!(
+        second.symbol_embedding_rows_upserted,
+        second_hashes.len() * 2
+    );
     assert!(!second_hashes.is_empty());
     assert_eq!(
         load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),

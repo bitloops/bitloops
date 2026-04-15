@@ -471,15 +471,12 @@ async fn load_workplane_embedding_refresh_inputs(
     let Some(artefact_id) = payload_artefact_id(&job.payload) else {
         anyhow::bail!("workplane mailbox job missing artefact id");
     };
-    let current_inputs = load_semantic_feature_inputs_for_current_repo(
-        relational,
-        &job.repo_root,
-        &job.repo_id,
-    )
-    .await?
-    .into_iter()
-    .filter(|input| input.artefact_id == artefact_id)
-    .collect::<Vec<_>>();
+    let current_inputs =
+        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
+            .await?
+            .into_iter()
+            .filter(|input| input.artefact_id == artefact_id)
+            .collect::<Vec<_>>();
     if let Some(first) = current_inputs.first() {
         let single_path = current_inputs
             .iter()
