@@ -14,6 +14,8 @@ postgres-tests = []
 slow-tests = []
 # Opt-in QAT acceptance suites, exposed through the `cargo qat*` aliases.
 qat-tests = []
+# Opt-in internal QAT harness tests that should not compile into the focused suite targets.
+qat-internal-tests = []
 
 [lib]
 path = "src/lib.rs"
@@ -91,9 +93,44 @@ path = "tests/performance.rs"
 required-features = ["slow-tests"]
 
 [[test]]
-name = "qat_acceptance"
-path = "tests/qat_acceptance.rs"
+name = "qat"
+path = "tests/qat.rs"
 required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_smoke"
+path = "tests/qat_smoke.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_devql_capabilities"
+path = "tests/qat_devql_capabilities.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_devql_ingest"
+path = "tests/qat_devql_ingest.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_devql_sync"
+path = "tests/qat_devql_sync.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_onboarding"
+path = "tests/qat_onboarding.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_quickstart"
+path = "tests/qat_quickstart.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_internal"
+path = "tests/qat_internal.rs"
+required-features = ["qat-tests", "qat-internal-tests"]
 
 [[test]]
 name = "qat_bundle"

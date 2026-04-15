@@ -32,6 +32,54 @@ fn combine_bundle_results_returns_onboarding_error_when_only_onboarding_fails() 
 }
 
 #[test]
+fn combine_bundle_results_returns_sync_error_when_only_sync_fails() {
+    let err = combine_bundle_results(vec![
+        BundleResult::ok("onboarding"),
+        BundleResult::ok("smoke"),
+        BundleResult::err("devql-sync", anyhow::anyhow!("sync failed")),
+        BundleResult::ok("devql-capabilities"),
+        BundleResult::ok("devql-ingest"),
+    ])
+    .expect_err("sync failure should surface");
+    assert!(
+        format!("{err:#}").contains("sync failed"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn combine_bundle_results_returns_smoke_error_when_only_smoke_fails() {
+    let err = combine_bundle_results(vec![
+        BundleResult::ok("onboarding"),
+        BundleResult::err("smoke", anyhow::anyhow!("smoke failed")),
+        BundleResult::ok("devql-sync"),
+        BundleResult::ok("devql-capabilities"),
+        BundleResult::ok("devql-ingest"),
+    ])
+    .expect_err("smoke failure should surface");
+    assert!(
+        format!("{err:#}").contains("smoke failed"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn combine_bundle_results_returns_devql_capabilities_error_when_only_capabilities_fail() {
+    let err = combine_bundle_results(vec![
+        BundleResult::ok("onboarding"),
+        BundleResult::ok("smoke"),
+        BundleResult::ok("devql-sync"),
+        BundleResult::err("devql-capabilities", anyhow::anyhow!("devql failed")),
+        BundleResult::ok("devql-ingest"),
+    ])
+    .expect_err("devql failure should surface");
+    assert!(
+        format!("{err:#}").contains("devql failed"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn combine_bundle_results_returns_devql_ingest_error_when_only_ingest_fails() {
     let err = combine_bundle_results(vec![
         BundleResult::ok("onboarding"),

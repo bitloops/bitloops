@@ -41,9 +41,10 @@ test-coverage = "llvm-cov --workspace --all-targets --features slow-tests --no-d
 test-coverage-lcov = "llvm-cov --workspace --all-targets --features slow-tests --no-default-features --lcov --output-path target/llvm-cov.info"
 
 # QAT aliases
-qat = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat --exact"
-qat-smoke = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_smoke --exact"
-qat-devql-sync = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_sync --exact"
-qat-onboarding = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_onboarding --exact"
-qat-devql-capabilities = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_capabilities --exact"
-qat-devql-ingest = "nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_ingest --exact"
+qat = "nextest run --features qat-tests --test qat --run-ignored only -- qat --exact"
+qat-smoke = "nextest run --features qat-tests --test qat_smoke --run-ignored only -- qat_smoke --exact"
+qat-devql-capabilities = "nextest run --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact"
+qat-devql-sync = "nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
+qat-onboarding = "nextest run --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"
+qat-devql-ingest = "nextest run --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact"
+qat-quickstart = "nextest run --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact"

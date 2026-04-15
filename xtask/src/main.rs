@@ -1477,15 +1477,25 @@ mod tests {
     }
 
     #[test]
-    fn slow_lane_excludes_qat_acceptance() {
-        assert!(
-            !SLOW_TEST_TARGETS.contains(&"qat_acceptance"),
-            "qat acceptance should remain outside the generic slow lane"
-        );
+    fn slow_lane_excludes_qat_targets() {
+        for target in [
+            "qat",
+            "qat_smoke",
+            "qat_devql_capabilities",
+            "qat_devql_ingest",
+            "qat_devql_sync",
+            "qat_onboarding",
+            "qat_quickstart",
+        ] {
+            assert!(
+                !SLOW_TEST_TARGETS.contains(&target),
+                "QAT target `{target}` should remain outside the generic slow lane"
+            );
+        }
     }
 
     #[test]
-    fn cargo_manifest_and_qat_aliases_use_dedicated_qat_tests_feature() {
+    fn cargo_manifest_and_qat_aliases_use_split_qat_targets() {
         let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root");
@@ -1498,23 +1508,95 @@ mod tests {
             "bitloops manifest should declare a dedicated qat-tests feature"
         );
         assert!(
-            manifest.contains(
-                "name = \"qat_acceptance\"\npath = \"tests/qat_acceptance.rs\"\nrequired-features = [\"qat-tests\"]"
-            ),
-            "qat_acceptance target should require only the qat-tests feature"
+            manifest.contains("qat-internal-tests = []"),
+            "bitloops manifest should declare a dedicated qat-internal-tests feature"
         );
+
+        for (name, path, required_features) in [
+            ("qat", "tests/qat.rs", &["qat-tests"][..]),
+            ("qat_smoke", "tests/qat_smoke.rs", &["qat-tests"][..]),
+            (
+                "qat_devql_capabilities",
+                "tests/qat_devql_capabilities.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_devql_ingest",
+                "tests/qat_devql_ingest.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_devql_sync",
+                "tests/qat_devql_sync.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_onboarding",
+                "tests/qat_onboarding.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_quickstart",
+                "tests/qat_quickstart.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_internal",
+                "tests/qat_internal.rs",
+                &["qat-tests", "qat-internal-tests"][..],
+            ),
+        ] {
+            let required_features = required_features
+                .iter()
+                .map(|feature| format!("\"{feature}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let snippet = format!(
+                "name = \"{name}\"\npath = \"{path}\"\nrequired-features = [{required_features}]"
+            );
+            assert!(
+                manifest.contains(&snippet),
+                "manifest should declare QAT target `{name}` with required features [{required_features}]"
+            );
+        }
 
         let config_path = workspace_root.join(".cargo").join("config.toml");
         let config = fs::read_to_string(&config_path)
             .unwrap_or_else(|err| panic!("reading {} failed: {err}", config_path.display()));
 
-        for alias in [
-            "qat = ",
-            "qat-smoke = ",
-            "qat-devql-capabilities = ",
-            "qat-devql-sync = ",
-            "qat-onboarding = ",
-            "qat-devql-ingest = ",
+        for (alias, target, test_name, expect_no_capture) in [
+            ("qat = ", "qat", "qat", false),
+            ("qat-smoke = ", "qat_smoke", "qat_smoke", false),
+            (
+                "qat-devql-capabilities = ",
+                "qat_devql_capabilities",
+                "qat_devql_capabilities",
+                false,
+            ),
+            (
+                "qat-devql-sync = ",
+                "qat_devql_sync",
+                "qat_devql_sync",
+                false,
+            ),
+            (
+                "qat-onboarding = ",
+                "qat_onboarding",
+                "qat_onboarding",
+                false,
+            ),
+            (
+                "qat-devql-ingest = ",
+                "qat_devql_ingest",
+                "qat_devql_ingest",
+                false,
+            ),
+            (
+                "qat-quickstart = ",
+                "qat_quickstart",
+                "qat_quickstart",
+                false,
+            ),
         ] {
             let line = config
                 .lines()
@@ -1529,6 +1611,182 @@ mod tests {
             assert!(
                 line.contains("--features qat-tests"),
                 "cargo alias should enable the dedicated qat-tests feature: {line}"
+            );
+            assert!(
+                line.contains(&format!("--test {target}")),
+                "cargo alias should target `{target}`: {line}"
+            );
+            assert!(
+                line.contains(&format!("-- {test_name} --exact")),
+                "cargo alias should select `{test_name}` exactly: {line}"
+            );
+            assert_eq!(
+                line.contains("--no-capture"),
+                expect_no_capture,
+                "cargo alias `{alias}` should {}use --no-capture: {line}",
+                if expect_no_capture { "" } else { "not " }
+            );
+        }
+    }
+
+    #[test]
+    fn crate_local_qat_aliases_match_workspace_qat_aliases() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let workspace_config_path = workspace_root.join(".cargo").join("config.toml");
+        let workspace_config = fs::read_to_string(&workspace_config_path).unwrap_or_else(|err| {
+            panic!("reading {} failed: {err}", workspace_config_path.display())
+        });
+        let crate_config_path = workspace_root
+            .join("bitloops")
+            .join(".cargo")
+            .join("config.toml");
+        let crate_config = fs::read_to_string(&crate_config_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", crate_config_path.display()));
+
+        for (alias, target, test_name, expect_no_capture) in [
+            ("qat = ", "qat", "qat", false),
+            ("qat-smoke = ", "qat_smoke", "qat_smoke", false),
+            (
+                "qat-devql-capabilities = ",
+                "qat_devql_capabilities",
+                "qat_devql_capabilities",
+                false,
+            ),
+            (
+                "qat-devql-sync = ",
+                "qat_devql_sync",
+                "qat_devql_sync",
+                false,
+            ),
+            (
+                "qat-onboarding = ",
+                "qat_onboarding",
+                "qat_onboarding",
+                false,
+            ),
+            (
+                "qat-devql-ingest = ",
+                "qat_devql_ingest",
+                "qat_devql_ingest",
+                false,
+            ),
+            (
+                "qat-quickstart = ",
+                "qat_quickstart",
+                "qat_quickstart",
+                false,
+            ),
+        ] {
+            let workspace_line = workspace_config
+                .lines()
+                .find(|line| line.starts_with(alias))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing workspace cargo alias `{}` in {}",
+                        alias,
+                        workspace_config_path.display()
+                    )
+                });
+            let crate_line = crate_config
+                .lines()
+                .find(|line| line.starts_with(alias))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing crate-local cargo alias `{}` in {}",
+                        alias,
+                        crate_config_path.display()
+                    )
+                });
+            for line in [workspace_line, crate_line] {
+                assert!(
+                    line.contains("--features qat-tests"),
+                    "QAT alias `{alias}` should enable the dedicated qat-tests feature: {line}"
+                );
+                assert!(
+                    line.contains(&format!("--test {target}")),
+                    "QAT alias `{alias}` should target `{target}`: {line}"
+                );
+                assert!(
+                    line.contains(&format!("-- {test_name} --exact")),
+                    "QAT alias `{alias}` should select `{test_name}` exactly: {line}"
+                );
+                assert_eq!(
+                    line.contains("--no-capture"),
+                    expect_no_capture,
+                    "QAT alias `{alias}` should {}use --no-capture: {line}",
+                    if expect_no_capture { "" } else { "not " }
+                );
+            }
+            assert_eq!(
+                crate_line.contains("--manifest-path bitloops/Cargo.toml"),
+                false,
+                "crate-local alias `{alias}` should not hard-code the workspace manifest path"
+            );
+        }
+    }
+
+    #[test]
+    fn nextest_config_serializes_split_qat_binaries() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let config_path = workspace_root.join(".config").join("nextest.toml");
+        let config = fs::read_to_string(&config_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", config_path.display()));
+
+        for target in [
+            "qat",
+            "qat_smoke",
+            "qat_devql_capabilities",
+            "qat_devql_ingest",
+            "qat_devql_sync",
+            "qat_onboarding",
+            "qat_quickstart",
+        ] {
+            let needle = format!("binary(={target})");
+            assert!(
+                config.matches(&needle).count() >= 2,
+                "nextest config should assign `{target}` to the qat group in both profiles"
+            );
+        }
+
+        assert!(
+            !config.contains("binary(=qat_acceptance)"),
+            "nextest config should no longer reference the legacy qat_acceptance target"
+        );
+    }
+
+    #[test]
+    fn qat_internal_tests_are_isolated_to_internal_target() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let qat_internal_path = workspace_root
+            .join("bitloops")
+            .join("tests")
+            .join("qat_internal.rs");
+        let qat_internal = fs::read_to_string(&qat_internal_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", qat_internal_path.display()));
+
+        assert!(
+            qat_internal.contains("#[path = \"qat_internal_support.rs\"]"),
+            "qat_internal target should route through the dedicated internal support module"
+        );
+
+        for relative_path in [
+            "bitloops/tests/qat_support/helpers/mod.rs",
+            "bitloops/tests/qat_support/runner.rs",
+            "bitloops/tests/qat_support/entrypoints.rs",
+        ] {
+            let path = workspace_root.join(relative_path);
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {} failed: {err}", path.display()));
+            assert!(
+                !source.contains("feature = \"qat-internal-tests\""),
+                "shared QAT support file {} should not gate tests by package feature",
+                path.display()
             );
         }
     }

@@ -148,6 +148,3 @@ include!("deps_and_testlens.rs");
 include!("semantic_clones.rs");
 include!("knowledge.rs");
 include!("internals.rs");
-
-#[cfg(test)]
-mod tests;

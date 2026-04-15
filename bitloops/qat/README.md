@@ -1,9 +1,9 @@
 # QAT Test Guide
 
-This document explains how to run Bitloops QAT (Cucumber) journeys and how to inspect artifacts.
-
-QAT runs as a standard Rust integration test target, executed via `cargo-nextest`. The production binary no longer exposes a
-`qat` subcommand, and the repo aliases enable the dedicated `qat-tests` feature automatically.
+QAT runs as dedicated Rust integration test targets, executed via `cargo-nextest`. The legacy `qat_acceptance` target has been
+split into `qat`, `qat_smoke`, `qat_devql_capabilities`, `qat_devql_ingest`, `qat_devql_sync`, `qat_onboarding`, and
+`qat_quickstart`. The production binary no longer exposes a `qat` subcommand, and the repo aliases enable the dedicated
+`qat-tests` feature automatically.
 
 ## Where to run from
 
@@ -24,15 +24,27 @@ cargo qat
 ```
 
 Works from both the `bitloops/` crate directory and the repository root.
-The checked-in alias has `cargo-nextest` as the runner and adds `--no-capture` so the long bundled journey streams progress instead of failing opaquely under output capture.
+The checked-in alias uses `cargo-nextest` as the runner.
 
 Equivalent explicit form:
 
 ```bash
-cargo nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_acceptance --run-ignored only --no-capture -- qat --exact
+cargo nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat --run-ignored only -- qat --exact
 ```
 
 The bundled suites are all part of `cargo qat`, and the focused aliases remain available for targeted runs.
+
+### Quickstart
+
+```bash
+cargo qat-quickstart
+```
+
+Or equivalently:
+
+```bash
+cargo nextest run --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact
+```
 
 ### 1. Smoke (13 scenarios across 2 features)
 
@@ -48,7 +60,7 @@ cargo qat-smoke
 Or equivalently:
 
 ```bash
-cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_smoke --exact
+cargo nextest run --features qat-tests --test qat_smoke --run-ignored only -- qat_smoke --exact
 ```
 
 **Scenarios:**
@@ -73,7 +85,7 @@ cargo qat-onboarding
 Or equivalently:
 
 ```bash
-cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_onboarding --exact
+cargo nextest run --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact
 ```
 
 **Scenarios:**
@@ -107,7 +119,7 @@ cargo qat-devql-sync
 Or equivalently:
 
 ```bash
-cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_sync --exact
+cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact
 ```
 
 **Scenarios:**
@@ -146,34 +158,34 @@ cargo qat-devql-capabilities
 Or equivalently:
 
 ```bash
-cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only -- qat_devql_capabilities --exact
+cargo nextest run --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact
 ```
 
 **Scenarios:**
 
-| #   | Scenario                                                      | Flow                       |
-| --- | ------------------------------------------------------------- | -------------------------- |
-| 1   | First Claude Code change is queryable through DevQL           | `AgentEnablementQueryable` |
-| 2   | Claude Code chat history is retrievable after edit and commit | `AgentChatHistory`         |
-| 3   | Dependency query returns outgoing edges for a known caller    | `BlastRadiusTemporal`      |
-| 4   | Dependency query returns incoming edges for a known callee    | `BlastRadiusTemporal`      |
-| 5   | Current workspace edit changes the outgoing dependency graph  | `BlastRadiusTemporal`      |
-| 6   | Historical query returns the pre-edit outgoing graph          | `BlastRadiusTemporal`      |
-| 7   | Repeated ingest does not duplicate artefacts or edges         | `BlastRadiusTemporal`      |
-| 8   | Test summary returns counts for `UserService.createUser`      | `TestHarnessProofMap`      |
-| 9   | Tests query returns individual covering tests                 | `TestHarnessProofMap`      |
-| 10  | Coverage query returns line coverage data                     | `TestHarnessProofMap`      |
-| 11  | Untested artefact is clearly identified                       | `TestHarnessProofMap`      |
-| 12  | Failing test is distinguishable from passing test             | `TestHarnessProofMap`      |
-| 13  | Historical ingest populates semantic-clone historical tables  | `SemanticClones`           |
-| 14  | Current projection populates semantic-clone current tables | `SemanticClones`           |
-| 15  | Embedding and clone-edge rebuild jobs both make progress      | `SemanticClones`           |
+| #   | Scenario                                                           | Flow                       |
+| --- | ------------------------------------------------------------------ | -------------------------- |
+| 1   | First Claude Code change is queryable through DevQL                | `AgentEnablementQueryable` |
+| 2   | Claude Code chat history is retrievable after edit and commit      | `AgentChatHistory`         |
+| 3   | Dependency query returns outgoing edges for a known caller         | `BlastRadiusTemporal`      |
+| 4   | Dependency query returns incoming edges for a known callee         | `BlastRadiusTemporal`      |
+| 5   | Current workspace edit changes the outgoing dependency graph       | `BlastRadiusTemporal`      |
+| 6   | Historical query returns the pre-edit outgoing graph               | `BlastRadiusTemporal`      |
+| 7   | Repeated ingest does not duplicate artefacts or edges              | `BlastRadiusTemporal`      |
+| 8   | Test summary returns counts for `UserService.createUser`           | `TestHarnessProofMap`      |
+| 9   | Tests query returns individual covering tests                      | `TestHarnessProofMap`      |
+| 10  | Coverage query returns line coverage data                          | `TestHarnessProofMap`      |
+| 11  | Untested artefact is clearly identified                            | `TestHarnessProofMap`      |
+| 12  | Failing test is distinguishable from passing test                  | `TestHarnessProofMap`      |
+| 13  | Historical ingest populates semantic-clone historical tables       | `SemanticClones`           |
+| 14  | Current projection populates semantic-clone current tables         | `SemanticClones`           |
+| 15  | Embedding and clone-edge rebuild jobs both make progress           | `SemanticClones`           |
 | 16  | Historical and current embeddings expose code and summary channels | `SemanticClones`           |
-| 17  | Handler clones stay explainable, rankable, and filterable     | `SemanticClones`           |
-| 18  | DevQL clone summary returns grouped counts                    | `SemanticClones`           |
-| 19  | GraphQL clone summary returns grouped counts                  | `SemanticClones`           |
-| 20  | Unsupported URL fails cleanly without partial persistence     | `KnowledgeIngestion`       |
-| 21  | Hardened DevQL capability surfaces compose in one workflow    | `CrossCapabilitySmoke`     |
+| 17  | Handler clones stay explainable, rankable, and filterable          | `SemanticClones`           |
+| 18  | DevQL clone summary returns grouped counts                         | `SemanticClones`           |
+| 19  | GraphQL clone summary returns grouped counts                       | `SemanticClones`           |
+| 20  | Unsupported URL fails cleanly without partial persistence          | `KnowledgeIngestion`       |
+| 21  | Hardened DevQL capability surfaces compose in one workflow         | `CrossCapabilitySmoke`     |
 
 ## Daemon prerequisite
 
