@@ -6,6 +6,7 @@ mod profiles;
 mod tests;
 
 pub(crate) use args::enqueue_embeddings_bootstrap_task;
+pub(crate) use args::run_async;
 pub use args::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsDoctorArgs,
     EmbeddingsInstallArgs, EmbeddingsPullArgs, EmbeddingsRuntime, run,
@@ -30,8 +31,3 @@ pub(crate) use managed::{
 
 #[cfg(test)]
 pub(crate) use profiles::{clear_cache_for_profile, doctor_profile, pull_profile};
-
-#[cfg(test)]
-pub(crate) async fn run_async(args: EmbeddingsArgs) -> anyhow::Result<()> {
-    args::run_async(args).await
-}

@@ -57,24 +57,20 @@ pub(super) fn build_file_artefact_row_from_content(
 
 pub(super) async fn upsert_file_artefact_row(
     repo_id: &str,
-    repo_root: &Path,
     relational: &RelationalStorage,
     path: &str,
     blob_sha: &str,
     language: &str,
     extraction_fingerprint: &str,
+    blob_content: &DecodedFileContent,
 ) -> Result<FileArtefactRow> {
     let symbol_id = file_symbol_id(path);
     let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
-    let line_count = git_blob_line_count(repo_root, blob_sha).unwrap_or(1).max(1);
-    let blob_content = git_blob_content(repo_root, blob_sha);
-    let byte_count = blob_content
-        .as_ref()
-        .map(|content| content.len() as i32)
-        .unwrap_or(0)
-        .max(0);
+    let line_count = blob_content.line_count().max(1);
+    let byte_count = blob_content.byte_count().max(0);
     let modifiers_sql = sql_json_text_array(relational, &[]);
     let file_docstring = blob_content
+        .text
         .as_deref()
         .and_then(|content| extract_file_docstring_for_language_pack(path, language, content));
     let docstring_sql = sql_nullable_text(file_docstring.as_deref());

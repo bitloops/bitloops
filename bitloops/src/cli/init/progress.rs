@@ -142,7 +142,13 @@ pub(super) async fn run_dual_init_progress(
     } else {
         SummaryProgressState::Hidden
     };
-    let mut summary_backfill_enqueued = false;
+    let mut embeddings_bootstrap_ready = matches!(
+        &bottom_state,
+        BottomProgressState::Bootstrap(task)
+            if task.is_terminal() && task.status.eq_ignore_ascii_case("completed")
+    );
+    let mut initial_sync_completed = false;
+    let mut enqueue_follow_up_sync_after_embeddings_ready = false;
     let mut checklist = InitChecklistState {
         show_sync: options.show_sync,
         show_ingest: options.show_ingest,
@@ -192,6 +198,14 @@ pub(super) async fn run_dual_init_progress(
                             if refreshed.status.eq_ignore_ascii_case("completed") {
                                 if refreshed.is_sync() {
                                     checklist.sync_complete = true;
+                                    if !initial_sync_completed {
+                                        initial_sync_completed = true;
+                                        if options.queued_embeddings_bootstrap.is_some()
+                                            && !embeddings_bootstrap_ready
+                                        {
+                                            enqueue_follow_up_sync_after_embeddings_ready = true;
+                                        }
+                                    }
                                 } else if refreshed.is_ingest() {
                                     checklist.ingest_complete = true;
                                 }
@@ -221,6 +235,14 @@ pub(super) async fn run_dual_init_progress(
                         Some(refreshed) => top_task = Some(refreshed),
                         None if current.is_sync() && enqueue_ingest_after_sync => {
                             checklist.sync_complete = true;
+                            if !initial_sync_completed {
+                                initial_sync_completed = true;
+                                if options.queued_embeddings_bootstrap.is_some()
+                                    && !embeddings_bootstrap_ready
+                                {
+                                    enqueue_follow_up_sync_after_embeddings_ready = true;
+                                }
+                            }
                             let (ingest_task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
                                 scope,
                                 Some(options.ingest_backfill),
@@ -232,6 +254,14 @@ pub(super) async fn run_dual_init_progress(
                         None => {
                             if current.is_sync() {
                                 checklist.sync_complete = true;
+                                if !initial_sync_completed {
+                                    initial_sync_completed = true;
+                                    if options.queued_embeddings_bootstrap.is_some()
+                                        && !embeddings_bootstrap_ready
+                                    {
+                                        enqueue_follow_up_sync_after_embeddings_ready = true;
+                                    }
+                                }
                             } else if current.is_ingest() {
                                 checklist.ingest_complete = true;
                             }
@@ -320,6 +350,7 @@ pub(super) async fn run_dual_init_progress(
                         match refresh_init_progress_task(bootstrap_scope, &current_task).await? {
                             Some(refreshed) if refreshed.is_terminal() => {
                                 if refreshed.status.eq_ignore_ascii_case("completed") {
+                                    embeddings_bootstrap_ready = true;
                                     let queue_snapshot =
                                         current_embedding_queue_snapshot(&scope.repo_root).await?;
                                     let completed_floor = queue_snapshot
@@ -391,46 +422,15 @@ pub(super) async fn run_dual_init_progress(
                         completed_floor,
                     } => {
                         let queue_snapshot = current_summary_queue_snapshot(&scope.repo_root).await?;
-                        if !summary_backfill_enqueued
-                            && summary_repo_backfill_needed(
-                                &result,
-                                queue_snapshot,
-                                allow_empty_queue_completion,
-                                completed_floor,
-                                snapshot.completed,
-                                snapshot.failed,
-                            )
-                        {
-                            match crate::capability_packs::semantic_clones::workplane::enqueue_summary_refresh_repo_backfill_for_repo(&scope.repo_root) {
-                                Ok(()) => {
-                                    summary_backfill_enqueued = true;
-                                    let queue_snapshot = current_summary_queue_snapshot(&scope.repo_root).await?;
-                                    update_summary_queue_state(
-                                        result,
-                                        queue_snapshot,
-                                        false,
-                                        baseline_total,
-                                        completed_floor,
-                                        snapshot.completed,
-                                        snapshot.failed,
-                                    )
-                                }
-                                Err(err) => SummaryProgressState::Failed {
-                                    progress: crate::cli::inference::SummarySetupProgress::default(),
-                                    error: format!("failed to queue semantic summary catch-up: {err:#}"),
-                                },
-                            }
-                        } else {
-                            update_summary_queue_state(
-                                result,
-                                queue_snapshot,
-                                allow_empty_queue_completion,
-                                baseline_total,
-                                completed_floor,
-                                snapshot.completed,
-                                snapshot.failed,
-                            )
-                        }
+                        update_summary_queue_state(
+                            result,
+                            queue_snapshot,
+                            allow_empty_queue_completion,
+                            baseline_total,
+                            completed_floor,
+                            snapshot.completed,
+                            snapshot.failed,
+                        )
                     }
                     SummaryProgressState::WaitingForQueue {
                         result,
@@ -440,49 +440,41 @@ pub(super) async fn run_dual_init_progress(
                         failed_jobs,
                     } => {
                         let queue_snapshot = current_summary_queue_snapshot(&scope.repo_root).await?;
-                        if !summary_backfill_enqueued
-                            && summary_repo_backfill_needed(
-                                &result,
-                                queue_snapshot,
-                                allow_empty_queue_completion,
-                                completed_floor,
-                                completed_jobs,
-                                failed_jobs,
-                            )
-                        {
-                            match crate::capability_packs::semantic_clones::workplane::enqueue_summary_refresh_repo_backfill_for_repo(&scope.repo_root) {
-                                Ok(()) => {
-                                    summary_backfill_enqueued = true;
-                                    let queue_snapshot = current_summary_queue_snapshot(&scope.repo_root).await?;
-                                    update_summary_queue_state(
-                                        result,
-                                        queue_snapshot,
-                                        false,
-                                        baseline_total,
-                                        completed_floor,
-                                        completed_jobs,
-                                        failed_jobs,
-                                    )
-                                }
-                                Err(err) => SummaryProgressState::Failed {
-                                    progress: crate::cli::inference::SummarySetupProgress::default(),
-                                    error: format!("failed to queue semantic summary catch-up: {err:#}"),
-                                },
-                            }
-                        } else {
-                            update_summary_queue_state(
-                                result,
-                                queue_snapshot,
-                                allow_empty_queue_completion,
-                                baseline_total,
-                                completed_floor,
-                                completed_jobs,
-                                failed_jobs,
-                            )
-                        }
+                        update_summary_queue_state(
+                            result,
+                            queue_snapshot,
+                            allow_empty_queue_completion,
+                            baseline_total,
+                            completed_floor,
+                            completed_jobs,
+                            failed_jobs,
+                        )
                     }
                     other => other,
                 };
+
+                if enqueue_follow_up_sync_after_embeddings_ready
+                    && embeddings_bootstrap_ready
+                    && init_pipeline_complete(
+                        checklist,
+                        top_task.is_none(),
+                        enqueue_ingest_after_sync,
+                    )
+                {
+                    let (follow_up_sync_task, _merged) =
+                        crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
+                            scope,
+                            false,
+                            None,
+                            false,
+                            false,
+                            "init",
+                            false,
+                        )
+                        .await?;
+                    top_task = Some(follow_up_sync_task);
+                    enqueue_follow_up_sync_after_embeddings_ready = false;
+                }
 
                 renderer.render(
                     out,
@@ -547,32 +539,6 @@ fn summary_queue_tracking_enabled(
         result.outcome,
         crate::cli::inference::SummarySetupOutcome::Configured { .. }
     )
-}
-
-fn summary_repo_backfill_needed(
-    result: &crate::cli::inference::SummarySetupExecutionResult,
-    snapshot: Option<EmbeddingQueueSnapshot>,
-    allow_empty_completion: bool,
-    completed_floor: u64,
-    completed_jobs: u64,
-    failed_jobs: u64,
-) -> bool {
-    if !summary_queue_tracking_enabled(result)
-        || !allow_empty_completion
-        || completed_jobs > 0
-        || failed_jobs > 0
-    {
-        return false;
-    }
-
-    match snapshot {
-        Some(snapshot) => {
-            snapshot.remaining() == 0
-                && snapshot.failed == 0
-                && snapshot.completed <= completed_floor
-        }
-        None => true,
-    }
 }
 
 fn update_embeddings_queue_state(
@@ -757,68 +723,5 @@ mod tests {
         );
 
         assert!(matches!(state, SummaryProgressState::Complete { .. }));
-    }
-
-    #[test]
-    fn configured_summaries_request_repo_backfill_when_no_summary_jobs_appeared() {
-        assert!(summary_repo_backfill_needed(
-            &configured_summary_result(),
-            None,
-            true,
-            0,
-            0,
-            0,
-        ));
-        assert!(summary_repo_backfill_needed(
-            &configured_summary_result(),
-            Some(EmbeddingQueueSnapshot {
-                pending: 0,
-                running: 0,
-                failed: 0,
-                completed: 0,
-            }),
-            true,
-            0,
-            0,
-            0,
-        ));
-    }
-
-    #[test]
-    fn configured_summaries_skip_repo_backfill_once_summary_work_exists() {
-        assert!(!summary_repo_backfill_needed(
-            &configured_summary_result(),
-            Some(EmbeddingQueueSnapshot {
-                pending: 1,
-                running: 0,
-                failed: 0,
-                completed: 0,
-            }),
-            true,
-            0,
-            0,
-            0,
-        ));
-        assert!(!summary_repo_backfill_needed(
-            &configured_summary_result(),
-            Some(EmbeddingQueueSnapshot {
-                pending: 0,
-                running: 0,
-                failed: 0,
-                completed: 3,
-            }),
-            true,
-            1,
-            2,
-            0,
-        ));
-        assert!(!summary_repo_backfill_needed(
-            &configured_summary_result(),
-            None,
-            false,
-            0,
-            0,
-            0,
-        ));
     }
 }

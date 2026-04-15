@@ -191,7 +191,7 @@ fn build_init_bitloops_args_supports_sync_true_choice_and_force() {
 #[test]
 fn build_init_bitloops_args_with_backfill_enables_ingest_and_sets_window() {
     let args = build_init_bitloops_args_with_options(
-        "claude-code",
+        &["claude-code"],
         false,
         Some(false),
         Some(false),
@@ -206,6 +206,24 @@ fn build_init_bitloops_args_with_backfill_enables_ingest_and_sets_window() {
             "--sync=false",
             "--ingest=true",
             "--backfill=2",
+        ]
+    );
+}
+
+#[test]
+fn build_init_bitloops_args_supports_repeated_agent_flags() {
+    let args =
+        build_init_bitloops_args_with_options(&["claude-code", "codex"], false, None, None, None);
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--agent",
+            "codex",
+            "--sync=false",
+            "--ingest=false",
         ]
     );
 }

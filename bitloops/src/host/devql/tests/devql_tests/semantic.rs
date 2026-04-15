@@ -1,11 +1,8 @@
 use super::*;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
-
-const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
 
 #[tokio::test]
 async fn init_sqlite_schema_creates_symbol_embeddings_table() {
@@ -27,6 +24,28 @@ async fn init_sqlite_schema_creates_symbol_embeddings_table() {
         .expect("symbol_embeddings table");
 
     assert_eq!(table_name, "symbol_embeddings");
+}
+
+#[tokio::test]
+async fn init_sqlite_schema_creates_symbol_clone_edges_current_table() {
+    let temp = tempdir().expect("temp dir");
+    let db_path = temp.path().join("devql.sqlite");
+
+    init_sqlite_schema(&db_path)
+        .await
+        .expect("initialise sqlite relational schema");
+
+    let conn = rusqlite::Connection::open(&db_path).expect("open sqlite db");
+    let mut stmt = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'symbol_clone_edges_current'",
+        )
+        .expect("prepare sqlite master query");
+    let table_name: String = stmt
+        .query_row([], |row| row.get(0))
+        .expect("symbol_clone_edges_current table");
+
+    assert_eq!(table_name, "symbol_clone_edges_current");
 }
 
 #[tokio::test]
@@ -390,7 +409,10 @@ fn load_current_embedding_rows(sqlite_path: &Path, repo_id: &str) -> Vec<Current
         .prepare(
             "SELECT a.symbol_fqn, a.path, e.representation_kind, e.provider, e.model, e.dimension, e.embedding_input_hash
              FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
+             JOIN symbol_embeddings_current e
+               ON e.repo_id = a.repo_id
+              AND e.artefact_id = a.artefact_id
+              AND e.content_id = a.content_id
              WHERE a.repo_id = ?1
              ORDER BY a.path, a.start_line, a.symbol_fqn, e.representation_kind",
         )
@@ -426,65 +448,25 @@ fn load_active_setup_row(
     .ok()
 }
 
-fn load_current_embedding_setups(sqlite_path: &Path, repo_id: &str) -> Vec<(String, String, i64)> {
-    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
-    let mut stmt = conn
-        .prepare(
-            "SELECT DISTINCT e.provider, e.model, e.dimension
-             FROM artefacts_current a
-             JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id
-             WHERE a.repo_id = ?1
-             ORDER BY e.provider, e.model, e.dimension",
-        )
-        .expect("prepare current setup query");
-    stmt.query_map([repo_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .expect("query current setups")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("collect current setups")
-}
-
 fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
     let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
     conn.query_row(
-        "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+        "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
         [repo_id],
         |row| row.get(0),
     )
     .expect("count clone edges")
 }
 
-fn hash_by_symbol(rows: &[CurrentEmbeddingRow]) -> BTreeMap<String, String> {
-    rows.iter()
-        .filter(|row| is_code_embedding_row(row))
-        .map(|row| (row.symbol_fqn.clone(), row.embedding_input_hash.clone()))
-        .collect()
-}
-
-fn is_code_embedding_row(row: &CurrentEmbeddingRow) -> bool {
-    matches!(
-        row.representation_kind.as_str(),
-        "code" | "baseline" | "enriched"
-    )
-}
-
-async fn run_direct_ingest_with_env(
-    repo_root: &Path,
-    max_checkpoints: usize,
-    profile_name: &str,
-    model: &str,
-    dimension: &str,
-) -> IngestionCounters {
-    write_semantic_clone_ingest_config(repo_root, profile_name, model);
-    assert_eq!(
-        list_committed(repo_root)
-            .expect("list committed checkpoints before direct ingest")
-            .len(),
-        2
-    );
+#[tokio::test]
+async fn direct_ingest_does_not_produce_semantic_clone_outputs_even_when_embeddings_are_configured()
+{
+    let repo = seed_direct_ingest_semantic_repo();
+    write_semantic_clone_ingest_config(repo.path(), "alpha", "bootstrap-model");
     let home = TempDir::new().expect("home dir");
     let home_path = home.path().to_string_lossy().to_string();
     let _guard = enter_process_state(
-        Some(repo_root),
+        Some(repo.path()),
         &[
             ("HOME", Some(home_path.as_str())),
             ("USERPROFILE", Some(home_path.as_str())),
@@ -493,241 +475,59 @@ async fn run_direct_ingest_with_env(
             ("BITLOOPS_DEVQL_CH_USER", None),
             ("BITLOOPS_DEVQL_CH_PASSWORD", None),
             ("BITLOOPS_DEVQL_CH_DATABASE", None),
-            ("BITLOOPS_TEST_EMBED_MODEL", Some(model)),
-            ("BITLOOPS_TEST_EMBED_DIMENSION", Some(dimension)),
+            ("BITLOOPS_TEST_EMBED_MODEL", Some("bootstrap-model")),
+            ("BITLOOPS_TEST_EMBED_DIMENSION", Some("3")),
         ],
     );
-    let cfg = semantic_ingest_test_cfg_for_repo(repo_root);
-    execute_init_schema(&cfg, "direct ingest test")
-        .await
-        .expect("initialise devql schema for direct ingest test");
-    let backends = resolve_store_backend_config_for_repo(repo_root)
-        .expect("resolve backend config for direct ingest test");
-    let relational = RelationalStorage::connect(&cfg, &backends.relational, "direct ingest test")
-        .await
-        .expect("connect relational storage for direct ingest test");
-    execute_sync(
-        &cfg,
-        &relational,
-        crate::host::devql::sync::types::SyncMode::Full,
-    )
-    .await
-    .expect("seed current state before direct ingest");
-    let capability = crate::config::resolve_embedding_capability_config_for_repo(repo_root);
-    let gateway = crate::host::inference::LocalInferenceGateway::new(
-        repo_root,
-        capability.inference.clone(),
-        std::collections::HashMap::new(),
-    );
-    let embedding_provider =
-        crate::host::inference::InferenceGateway::embeddings(&gateway, profile_name)
-            .expect("build fake embedding provider");
-    let setup = crate::capability_packs::semantic_clones::embeddings::resolve_embedding_setup(
-        embedding_provider.as_ref(),
-    )
-    .expect("resolve fake embedding setup");
-    assert_eq!(setup.provider, TEST_EMBEDDINGS_DRIVER);
-    assert_eq!(setup.model, model);
-    assert_eq!(
-        setup.dimension,
-        dimension.parse::<usize>().expect("parse dimension")
-    );
-
-    execute_ingest_with_observer(&cfg, false, max_checkpoints, None, None)
-        .await
-        .expect("execute direct ingest")
-}
-
-#[tokio::test]
-async fn direct_ingest_bootstraps_active_embedding_setup_from_single_runtime() {
-    let repo = seed_direct_ingest_semantic_repo();
-
-    let summary =
-        run_direct_ingest_with_env(repo.path(), 10, "alpha", "bootstrap-model", "3").await;
 
     let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
+    execute_init_schema(&cfg, "direct ingest semantic no-op test")
+        .await
+        .expect("initialise devql schema for direct ingest semantic no-op test");
+    let summary = execute_ingest_with_observer(&cfg, false, 10, None, None)
+        .await
+        .expect("execute direct ingest without sync pre-seeding");
     let sqlite_path = checkpoint_sqlite_path(repo.path());
-    let setup = load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
-    let current_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
+    let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+
+    let historical_semantics: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical semantic rows");
+    let historical_embeddings: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical embedding rows");
+    let current_semantics: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current semantic rows");
+    let current_embeddings: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current embedding rows");
 
     assert!(summary.success);
-    assert!(summary.commits_processed >= 2);
-    assert!(!current_rows.is_empty());
-    assert_eq!(setup.0, TEST_EMBEDDINGS_DRIVER);
-    assert_eq!(setup.1, "bootstrap-model");
-    assert_eq!(setup.2, 3);
-    assert_eq!(
-        setup.3,
-        crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-            TEST_EMBEDDINGS_DRIVER,
-            "bootstrap-model",
-            3,
-        )
-        .setup_fingerprint
-    );
-    assert_eq!(
-        load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
-        vec![(
-            TEST_EMBEDDINGS_DRIVER.to_string(),
-            "bootstrap-model".to_string(),
-            3,
-        )]
-    );
-    assert!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0);
-    assert!(summary.symbol_clone_edges_upserted > 0);
-}
-
-#[tokio::test]
-async fn direct_ingest_refreshes_repo_when_provider_or_model_changes() {
-    let repo = seed_direct_ingest_semantic_repo();
-    let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
-    let sqlite_path = checkpoint_sqlite_path(repo.path());
-
-    run_direct_ingest_with_env(repo.path(), 10, "alpha", "model-a", "3").await;
-    let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
-    let first_hashes = hash_by_symbol(&first_rows);
-
-    let second = run_direct_ingest_with_env(repo.path(), 1, "alpha", "model-b", "3").await;
-    let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
-    let second_hashes = hash_by_symbol(&second_rows);
-    let active_setup =
-        load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
-
-    assert_eq!(second.symbol_embedding_rows_upserted, first_rows.len());
-    assert_eq!(
-        load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
-        vec![(TEST_EMBEDDINGS_DRIVER.to_string(), "model-b".to_string(), 3)]
-    );
-    assert_eq!(
-        active_setup,
-        (
-            TEST_EMBEDDINGS_DRIVER.to_string(),
-            "model-b".to_string(),
-            3,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                TEST_EMBEDDINGS_DRIVER,
-                "model-b",
-                3,
-            )
-            .setup_fingerprint,
-        )
-    );
-    for (symbol_fqn, first_hash) in first_hashes {
-        assert_ne!(
-            second_hashes
-                .get(&symbol_fqn)
-                .expect("symbol hash after refresh"),
-            &first_hash
-        );
-    }
-    assert!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0);
-}
-
-#[tokio::test]
-async fn direct_ingest_does_not_refresh_on_profile_rename_with_same_runtime_descriptor() {
-    let repo = seed_direct_ingest_semantic_repo();
-    let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
-    let sqlite_path = checkpoint_sqlite_path(repo.path());
-
-    run_direct_ingest_with_env(repo.path(), 10, "alpha", "stable-model", "3").await;
-    let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
-    let first_hashes = hash_by_symbol(&first_rows);
-
-    let second = run_direct_ingest_with_env(repo.path(), 1, "beta", "stable-model", "3").await;
-    let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
-    let second_hashes = hash_by_symbol(&second_rows);
-    let active_setup =
-        load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
-
-    assert_eq!(second.symbol_embedding_rows_upserted, 0);
-    assert_eq!(
-        load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
-        vec![(
-            TEST_EMBEDDINGS_DRIVER.to_string(),
-            "stable-model".to_string(),
-            3,
-        )]
-    );
-    assert_eq!(
-        active_setup,
-        (
-            TEST_EMBEDDINGS_DRIVER.to_string(),
-            "stable-model".to_string(),
-            3,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                TEST_EMBEDDINGS_DRIVER,
-                "stable-model",
-                3,
-            )
-            .setup_fingerprint,
-        )
-    );
-
-    let mut unchanged_symbol_count = 0usize;
-    for row in second_rows.iter().filter(|row| is_code_embedding_row(row)) {
-        let first_hash = first_hashes
-            .get(&row.symbol_fqn)
-            .expect("symbol present after profile rename");
-        assert_eq!(&row.embedding_input_hash, first_hash);
-        unchanged_symbol_count += 1;
-    }
-    assert_eq!(unchanged_symbol_count, first_hashes.len());
-    assert_eq!(
-        second_hashes
-            .get("src/invoice.ts")
-            .expect("file artefact hash for unchanged path"),
-        first_hashes
-            .get("src/invoice.ts")
-            .expect("first file artefact hash for unchanged path")
-    );
-}
-
-#[tokio::test]
-async fn direct_ingest_treats_dimension_change_as_setup_change() {
-    let repo = seed_direct_ingest_semantic_repo();
-    let cfg = semantic_ingest_test_cfg_for_repo(repo.path());
-    let sqlite_path = checkpoint_sqlite_path(repo.path());
-
-    run_direct_ingest_with_env(repo.path(), 10, "alpha", "dimension-model", "3").await;
-    let first_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
-    let first_hashes = hash_by_symbol(&first_rows);
-
-    let second = run_direct_ingest_with_env(repo.path(), 1, "alpha", "dimension-model", "4").await;
-    let second_rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
-    let second_hashes = hash_by_symbol(&second_rows);
-    let active_setup =
-        load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).expect("active setup row");
-
-    assert_eq!(second.symbol_embedding_rows_upserted, first_rows.len());
-    assert_eq!(
-        load_current_embedding_setups(&sqlite_path, &cfg.repo.repo_id),
-        vec![(
-            TEST_EMBEDDINGS_DRIVER.to_string(),
-            "dimension-model".to_string(),
-            4,
-        )]
-    );
-    assert_eq!(
-        active_setup,
-        (
-            TEST_EMBEDDINGS_DRIVER.to_string(),
-            "dimension-model".to_string(),
-            4,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
-                TEST_EMBEDDINGS_DRIVER,
-                "dimension-model",
-                4,
-            )
-            .setup_fingerprint,
-        )
-    );
-    for (symbol_fqn, first_hash) in first_hashes {
-        assert_ne!(
-            second_hashes
-                .get(&symbol_fqn)
-                .expect("symbol hash after dimension refresh"),
-            &first_hash
-        );
-    }
-    assert!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0);
+    assert_eq!(summary.semantic_feature_rows_upserted, 0);
+    assert_eq!(summary.symbol_embedding_rows_upserted, 0);
+    assert_eq!(summary.symbol_clone_edges_upserted, 0);
+    assert_eq!(historical_semantics, 0);
+    assert_eq!(historical_embeddings, 0);
+    assert_eq!(current_semantics, 0);
+    assert_eq!(current_embeddings, 0);
+    assert_eq!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id), 0);
+    assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
+    assert!(load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty());
 }

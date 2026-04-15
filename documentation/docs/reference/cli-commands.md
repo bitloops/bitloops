@@ -58,7 +58,12 @@ Notes:
 - If `--sync` is omitted in an interactive terminal, `init` asks whether you want to sync the codebase after hooks are installed.
 - In non-interactive mode, `init` requires `--sync=true` or `--sync=false`.
 - `init` can also run DevQL ingest when you opt in with `--ingest=true` or accept the interactive prompt. The `--skip-baseline` flag is accepted for compatibility only.
-- Use `--agent <name>` to pin the supported agent set.
+- Use `--agent <name>` repeatedly to pin the supported agent set. For example:
+
+  ```bash
+  bitloops init --sync=false --agent claude-code --agent codex
+  ```
+
 - `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
 - `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.

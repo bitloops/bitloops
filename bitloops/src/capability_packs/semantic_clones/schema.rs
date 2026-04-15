@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS symbol_clone_edges (
     clone_input_hash TEXT NOT NULL,
     explanation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     generated_at DATETIME DEFAULT now(),
-    PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)
+    PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id)
 );
 
 CREATE INDEX IF NOT EXISTS symbol_clone_edges_source_idx
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS symbol_clone_edges (
     clone_input_hash TEXT NOT NULL,
     explanation_json TEXT NOT NULL DEFAULT '{}',
     generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)
+    PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id)
 );
 
 CREATE INDEX IF NOT EXISTS symbol_clone_edges_source_idx

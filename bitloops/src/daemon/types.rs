@@ -553,8 +553,16 @@ impl fmt::Display for DevqlTaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostCommitSnapshotSpec {
+    pub commit_sha: String,
+    pub changed_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncTaskSpec {
     pub mode: SyncTaskMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_commit_snapshot: Option<PostCommitSnapshotSpec>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -114,6 +114,7 @@ impl DevqlTaskCoordinator {
                 DevqlTaskSource::RepoPolicyChange,
                 DevqlTaskSpec::Sync(SyncTaskSpec {
                     mode: SyncTaskMode::Full,
+                    post_commit_snapshot: None,
                 }),
             )?;
             return Ok(true);

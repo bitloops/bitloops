@@ -82,7 +82,7 @@ Feature: Activation and Onboarding
         Then  git hooks exist for the open-code agent in bitloops
 
     # ── Disable Bitloops in a repository ─────────────────────
-    Scenario: Disable stops capture and status reflects disabled state
+    Scenario: Disable stops capture, removes agent surfaces, and leaves git hooks intact
         Given I run CleanStart for flow "disable-repo"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
@@ -90,6 +90,7 @@ Feature: Activation and Onboarding
         And   I run bitloops enable in bitloops
         And   I run bitloops disable in bitloops
         Then  bitloops status shows disabled in bitloops
+        And   agent hooks are removed for the claude-code agent in bitloops
 
     # ── Uninstall Bitloops from a repository ─────────────────
     Scenario: Uninstall removes agent and git hooks from the repository

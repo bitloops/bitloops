@@ -10,8 +10,7 @@ use tokio_postgres::{NoTls, config::SslMode};
 
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-    SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID, load_pre_stage_artefacts_for_blob,
-    load_pre_stage_dependencies_for_blob,
+    SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
 };
 use crate::config::{
     EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
@@ -19,7 +18,7 @@ use crate::config::{
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
-    read_committed, read_session_content, run_git,
+    read_committed, read_session_content, run_git, run_git_bytes,
 };
 use crate::host::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
@@ -76,6 +75,7 @@ pub(crate) use self::commands_query::{
     format_query_output, use_raw_graphql_mode,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
+pub(crate) use self::commands_refresh::snapshot_committed_current_rows_for_commit_for_config;
 pub use self::commands_refresh::{
     PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata, run_post_checkout_branch_seed,
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
@@ -135,6 +135,7 @@ const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
 const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 #[cfg(test)]
 const CSHARP_LANGUAGE_PACK_ID: &str = "csharp-language-pack";
+#[allow(dead_code)]
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";

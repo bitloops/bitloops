@@ -143,6 +143,9 @@ The `bitloops-local-embeddings` and `bitloops-platform-embeddings` binaries are 
    bitloops disable
    ```
 
+   `bitloops disable` removes Bitloops-managed agent prompt surfaces for the agents recorded in the repo policy.
+   `bitloops enable` reinstalls those same managed surfaces and resumes capture.
+
 4. Work as usual and commit normally. Bitloops will capture the relevant
    developer-agent context around those changes.
 
@@ -166,7 +169,7 @@ bitloops checkpoints status
 
 ## Uninstall
 
-Remove Bitloops hooks from the current repository:
+Remove Bitloops-managed agent prompt surfaces from the current Bitloops project:
 
 ```bash
 bitloops disable

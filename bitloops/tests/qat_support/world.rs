@@ -21,6 +21,7 @@ pub struct SemanticCloneHistoricalTableSnapshot {
     pub symbol_features: usize,
     pub symbol_semantics: usize,
     pub symbol_embeddings: usize,
+    pub symbol_clone_edges: usize,
     pub commit_ingest_ledger: usize,
 }
 
@@ -30,7 +31,7 @@ pub struct SemanticCloneCurrentTableSnapshot {
     pub symbol_features_current: usize,
     pub symbol_semantics_current: usize,
     pub symbol_embeddings_current: usize,
-    pub symbol_clone_edges: usize,
+    pub symbol_clone_edges_current: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -39,7 +40,6 @@ pub struct SemanticCloneTableSnapshot {
     pub current: SemanticCloneCurrentTableSnapshot,
     pub historical_representation_counts: RepresentationKindCounts,
     pub current_representation_counts: RepresentationKindCounts,
-    pub current_joined_representation_counts: RepresentationKindCounts,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -110,13 +110,25 @@ async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, semantic_clones_sqlite_schema_sql())
         .await
         .context("creating SQLite semantic clone tables")?;
-    Ok(())
+    upgrade_sqlite_semantic_clones_schema(sqlite_path).await
 }
 
 pub(crate) async fn init_postgres_semantic_clones_schema(pg_client: &Client) -> Result<()> {
     postgres_exec(pg_client, semantic_clones_postgres_schema_sql())
         .await
         .context("creating Postgres semantic clone tables")?;
+    postgres_exec(
+        pg_client,
+        "ALTER TABLE symbol_clone_edges DROP CONSTRAINT IF EXISTS symbol_clone_edges_pkey;",
+    )
+    .await
+    .context("dropping legacy Postgres symbol_clone_edges primary key")?;
+    postgres_exec(
+        pg_client,
+        "ALTER TABLE symbol_clone_edges ADD CONSTRAINT symbol_clone_edges_pkey PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id);",
+    )
+    .await
+    .context("upgrading Postgres symbol_clone_edges primary key")?;
     Ok(())
 }
 
@@ -126,4 +138,100 @@ pub(super) async fn ensure_semantic_clones_schema(relational: &RelationalStorage
         init_postgres_semantic_clones_schema(remote_client).await?;
     }
     Ok(())
+}
+
+async fn upgrade_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
+    let db_path = sqlite_path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = rusqlite::Connection::open(&db_path)
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+
+        let current_pk = sqlite_table_primary_key_columns(&conn, "symbol_clone_edges")?;
+        let expected_pk = vec![
+            "repo_id".to_string(),
+            "source_artefact_id".to_string(),
+            "target_artefact_id".to_string(),
+        ];
+        if current_pk != expected_pk {
+            migrate_sqlite_historical_clone_edges_table(&conn)?;
+        }
+
+        Ok(())
+    })
+    .await
+    .context("running SQLite semantic clone schema upgrade on blocking worker")?
+}
+
+fn migrate_sqlite_historical_clone_edges_table(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute(
+        "ALTER TABLE symbol_clone_edges RENAME TO symbol_clone_edges_legacy",
+        [],
+    )
+    .context("renaming legacy symbol_clone_edges table")?;
+    conn.execute_batch(semantic_clones_sqlite_schema_sql())
+        .context("creating upgraded SQLite semantic clone tables")?;
+    conn.execute(
+        "INSERT OR REPLACE INTO symbol_clone_edges (
+            repo_id,
+            source_symbol_id,
+            source_artefact_id,
+            target_symbol_id,
+            target_artefact_id,
+            relation_kind,
+            score,
+            semantic_score,
+            lexical_score,
+            structural_score,
+            clone_input_hash,
+            explanation_json,
+            generated_at
+        )
+        SELECT
+            repo_id,
+            source_symbol_id,
+            source_artefact_id,
+            target_symbol_id,
+            target_artefact_id,
+            relation_kind,
+            score,
+            semantic_score,
+            lexical_score,
+            structural_score,
+            clone_input_hash,
+            explanation_json,
+            generated_at
+        FROM symbol_clone_edges_legacy
+        ORDER BY generated_at, rowid",
+        [],
+    )
+    .context("copying legacy symbol_clone_edges rows into upgraded table")?;
+    conn.execute("DROP TABLE symbol_clone_edges_legacy", [])
+        .context("dropping legacy symbol_clone_edges table")?;
+    Ok(())
+}
+
+fn sqlite_table_primary_key_columns(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .with_context(|| format!("preparing PRAGMA table_info({table_name})"))?;
+    let columns = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+        })
+        .with_context(|| format!("querying PRAGMA table_info({table_name})"))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("iterating PRAGMA table_info({table_name})"))?;
+
+    let mut primary_key_columns = columns
+        .into_iter()
+        .filter(|(_, position)| *position > 0)
+        .collect::<Vec<_>>();
+    primary_key_columns.sort_by_key(|(_, position)| *position);
+    Ok(primary_key_columns
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect())
 }

@@ -48,7 +48,8 @@ pub struct EnableArgs {
     #[arg(long, short = 'f', hide = true)]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
+    /// Deprecated hidden compatibility flag. Use `bitloops init --agent <agent>`
+    /// to persist supported agents before running `bitloops enable`.
     #[arg(long, hide = true)]
     pub agent: Option<String>,
 
@@ -179,6 +180,13 @@ pub(crate) async fn run_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
+    if let Some(agent) = args.agent.as_deref() {
+        bail!(
+            "`bitloops enable --agent {agent}` is no longer supported. \
+Run `bitloops init --agent {agent}` to persist supported agents before enabling Bitloops."
+        );
+    }
+
     let cwd = env::current_dir().context("getting current directory")?;
     let git_root = find_repo_root(&cwd)?;
     let telemetry_choice =
@@ -201,13 +209,32 @@ pub(crate) async fn run_with_io(
     }
 
     let policy = discover_repo_policy(&cwd)?;
+    let project_root = policy
+        .root
+        .clone()
+        .context("resolving Bitloops project root from repo policy")?;
     let target_path = policy
         .local_path
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    set_capture_enabled(&target_path, true)?;
+    let selected_agents = crate::cli::agent_surfaces::configured_agents_or_bail(&cwd)?;
     let settings = load_settings(&cwd).unwrap_or_default();
+    let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
+        &git_root,
+        settings.local_dev,
+    )?;
+    if git_count > 0 {
+        writeln!(out, "Installed {git_count} git hook(s).")?;
+    }
+    crate::cli::agent_surfaces::reconcile_project_agent_surfaces(
+        &project_root,
+        &selected_agents,
+        settings.local_dev,
+        args.force,
+        out,
+    )?;
+    set_capture_enabled(&target_path, true)?;
     restart_watcher_if_running(&git_root);
 
     writeln!(out, "Bitloops enabled in this project! :)")?;
@@ -365,12 +392,22 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
 pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool) -> Result<()> {
     let _ = use_project_settings;
     let policy = discover_repo_policy(start)?;
+    let project_root = policy
+        .root
+        .clone()
+        .context("resolving Bitloops project root from repo policy")?;
     let target_path = policy
         .local_path
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
+    let configured_agents = crate::config::settings::supported_agents(start)?;
     set_capture_enabled(&target_path, false)?;
+    crate::cli::agent_surfaces::cleanup_project_agent_surfaces(
+        &project_root,
+        &configured_agents,
+        out,
+    )?;
     let repo_root = find_repo_root(start)?;
     restart_watcher_if_running(&repo_root);
     writeln!(
@@ -426,18 +463,6 @@ pub fn count_session_states(repo_root: &Path) -> usize {
 pub fn count_shadow_branches(repo_root: &Path) -> usize {
     let _ = repo_root;
     0
-}
-
-pub(crate) fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
-    let registry = AgentAdapterRegistry::builtin();
-    for agent in registry.available_agents() {
-        if registry.are_agent_hooks_installed(repo_root, &agent)? {
-            let label = registry.uninstall_agent_hooks(repo_root, &agent)?;
-            writeln!(out, "  Removed {label} hooks")?;
-        }
-    }
-
-    Ok(())
 }
 
 pub fn check_bitloops_dir_exists(repo_root: &Path) -> bool {

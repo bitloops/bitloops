@@ -1,6 +1,6 @@
 //! Thin-CLI policy settings resolved from repo policy TOML plus global daemon CLI config.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -82,6 +82,36 @@ pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
 
 pub fn load_required_settings(repo_root: &Path) -> Result<BitloopsSettings> {
     load_settings_from_policy(discover_repo_policy(repo_root)?)
+}
+
+pub fn supported_agents(start: &Path) -> Result<Vec<String>> {
+    let policy = discover_repo_policy(start)?;
+    supported_agents_from_policy(&policy)
+}
+
+pub fn supported_agents_from_policy(policy: &super::RepoPolicySnapshot) -> Result<Vec<String>> {
+    let Some(raw) = policy.agents.get("supported") else {
+        return Ok(Vec::new());
+    };
+    let raw = raw
+        .as_array()
+        .ok_or_else(|| anyhow!("`[agents].supported` must be an array of strings"))?;
+
+    let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut resolved = Vec::new();
+
+    for value in raw {
+        let name = value
+            .as_str()
+            .ok_or_else(|| anyhow!("`[agents].supported` must contain only strings"))?;
+        let normalized = registry.normalise_agent_name(name)?;
+        if seen.insert(normalized.clone()) {
+            resolved.push(normalized);
+        }
+    }
+
+    Ok(resolved)
 }
 
 fn load_settings_from_policy(policy: super::RepoPolicySnapshot) -> Result<BitloopsSettings> {

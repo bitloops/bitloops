@@ -553,8 +553,23 @@ pub(super) fn then_semantic_clone_current_tables_populated(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "semantic clone current projection tables are populated without inline embeddings",
+            "semantic clone current projection tables are populated",
             helpers::assert_semantic_clone_current_tables_populated(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_semantic_clone_ingest_skips_historical_semantic_tables(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "semantic clone ingest does not populate historical semantic tables",
+            helpers::assert_semantic_clone_ingest_skips_historical_semantic_tables(
+                world, &repo_name,
+            ),
         );
     })
 }
@@ -566,8 +581,23 @@ pub(super) fn then_semantic_clone_representation_channels_populated(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "semantic clone historical embeddings and current artefacts expose code and summary channels",
+            "semantic clone historical and current embeddings expose code and summary channels",
             helpers::assert_semantic_clone_representation_channels_populated(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_current_semantic_clone_representation_channels_populated(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "semantic clone current embeddings expose code and summary channels",
+            helpers::assert_current_semantic_clone_representation_channels_populated(
+                world, &repo_name,
+            ),
         );
     })
 }

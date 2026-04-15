@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+pub(crate) mod agent_surfaces;
 pub mod checkpoints;
 pub mod clean;
 pub mod daemon;
@@ -222,7 +223,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
-        Commands::Embeddings(args) => embeddings::run(args),
+        Commands::Embeddings(args) => embeddings::run_async(args).await,
         Commands::Inference(args) => inference::run(args),
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,

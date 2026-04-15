@@ -49,7 +49,11 @@ In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false
 
 That initial sync only reconciles current workspace state. Use `--ingest=true` during init, or run `bitloops devql tasks enqueue --kind ingest` separately, when you want checkpoint, commit, and event history materialised.
 
-If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
+If you want to pin the supported agent set during bootstrap, repeat `--agent <name>` for each supported agent. For example:
+
+```bash
+bitloops init --sync=false --agent claude-code --agent codex
+```
 
 If telemetry consent is unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
 
