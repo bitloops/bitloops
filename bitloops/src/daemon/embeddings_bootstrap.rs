@@ -18,7 +18,9 @@ use crate::daemon::{
     EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness, EmbeddingsBootstrapResult,
     EmbeddingsBootstrapTaskSpec, PersistedEmbeddingsBootstrapState, unix_timestamp_now,
 };
-use crate::host::inference::{BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_EMBEDDINGS_RUNTIME_ID};
+use crate::host::inference::{
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID,
+};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 pub(crate) fn execute_task_with_progress<R>(
@@ -138,7 +140,7 @@ pub(crate) fn gate_status_for_config_path(
     };
 
     if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER
-        || profile.runtime.as_deref() != Some(BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+        || profile.runtime.as_deref() != Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
     {
         return Ok(EmbeddingsBootstrapGateStatus {
             blocked: false,
@@ -432,7 +434,7 @@ fn should_install_managed_runtime(
         .get(profile_name)
         .ok_or_else(|| anyhow!("embedding profile `{profile_name}` was not found"))?;
     Ok(profile.driver == BITLOOPS_EMBEDDINGS_IPC_DRIVER
-        && profile.runtime.as_deref() == Some(BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+        && profile.runtime.as_deref() == Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
         && managed_runtime_command_is_eligible(config_path)?)
 }
 
@@ -452,7 +454,7 @@ fn already_ready_result(
         return Ok(None);
     };
     if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER
-        || profile.runtime.as_deref() != Some(BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+        || profile.runtime.as_deref() != Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
     {
         return Ok(Some(EmbeddingsBootstrapResult {
             version: None,

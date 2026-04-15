@@ -6,11 +6,14 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use toml_edit::{DocumentMut, Item, Table};
 
+use crate::cli::terminal_picker::{
+    SingleSelectOption, can_use_terminal_picker, prompt_single_select,
+};
 use crate::config::{
     InferenceTask, resolve_inference_capability_config_for_repo,
     resolve_preferred_daemon_config_path_for_repo,
 };
-use crate::host::inference::BITLOOPS_INFERENCE_RUNTIME_ID;
+use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
 use super::managed::{
     ManagedInferenceInstallPhase, ManagedInferenceInstallProgress, install_or_bootstrap_inference,
@@ -22,7 +25,18 @@ const DEFAULT_OLLAMA_CHAT_BASE_URL: &str = "http://127.0.0.1:11434/api/chat";
 const DEFAULT_SUMMARY_TEMPERATURE: &str = "0.1";
 const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS: i64 = 200;
 const DEFAULT_SUMMARY_PROFILE_NAME: &str = "summary_local";
-const PREFERRED_OLLAMA_MODELS: &[&str] = &["ministral-3:3b", "ministral-3:8b"];
+const DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME: &str = "summary_llm";
+const DEFAULT_PLATFORM_SUMMARY_MODEL: &str = "ministral-3-3b-instruct";
+const DEFAULT_PLATFORM_SUMMARY_API_KEY: &str = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}";
+const PLATFORM_CHAT_COMPLETIONS_URL_ENV: &str = "BITLOOPS_PLATFORM_CHAT_COMPLETIONS_URL";
+const PLATFORM_GATEWAY_URL_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_URL";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SummarySetupSelection {
+    Cloud,
+    Local,
+    Skip,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SummarySetupOutcome {
@@ -71,9 +85,18 @@ pub(crate) struct SummarySetupExecutionResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PreparedSummarySetupAction {
-    InstallRuntimeOnly { message: String },
-    InstallRuntimeOnlyPendingProbe { message: String },
-    Configure { model_name: String },
+    InstallRuntimeOnly {
+        message: String,
+    },
+    InstallRuntimeOnlyPendingProbe {
+        message: String,
+    },
+    ConfigureLocal {
+        model_name: String,
+    },
+    ConfigureCloud {
+        gateway_url_override: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +149,19 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
     let Some(profile) = capability.inference.profiles.get(profile_name) else {
         return false;
     };
+    let Some(runtime_name) = profile
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Some(runtime) = capability.inference.runtimes.get(runtime_name) else {
+        return false;
+    };
+
+    let driver = profile.driver.trim();
 
     profile.task == InferenceTask::TextGeneration
         && profile
@@ -138,11 +174,13 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        && profile
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+        && !runtime.command.trim().is_empty()
+        && (driver == BITLOOPS_PLATFORM_CHAT_DRIVER
+            || profile
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty()))
         && profile
             .temperature
             .as_deref()
@@ -166,6 +204,156 @@ pub(crate) fn configure_local_summary_generation(
     let execution = apply_prepared_summary_setup(repo_root, plan)?;
     writeln!(out, "{}", execution.message)?;
     Ok(execution.outcome)
+}
+
+pub(crate) fn configure_cloud_summary_generation(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+) -> Result<String> {
+    let _ = install_or_bootstrap_inference(repo_root)?;
+    let execution = apply_prepared_summary_setup(
+        repo_root,
+        prepare_cloud_summary_generation_plan(gateway_url_override),
+    )?;
+    Ok(execution.message)
+}
+
+pub(crate) fn prepare_cloud_summary_generation_plan(
+    gateway_url_override: Option<&str>,
+) -> PreparedSummarySetupPlan {
+    PreparedSummarySetupPlan {
+        action: PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override: gateway_url_override.map(str::to_string),
+        },
+    }
+}
+
+pub(crate) fn platform_summary_gateway_url_override() -> Option<String> {
+    let explicit = read_non_empty_env_value(PLATFORM_CHAT_COMPLETIONS_URL_ENV);
+    if explicit.is_some() {
+        return explicit;
+    }
+
+    read_non_empty_env_value(PLATFORM_GATEWAY_URL_ENV).map(|base_url| {
+        let trimmed = base_url.trim_end_matches('/');
+        format!("{trimmed}/v1/chat/completions")
+    })
+}
+
+pub(crate) fn prompt_summary_setup_selection(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    interactive: bool,
+    default_to_local_when_noninteractive: bool,
+    cloud_logged_in: bool,
+) -> Result<SummarySetupSelection> {
+    if !interactive {
+        return Ok(if cloud_logged_in {
+            SummarySetupSelection::Cloud
+        } else if default_to_local_when_noninteractive {
+            SummarySetupSelection::Local
+        } else {
+            SummarySetupSelection::Skip
+        });
+    }
+
+    if can_use_terminal_picker() {
+        return prompt_summary_setup_selection_with_picker(out, cloud_logged_in);
+    }
+
+    prompt_summary_setup_selection_with_text_input(out, input, cloud_logged_in)
+}
+
+fn prompt_summary_setup_selection_with_picker(
+    out: &mut dyn Write,
+    cloud_logged_in: bool,
+) -> Result<SummarySetupSelection> {
+    let options = vec![
+        SingleSelectOption::new(
+            "Bitloops cloud (recommended)",
+            vec![
+                "Requires you to create or use your free Bitloops account. No local model needed."
+                    .to_string(),
+            ],
+        ),
+        SingleSelectOption::new(
+            "Local Ollama",
+            vec![
+                "No code leaves your machine but requires RAM >32GB and GPU acceleration (64GB+ recommended)."
+                    .to_string(),
+            ],
+        ),
+        SingleSelectOption::new("Skip for now", Vec::new()),
+    ];
+    let mut footer = Vec::new();
+    if !cloud_logged_in {
+        footer.push(
+            "Choosing Bitloops cloud will open the Bitloops sign-in flow in your browser."
+                .to_string(),
+        );
+    }
+
+    writeln!(out)?;
+    let selection = prompt_single_select(
+        out,
+        "How would you like Bitloops to configure semantic summaries?",
+        &options,
+        0,
+        &footer,
+    )?;
+
+    Ok(match selection {
+        0 => SummarySetupSelection::Cloud,
+        1 => SummarySetupSelection::Local,
+        2 => SummarySetupSelection::Skip,
+        _ => unreachable!("terminal picker returned invalid summary selection"),
+    })
+}
+
+fn prompt_summary_setup_selection_with_text_input(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    cloud_logged_in: bool,
+) -> Result<SummarySetupSelection> {
+    writeln!(out)?;
+    writeln!(
+        out,
+        "How would you like Bitloops to configure semantic summaries?"
+    )?;
+    writeln!(out, "1. Bitloops cloud (recommended)")?;
+    writeln!(
+        out,
+        "   Requires you to create or use your free Bitloops account. No local model needed."
+    )?;
+    writeln!(out, "2. Local Ollama")?;
+    writeln!(
+        out,
+        "   No code leaves your machine but requires RAM >32GB and GPU acceleration (64GB+ recommended)."
+    )?;
+    writeln!(out, "3. Skip for now")?;
+    if !cloud_logged_in {
+        writeln!(
+            out,
+            "Choosing Bitloops cloud will open the Bitloops sign-in flow in your browser."
+        )?;
+    }
+
+    loop {
+        writeln!(out, "Select an option [1/2/3]")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading semantic summary setup selection")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "1" | "cloud" | "bitloops" => return Ok(SummarySetupSelection::Cloud),
+            "2" | "local" | "ollama" => return Ok(SummarySetupSelection::Local),
+            "3" | "skip" | "later" => return Ok(SummarySetupSelection::Skip),
+            _ => writeln!(out, "Please choose 1, 2, or 3.")?,
+        }
+    }
 }
 
 pub(crate) fn prepare_local_summary_generation_plan(
@@ -230,7 +418,7 @@ pub(crate) fn prepare_local_summary_generation_plan(
                     });
                 };
                 return Ok(PreparedSummarySetupPlan {
-                    action: PreparedSummarySetupAction::Configure { model_name },
+                    action: PreparedSummarySetupAction::ConfigureLocal { model_name },
                 });
             }
         }
@@ -280,7 +468,7 @@ fn apply_prepared_summary_setup(
                 message,
             })
         }
-        PreparedSummarySetupAction::Configure { model_name } => {
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
             write_summary_profile(repo_root, &model_name)?;
             Ok(SummarySetupExecutionResult {
                 outcome: SummarySetupOutcome::Configured {
@@ -289,6 +477,18 @@ fn apply_prepared_summary_setup(
                 message: format!(
                     "Configured semantic summaries to use Ollama model `{model_name}`."
                 ),
+            })
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+        } => {
+            write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: DEFAULT_PLATFORM_SUMMARY_MODEL.to_string(),
+                },
+                message: "Configured semantic summaries to use Bitloops cloud summaries."
+                    .to_string(),
             })
         }
     }
@@ -337,7 +537,7 @@ where
                 message,
             })
         }
-        PreparedSummarySetupAction::Configure { model_name } => {
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
             report(SummarySetupProgress {
                 phase: SummarySetupPhase::WritingProfile,
                 message: Some(format!("Applying summary profile for `{model_name}`")),
@@ -351,6 +551,23 @@ where
                 message: format!(
                     "Configured semantic summaries to use Ollama model `{model_name}`."
                 ),
+            })
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+        } => {
+            report(SummarySetupProgress {
+                phase: SummarySetupPhase::WritingProfile,
+                message: Some("Applying Bitloops cloud summary profile".to_string()),
+                ..Default::default()
+            })?;
+            write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: DEFAULT_PLATFORM_SUMMARY_MODEL.to_string(),
+                },
+                message: "Configured semantic summaries to use Bitloops cloud summaries."
+                    .to_string(),
             })
         }
     }
@@ -385,10 +602,10 @@ fn auto_configured_summary_model_name() -> Result<Option<String>> {
 }
 
 fn select_preferred_ollama_model(models: &[String]) -> Option<String> {
-    PREFERRED_OLLAMA_MODELS
+    models
         .iter()
-        .find(|candidate| models.iter().any(|model| model == **candidate))
-        .map(|model| (*model).to_string())
+        .find(|model| is_recommended_ollama_model(model))
+        .cloned()
 }
 
 fn select_ollama_model(
@@ -397,36 +614,65 @@ fn select_ollama_model(
     input: &mut dyn BufRead,
     interactive: bool,
 ) -> Result<Option<String>> {
-    if let Some(preferred) = select_preferred_ollama_model(models) {
-        return Ok(Some(preferred));
+    if !interactive {
+        return Ok(select_preferred_ollama_model(models));
     }
 
-    if !interactive {
+    if models.is_empty() {
+        writeln!(out, "Ollama is running, but no models are installed.")?;
         return Ok(None);
     }
 
-    if !models.is_empty() {
+    let default_model = select_preferred_ollama_model(models);
+    writeln!(out, "Select an Ollama model for semantic summaries:")?;
+    for (index, model) in models.iter().enumerate() {
+        let suffix = if Some(model) == default_model.as_ref() {
+            " (mistral-3-3b recommended)"
+        } else {
+            ""
+        };
+        writeln!(out, "  {}. {}{}", index + 1, model, suffix)?;
+    }
+
+    if let Some(model_name) = default_model.as_ref() {
         writeln!(
             out,
-            "Ollama is running. Installed models: {}",
-            models.join(", ")
+            "Press Enter to use `{model_name}`, type a number to choose another model, or `s` to skip:"
         )?;
-    }
-    writeln!(
-        out,
-        "Enter an Ollama model name for semantic summaries, or press Enter to skip:"
-    )?;
-    write!(out, "> ")?;
-    out.flush()?;
-    let mut line = String::new();
-    input
-        .read_line(&mut line)
-        .context("reading Ollama model selection")?;
-    let selected = line.trim();
-    if selected.is_empty() {
-        Ok(None)
     } else {
-        Ok(Some(selected.to_string()))
+        writeln!(out, "Type a number to choose a model, or `s` to skip:")?;
+    }
+
+    loop {
+        write!(out, "> ")?;
+        out.flush()?;
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading Ollama model selection")?;
+        let selected = line.trim();
+        if selected.is_empty() {
+            if let Some(model_name) = default_model.clone() {
+                return Ok(Some(model_name));
+            }
+            writeln!(out, "Please choose a model number or enter `s` to skip.")?;
+            continue;
+        }
+        if matches!(selected.to_ascii_lowercase().as_str(), "s" | "skip") {
+            return Ok(None);
+        }
+        if let Ok(index) = selected.parse::<usize>()
+            && (1..=models.len()).contains(&index)
+        {
+            return Ok(Some(models[index - 1].clone()));
+        }
+        if let Some(model_name) = models.iter().find(|model| model.as_str() == selected) {
+            return Ok(Some(model_name.clone()));
+        }
+        writeln!(
+            out,
+            "Please choose one of the listed models or enter `s` to skip."
+        )?;
     }
 }
 
@@ -534,23 +780,90 @@ fn write_summary_profile(repo_root: &Path, model_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn select_summary_profile_name(profiles: &Table) -> String {
-    match profiles
-        .get(DEFAULT_SUMMARY_PROFILE_NAME)
-        .and_then(Item::as_table)
-    {
-        None => DEFAULT_SUMMARY_PROFILE_NAME.to_string(),
-        Some(profile) if is_managed_summary_profile(profile) => {
-            DEFAULT_SUMMARY_PROFILE_NAME.to_string()
+fn write_platform_summary_profile(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+) -> Result<()> {
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
+    let contents = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("reading Bitloops daemon config {}", config_path.display())
+            });
         }
-        Some(_) => next_available_summary_profile_name(profiles),
+    };
+    let mut doc = if contents.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        contents
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?
+    };
+
+    let profile_name = {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        select_profile_name(
+            profiles,
+            DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME,
+            is_managed_platform_summary_profile,
+        )
+    };
+
+    {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        let profile = ensure_child_table(profiles, &profile_name);
+        profile["task"] = Item::Value("text_generation".into());
+        profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
+        profile["driver"] = Item::Value(BITLOOPS_PLATFORM_CHAT_DRIVER.into());
+        profile["model"] = Item::Value(DEFAULT_PLATFORM_SUMMARY_MODEL.into());
+        profile["api_key"] = Item::Value(DEFAULT_PLATFORM_SUMMARY_API_KEY.into());
+        if let Some(gateway_url_override) = gateway_url_override {
+            profile["base_url"] = Item::Value(gateway_url_override.into());
+        } else {
+            profile.remove("base_url");
+        }
+        profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+        profile["max_output_tokens"] = Item::Value(DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS.into());
+        profile.remove("cache_dir");
+    }
+
+    let semantic_clones = ensure_table(&mut doc, "semantic_clones");
+    let semantic_inference = ensure_child_table(semantic_clones, "inference");
+    semantic_inference["summary_generation"] = Item::Value(profile_name.as_str().into());
+
+    std::fs::write(&config_path, doc.to_string())
+        .with_context(|| format!("writing Bitloops daemon config {}", config_path.display()))?;
+    Ok(())
+}
+
+fn select_summary_profile_name(profiles: &Table) -> String {
+    select_profile_name(
+        profiles,
+        DEFAULT_SUMMARY_PROFILE_NAME,
+        is_managed_summary_profile,
+    )
+}
+
+fn select_profile_name(
+    profiles: &Table,
+    default_name: &str,
+    is_managed_profile: fn(&Table) -> bool,
+) -> String {
+    match profiles.get(default_name).and_then(Item::as_table) {
+        None => default_name.to_string(),
+        Some(profile) if is_managed_profile(profile) => default_name.to_string(),
+        Some(_) => next_available_profile_name(profiles, default_name),
     }
 }
 
-fn next_available_summary_profile_name(profiles: &Table) -> String {
+fn next_available_profile_name(profiles: &Table, prefix: &str) -> String {
     let mut suffix = 1usize;
     loop {
-        let candidate = format!("{DEFAULT_SUMMARY_PROFILE_NAME}_{suffix}");
+        let candidate = format!("{prefix}_{suffix}");
         if !profiles.contains_key(&candidate) {
             return candidate;
         }
@@ -577,6 +890,60 @@ fn is_managed_summary_profile(profile: &Table) -> bool {
             .and_then(|value| value.as_str())
             .map(str::trim)
             == Some("ollama_chat")
+}
+
+fn is_managed_platform_summary_profile(profile: &Table) -> bool {
+    profile
+        .get("task")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        == Some("text_generation")
+        && profile
+            .get("runtime")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(BITLOOPS_INFERENCE_RUNTIME_ID)
+        && profile
+            .get("driver")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_some_and(|driver| {
+                driver == BITLOOPS_PLATFORM_CHAT_DRIVER || driver == "openai_chat_completions"
+            })
+        && profile
+            .get("api_key")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_none_or(|api_key| api_key == "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}")
+}
+
+fn is_recommended_ollama_model(model_name: &str) -> bool {
+    matches!(
+        normalised_ollama_model_name(model_name).as_str(),
+        "mistral-3-3b" | "ministral-3-3b"
+    )
+}
+
+fn normalised_ollama_model_name(model_name: &str) -> String {
+    model_name
+        .trim()
+        .to_ascii_lowercase()
+        .replace([':', '_'], "-")
+}
+
+fn read_non_empty_env_value(key: &str) -> Option<String> {
+    std::env::var(key).ok().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {

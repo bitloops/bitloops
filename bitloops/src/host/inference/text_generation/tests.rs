@@ -11,7 +11,9 @@ use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, InferenceConfig, InferenceRuntimeConfig, InferenceTask,
     REPO_POLICY_LOCAL_FILE_NAME, resolve_inference_capability_config_for_repo,
 };
-use crate::host::inference::{EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway};
+use crate::host::inference::{
+    BITLOOPS_PLATFORM_CHAT_DRIVER, EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway,
+};
 
 use super::*;
 
@@ -135,6 +137,40 @@ fn runtime_service_restarts_after_request_timeout() {
     assert!(
         timeout_marker.exists(),
         "first request should have timed out"
+    );
+}
+
+#[test]
+fn platform_runtime_service_requires_authenticated_session() {
+    let _guard = test_lock();
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_inference_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    let config_path = temp.path().join("bitloops.toml");
+    fs::write(&config_path, "[inference]\n").expect("write fake config");
+    write_fake_runtime_script(&script_path, None, "[\"text\",\"json_object\"]");
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let err = with_platform_runtime_auth_environment_hook(
+        || Ok(Vec::new()),
+        || match BitloopsInferenceTextGenerationService::new(
+            "summary_llm",
+            BITLOOPS_PLATFORM_CHAT_DRIVER,
+            &runtime,
+            &config_path,
+        ) {
+            Ok(_) => panic!("platform service without auth must fail"),
+            Err(err) => err,
+        },
+    );
+
+    assert!(
+        format!("{err:#}").contains("requires an authenticated Bitloops session"),
+        "unexpected error: {err:#}"
+    );
+    assert!(
+        !launch_log.exists(),
+        "platform runtime should not be spawned without an auth token"
     );
 }
 

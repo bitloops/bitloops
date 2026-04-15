@@ -6,17 +6,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Value as TomlValue};
 
-use crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID;
+use crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID;
 use crate::utils::platform_dirs::{bitloops_data_dir, ensure_dir};
 
 use super::archive::write_file_atomically;
 
 const MANAGED_EMBEDDINGS_INSTALL_PARENT_DIR: &str = "tools";
-const MANAGED_EMBEDDINGS_INSTALL_DIR_NAME: &str = "bitloops-embeddings";
-const MANAGED_EMBEDDINGS_METADATA_FILE_NAME: &str = "bitloops-embeddings-install.json";
+const MANAGED_EMBEDDINGS_INSTALL_DIR_NAME: &str = "bitloops-local-embeddings";
+const MANAGED_EMBEDDINGS_METADATA_FILE_NAME: &str = "bitloops-local-embeddings-install.json";
 
 pub(crate) const MANAGED_EMBEDDINGS_VERSION_OVERRIDE_ENV: &str =
-    "BITLOOPS_EMBEDDINGS_VERSION_OVERRIDE";
+    "BITLOOPS_LOCAL_EMBEDDINGS_VERSION_OVERRIDE";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ManagedEmbeddingsInstallMetadata {
@@ -77,9 +77,9 @@ impl StdError for ManagedEmbeddingsMetadataError {
 
 pub(crate) fn managed_embeddings_binary_name() -> &'static str {
     if cfg!(windows) {
-        "bitloops-embeddings.exe"
+        "bitloops-local-embeddings.exe"
     } else {
-        "bitloops-embeddings"
+        "bitloops-local-embeddings"
     }
 }
 
@@ -153,7 +153,7 @@ pub(crate) fn managed_runtime_command_is_eligible(config_path: &Path) -> Result<
     if command.is_empty() {
         return Ok(true);
     }
-    if command == "bitloops-embeddings" || command == managed_embeddings_binary_name() {
+    if command == "bitloops-local-embeddings" || command == managed_embeddings_binary_name() {
         return Ok(true);
     }
 
@@ -187,7 +187,7 @@ pub(crate) fn raw_managed_runtime_command(config_path: &Path) -> Result<Option<S
         .and_then(Item::as_table)
         .and_then(|table| table.get("runtimes"))
         .and_then(Item::as_table)
-        .and_then(|table| table.get(BITLOOPS_EMBEDDINGS_RUNTIME_ID))
+        .and_then(|table| table.get(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID))
         .and_then(Item::as_table)
         .and_then(|table| table.get("command"))
         .and_then(Item::as_value)
@@ -227,7 +227,7 @@ pub(crate) fn rewrite_managed_runtime_command_if_eligible(
         return Ok(false);
     };
     let Some(runtime) = runtimes
-        .get_mut(BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+        .get_mut(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
         .and_then(Item::as_table_mut)
     else {
         return Ok(false);

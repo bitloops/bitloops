@@ -7,7 +7,8 @@ title: Semantic + Embeddings Quickstart
 This guide shows the quickest way to try:
 
 - semantic summaries through a configured text-generation inference profile
-- local embeddings through the standalone `bitloops-embeddings` binary over stdio IPC
+- local embeddings through the standalone `bitloops-local-embeddings` binary over stdio IPC
+- hosted embeddings through the standalone `bitloops-platform-embeddings` binary over stdio IPC
 - the daemon-owned enrichment queue and health checks
 
 Run the repo-scoped commands below from inside a Git repository or Bitloops project, typically after `bitloops init`.
@@ -15,10 +16,10 @@ Run the repo-scoped commands below from inside a Git repository or Bitloops proj
 ## What You Need
 
 - `bitloops`
-- either the Bitloops-managed embeddings install flow or a manually installed `bitloops-embeddings` binary
+- either the Bitloops-managed embeddings install flow or a manually installed `bitloops-local-embeddings` / `bitloops-platform-embeddings` binary
 - a text-generation provider API key if you want LLM semantic summaries
 
-In a source checkout, build and install `bitloops`. For the default local Bitloops-managed runtime, explicit setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the standalone `bitloops-embeddings` binary for you. If you are wiring a custom runtime manually, install the matching standalone binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform:
+In a source checkout, build and install `bitloops`. For the default local Bitloops-managed runtime, explicit setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the standalone `bitloops-local-embeddings` binary for you. If you are wiring a custom runtime manually, install the matching standalone binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform:
 
 ```bash
 cargo build
@@ -55,6 +56,14 @@ bitloops daemon enable --install-embeddings
 
 Interactive `bitloops enable` also asks whether to install embeddings when they are not already configured. The prompt uses `[Y/n]`, so pressing `Enter` accepts the recommended setup.
 
+If you want the hosted gateway runtime instead of the default local runtime:
+
+```bash
+bitloops embeddings install --runtime platform --gateway-url https://gateway.example/v1/embeddings
+```
+
+`bitloops init` and `bitloops enable` accept the same hosted mode through `--embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings`. The managed platform runtime reads its bearer token from `BITLOOPS_PLATFORM_GATEWAY_TOKEN` by default; override that with `--embeddings-api-key-env`.
+
 ## Config Location And Targeting
 
 Inference runtimes, profiles, and semantic-clones slot bindings live in the Bitloops daemon config.
@@ -88,8 +97,8 @@ When Bitloops auto-configures embeddings, it writes the minimum profile required
 code_embeddings = "local_code"
 summary_embeddings = "local_code"
 
-[inference.runtimes.bitloops_embeddings]
-command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-embeddings/bitloops-embeddings"
+[inference.runtimes.bitloops_local_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-local-embeddings/bitloops-local-embeddings"
 args = []
 startup_timeout_secs = 60
 request_timeout_secs = 300
@@ -97,7 +106,7 @@ request_timeout_secs = 300
 [inference.profiles.local_code]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "bge-m3"
 ```
 
@@ -107,10 +116,34 @@ Notes:
 - `bitloops_embeddings_ipc` is the default auto-created local embeddings driver.
 - `bge-m3` is the default auto-created local embeddings model.
 - When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above.
-- Use `command = "bitloops-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
+- Use `command = "bitloops-local-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
 - If an active embedding profile already exists, Bitloops does not overwrite it.
 - If that existing active profile is local, Bitloops still runs the normal warm/bootstrap path for it.
 - If that existing active profile is hosted or otherwise non-local, Bitloops treats embeddings as already enabled and skips local runtime bootstrap.
+
+## Hosted Platform Embeddings Config
+
+The hosted gateway path writes a separate runtime and profile:
+
+```toml
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-platform-embeddings/bitloops-platform-embeddings"
+args = ["--gateway-url", "https://gateway.example/v1/embeddings", "--api-key-env", "BITLOOPS_PLATFORM_GATEWAY_TOKEN"]
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.platform_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+```
+
+The hosted runtime keeps the same daemon-facing IPC contract as the local runtime. Only the implementation behind the runtime command changes.
 
 ## Optional Semantic Summaries
 
@@ -155,7 +188,7 @@ bitloops embeddings pull local_code
 
 What this does:
 
-- starts the standalone `bitloops-embeddings` binary through the host inference runtime
+- starts the standalone `bitloops-local-embeddings` binary through the host inference runtime
 - validates the selected profile and runtime binding
 - warms the local model cache
 - downloads the model if it is missing
@@ -241,7 +274,7 @@ bitloops daemon enrichments retry-failed
 
 ## Troubleshooting
 
-### `bitloops-embeddings` not found
+### `bitloops-local-embeddings` not found
 
 If you are using the Bitloops-managed runtime, run:
 
@@ -253,7 +286,7 @@ bitloops embeddings doctor
 If you are managing the runtime yourself, make sure the standalone binary is installed and on `PATH`:
 
 ```bash
-which bitloops-embeddings
+which bitloops-local-embeddings
 ```
 
 ### Runtime handshake timeout on first local run
@@ -261,7 +294,7 @@ which bitloops-embeddings
 If the first local model startup is slow, raise the inference runtime timeouts:
 
 ```toml
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 startup_timeout_secs = 120
 request_timeout_secs = 120
 ```

@@ -187,7 +187,7 @@ enrichment_workers = 2
 code_embeddings = "fake"
 summary_embeddings = "fake"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -196,7 +196,7 @@ request_timeout_secs = 5
 [inference.profiles.fake]
 task = "embeddings"
 driver = "{driver}"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "qat-test-model"
 "#,
         relational_path = relational_path.display().to_string(),

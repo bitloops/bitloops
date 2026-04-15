@@ -767,7 +767,8 @@ fn resolve_mailbox_provider_readiness(
 
     if !text_generation
         && slot.driver.as_deref() == Some(crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER)
-        && slot.runtime.as_deref() == Some(crate::host::inference::BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+        && slot.runtime.as_deref()
+            == Some(crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
     {
         let gate_status = crate::daemon::embeddings_bootstrap::gate_status_for_config_path(
             runtime_store,

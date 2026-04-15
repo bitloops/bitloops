@@ -197,7 +197,7 @@ embedding_mode = "deterministic"
 code_embeddings = "{profile_name}"
 summary_embeddings = "{profile_name}"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -206,7 +206,7 @@ request_timeout_secs = 5
 [inference.profiles.{profile_name}]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = {model:?}
 "#
         ),
