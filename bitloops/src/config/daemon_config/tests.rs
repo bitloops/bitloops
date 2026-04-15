@@ -245,6 +245,42 @@ local_dev = false
 }
 
 #[test]
+fn prepare_daemon_embeddings_install_skips_existing_platform_ipc_profile() {
+    let config = NamedTempFile::new().expect("create temp config");
+    fs::write(
+        config.path(),
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "bitloops-platform-embeddings"
+args = ["--gateway-url", "https://gateway.example/v1/embeddings", "--api-key-env", "BITLOOPS_PLATFORM_GATEWAY_TOKEN"]
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.platform_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+"#,
+    )
+    .expect("write temp config");
+
+    let plan =
+        prepare_daemon_embeddings_install(config.path()).expect("prepare embeddings install");
+
+    assert_eq!(plan.profile_name, "platform_code");
+    assert_eq!(plan.mode, DaemonEmbeddingsInstallMode::SkipHosted);
+    assert!(!plan.config_modified);
+}
+
+#[test]
 fn apply_with_managed_runtime_path_preserves_platform_runtime_args() {
     let config = NamedTempFile::new().expect("create temp config");
 

@@ -14,7 +14,8 @@ use super::plans::{
     DaemonEmbeddingsInstallMode, DaemonEmbeddingsInstallPlan, DaemonInferenceInstallPlan,
 };
 use super::toml::{
-    ensure_child_table, ensure_table, inference_driver_for_profile, selected_inference_profile_name,
+    ensure_child_table, ensure_table, inference_driver_for_profile, inference_runtime_for_profile,
+    selected_inference_profile_name,
 };
 
 pub(crate) fn prepare_daemon_embeddings_install(
@@ -44,7 +45,10 @@ pub(crate) fn prepare_daemon_embeddings_install(
 
     if let Some(profile_name) = selected_inference_profile_name(&doc) {
         let profile_driver = inference_driver_for_profile(&doc, &profile_name);
-        let mode = if profile_driver.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER) {
+        let profile_runtime = inference_runtime_for_profile(&doc, &profile_name);
+        let mode = if profile_driver.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER)
+            && profile_runtime.as_deref() == Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
+        {
             DaemonEmbeddingsInstallMode::WarmExisting
         } else {
             DaemonEmbeddingsInstallMode::SkipHosted

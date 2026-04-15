@@ -55,6 +55,17 @@ pub(super) fn inference_driver_for_profile(
     doc: &DocumentMut,
     profile_name: &str,
 ) -> Option<String> {
+    inference_profile_value(doc, profile_name, "driver")
+}
+
+pub(super) fn inference_runtime_for_profile(
+    doc: &DocumentMut,
+    profile_name: &str,
+) -> Option<String> {
+    inference_profile_value(doc, profile_name, "runtime")
+}
+
+fn inference_profile_value(doc: &DocumentMut, profile_name: &str, key: &str) -> Option<String> {
     doc.as_table()
         .get("inference")?
         .as_table()?
@@ -62,7 +73,7 @@ pub(super) fn inference_driver_for_profile(
         .as_table()?
         .get(profile_name)?
         .as_table()?
-        .get("driver")?
+        .get(key)?
         .as_value()?
         .as_str()
         .map(str::trim)
