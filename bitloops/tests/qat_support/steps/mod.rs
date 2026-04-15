@@ -48,6 +48,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops init with agents (\S+) and (\S+) in (\S+)$"),
+            step_fn(given_init_bitloops_with_agents),
+        )
+        .given(
+            None,
             regex(r"^I run bitloops init --agent (\S+) --sync=false in (\S+)$"),
             step_fn(given_init_bitloops_with_agent_sync_false),
         )

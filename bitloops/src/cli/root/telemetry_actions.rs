@@ -338,7 +338,7 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
         flags.push("exclude_from");
     }
     insert_flags(&mut props, flags);
-    insert_bool_property(&mut props, "has_agent", args.agent.is_some());
+    insert_bool_property(&mut props, "has_agent", !args.agent.is_empty());
     insert_bool_property(&mut props, "has_sync_choice", args.sync.is_some());
     new_action("bitloops init", props)
 }
@@ -788,6 +788,33 @@ mod telemetry_actions_unit_tests {
 
         let plain = telemetry_action_for_version(false);
         assert!(!plain.properties.contains_key("flags"));
+    }
+
+    #[test]
+    fn telemetry_action_for_init_with_repeated_agents_sets_has_agent() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "bitloops",
+            "init",
+            "--agent",
+            "cursor",
+            "--agent",
+            "codex",
+            "--sync=false",
+            "--ingest=false",
+        ])
+        .expect("init command should parse");
+        let action = telemetry_action_for_command(
+            cli.command
+                .as_ref()
+                .expect("init command should produce a subcommand"),
+        )
+        .expect("init telemetry action should be emitted");
+
+        assert_eq!(action.event, "bitloops init");
+        assert_eq!(
+            action.properties.get("has_agent").and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

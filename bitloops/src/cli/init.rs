@@ -51,9 +51,9 @@ pub struct InitArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
-    #[arg(long)]
-    pub agent: Option<String>,
+    /// Target specific agent setups (repeatable).
+    #[arg(long = "agent", value_name = "AGENT")]
+    pub agent: Vec<String>,
 
     /// Enable anonymous telemetry for this CLI version.
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]

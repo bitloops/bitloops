@@ -97,6 +97,27 @@ pub(super) fn given_init_bitloops_with_agent(
     })
 }
 
+pub(super) fn given_init_bitloops_with_agents(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let first_agent_name = ctx.matches[1].1.clone();
+        let second_agent_name = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I run bitloops init with agents",
+            helpers::run_init_bitloops_with_agents(
+                world,
+                &repo_name,
+                &[first_agent_name.as_str(), second_agent_name.as_str()],
+                false,
+                None,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_init_bitloops_with_agent_sync_false(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

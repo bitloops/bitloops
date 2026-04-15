@@ -397,7 +397,17 @@ pub fn run_init_bitloops_with_agent(
     force: bool,
     sync: Option<bool>,
 ) -> Result<()> {
-    run_init_bitloops_with_agent_config(world, repo_name, agent_name, force, sync, None, None)
+    run_init_bitloops_with_agents(world, repo_name, &[agent_name], force, sync)
+}
+
+pub fn run_init_bitloops_with_agents(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_names: &[&str],
+    force: bool,
+    sync: Option<bool>,
+) -> Result<()> {
+    run_init_bitloops_with_agent_config(world, repo_name, agent_names, force, sync, None, None)
 }
 
 pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
@@ -411,7 +421,7 @@ pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
     run_init_bitloops_with_agent_config(
         world,
         repo_name,
-        agent_name,
+        &[agent_name],
         false,
         Some(sync),
         Some(ingest),
@@ -422,18 +432,33 @@ pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
 fn run_init_bitloops_with_agent_config(
     world: &mut QatWorld,
     repo_name: &str,
-    agent_name: &str,
+    agent_names: &[&str],
     force: bool,
     sync: Option<bool>,
     ingest: Option<bool>,
     backfill: Option<usize>,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
-    world.agent_name = Some(normalised_agent_name.to_string());
+    ensure!(
+        !agent_names.is_empty(),
+        "at least one agent must be provided for init"
+    );
 
-    let args_owned =
-        build_init_bitloops_args_with_options(normalised_agent_name, force, sync, ingest, backfill);
+    let normalised_agent_names = agent_names
+        .iter()
+        .map(|agent_name| normalise_onboarding_agent_name(agent_name))
+        .collect::<Vec<_>>();
+    world.agent_name = normalised_agent_names
+        .first()
+        .map(|agent_name| (*agent_name).to_string());
+
+    let args_owned = build_init_bitloops_args_with_options(
+        &normalised_agent_names,
+        force,
+        sync,
+        ingest,
+        backfill,
+    );
     let label = format!("bitloops {}", args_owned.join(" "));
     let mut attempts = 0_u8;
 
@@ -459,21 +484,23 @@ fn run_init_bitloops_with_agent_config(
 }
 
 fn build_init_bitloops_args(agent_name: &str, force: bool, sync: Option<bool>) -> Vec<String> {
-    build_init_bitloops_args_with_options(agent_name, force, sync, None, None)
+    build_init_bitloops_args_with_options(&[agent_name], force, sync, None, None)
 }
 
 fn build_init_bitloops_args_with_options(
-    agent_name: &str,
+    agent_names: &[&str],
     force: bool,
     sync: Option<bool>,
     ingest: Option<bool>,
     backfill: Option<usize>,
 ) -> Vec<String> {
-    let mut args = vec![
-        "init".to_string(),
-        "--agent".to_string(),
-        agent_name.to_string(),
-    ];
+    debug_assert!(!agent_names.is_empty(), "init requires at least one agent");
+
+    let mut args = vec!["init".to_string()];
+    for agent_name in agent_names {
+        args.push("--agent".to_string());
+        args.push((*agent_name).to_string());
+    }
 
     let sync_choice = sync.unwrap_or(false);
     let ingest_choice = if backfill.is_some() {

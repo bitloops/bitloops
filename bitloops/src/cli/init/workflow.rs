@@ -25,6 +25,21 @@ use super::{
     should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
 };
 
+fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
+    let registry = AgentAdapterRegistry::builtin();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut resolved = Vec::new();
+
+    for value in values {
+        let normalized = registry.normalise_agent_name(value)?;
+        if seen.insert(normalized.clone()) {
+            resolved.push(normalized);
+        }
+    }
+
+    Ok(resolved)
+}
+
 pub(super) async fn run_for_project_root(
     args: InitArgs,
     project_root: &Path,
@@ -82,8 +97,8 @@ pub(super) async fn run_for_project_root(
     }
     ensure_repo_local_policy_excluded(&git_root, project_root)?;
 
-    let selected_agents = if let Some(agent) = args.agent.as_deref() {
-        vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
+    let selected_agents = if !args.agent.is_empty() {
+        resolve_cli_agents(&args.agent)?
     } else {
         detect_or_select_agent(project_root, out, select_fn)?
     };
