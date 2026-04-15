@@ -10,6 +10,8 @@ pub(crate) const PARSE_STATUS_OK: &str = "ok";
 pub(crate) const PARSE_STATUS_PARSE_ERROR: &str = "parse_error";
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const PARSE_STATUS_DECODE_ERROR: &str = "decode_error";
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const PARSE_STATUS_DEGRADED_FILE_ONLY: &str = "degraded_file_only";
 
 struct ExtractionInput<'a> {
     path: &'a str,
@@ -125,13 +127,57 @@ pub(crate) fn decode_error_file_only_to_cache_format(
     extractor_version: &str,
     raw_bytes: &[u8],
 ) -> CachedExtraction {
+    file_only_to_cache_format(
+        PARSE_STATUS_DECODE_ERROR,
+        path,
+        content_id,
+        language,
+        extraction_fingerprint,
+        parser_version,
+        extractor_version,
+        raw_bytes,
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn degraded_file_only_to_cache_format(
+    path: &str,
+    content_id: &str,
+    language: &str,
+    extraction_fingerprint: &str,
+    parser_version: &str,
+    extractor_version: &str,
+    raw_bytes: &[u8],
+) -> CachedExtraction {
+    file_only_to_cache_format(
+        PARSE_STATUS_DEGRADED_FILE_ONLY,
+        path,
+        content_id,
+        language,
+        extraction_fingerprint,
+        parser_version,
+        extractor_version,
+        raw_bytes,
+    )
+}
+
+fn file_only_to_cache_format(
+    parse_status: &str,
+    path: &str,
+    content_id: &str,
+    language: &str,
+    extraction_fingerprint: &str,
+    parser_version: &str,
+    extractor_version: &str,
+    raw_bytes: &[u8],
+) -> CachedExtraction {
     CachedExtraction {
         content_id: content_id.to_string(),
         language: language.to_string(),
         extraction_fingerprint: extraction_fingerprint.to_string(),
         parser_version: parser_version.to_string(),
         extractor_version: extractor_version.to_string(),
-        parse_status: PARSE_STATUS_DECODE_ERROR.to_string(),
+        parse_status: parse_status.to_string(),
         artefacts: vec![CachedArtefact {
             artifact_key: file_artifact_key_from_bytes(raw_bytes),
             canonical_kind: Some("file".to_string()),
@@ -497,6 +543,35 @@ mod tests {
         assert_eq!(file.end_line, 2);
         assert_eq!(file.start_byte, 0);
         assert_eq!(file.end_byte, 9);
+        assert!(file.signature.is_empty());
+        assert!(file.modifiers.is_empty());
+        assert!(file.docstring.is_none());
+    }
+
+    #[test]
+    fn degraded_file_only_cache_payload_materializes_file_only_from_raw_bytes() {
+        let degraded = degraded_file_only_to_cache_format(
+            "scripts/E501_4.py",
+            "content-id",
+            "python",
+            "fingerprint-v1",
+            "parser-v1",
+            "extractor-v1",
+            b"hello\x00world\n",
+        );
+
+        assert_eq!(degraded.parse_status, PARSE_STATUS_DEGRADED_FILE_ONLY);
+        assert_eq!(degraded.artefacts.len(), 1);
+        assert!(degraded.edges.is_empty());
+
+        let file = &degraded.artefacts[0];
+        assert_eq!(file.canonical_kind.as_deref(), Some("file"));
+        assert_eq!(file.language_kind, "file");
+        assert_eq!(file.name, "scripts/E501_4.py");
+        assert_eq!(file.start_line, 1);
+        assert_eq!(file.end_line, 1);
+        assert_eq!(file.start_byte, 0);
+        assert_eq!(file.end_byte, 12);
         assert!(file.signature.is_empty());
         assert!(file.modifiers.is_empty());
         assert!(file.docstring.is_none());

@@ -9,7 +9,6 @@ use rusqlite::Connection;
 use super::diff_collector::DiffArtefactRecord;
 use super::shared::{determine_retention_class, read_effective_content};
 use super::stats::PreparedPathStats;
-use crate::host::devql::DevqlConfig;
 use crate::host::devql::sync::content_cache::{
     CacheKey, CachedExtraction, deduped_cached_content_parts,
     lookup_cached_content_with_connection, persist_cached_content_tx, touch_cache_entries_tx,
@@ -19,6 +18,7 @@ use crate::host::devql::sync::materializer::{
     remove_paths_tx,
 };
 use crate::host::devql::sync::types::DesiredFileState;
+use crate::host::devql::{DecodedFileContent, DevqlConfig};
 
 const BATCH_FILE_LIMIT: usize = 32;
 const BATCH_ROW_LIMIT: usize = 4000;
@@ -465,6 +465,61 @@ fn prepare_failure_outcome(path: String, error_message: String) -> PreparedSyncO
     }
 }
 
+fn parse_status_counts_as_parse_error(parse_status: &str) -> bool {
+    matches!(
+        parse_status,
+        crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR
+            | crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR
+            | crate::host::devql::sync::extraction::PARSE_STATUS_DEGRADED_FILE_ONLY
+    )
+}
+
+fn parse_status_allows_semantic_projection(parse_status: &str) -> bool {
+    !matches!(
+        parse_status,
+        crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR
+            | crate::host::devql::sync::extraction::PARSE_STATUS_DEGRADED_FILE_ONLY
+    )
+}
+
+fn build_code_file_only_fallback_extraction(
+    desired: &DesiredFileState,
+    content: &DecodedFileContent,
+    parser_version: &str,
+    extractor_version: &str,
+) -> Option<CachedExtraction> {
+    if desired.analysis_mode != crate::host::devql::AnalysisMode::Code {
+        return None;
+    }
+    if content.decode_degraded {
+        return Some(
+            crate::host::devql::sync::extraction::decode_error_file_only_to_cache_format(
+                &desired.path,
+                &desired.effective_content_id,
+                &desired.language,
+                &desired.extraction_fingerprint,
+                parser_version,
+                extractor_version,
+                &content.raw_bytes,
+            ),
+        );
+    }
+    if content.contains_nul_bytes() {
+        return Some(
+            crate::host::devql::sync::extraction::degraded_file_only_to_cache_format(
+                &desired.path,
+                &desired.effective_content_id,
+                &desired.language,
+                &desired.extraction_fingerprint,
+                parser_version,
+                extractor_version,
+                &content.raw_bytes,
+            ),
+        );
+    }
+    None
+}
+
 fn prepare_sync_item_with_connection(
     connection: &Connection,
     cfg: &DevqlConfig,
@@ -531,6 +586,12 @@ fn prepare_sync_item_with_connection(
 
     let content = read_effective_content(cfg, &desired)
         .with_context(|| format!("reading effective content for `{}`", desired.path))?;
+    let forced_file_only_extraction = build_code_file_only_fallback_extraction(
+        &desired,
+        &content,
+        parser_version,
+        extractor_version,
+    );
 
     let (
         extraction,
@@ -540,15 +601,17 @@ fn prepare_sync_item_with_connection(
         semantic_projection_allowed,
         cache_store_retention_class,
         cache_touch_key,
-    ) = match cached {
-        Some(cached) => {
-            let parse_error = matches!(
+    ) = match (cached, forced_file_only_extraction) {
+        (Some(cached), Some(_))
+            if matches!(
                 cached.parse_status.as_str(),
-                crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR
-                    | crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR
-            );
-            let semantic_projection_allowed = cached.parse_status
-                != crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR;
+                crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR
+                    | crate::host::devql::sync::extraction::PARSE_STATUS_DEGRADED_FILE_ONLY
+            ) =>
+        {
+            let parse_error = parse_status_counts_as_parse_error(&cached.parse_status);
+            let semantic_projection_allowed =
+                parse_status_allows_semantic_projection(&cached.parse_status);
             (
                 cached,
                 true,
@@ -565,24 +628,39 @@ fn prepare_sync_item_with_connection(
                 }),
             )
         }
-        None => {
+        (_, Some(extraction)) => (
+            extraction,
+            false,
+            true,
+            true,
+            false,
+            Some(retention_class),
+            None,
+        ),
+        (Some(cached), None) => {
+            let parse_error = parse_status_counts_as_parse_error(&cached.parse_status);
+            let semantic_projection_allowed =
+                parse_status_allows_semantic_projection(&cached.parse_status);
+            (
+                cached,
+                true,
+                false,
+                parse_error,
+                semantic_projection_allowed,
+                None,
+                Some(CacheKey {
+                    content_id: desired.effective_content_id.clone(),
+                    language: desired.language.clone(),
+                    extraction_fingerprint: desired.extraction_fingerprint.clone(),
+                    parser_version: parser_version.to_string(),
+                    extractor_version: extractor_version.to_string(),
+                }),
+            )
+        }
+        (None, None) => {
             let extraction_started = Instant::now();
-            let extraction = if content.decode_degraded
-                && desired.analysis_mode == crate::host::devql::AnalysisMode::Code
-            {
-                Some(
-                    crate::host::devql::sync::extraction::decode_error_file_only_to_cache_format(
-                        &desired.path,
-                        &desired.effective_content_id,
-                        &desired.language,
-                        &desired.extraction_fingerprint,
-                        parser_version,
-                        extractor_version,
-                        &content.raw_bytes,
-                    ),
-                )
-            } else if let Some(text) = content.text.as_deref() {
-                crate::host::devql::sync::extraction::extract_to_cache_format(
+            let extraction = if let Some(text) = content.text.as_deref() {
+                match crate::host::devql::sync::extraction::extract_to_cache_format(
                     cfg,
                     crate::host::devql::sync::extraction::CacheExtractionRequest {
                         path: &desired.path,
@@ -593,8 +671,26 @@ fn prepare_sync_item_with_connection(
                         extractor_version,
                         content: text,
                     },
-                )
-                .with_context(|| format!("extracting `{}` into sync cache format", desired.path))?
+                ) {
+                    Ok(extraction) => extraction,
+                    Err(err) if desired.analysis_mode == crate::host::devql::AnalysisMode::Code => {
+                        Some(
+                            crate::host::devql::sync::extraction::degraded_file_only_to_cache_format(
+                                &desired.path,
+                                &desired.effective_content_id,
+                                &desired.language,
+                                &desired.extraction_fingerprint,
+                                parser_version,
+                                extractor_version,
+                                &content.raw_bytes,
+                            ),
+                        )
+                    }
+                    Err(err) => {
+                        return Err(err)
+                            .with_context(|| format!("extracting `{}` into sync cache format", desired.path));
+                    }
+                }
             } else {
                 None
             };
@@ -611,10 +707,9 @@ fn prepare_sync_item_with_connection(
                 });
             };
             stats.extraction = extraction_started.elapsed();
-            let parse_error = extraction.parse_status
-                == crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR;
-            let semantic_projection_allowed = extraction.parse_status
-                != crate::host::devql::sync::extraction::PARSE_STATUS_DECODE_ERROR;
+            let parse_error = parse_status_counts_as_parse_error(&extraction.parse_status);
+            let semantic_projection_allowed =
+                parse_status_allows_semantic_projection(&extraction.parse_status);
             (
                 extraction,
                 false,
