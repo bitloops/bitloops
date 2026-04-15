@@ -353,17 +353,9 @@ async fn enqueue_embeddings_bootstrap_during_init(
     project_root: &Path,
     out: &mut dyn Write,
 ) -> Result<QueuedEmbeddingsBootstrapTask> {
-    writeln!(out, "Queueing embeddings bootstrap in the daemon...")?;
     let (scope, queued) =
         enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
             .await?;
-    let phase = queued
-        .task
-        .embeddings_bootstrap_progress()
-        .map(|progress| progress.phase.as_str())
-        .unwrap_or("queued");
-    writeln!(out, "Embeddings bootstrap task: {}", queued.task.task_id)?;
-    writeln!(out, "Embeddings bootstrap phase: {phase}")?;
     out.flush()?;
     Ok(QueuedEmbeddingsBootstrapTask {
         scope,

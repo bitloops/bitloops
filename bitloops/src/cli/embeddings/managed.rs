@@ -1,5 +1,6 @@
 pub(crate) mod archive;
 pub(crate) mod config;
+pub(crate) mod download;
 pub(crate) mod install;
 pub(crate) mod platform;
 

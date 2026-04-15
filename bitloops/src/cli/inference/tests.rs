@@ -108,6 +108,8 @@ fn prompt_summary_setup_selection_defaults_to_cloud() {
 
     assert_eq!(selection, SummarySetupSelection::Cloud);
     let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.starts_with('\n'));
+    assert!(rendered.contains("How would you like Bitloops to configure semantic summaries?"));
     assert!(rendered.contains("Use ↑/↓ to move and enter to confirm."));
     assert!(rendered.contains("Bitloops cloud (recommended)"));
     assert!(rendered.contains(

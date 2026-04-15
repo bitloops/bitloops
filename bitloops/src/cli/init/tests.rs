@@ -1714,13 +1714,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
 
                         let rendered = String::from_utf8(out).expect("utf8 output");
                         assert!(
-                            rendered.contains("Queueing embeddings bootstrap in the daemon...")
+                            !rendered.contains("Queueing embeddings bootstrap in the daemon...")
                         );
-                        assert!(
-                            rendered
-                                .contains("Embeddings bootstrap task: embeddings_bootstrap-task-")
-                        );
-                        assert!(rendered.contains("Embeddings bootstrap phase: queued"));
+                        assert!(!rendered.contains("Embeddings bootstrap task:"));
+                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
                         assert!(
                             rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                         );
@@ -1954,9 +1951,6 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                             .expect("run init");
 
                                         let rendered = String::from_utf8(out).expect("utf8 output");
-                                        let bootstrap_index = rendered
-                                            .find("Queueing embeddings bootstrap in the daemon...")
-                                            .expect("bootstrap output");
                                         let handoff_index = rendered
                                             .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                                             .expect("handoff output");
@@ -1971,12 +1965,16 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         let embeddings_description_index = rendered
                                             .find("Creating code embeddings for fast search using our local embeddings provider")
                                             .expect("embeddings description output");
-                                        assert!(bootstrap_index < checklist_index);
                                         assert!(handoff_index < checklist_index);
                                         assert!(checklist_index < sync_description_index);
                                         assert!(
                                             sync_description_index < embeddings_description_index
                                         );
+                                        assert!(!rendered.contains(
+                                            "Queueing embeddings bootstrap in the daemon..."
+                                        ));
+                                        assert!(!rendered.contains("Embeddings bootstrap task:"));
+                                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
                                         assert!(
                                             !rendered.contains("Starting initial DevQL sync...")
                                         );

@@ -154,6 +154,52 @@ pub fn resolve_summary_provider(
     }
 }
 
+pub fn resolve_embedding_provider(
+    config: &SemanticClonesConfig,
+    inference: &dyn InferenceGateway,
+    representation_kind: EmbeddingRepresentationKind,
+    mode: EmbeddingProviderMode,
+) -> Result<EmbeddingProviderSelection> {
+    let slot_name = embedding_slot_for_representation(config, representation_kind);
+    if slot_name.is_none() {
+        return Ok(EmbeddingProviderSelection {
+            provider: None,
+            degraded_reason: None,
+            slot_name: None,
+            profile_name: None,
+        });
+    }
+
+    let slot_name = slot_name.expect("checked above");
+    let profile_name = resolved_profile_name(inference, &slot_name);
+    match inference.embeddings(&slot_name) {
+        Ok(service) => Ok(EmbeddingProviderSelection {
+            provider: Some(service),
+            degraded_reason: None,
+            slot_name: Some(slot_name),
+            profile_name,
+        }),
+        Err(err) if matches!(mode, EmbeddingProviderMode::ConfiguredDegrade) => {
+            Ok(EmbeddingProviderSelection {
+                provider: None,
+                degraded_reason: Some(format!("{err:#}")),
+                slot_name: Some(slot_name),
+                profile_name,
+            })
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "resolving embedding provider for slot `{}`{}",
+                slot_name,
+                profile_name
+                    .as_deref()
+                    .map(|name| format!(" (profile `{name}`)"))
+                    .unwrap_or_default()
+            )
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -252,51 +298,5 @@ mod tests {
             selection.provider.requires_model_output(),
             "configured strict should continue to fail when model-backed output is missing"
         );
-    }
-}
-
-pub fn resolve_embedding_provider(
-    config: &SemanticClonesConfig,
-    inference: &dyn InferenceGateway,
-    representation_kind: EmbeddingRepresentationKind,
-    mode: EmbeddingProviderMode,
-) -> Result<EmbeddingProviderSelection> {
-    let slot_name = embedding_slot_for_representation(config, representation_kind);
-    if slot_name.is_none() {
-        return Ok(EmbeddingProviderSelection {
-            provider: None,
-            degraded_reason: None,
-            slot_name: None,
-            profile_name: None,
-        });
-    }
-
-    let slot_name = slot_name.expect("checked above");
-    let profile_name = resolved_profile_name(inference, &slot_name);
-    match inference.embeddings(&slot_name) {
-        Ok(service) => Ok(EmbeddingProviderSelection {
-            provider: Some(service),
-            degraded_reason: None,
-            slot_name: Some(slot_name),
-            profile_name,
-        }),
-        Err(err) if matches!(mode, EmbeddingProviderMode::ConfiguredDegrade) => {
-            Ok(EmbeddingProviderSelection {
-                provider: None,
-                degraded_reason: Some(format!("{err:#}")),
-                slot_name: Some(slot_name),
-                profile_name,
-            })
-        }
-        Err(err) => Err(err).with_context(|| {
-            format!(
-                "resolving embedding provider for slot `{}`{}",
-                slot_name,
-                profile_name
-                    .as_deref()
-                    .map(|name| format!(" (profile `{name}`)"))
-                    .unwrap_or_default()
-            )
-        }),
     }
 }

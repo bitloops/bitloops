@@ -293,6 +293,7 @@ fn prompt_summary_setup_selection_with_picker(
         );
     }
 
+    writeln!(out)?;
     let selection = prompt_single_select(
         out,
         "How would you like Bitloops to configure semantic summaries?",

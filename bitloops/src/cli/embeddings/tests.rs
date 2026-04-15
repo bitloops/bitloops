@@ -1,4 +1,6 @@
-use super::managed::archive::{ManagedEmbeddingsArchiveKind, sha256_hex};
+use super::managed::archive::{
+    ManagedEmbeddingsArchiveKind, extract_managed_embeddings_bundle_entries_from_file, sha256_hex,
+};
 use super::managed::config::{
     load_managed_embeddings_install_metadata, managed_embeddings_binary_name,
     raw_managed_runtime_command,
@@ -284,6 +286,45 @@ fn create_archive_bytes(
             encoder.finish().expect("finish xz encoder")
         }
     }
+}
+
+#[test]
+fn extract_managed_embeddings_bundle_entries_from_file_reads_zip_archive() {
+    assert_archive_file_extraction_matches_payload(ManagedEmbeddingsArchiveKind::Zip);
+}
+
+#[test]
+fn extract_managed_embeddings_bundle_entries_from_file_reads_tar_xz_archive() {
+    assert_archive_file_extraction_matches_payload(ManagedEmbeddingsArchiveKind::TarXz);
+}
+
+fn assert_archive_file_extraction_matches_payload(archive_kind: ManagedEmbeddingsArchiveKind) {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let binary_name = managed_embeddings_binary_name();
+    let payload = b"managed-runtime-payload";
+    let archive_bytes = create_archive_bytes(archive_kind, binary_name, payload);
+    let archive_name = match archive_kind {
+        ManagedEmbeddingsArchiveKind::Zip => "managed-runtime.zip",
+        ManagedEmbeddingsArchiveKind::TarXz => "managed-runtime.tar.xz",
+    };
+    let archive_path = temp_dir.path().join(archive_name);
+    fs::write(&archive_path, archive_bytes).expect("write archive");
+
+    let bundle_entries = extract_managed_embeddings_bundle_entries_from_file(
+        &archive_path,
+        archive_kind,
+        binary_name,
+    )
+    .expect("extract archive");
+
+    assert!(bundle_entries.iter().any(|entry| {
+        entry.relative_path.as_os_str() == binary_name && entry.bytes.as_slice() == payload
+    }));
+    assert!(
+        bundle_entries
+            .iter()
+            .any(|entry| { entry.relative_path == Path::new("_internal").join("Python") })
+    );
 }
 
 fn write_runtime_only_config(repo_root: &Path, command: &str, args: &[String]) {

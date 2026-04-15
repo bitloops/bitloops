@@ -4,7 +4,6 @@ use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,9 +13,10 @@ use crate::config::{
 use crate::utils::platform_dirs::bitloops_data_dir;
 
 use super::archive::{
-    ManagedEmbeddingsArchiveKind, extract_managed_embeddings_bundle_entries, sha256_hex,
-    write_file_atomically,
+    ManagedEmbeddingsArchiveKind, ManagedEmbeddingsBundleEntry,
+    extract_managed_embeddings_bundle_entries_from_file, write_file_atomically,
 };
+use super::download::download_release_asset_to_temp_file;
 
 const MANAGED_PLATFORM_EMBEDDINGS_RELEASES_API_BASE: &str =
     "https://api.github.com/repos/bitloops/bitloops-embeddings";
@@ -283,17 +283,25 @@ fn install_managed_platform_embeddings_binary_from_release(
             )
         })?;
     let expected_digest = parse_sha256_digest(asset.digest.as_deref())?;
-    let archive_bytes = download_managed_platform_embeddings_asset(&asset.browser_download_url)?;
-    let actual_digest = sha256_hex(archive_bytes.as_ref());
-    if actual_digest != expected_digest {
+    let client = managed_platform_embeddings_http_client()?;
+    let download = download_release_asset_to_temp_file(
+        &client,
+        &asset.browser_download_url,
+        MANAGED_PLATFORM_EMBEDDINGS_USER_AGENT,
+        "managed bitloops-platform-embeddings asset",
+        |_downloaded, _total| Ok(()),
+    )?;
+    if download.sha256_hex != expected_digest {
         bail!(
-            "managed bitloops-platform-embeddings asset digest mismatch for `{}`",
-            asset.name
+            "managed bitloops-platform-embeddings asset digest mismatch for `{}`: expected {}, got {}",
+            asset.name,
+            expected_digest,
+            download.sha256_hex
         );
     }
 
-    let bundle_entries = extract_managed_embeddings_bundle_entries(
-        archive_bytes.as_ref(),
+    let bundle_entries = extract_managed_embeddings_bundle_entries_from_file(
+        download.path(),
         asset_spec.archive_kind,
         managed_platform_embeddings_binary_name(),
     )
@@ -304,24 +312,7 @@ fn install_managed_platform_embeddings_binary_from_release(
         )
     })?;
 
-    reset_managed_platform_embeddings_install_dir()?;
-    let install_dir = managed_platform_embeddings_binary_dir()?;
-    let binary_path = managed_platform_embeddings_binary_path()?;
-    for entry in bundle_entries {
-        let output_path = install_dir.join(&entry.relative_path);
-        write_file_atomically(&output_path, &entry.bytes, entry.executable)?;
-    }
-
-    save_managed_platform_embeddings_install_metadata(&ManagedPlatformEmbeddingsInstallMetadata {
-        version: release.tag_name.clone(),
-        binary_path: binary_path.clone(),
-    })?;
-
-    Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
-        version: release.tag_name.clone(),
-        binary_path,
-        freshly_installed: true,
-    })
+    install_managed_platform_embeddings_bundle_entries(&release.tag_name, bundle_entries)
 }
 
 fn fetch_managed_platform_embeddings_release(
@@ -344,34 +335,6 @@ fn fetch_managed_platform_embeddings_release(
         .context("parsing managed bitloops-platform-embeddings release metadata")
 }
 
-fn download_managed_platform_embeddings_asset(url: &str) -> Result<Vec<u8>> {
-    let mut response = managed_platform_embeddings_http_client()?
-        .get(url)
-        .header(ACCEPT, "application/octet-stream")
-        .header(USER_AGENT, MANAGED_PLATFORM_EMBEDDINGS_USER_AGENT)
-        .send()
-        .with_context(|| {
-            format!("downloading managed bitloops-platform-embeddings asset from {url}")
-        })?
-        .error_for_status()
-        .with_context(|| {
-            format!("downloading managed bitloops-platform-embeddings asset from {url}")
-        })?;
-
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 64 * 1024];
-    loop {
-        let read = response
-            .read(&mut chunk)
-            .context("reading managed bitloops-platform-embeddings asset bytes")?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-    }
-    Ok(bytes)
-}
-
 fn managed_platform_embeddings_http_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(
@@ -379,6 +342,30 @@ fn managed_platform_embeddings_http_client() -> Result<Client> {
         ))
         .build()
         .context("building managed bitloops-platform-embeddings HTTP client")
+}
+
+fn install_managed_platform_embeddings_bundle_entries(
+    version: &str,
+    bundle_entries: Vec<ManagedEmbeddingsBundleEntry>,
+) -> Result<ManagedPlatformEmbeddingsBinaryInstallOutcome> {
+    reset_managed_platform_embeddings_install_dir()?;
+    let install_dir = managed_platform_embeddings_binary_dir()?;
+    let binary_path = managed_platform_embeddings_binary_path()?;
+    for entry in bundle_entries {
+        let output_path = install_dir.join(&entry.relative_path);
+        write_file_atomically(&output_path, &entry.bytes, entry.executable)?;
+    }
+
+    save_managed_platform_embeddings_install_metadata(&ManagedPlatformEmbeddingsInstallMetadata {
+        version: version.to_string(),
+        binary_path: binary_path.clone(),
+    })?;
+
+    Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+        version: version.to_string(),
+        binary_path,
+        freshly_installed: true,
+    })
 }
 
 fn parse_sha256_digest(digest: Option<&str>) -> Result<String> {

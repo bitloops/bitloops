@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::utils::branding::{BITLOOPS_PURPLE_HEX, color_hex_if_enabled};
+use crate::utils::branding::{BITLOOPS_PURPLE_HEX, color_hex_if_enabled, should_use_color_output};
 
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
@@ -158,7 +158,7 @@ fn render_single_select(
 
         lines.push(format!("{pointer} {label}"));
         for detail in &option.details {
-            lines.push(format!("  {detail}"));
+            lines.push(format!("  {}", style_single_select_detail(detail)));
         }
     }
 
@@ -186,6 +186,14 @@ fn render_single_select(
     }
     out.flush()?;
     Ok(lines.len())
+}
+
+fn style_single_select_detail(detail: &str) -> String {
+    if should_use_color_output() {
+        format!("\x1b[2;3m{detail}\x1b[0m")
+    } else {
+        detail.to_string()
+    }
 }
 
 #[cfg(not(test))]

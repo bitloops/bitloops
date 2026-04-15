@@ -183,7 +183,7 @@ fn render_completed_sync_lane_while_ingest_continues() {
         &SummaryProgressState::Hidden,
     );
 
-    assert!(frame.contains("✓ Sync complete"));
+    assert!(frame.contains("Sync complete"));
     assert!(frame.contains("100% complete"));
     assert!(frame.contains("Ingesting demo"));
     assert!(!frame.contains("Waiting for sync to finish before starting ingest"));

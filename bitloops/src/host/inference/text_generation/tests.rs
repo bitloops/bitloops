@@ -165,8 +165,7 @@ fn platform_runtime_service_requires_authenticated_session() {
     );
 
     assert!(
-        err.to_string()
-            .contains("requires an authenticated Bitloops session"),
+        format!("{err:#}").contains("requires an authenticated Bitloops session"),
         "unexpected error: {err:#}"
     );
     assert!(
