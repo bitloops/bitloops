@@ -268,7 +268,7 @@ pub(crate) fn save_task_step_keeps_existing_base_commit_without_shadow_migration
 }
 
 #[test]
-pub(crate) fn initialize_session_sets_pending_prompt_attribution() {
+pub(crate) fn initialize_session_does_not_compute_pending_prompt_attribution_eagerly() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let strategy = ManualCommitStrategy::new(dir.path());
@@ -280,15 +280,8 @@ pub(crate) fn initialize_session_sets_pending_prompt_attribution() {
 
     let loaded = backend.load_session("attr-pending").unwrap().unwrap();
     assert!(
-        loaded.pending_prompt_attribution.is_some(),
-        "turn start should always persist pending prompt attribution"
-    );
-    assert_eq!(
-        loaded
-            .pending_prompt_attribution
-            .as_ref()
-            .map(|pa| pa.checkpoint_number),
-        Some(1)
+        loaded.pending_prompt_attribution.is_none(),
+        "turn start should stay lightweight and defer prompt attribution work"
     );
 }
 
@@ -331,7 +324,7 @@ pub(crate) fn initialize_session_keeps_existing_base_commit_without_shadow_migra
 }
 
 #[test]
-pub(crate) fn initialize_session_prompt_attribution_uses_latest_temporary_checkpoint_tree_hash() {
+pub(crate) fn lazy_prompt_attribution_uses_latest_temporary_checkpoint_tree_hash() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
     let session_id = "attr-latest-temp-tree";
@@ -360,9 +353,7 @@ pub(crate) fn initialize_session_prompt_attribution_uses_latest_temporary_checkp
 
     let backend = session_backend(dir.path());
     let loaded = backend.load_session(session_id).unwrap().unwrap();
-    let pending = loaded
-        .pending_prompt_attribution
-        .expect("pending prompt attribution should be set");
+    let pending = strategy.calculate_prompt_attribution_at_start(&loaded);
     assert_eq!(
         pending.user_lines_added, 0,
         "worktree matches latest temporary checkpoint tree, so user_lines_added should be 0"
@@ -426,6 +417,51 @@ pub(crate) fn save_step_consumes_pending_prompt_attribution() {
         "saved checkpoint should append prompt attribution"
     );
     assert_eq!(loaded.prompt_attributions[0].user_lines_added, 2);
+}
+
+#[test]
+pub(crate) fn save_step_computes_prompt_attribution_when_pending_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    fs::write(dir.path().join("tracked.txt"), "line1\nline2\n").unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    let backend = session_backend(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "attr-save-lazy".to_string(),
+            base_commit: head,
+            phase: SessionPhase::Active,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let ctx = StepContext {
+        session_id: "attr-save-lazy".to_string(),
+        modified_files: vec!["tracked.txt".to_string()],
+        new_files: vec![],
+        deleted_files: vec![],
+        metadata: None,
+        commit_message: String::new(),
+        transcript_path: String::new(),
+        author_name: String::new(),
+        author_email: String::new(),
+        agent_type: AGENT_TYPE_CLAUDE_CODE.to_string(),
+        step_transcript_identifier: String::new(),
+        step_transcript_start: 0,
+        token_usage: None,
+    };
+    strategy.save_step(&ctx).unwrap();
+
+    let loaded = backend.load_session("attr-save-lazy").unwrap().unwrap();
+    assert_eq!(
+        loaded.prompt_attributions.len(),
+        1,
+        "save_step should derive prompt attribution when turn start skipped it"
+    );
+    assert_eq!(loaded.prompt_attributions[0].checkpoint_number, 1);
+    assert_eq!(loaded.prompt_attributions[0].user_lines_added, 2);
+    assert_eq!(loaded.prompt_attributions[0].user_lines_removed, 0);
 }
 
 // New test: save_step includes transcript in the temporary checkpoint tree.

@@ -10,6 +10,7 @@ pub mod open_code;
 pub mod policy;
 pub mod registry;
 pub mod session;
+pub mod skill_install;
 pub mod types;
 
 use anyhow::Result;

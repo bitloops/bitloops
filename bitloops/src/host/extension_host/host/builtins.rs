@@ -120,6 +120,25 @@ pub(crate) const JAVA_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescri
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
+pub(crate) const CSHARP_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+    id: "csharp-language-pack",
+    version: "1.0.0",
+    api_version: 1,
+    display_name: "C# Language Pack",
+    aliases: &["cs-pack", "dotnet-pack"],
+    supported_languages: &["csharp", "c#"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "csharp-standard",
+        display_name: "C# Standard",
+        language_id: "csharp",
+        dialect: Some("cs"),
+        aliases: &["cs", "dotnet"],
+        file_extensions: &["cs"],
+        supported_source_versions: &["^8.0", "^9.0", "^10.0", "^11.0", "^12.0", "^13.0"],
+    }],
+    compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
+};
+
 const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "knowledge-capability-pack",
     display_name: "Knowledge Capability Pack",

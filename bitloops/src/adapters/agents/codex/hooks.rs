@@ -24,7 +24,8 @@ const STATUS_MESSAGE_PRE_TOOL_USE: &str = "Preparing tool call...";
 const STATUS_MESSAGE_POST_TOOL_USE: &str = "Processing tool response...";
 const STATUS_MESSAGE_STOP: &str = "Wrapping up turn...";
 const TOOL_MATCHER_BASH: &str = "Bash";
-const HOOK_TIMEOUT_SECONDS: i64 = 10;
+const DEFAULT_HOOK_TIMEOUT_SECONDS: i64 = 10;
+const USER_PROMPT_SUBMIT_TIMEOUT_SECONDS: i64 = 30;
 
 fn managed_hook_keys() -> [&'static str; 5] {
     [
@@ -38,7 +39,13 @@ fn managed_hook_keys() -> [&'static str; 5] {
 
 fn hook_commands(
     local_dev: bool,
-) -> [(&'static str, String, &'static str, Option<&'static str>); 5] {
+) -> [(
+    &'static str,
+    String,
+    &'static str,
+    i64,
+    Option<&'static str>,
+); 5] {
     let prefix = if local_dev {
         LOCAL_DEV_HOOK_PREFIX
     } else {
@@ -52,24 +59,28 @@ fn hook_commands(
                 crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START
             )),
             STATUS_MESSAGE_SESSION_START,
+            DEFAULT_HOOK_TIMEOUT_SECONDS,
             None,
         ),
         (
             HOOK_KEY_USER_PROMPT_SUBMIT,
             crate::adapters::agents::managed_hook_command(&format!("{prefix}user-prompt-submit")),
             STATUS_MESSAGE_USER_PROMPT_SUBMIT,
+            USER_PROMPT_SUBMIT_TIMEOUT_SECONDS,
             None,
         ),
         (
             HOOK_KEY_PRE_TOOL_USE,
             crate::adapters::agents::managed_hook_command(&format!("{prefix}pre-tool-use")),
             STATUS_MESSAGE_PRE_TOOL_USE,
+            DEFAULT_HOOK_TIMEOUT_SECONDS,
             Some(TOOL_MATCHER_BASH),
         ),
         (
             HOOK_KEY_POST_TOOL_USE,
             crate::adapters::agents::managed_hook_command(&format!("{prefix}post-tool-use")),
             STATUS_MESSAGE_POST_TOOL_USE,
+            DEFAULT_HOOK_TIMEOUT_SECONDS,
             Some(TOOL_MATCHER_BASH),
         ),
         (
@@ -79,6 +90,7 @@ fn hook_commands(
                 crate::adapters::agents::codex::lifecycle::HOOK_NAME_STOP
             )),
             STATUS_MESSAGE_STOP,
+            DEFAULT_HOOK_TIMEOUT_SECONDS,
             None,
         ),
     ]
@@ -143,7 +155,12 @@ fn command_of(entry: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn managed_hook_value(command: &str, status_message: &str, matcher: Option<&str>) -> Value {
+fn managed_hook_value(
+    command: &str,
+    status_message: &str,
+    timeout_seconds: i64,
+    matcher: Option<&str>,
+) -> Value {
     let mut hook = Map::new();
     hook.insert("type".to_string(), Value::String("command".to_string()));
     hook.insert("command".to_string(), Value::String(command.to_string()));
@@ -151,10 +168,7 @@ fn managed_hook_value(command: &str, status_message: &str, matcher: Option<&str>
         "statusMessage".to_string(),
         Value::String(status_message.to_string()),
     );
-    hook.insert(
-        "timeout".to_string(),
-        Value::Number(HOOK_TIMEOUT_SECONDS.into()),
-    );
+    hook.insert("timeout".to_string(), Value::Number(timeout_seconds.into()));
 
     let mut entry = Map::new();
     if let Some(matcher) = matcher {
@@ -242,6 +256,7 @@ fn normalize_entries_for_install(
     entries: &mut Vec<Value>,
     desired_command: &str,
     status_message: &str,
+    timeout_seconds: i64,
     matcher: Option<&'static str>,
     force: bool,
 ) -> (bool, bool) {
@@ -252,7 +267,12 @@ fn normalize_entries_for_install(
     strip_managed_from_entries(entries, desired_command, !force, &mut desired_kept);
 
     if !desired_kept {
-        entries.push(managed_hook_value(desired_command, status_message, matcher));
+        entries.push(managed_hook_value(
+            desired_command,
+            status_message,
+            timeout_seconds,
+            matcher,
+        ));
         inserted = true;
     }
 
@@ -261,6 +281,7 @@ fn normalize_entries_for_install(
 
 pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
     ensure_codex_hooks_feature_enabled_at(repo_root)?;
+    crate::adapters::agents::codex::skills::install_repo_skill(repo_root)?;
     let path = hooks_file_path_for(repo_root);
     let existing_data = fs::read(&path).ok();
 
@@ -278,10 +299,16 @@ pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Resul
     let mut installed = 0usize;
     let mut changed = false;
 
-    for (hook_key, command, status_message, matcher) in hook_commands(local_dev) {
+    for (hook_key, command, status_message, timeout_seconds, matcher) in hook_commands(local_dev) {
         let mut entries = parse_hook_entries(&raw_hooks, hook_key);
-        let (hook_changed, inserted) =
-            normalize_entries_for_install(&mut entries, &command, status_message, matcher, force);
+        let (hook_changed, inserted) = normalize_entries_for_install(
+            &mut entries,
+            &command,
+            status_message,
+            timeout_seconds,
+            matcher,
+            force,
+        );
         if hook_changed {
             changed = true;
         }
@@ -308,6 +335,8 @@ pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
 }
 
 pub fn uninstall_hooks_at(repo_root: &Path) -> Result<()> {
+    crate::adapters::agents::codex::skills::uninstall_repo_skill(repo_root)?;
+
     let path = hooks_file_path_for(repo_root);
     let data = match fs::read(&path) {
         Ok(data) => data,

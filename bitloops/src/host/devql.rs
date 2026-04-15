@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
-    read_committed, read_session_content, run_git,
+    read_committed, read_session_content, run_git, run_git_bytes,
 };
 use crate::host::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
@@ -133,6 +133,8 @@ const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
 #[cfg(test)]
 const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
+#[cfg(test)]
+const CSHARP_LANGUAGE_PACK_ID: &str = "csharp-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";

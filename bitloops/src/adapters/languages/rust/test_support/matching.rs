@@ -66,7 +66,7 @@ pub(crate) fn doctest_match_keys(
     keys
 }
 
-fn scenario_base_name(name: &str) -> String {
+pub(crate) fn scenario_base_name(name: &str) -> String {
     name.split('[').next().unwrap_or(name).trim().to_string()
 }
 

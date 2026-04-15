@@ -672,7 +672,10 @@ fn parses_enumerated_doctest_output() {
 
     assert_eq!(scenarios.len(), 1);
     assert_eq!(scenarios[0].relative_path, "crates/sample/src/lib.rs");
-    assert_eq!(scenarios[0].scenario_name, "sample::documented_increment");
+    assert_eq!(
+        scenarios[0].scenario_name,
+        "sample::documented_increment[doctest:12]"
+    );
     assert!(
         scenarios[0]
             .reference_candidates
@@ -681,6 +684,24 @@ fn parses_enumerated_doctest_output() {
                 start_line: 12,
             }),
         "expected parsed doctest line target"
+    );
+}
+
+#[test]
+fn enumerated_doctests_preserve_line_identity_for_duplicate_items() {
+    let scenarios = parse_enumerated_doctests(
+        r#"crates/sample/src/lib.rs - sample::documented_increment (line 12): test
+crates/sample/src/lib.rs - sample::documented_increment (line 24): test"#,
+    );
+
+    assert_eq!(scenarios.len(), 2);
+    assert_eq!(
+        scenarios[0].scenario_name,
+        "sample::documented_increment[doctest:12]"
+    );
+    assert_eq!(
+        scenarios[1].scenario_name,
+        "sample::documented_increment[doctest:24]"
     );
 }
 

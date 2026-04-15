@@ -18,7 +18,7 @@ use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 use self::enumeration::{parse_enumerated_doctests, parse_enumerated_host_tests};
 use self::matching::{
     doctest_match_keys, normalized_enumerated_doctest_key, normalized_enumerated_test_key,
-    source_scenario_match_keys,
+    scenario_base_name, source_scenario_match_keys,
 };
 use crate::host::language_adapter::{
     DiscoveredTestFile, EnumerationMode, EnumerationResult, LanguageAdapterContext,
@@ -221,34 +221,32 @@ impl RustTestMappingHelper {
             .scenarios
             .into_iter()
             .filter(|scenario| {
-                let normalized_key =
-                    if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
-                        scenario
-                            .reference_candidates
-                            .iter()
-                            .find_map(|candidate| match candidate {
-                                ReferenceCandidate::ExplicitTarget { path, start_line } => {
-                                    Some(normalized_enumerated_doctest_key(
-                                        path,
-                                        &scenario.scenario_name,
-                                        *start_line,
-                                    ))
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| {
-                                normalized_enumerated_doctest_key(
-                                    &scenario.relative_path,
-                                    &scenario.scenario_name,
-                                    0,
-                                )
-                            })
-                    } else {
-                        normalized_enumerated_test_key(&format!(
-                            "{}::{}",
-                            scenario.suite_name, scenario.scenario_name
-                        ))
-                    };
+                let normalized_key = if scenario.discovery_source
+                    == ScenarioDiscoverySource::Doctest
+                {
+                    let item_name = scenario_base_name(&scenario.scenario_name);
+                    scenario
+                        .reference_candidates
+                        .iter()
+                        .find_map(|candidate| match candidate {
+                            ReferenceCandidate::ExplicitTarget { path, start_line } => Some(
+                                normalized_enumerated_doctest_key(path, &item_name, *start_line),
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            normalized_enumerated_doctest_key(
+                                &scenario.relative_path,
+                                &item_name,
+                                0,
+                            )
+                        })
+                } else {
+                    normalized_enumerated_test_key(&format!(
+                        "{}::{}",
+                        scenario.suite_name, scenario.scenario_name
+                    ))
+                };
 
                 if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
                     !source_doctest_keys.contains(&normalized_key)
@@ -326,4 +324,62 @@ fn read_source_file(path: &Path) -> Result<String> {
 
 fn normalize_rel_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RustTestMappingHelper;
+    use crate::host::language_adapter::{
+        DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, EnumeratedTestScenario,
+        EnumerationMode, EnumerationResult, ReferenceCandidate, ScenarioDiscoverySource,
+    };
+
+    #[test]
+    fn reconcile_dedupes_enumerated_doctest_when_source_doctest_exists() {
+        let source_files = vec![DiscoveredTestFile {
+            relative_path: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            reference_candidates: Vec::new(),
+            suites: vec![DiscoveredTestSuite {
+                name: "crate::doctests".to_string(),
+                start_line: 1,
+                end_line: 1,
+                scenarios: vec![DiscoveredTestScenario {
+                    name: "sample::documented_increment[doctest:12]".to_string(),
+                    start_line: 12,
+                    end_line: 15,
+                    reference_candidates: vec![ReferenceCandidate::ExplicitTarget {
+                        path: "src/lib.rs".to_string(),
+                        start_line: 12,
+                    }],
+                    discovery_source: ScenarioDiscoverySource::Doctest,
+                }],
+            }],
+        }];
+
+        let enumeration = EnumerationResult {
+            mode: EnumerationMode::Full,
+            scenarios: vec![EnumeratedTestScenario {
+                language: "rust".to_string(),
+                suite_name: "src::lib.rs::doctests".to_string(),
+                scenario_name: "sample::documented_increment[doctest:12]".to_string(),
+                relative_path: "src/lib.rs".to_string(),
+                start_line: 12,
+                reference_candidates: vec![ReferenceCandidate::ExplicitTarget {
+                    path: "src/lib.rs".to_string(),
+                    start_line: 12,
+                }],
+                discovery_source: ScenarioDiscoverySource::Doctest,
+            }],
+            notes: Vec::new(),
+        };
+
+        let reconciled = RustTestMappingHelper::reconcile(&source_files, enumeration);
+
+        assert!(
+            reconciled.enumerated_scenarios.is_empty(),
+            "expected source doctest to suppress the matching enumerated doctest, got {:?}",
+            reconciled.enumerated_scenarios
+        );
+    }
 }

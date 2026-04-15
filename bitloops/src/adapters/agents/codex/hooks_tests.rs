@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::test_support::process_state::with_env_var;
+use crate::test_support::process_state::{with_env_var, with_env_vars};
 use serde_json::Value;
 
 use super::*;
@@ -21,6 +21,14 @@ fn hooks_file(path: &Path) -> PathBuf {
 
 fn config_file(path: &Path) -> PathBuf {
     path.join(".codex").join("config.toml")
+}
+
+fn skill_file(path: &Path) -> PathBuf {
+    path.join(".agents")
+        .join("skills")
+        .join("bitloops")
+        .join("using-devql")
+        .join("SKILL.md")
 }
 
 fn read_hooks(path: &Path) -> String {
@@ -87,12 +95,23 @@ fn with_managed_hook_env_cleared<T>(f: impl FnOnce() -> T) -> T {
     with_env_var(crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, f)
 }
 
+fn with_codex_test_env<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+    let home = home.to_string_lossy().to_string();
+    with_env_vars(
+        &[
+            (crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE, None),
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+        f,
+    )
+}
+
 #[test]
 fn install_hooks_fresh_and_idempotent() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         let installed = install_hooks_at(dir.path(), false, false).expect("install");
         assert_eq!(installed, 5);
         assert!(are_hooks_installed_at(dir.path()));
@@ -135,6 +154,15 @@ fn install_hooks_fresh_and_idempotent() {
             .and_then(Value::as_array)
             .and_then(|entries| entries.first())
             .expect("SessionStart hook command");
+        let user_prompt_hook = output
+            .get("hooks")
+            .and_then(|hooks| hooks.get("UserPromptSubmit"))
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("hooks"))
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .expect("UserPromptSubmit hook command");
 
         assert_eq!(
             start_hook.get("type").and_then(Value::as_str),
@@ -145,15 +173,44 @@ fn install_hooks_fresh_and_idempotent() {
             Some("Initializing session...")
         );
         assert_eq!(start_hook.get("timeout").and_then(Value::as_i64), Some(10));
+        assert_eq!(
+            user_prompt_hook
+                .get("statusMessage")
+                .and_then(Value::as_str),
+            Some("Submitting prompt...")
+        );
+        assert_eq!(
+            user_prompt_hook.get("timeout").and_then(Value::as_i64),
+            Some(30)
+        );
+    });
+}
+
+#[test]
+fn install_hooks_writes_the_canonical_repo_skill() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let home = tempfile::tempdir().expect("home tempdir");
+    init_repo(repo.path());
+    with_codex_test_env(home.path(), || {
+        install_hooks_at(repo.path(), false, false).expect("install");
+
+        let skill = fs::read_to_string(skill_file(repo.path())).expect("read repo skill");
+        assert_eq!(
+            skill,
+            crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL
+        );
+        assert!(
+            !skill_file(home.path()).exists(),
+            "must not write Codex skill into HOME"
+        );
     });
 }
 
 #[test]
 fn installed_hooks_require_repo_local_codex_feature_config() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         install_hooks_at(dir.path(), false, false).expect("install");
         fs::remove_file(config_file(dir.path())).expect("remove config");
 
@@ -166,10 +223,9 @@ fn installed_hooks_require_repo_local_codex_feature_config() {
 
 #[test]
 fn installed_hooks_require_enabled_repo_local_codex_feature_config() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         install_hooks_at(dir.path(), false, false).expect("install");
         fs::write(config_file(dir.path()), "[features]\ncodex_hooks = false\n")
             .expect("disable codex hooks");
@@ -183,10 +239,9 @@ fn installed_hooks_require_enabled_repo_local_codex_feature_config() {
 
 #[test]
 fn install_hooks_local_dev_writes_cargo_run_commands() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         let installed = install_hooks_at(dir.path(), true, false).expect("install local-dev");
         assert_eq!(installed, 5);
 
@@ -202,10 +257,9 @@ fn install_hooks_local_dev_writes_cargo_run_commands() {
 
 #[test]
 fn install_hooks_force_reinstalls_managed_hooks() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         install_hooks_at(dir.path(), false, false).expect("initial install");
 
         let installed = install_hooks_at(dir.path(), false, true).expect("force install");
@@ -219,10 +273,9 @@ fn install_hooks_force_reinstalls_managed_hooks() {
 
 #[test]
 fn install_hooks_preserves_unknown_fields() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         let codex_dir = dir.path().join(".codex");
         fs::create_dir_all(&codex_dir).expect("create .codex");
         fs::write(
@@ -258,10 +311,9 @@ fn install_hooks_preserves_unknown_fields() {
 
 #[test]
 fn uninstall_preserves_non_bitloops_hooks() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         let codex_dir = dir.path().join(".codex");
         fs::create_dir_all(&codex_dir).expect("create .codex");
         fs::write(
@@ -343,11 +395,39 @@ fn uninstall_preserves_non_bitloops_hooks() {
 }
 
 #[test]
-fn install_hooks_migrates_local_dev_commands_without_force() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
+fn uninstall_removes_the_repo_skill() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let home = tempfile::tempdir().expect("home tempdir");
+    init_repo(repo.path());
+    with_codex_test_env(home.path(), || {
+        install_hooks_at(repo.path(), false, false).expect("install");
+        assert!(
+            skill_file(repo.path()).exists(),
+            "repo-local skill should exist after install"
+        );
+        assert!(
+            !skill_file(home.path()).exists(),
+            "HOME should not receive a Codex skill"
+        );
 
+        uninstall_hooks_at(repo.path()).expect("uninstall");
+
+        assert!(
+            !skill_file(repo.path()).exists(),
+            "repo-local skill should be removed by uninstall"
+        );
+        assert!(
+            !skill_file(home.path()).exists(),
+            "HOME should remain clean after uninstall"
+        );
+    });
+}
+
+#[test]
+fn install_hooks_migrates_local_dev_commands_without_force() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         let codex_dir = dir.path().join(".codex");
         fs::create_dir_all(&codex_dir).expect("create .codex");
         fs::write(
@@ -432,20 +512,18 @@ fn install_hooks_migrates_local_dev_commands_without_force() {
 
 #[test]
 fn uninstall_hooks_without_config_is_noop() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         uninstall_hooks_at(dir.path()).expect("uninstall noop");
     });
 }
 
 #[test]
 fn install_hooks_sets_bash_matcher_for_tool_hooks() {
-    with_managed_hook_env_cleared(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        init_repo(dir.path());
-
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+    with_codex_test_env(dir.path(), || {
         install_hooks_at(dir.path(), false, false).expect("install");
 
         let output = read_hooks_json(dir.path());

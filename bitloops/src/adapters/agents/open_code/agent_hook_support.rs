@@ -7,6 +7,7 @@ use crate::adapters::agents::HookSupport;
 
 use super::agent_api::OpenCodeAgent;
 use super::hooks::{BITLOOPS_MARKER, get_plugin_path, render_plugin_template};
+use super::skills::{install_repo_skill, repo_skill_path, uninstall_repo_skill};
 
 impl HookSupport for OpenCodeAgent {
     fn install_hooks(&self, local_dev: bool, force: bool) -> Result<usize> {
@@ -41,6 +42,7 @@ impl OpenCodeAgent {
         local_dev: bool,
         force: bool,
     ) -> Result<usize> {
+        install_repo_skill(repo_root)?;
         let plugin_path = self.plugin_path_at(repo_root);
 
         if !force
@@ -65,10 +67,12 @@ impl OpenCodeAgent {
     pub(crate) fn uninstall_hooks_at(&self, repo_root: &std::path::Path) -> Result<()> {
         let plugin_path = self.plugin_path_at(repo_root);
         match fs::remove_file(plugin_path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(anyhow!("failed to remove plugin file: {err}")),
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(anyhow!("failed to remove plugin file: {err}")),
         }
+        uninstall_repo_skill(repo_root)?;
+        Ok(())
     }
 
     pub(crate) fn are_hooks_installed_at(&self, repo_root: &std::path::Path) -> bool {
@@ -76,7 +80,7 @@ impl OpenCodeAgent {
         let Ok(content) = fs::read_to_string(plugin_path) else {
             return false;
         };
-        Self::ensure_plugin_marker(&content).is_ok()
+        Self::ensure_plugin_marker(&content).is_ok() && repo_skill_path(repo_root).exists()
     }
 
     pub(crate) fn plugin_path_at(&self, repo_root: &std::path::Path) -> PathBuf {
@@ -92,5 +96,60 @@ impl OpenCodeAgent {
 
     pub fn render_plugin(&self, local_dev: bool) -> Result<String> {
         render_plugin_template(local_dev)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn install_hooks_at_installs_plugin_and_repo_skill() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = OpenCodeAgent;
+
+        let count = agent
+            .install_hooks_at(dir.path(), false, false)
+            .expect("install should succeed");
+        assert_eq!(count, 1);
+
+        assert!(
+            agent.plugin_path_at(dir.path()).exists(),
+            "plugin should be installed"
+        );
+        assert!(
+            repo_skill_path(dir.path()).exists(),
+            "repo-local skill should be installed"
+        );
+    }
+
+    #[test]
+    fn uninstall_hooks_at_removes_plugin_and_repo_skill() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = OpenCodeAgent;
+
+        agent
+            .install_hooks_at(dir.path(), false, false)
+            .expect("install should succeed");
+        fs::write(dir.path().join(".opencode/skills/keep.txt"), "keep")
+            .expect("write sibling file");
+
+        agent
+            .uninstall_hooks_at(dir.path())
+            .expect("uninstall should succeed");
+
+        assert!(
+            !agent.plugin_path_at(dir.path()).exists(),
+            "plugin should be removed"
+        );
+        assert!(
+            !repo_skill_path(dir.path()).exists(),
+            "repo-local skill should be removed"
+        );
+        assert!(
+            dir.path().join(".opencode/skills").exists(),
+            "non-empty parent directory should remain"
+        );
     }
 }

@@ -2,6 +2,7 @@ use super::agent_hooks::{
     AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI, DEFAULT_AGENT,
 };
 use super::*;
+use crate::adapters::agents::{AGENT_NAME_COPILOT, AGENT_NAME_OPEN_CODE};
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
@@ -16,7 +17,7 @@ use crate::cli::telemetry_consent::{
 };
 use crate::cli::{Cli, Commands};
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ensure_daemon_config_exists};
-use crate::test_support::process_state::with_process_state;
+use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
 use clap::Parser;
@@ -578,6 +579,14 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]
         );
+        let repo_skill = repo
+            .path()
+            .join(".claude/skills/bitloops/using-devql/SKILL.md");
+        assert!(
+            repo_skill.exists(),
+            "expected repo-local DevQL skill to be installed at {}",
+            repo_skill.display()
+        );
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
@@ -820,12 +829,70 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         assert!(!rendered.contains("Initialised agents: cursor"));
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(
+            repo.path()
+                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .exists()
+        );
         assert!(!repo.path().join(".claude/settings.json").exists());
     });
 }
 
 #[test]
 fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let codex_home = tempfile::tempdir().expect("codex home tempdir");
+    setup_git_repo(&repo);
+    let codex_home_path = codex_home.path().to_string_lossy().to_string();
+
+    with_env_vars(
+        &[
+            ("HOME", Some(codex_home_path.as_str())),
+            ("USERPROFILE", Some(codex_home_path.as_str())),
+        ],
+        || {
+            with_temp_app_dirs(&app_dirs, false, true, || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: true,
+                        agent: Some(AGENT_CODEX.to_string()),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: true,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                    },
+                    repo.path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init");
+
+                assert!(repo.path().join(".codex/hooks.json").exists());
+                let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
+                    .expect("read codex config");
+                assert!(config.contains("codex_hooks = true"));
+                let repo_skill = repo
+                    .path()
+                    .join(".agents/skills/bitloops/using-devql/SKILL.md");
+                assert!(
+                    repo_skill.exists(),
+                    "expected Codex repo-local skill to be installed"
+                );
+                assert!(!repo.path().join(".claude/settings.json").exists());
+            });
+        },
+    );
+}
+
+#[test]
+fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
@@ -836,7 +903,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_CODEX.to_string()),
+                agent: Some(AGENT_GEMINI.to_string()),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -852,11 +919,88 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
         )
         .expect("run init");
 
-        assert!(repo.path().join(".codex/hooks.json").exists());
-        let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
-            .expect("read codex config");
-        assert!(config.contains("codex_hooks = true"));
-        assert!(!repo.path().join(".claude/settings.json").exists());
+        let gemini_md =
+            std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
+        assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+        assert!(
+            repo.path()
+                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: Some(AGENT_NAME_COPILOT.to_string()),
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        assert!(repo.path().join(".github/hooks/bitloops.json").exists());
+        assert!(
+            repo.path()
+                .join(".github/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: Some(AGENT_NAME_OPEN_CODE.to_string()),
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        assert!(repo.path().join(".opencode/plugins/bitloops.ts").exists());
+        assert!(
+            repo.path()
+                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
     });
 }
 

@@ -313,7 +313,11 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
 
     fs::write(
         repo.path().join("src/bad.rs"),
-        [0x66, 0x6e, 0x20, 0xff, 0x0a],
+        [
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66, 0x6e,
+            0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33, 0x32, 0x20,
+            0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+        ],
     )
     .expect("overwrite bad rust file with invalid UTF-8");
 
@@ -344,6 +348,27 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
             |row| row.get(0),
         )
         .expect("count bad.rs rows");
+    let bad_artefact_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count artefacts_current rows for bad.rs");
+    let bad_edge_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count artefact_edges_current rows for bad.rs");
+    let bad_file_kind: String = db
+        .query_row(
+            "SELECT canonical_kind FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("read canonical_kind for bad.rs");
 
     assert!(
         result.success,
@@ -355,9 +380,18 @@ async fn full_sync_continues_when_one_supported_file_has_invalid_utf8() {
     );
     assert_eq!(good_rows, 1, "good path should still be materialized");
     assert_eq!(
-        bad_rows, 0,
-        "failing path should be skipped instead of aborting the sync run"
+        bad_rows, 1,
+        "decode-degraded path should still be persisted in current_file_state"
     );
+    assert_eq!(
+        bad_artefact_rows, 1,
+        "bad.rs should materialize one file artefact"
+    );
+    assert_eq!(
+        bad_edge_rows, 0,
+        "bad.rs should not materialize dependency edges"
+    );
+    assert_eq!(bad_file_kind, "file");
 }
 
 #[tokio::test]
@@ -1046,5 +1080,111 @@ async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
     assert!(
         current_clone_edge_rows > 0,
         "unchanged sync should rebuild current clone edges"
+    );
+}
+
+#[tokio::test]
+async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_path() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-utf8-sync-semantics\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write Cargo.toml");
+    fs::write(
+        repo.path().join("src/good.rs"),
+        "pub fn good() -> i32 {\n    1\n}\n",
+    )
+    .expect("write good rust file");
+    fs::write(
+        repo.path().join("src/bad.rs"),
+        "pub fn bad() -> i32 {\n    2\n}\n",
+    )
+    .expect("write bad rust file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "seed files"]);
+    fs::write(
+        repo.path().join("src/bad.rs"),
+        [
+            0x2f, 0x2f, 0x20, 0x62, 0x61, 0x64, 0xff, 0x0a, 0x70, 0x75, 0x62, 0x20, 0x66, 0x6e,
+            0x20, 0x62, 0x61, 0x64, 0x28, 0x29, 0x20, 0x2d, 0x3e, 0x20, 0x69, 0x33, 0x32, 0x20,
+            0x7b, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x32, 0x0a, 0x7d, 0x0a,
+        ],
+    )
+    .expect("overwrite bad rust file with invalid UTF-8");
+    write_sync_semantic_clone_config(repo.path());
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync with invalid UTF-8 and semantic projection enabled");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let bad_file_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count file artefacts for bad.rs");
+    let bad_semantics_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_semantics_current rows for bad.rs");
+    let bad_feature_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_features_current rows for bad.rs");
+    let good_feature_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/good.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_features_current rows for good.rs");
+
+    assert!(
+        result.success,
+        "sync should succeed with decode-degraded input"
+    );
+    assert!(
+        result.parse_errors >= 1,
+        "decode degradation should count as a parse error"
+    );
+    assert_eq!(
+        bad_file_rows, 1,
+        "bad.rs should still materialize as a file-only path"
+    );
+    assert_eq!(
+        bad_semantics_rows, 0,
+        "bad.rs should not project semantic summaries"
+    );
+    assert_eq!(
+        bad_feature_rows, 0,
+        "bad.rs should not project semantic features"
+    );
+    assert!(
+        good_feature_rows > 0,
+        "good.rs should still populate semantic features"
     );
 }
