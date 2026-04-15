@@ -162,8 +162,6 @@ if ! EXTRACTED_BINARY="$(find_extracted_binary "bitloops")"; then
   exit 1
 fi
 
-EMBEDDINGS_BINARY="$(find_extracted_binary "bitloops-local-embeddings" || true)"
-
 if [[ ! -d "${INSTALL_DIR}" ]]; then
   mkdir -p "${INSTALL_DIR}" 2>/dev/null || true
 fi
@@ -176,16 +174,8 @@ if [[ ! -w "${INSTALL_DIR}" ]]; then
 fi
 
 install -m 0755 "${EXTRACTED_BINARY}" "${INSTALL_DIR}/bitloops"
-if [[ -n "${EMBEDDINGS_BINARY}" ]]; then
-  install -m 0755 "${EMBEDDINGS_BINARY}" "${INSTALL_DIR}/bitloops-local-embeddings"
-fi
 
 echo "Installed bitloops ${TAG} to ${INSTALL_DIR}/bitloops"
-if [[ -n "${EMBEDDINGS_BINARY}" ]]; then
-  echo "Installed bitloops-local-embeddings ${TAG} to ${INSTALL_DIR}/bitloops-local-embeddings"
-else
-  echo "Note: this release archive did not contain bitloops-local-embeddings; installing bitloops only."
-fi
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
   echo "Note: ${INSTALL_DIR} is not in PATH."
   echo "Add this to your shell profile:"

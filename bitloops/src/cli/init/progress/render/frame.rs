@@ -16,7 +16,10 @@ use super::queue::{
     format_summary_status_line,
 };
 use super::task::{
-    format_init_task_progress_bar_line, format_init_task_status_line, init_task_description,
+    InitTaskLaneKind, format_init_complete_progress_bar_line, format_init_task_progress_bar_line,
+    format_init_task_state_status_line, format_init_task_status_line,
+    format_init_waiting_progress_bar_line, init_task_completion_label,
+    init_task_description_for_kind,
 };
 use super::terminal::{
     clear_rendered_lines, fit_init_plain_line, format_count_u64, rendered_terminal_line_count,
@@ -154,31 +157,101 @@ impl InitProgressRenderer {
                 },
                 spinner.as_str(),
                 tick.as_str(),
-                "Configuring local semantic summaries with bitloops-inference",
+                "Configuring semantic summaries with bitloops-inference",
                 self.terminal_width,
             ));
         }
         lines.push(String::new());
 
-        if let Some(task) = top_task {
-            lines.push(fit_init_plain_line(
-                init_task_description(task),
-                self.terminal_width,
-            ));
-            lines.push(format_init_task_progress_bar_line(
-                task,
-                self.spinner_index,
-                self.terminal_width,
-            ));
-            lines.push(format_init_task_status_line(
-                task,
-                spinner.as_str(),
-                self.terminal_width,
-            ));
+        let mut rendered_top_section = false;
+        if checklist.show_sync {
+            push_top_task_section(
+                &mut lines,
+                &mut rendered_top_section,
+                fit_init_plain_line(
+                    init_task_description_for_kind(InitTaskLaneKind::Sync),
+                    self.terminal_width,
+                ),
+                match top_task.filter(|task| task.is_sync()) {
+                    Some(task) => format_init_task_progress_bar_line(
+                        task,
+                        self.spinner_index,
+                        self.terminal_width,
+                    ),
+                    None if checklist.sync_complete => {
+                        format_init_complete_progress_bar_line(self.terminal_width)
+                    }
+                    None => format_init_waiting_progress_bar_line(
+                        self.spinner_index,
+                        self.terminal_width,
+                    ),
+                },
+                match top_task.filter(|task| task.is_sync()) {
+                    Some(task) => {
+                        format_init_task_status_line(task, spinner.as_str(), self.terminal_width)
+                    }
+                    None if checklist.sync_complete => format_init_task_state_status_line(
+                        init_task_completion_label(InitTaskLaneKind::Sync),
+                        tick.as_str(),
+                        self.terminal_width,
+                    ),
+                    None => format_init_task_state_status_line(
+                        "Waiting to start sync",
+                        spinner.as_str(),
+                        self.terminal_width,
+                    ),
+                },
+            );
+        }
+        if checklist.show_ingest {
+            push_top_task_section(
+                &mut lines,
+                &mut rendered_top_section,
+                fit_init_plain_line(
+                    init_task_description_for_kind(InitTaskLaneKind::Ingest),
+                    self.terminal_width,
+                ),
+                match top_task.filter(|task| task.is_ingest()) {
+                    Some(task) => format_init_task_progress_bar_line(
+                        task,
+                        self.spinner_index,
+                        self.terminal_width,
+                    ),
+                    None if checklist.ingest_complete => {
+                        format_init_complete_progress_bar_line(self.terminal_width)
+                    }
+                    None => format_init_waiting_progress_bar_line(
+                        self.spinner_index,
+                        self.terminal_width,
+                    ),
+                },
+                match top_task.filter(|task| task.is_ingest()) {
+                    Some(task) => {
+                        format_init_task_status_line(task, spinner.as_str(), self.terminal_width)
+                    }
+                    None if checklist.ingest_complete => format_init_task_state_status_line(
+                        init_task_completion_label(InitTaskLaneKind::Ingest),
+                        tick.as_str(),
+                        self.terminal_width,
+                    ),
+                    None if checklist.show_sync && !checklist.sync_complete => {
+                        format_init_task_state_status_line(
+                            "Waiting for sync to finish before starting ingest",
+                            spinner.as_str(),
+                            self.terminal_width,
+                        )
+                    }
+                    None => format_init_task_state_status_line(
+                        "Waiting to start ingest",
+                        spinner.as_str(),
+                        self.terminal_width,
+                    ),
+                },
+            );
         }
         match bottom_state {
             BottomProgressState::Bootstrap(task) | BottomProgressState::BootstrapFailed(task) => {
-                if top_task.is_some() {
+                if rendered_top_section {
                     lines.push(String::new());
                 }
                 lines.push(fit_init_plain_line(
@@ -201,7 +274,7 @@ impl InitProgressRenderer {
                 baseline_total,
                 completed_floor: _,
             } => {
-                if top_task.is_some() {
+                if rendered_top_section {
                     lines.push(String::new());
                 }
                 lines.push(fit_init_plain_line(
@@ -225,7 +298,7 @@ impl InitProgressRenderer {
                 completed_jobs,
                 failed_jobs,
             } => {
-                if top_task.is_some() {
+                if rendered_top_section {
                     lines.push(String::new());
                 }
                 lines.push(fit_init_plain_line(
@@ -249,7 +322,7 @@ impl InitProgressRenderer {
                 failed_jobs,
                 baseline_total,
             } => {
-                if top_task.is_some() {
+                if rendered_top_section {
                     lines.push(String::new());
                 }
                 lines.push(fit_init_plain_line(
@@ -272,11 +345,11 @@ impl InitProgressRenderer {
             BottomProgressState::Hidden => {}
         }
         if !matches!(summary_state, SummaryProgressState::Hidden) {
-            if top_task.is_some() || !matches!(bottom_state, BottomProgressState::Hidden) {
+            if rendered_top_section || !matches!(bottom_state, BottomProgressState::Hidden) {
                 lines.push(String::new());
             }
             lines.push(fit_init_plain_line(
-                "Configuring local semantic summaries with bitloops-inference",
+                "Configuring semantic summaries with bitloops-inference",
                 self.terminal_width,
             ));
             lines.push(format_summary_progress_bar_line(
@@ -348,4 +421,20 @@ fn render_init_checklist_item(
         InitChecklistItemState::Failed => "✖".to_string(),
     };
     fit_init_plain_line(&format!("{icon} {text}"), terminal_width)
+}
+
+fn push_top_task_section(
+    lines: &mut Vec<String>,
+    rendered_top_section: &mut bool,
+    description: String,
+    progress_line: String,
+    status_line: String,
+) {
+    if *rendered_top_section {
+        lines.push(String::new());
+    }
+    lines.push(description);
+    lines.push(progress_line);
+    lines.push(status_line);
+    *rendered_top_section = true;
 }

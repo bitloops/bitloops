@@ -109,25 +109,14 @@ try {
   if (-not $binaryPath) {
     throw "Extracted archive did not contain bitloops.exe"
   }
-  $embeddingsBinaryPath = Find-ExtractedBinary -ExtractDir $extractDir -Name "bitloops-local-embeddings.exe"
 
   New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
   $targetPath = Join-Path $InstallDir "bitloops.exe"
   Copy-Item -Path $binaryPath -Destination $targetPath -Force
-  if ($embeddingsBinaryPath) {
-    $embeddingsTargetPath = Join-Path $InstallDir "bitloops-local-embeddings.exe"
-    Copy-Item -Path $embeddingsBinaryPath -Destination $embeddingsTargetPath -Force
-  }
 
   $pathChanged = Add-ToUserPath -PathToAdd $InstallDir
 
   Write-Host "Installed bitloops $tag to $targetPath"
-  if ($embeddingsBinaryPath) {
-    Write-Host "Installed bitloops-local-embeddings $tag to $embeddingsTargetPath"
-  }
-  else {
-    Write-Host "Note: this release archive did not contain bitloops-local-embeddings; installing bitloops only."
-  }
   if ($pathChanged) {
     Write-Host "Added $InstallDir to user PATH. Restart your terminal for PATH changes to apply."
   }

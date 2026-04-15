@@ -68,26 +68,33 @@ async fn run_status() -> Result<()> {
         return Ok(());
     };
 
-    println!("Signed in as {}.", session.display_label());
+    for line in render_status_lines(&session)? {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn render_status_lines(session: &crate::daemon::WorkosSessionDetails) -> Result<Vec<String>> {
+    let mut lines = vec![format!("Signed in as {}.", session.display_label())];
     if let Some(email) = session.user_email.as_deref() {
-        println!("Email: {email}");
+        lines.push(format!("Email: {email}"));
     }
     if let Some(authentication_method) = session.authentication_method.as_deref() {
-        println!("Method: {authentication_method}");
+        lines.push(format!("Method: {authentication_method}"));
     }
     if let Some(organisation_id) = session.organisation_id.as_deref() {
-        println!("Organisation: {organisation_id}");
+        lines.push(format!("Organisation: {organisation_id}"));
     }
     if let Some(expires_at_unix) = session.access_token_expires_at_unix {
         let Some(expires_at) = Local.timestamp_opt(expires_at_unix as i64, 0).single() else {
             bail!("stored WorkOS expiry timestamp is invalid");
         };
-        println!(
+        lines.push(format!(
             "Access token expires: {}",
             expires_at.format("%Y-%m-%d %H:%M:%S %:z")
-        );
+        ));
     }
-    Ok(())
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -107,5 +114,28 @@ mod tests {
             args.command,
             Some(super::LoginCommand::Status(super::LoginStatusArgs {}))
         ));
+    }
+
+    #[test]
+    fn login_status_does_not_render_the_access_token() {
+        let lines = super::render_status_lines(&crate::daemon::WorkosSessionDetails {
+            client_id: "client_test".to_string(),
+            user_id: Some("user_123".to_string()),
+            user_email: Some("cli@example.com".to_string()),
+            user_first_name: Some("CLI".to_string()),
+            user_last_name: Some("User".to_string()),
+            organisation_id: Some("org_123".to_string()),
+            authentication_method: Some("GoogleOAuth".to_string()),
+            access_token_expires_at_unix: None,
+            authenticated_at_unix: 0,
+            updated_at_unix: 0,
+        })
+        .expect("status lines");
+
+        assert_eq!(lines[0], "Signed in as CLI User.");
+        assert!(lines.contains(&"Email: cli@example.com".to_string()));
+        assert!(lines.contains(&"Method: GoogleOAuth".to_string()));
+        assert!(lines.contains(&"Organisation: org_123".to_string()));
+        assert!(!lines.iter().any(|line| line.starts_with("Access token:")));
     }
 }

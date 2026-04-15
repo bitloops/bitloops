@@ -2188,7 +2188,7 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                                                             rendered.contains("Creating code embeddings for fast search using our local embeddings provider")
                                                                         );
                                                                         assert!(
-                                                                            rendered.contains("Configuring local semantic summaries with bitloops-inference")
+                                                                            rendered.contains("Configuring semantic summaries with bitloops-inference")
                                                                         );
                                                                         assert!(
                                                                             !rendered.contains("Starting initial DevQL sync...")

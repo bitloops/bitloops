@@ -4,18 +4,30 @@ use super::terminal::{
     render_init_indeterminate_progress_bar,
 };
 
-pub(super) fn init_task_description(
-    task: &crate::cli::devql::graphql::TaskGraphqlRecord,
-) -> &'static str {
-    if task.is_sync() {
-        "Analysing your current branch to know what's what"
-    } else if task.is_ingest() {
-        "Analysing your git history because you know... history is important"
-    } else if task.is_embeddings_bootstrap() {
-        "Creating code embeddings for fast search using our local embeddings provider"
-    } else {
-        "Working"
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InitTaskLaneKind {
+    Sync,
+    Ingest,
+}
+
+impl InitTaskLaneKind {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Sync => "Analysing your current branch to know what's what",
+            Self::Ingest => "Analysing your git history because you know... history is important",
+        }
     }
+
+    fn completion_label(self) -> &'static str {
+        match self {
+            Self::Sync => "Sync complete",
+            Self::Ingest => "Ingest complete",
+        }
+    }
+}
+
+pub(super) fn init_task_description_for_kind(kind: InitTaskLaneKind) -> &'static str {
+    kind.description()
 }
 
 pub(super) fn format_init_task_status_line(
@@ -142,6 +154,48 @@ pub(super) fn format_init_task_progress_bar_line(
         render_init_indeterminate_progress_bar(bar_width, spinner_index)
     };
     format!("[{bar}]{summary}")
+}
+
+pub(super) fn format_init_waiting_progress_bar_line(
+    spinner_index: usize,
+    terminal_width: Option<usize>,
+) -> String {
+    let available_width = terminal_width.unwrap_or(80).max(16);
+    let summary = " waiting ".to_string();
+    let reserved = summary.chars().count() + 2;
+    if available_width <= reserved + 1 {
+        return fit_init_status_text(summary.trim(), Some(available_width));
+    }
+
+    let bar_width = available_width - reserved;
+    let bar = render_init_indeterminate_progress_bar(bar_width, spinner_index);
+    format!("[{bar}]{summary}")
+}
+
+pub(super) fn format_init_complete_progress_bar_line(terminal_width: Option<usize>) -> String {
+    let available_width = terminal_width.unwrap_or(80).max(16);
+    let summary = " 100% complete ".to_string();
+    let reserved = summary.chars().count() + 2;
+    if available_width <= reserved + 1 {
+        return fit_init_status_text(summary.trim(), Some(available_width));
+    }
+
+    let bar_width = available_width - reserved;
+    let bar = render_init_determinate_progress_bar(bar_width, 1.0);
+    format!("[{bar}]{summary}")
+}
+
+pub(super) fn format_init_task_state_status_line(
+    status: &str,
+    icon: &str,
+    terminal_width: Option<usize>,
+) -> String {
+    let fitted = fit_init_status_text(status, terminal_width.map(|width| width.saturating_sub(2)));
+    format!("{icon} {fitted}")
+}
+
+pub(super) fn init_task_completion_label(kind: InitTaskLaneKind) -> &'static str {
+    kind.completion_label()
 }
 
 fn init_task_progress_ratio(

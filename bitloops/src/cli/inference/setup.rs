@@ -27,7 +27,7 @@ const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS: i64 = 200;
 const DEFAULT_SUMMARY_PROFILE_NAME: &str = "summary_local";
 const DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME: &str = "summary_llm";
 const DEFAULT_PLATFORM_SUMMARY_MODEL: &str = "ministral-3-3b-instruct";
-const DEFAULT_PLATFORM_API_KEY_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_TOKEN";
+const DEFAULT_PLATFORM_SUMMARY_API_KEY: &str = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}";
 const PLATFORM_CHAT_COMPLETIONS_URL_ENV: &str = "BITLOOPS_PLATFORM_CHAT_COMPLETIONS_URL";
 const PLATFORM_GATEWAY_URL_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_URL";
 
@@ -85,9 +85,18 @@ pub(crate) struct SummarySetupExecutionResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PreparedSummarySetupAction {
-    InstallRuntimeOnly { message: String },
-    InstallRuntimeOnlyPendingProbe { message: String },
-    Configure { model_name: String },
+    InstallRuntimeOnly {
+        message: String,
+    },
+    InstallRuntimeOnlyPendingProbe {
+        message: String,
+    },
+    ConfigureLocal {
+        model_name: String,
+    },
+    ConfigureCloud {
+        gateway_url_override: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,8 +211,21 @@ pub(crate) fn configure_cloud_summary_generation(
     gateway_url_override: Option<&str>,
 ) -> Result<String> {
     let _ = install_or_bootstrap_inference(repo_root)?;
-    write_platform_summary_profile(repo_root, gateway_url_override)?;
-    Ok("Configured semantic summaries to use Bitloops cloud summaries.".to_string())
+    let execution = apply_prepared_summary_setup(
+        repo_root,
+        prepare_cloud_summary_generation_plan(gateway_url_override),
+    )?;
+    Ok(execution.message)
+}
+
+pub(crate) fn prepare_cloud_summary_generation_plan(
+    gateway_url_override: Option<&str>,
+) -> PreparedSummarySetupPlan {
+    PreparedSummarySetupPlan {
+        action: PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override: gateway_url_override.map(str::to_string),
+        },
+    }
 }
 
 pub(crate) fn platform_summary_gateway_url_override() -> Option<String> {
@@ -395,7 +417,7 @@ pub(crate) fn prepare_local_summary_generation_plan(
                     });
                 };
                 return Ok(PreparedSummarySetupPlan {
-                    action: PreparedSummarySetupAction::Configure { model_name },
+                    action: PreparedSummarySetupAction::ConfigureLocal { model_name },
                 });
             }
         }
@@ -445,7 +467,7 @@ fn apply_prepared_summary_setup(
                 message,
             })
         }
-        PreparedSummarySetupAction::Configure { model_name } => {
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
             write_summary_profile(repo_root, &model_name)?;
             Ok(SummarySetupExecutionResult {
                 outcome: SummarySetupOutcome::Configured {
@@ -454,6 +476,18 @@ fn apply_prepared_summary_setup(
                 message: format!(
                     "Configured semantic summaries to use Ollama model `{model_name}`."
                 ),
+            })
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+        } => {
+            write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: DEFAULT_PLATFORM_SUMMARY_MODEL.to_string(),
+                },
+                message: "Configured semantic summaries to use Bitloops cloud summaries."
+                    .to_string(),
             })
         }
     }
@@ -502,7 +536,7 @@ where
                 message,
             })
         }
-        PreparedSummarySetupAction::Configure { model_name } => {
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
             report(SummarySetupProgress {
                 phase: SummarySetupPhase::WritingProfile,
                 message: Some(format!("Applying summary profile for `{model_name}`")),
@@ -516,6 +550,23 @@ where
                 message: format!(
                     "Configured semantic summaries to use Ollama model `{model_name}`."
                 ),
+            })
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+        } => {
+            report(SummarySetupProgress {
+                phase: SummarySetupPhase::WritingProfile,
+                message: Some("Applying Bitloops cloud summary profile".to_string()),
+                ..Default::default()
+            })?;
+            write_platform_summary_profile(repo_root, gateway_url_override.as_deref())?;
+            Ok(SummarySetupExecutionResult {
+                outcome: SummarySetupOutcome::Configured {
+                    model_name: DEFAULT_PLATFORM_SUMMARY_MODEL.to_string(),
+                },
+                message: "Configured semantic summaries to use Bitloops cloud summaries."
+                    .to_string(),
             })
         }
     }
@@ -768,7 +819,7 @@ fn write_platform_summary_profile(
         profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
         profile["driver"] = Item::Value(BITLOOPS_PLATFORM_CHAT_DRIVER.into());
         profile["model"] = Item::Value(DEFAULT_PLATFORM_SUMMARY_MODEL.into());
-        profile["api_key"] = Item::Value(format!("${{{DEFAULT_PLATFORM_API_KEY_ENV}}}").into());
+        profile["api_key"] = Item::Value(DEFAULT_PLATFORM_SUMMARY_API_KEY.into());
         if let Some(gateway_url_override) = gateway_url_override {
             profile["base_url"] = Item::Value(gateway_url_override.into());
         } else {
@@ -866,7 +917,7 @@ fn is_managed_platform_summary_profile(profile: &Table) -> bool {
             .and_then(Item::as_value)
             .and_then(|value| value.as_str())
             .map(str::trim)
-            == Some("${BITLOOPS_PLATFORM_GATEWAY_TOKEN}")
+            .is_none_or(|api_key| api_key == "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}")
 }
 
 fn is_recommended_ollama_model(model_name: &str) -> bool {

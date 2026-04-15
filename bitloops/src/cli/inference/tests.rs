@@ -5,8 +5,9 @@ use tempfile::TempDir;
 use toml_edit::{DocumentMut, Item};
 
 use crate::cli::inference::{
-    OllamaAvailability, SummarySetupOutcome, SummarySetupSelection,
+    OllamaAvailability, SummarySetupOutcome, SummarySetupPhase, SummarySetupSelection,
     configure_cloud_summary_generation, configure_local_summary_generation,
+    execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
     prompt_summary_setup_selection, summary_generation_configured,
     with_managed_inference_install_hook, with_ollama_probe_hook,
 };
@@ -195,6 +196,68 @@ fn summary_setup_can_write_platform_profile_with_url_override() {
     .expect("configure cloud summaries");
 
     let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
+    assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
+}
+
+#[test]
+fn cloud_summary_setup_prepared_plan_reports_progress_and_writes_profile() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+    let mut progress_events = Vec::new();
+
+    let result = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            execute_prepared_summary_setup_with_progress(
+                &configure_root,
+                prepare_cloud_summary_generation_plan(Some(
+                    "https://platform.example.com/v1/chat/completions",
+                )),
+                |progress| {
+                    progress_events.push(progress);
+                    Ok(())
+                },
+            )
+        },
+    )
+    .expect("execute prepared cloud summary setup");
+
+    assert_eq!(
+        result.message,
+        "Configured semantic summaries to use Bitloops cloud summaries."
+    );
+    assert_eq!(
+        progress_events.last().map(|progress| progress.phase),
+        Some(SummarySetupPhase::WritingProfile)
+    );
+    assert_eq!(
+        progress_events
+            .last()
+            .and_then(|progress| progress.message.as_deref()),
+        Some("Applying Bitloops cloud summary profile")
+    );
+    assert!(summary_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(rendered.contains("driver = \"bitloops_platform_chat\""));
+    assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
+    assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
     assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
 }
 
@@ -352,7 +415,6 @@ task = "text_generation"
 driver = "bitloops_platform_chat"
 runtime = "bitloops_inference"
 model = "ministral-3-3b-instruct"
-api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
 temperature = "0.1"
 max_output_tokens = 200
 "#,

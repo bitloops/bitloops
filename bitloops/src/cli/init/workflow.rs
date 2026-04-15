@@ -11,7 +11,8 @@ use crate::cli::embeddings::{
 };
 use crate::cli::inference::{
     SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
-    platform_summary_gateway_url_override, prepare_local_summary_generation_plan,
+    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
+    prepare_local_summary_generation_plan,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -164,14 +165,22 @@ pub(super) async fn run_for_project_root(
         SummarySetupSelection::Cloud => {
             crate::cli::login::ensure_logged_in().await?;
             let gateway_url_override = platform_summary_gateway_url_override();
-            let message =
-                configure_cloud_summary_generation(project_root, gateway_url_override.as_deref())
-                    .map_err(|err| {
+            if args.install_default_daemon {
+                prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(
+                    gateway_url_override.as_deref(),
+                ));
+            } else {
+                let message = configure_cloud_summary_generation(
+                    project_root,
+                    gateway_url_override.as_deref(),
+                )
+                .map_err(|err| {
                     anyhow::anyhow!(
                         "Bitloops init completed, but semantic summary setup failed: {err:#}"
                     )
                 })?;
-            writeln!(out, "{message}")?;
+                writeln!(out, "{message}")?;
+            }
         }
         SummarySetupSelection::Local => {
             if args.install_default_daemon {
