@@ -17,10 +17,12 @@ pub(crate) fn parse_enumerated_doctests(output: &str) -> Vec<EnumeratedTestScena
             continue;
         };
 
+        let scenario_name = format!("{item_name}[doctest:{line_number}]");
+
         scenarios.push(EnumeratedTestScenario {
             language: "rust".to_string(),
             suite_name: format!("{}::doctests", path.replace('/', "::")),
-            scenario_name: item_name.clone(),
+            scenario_name,
             relative_path: path.to_string(),
             start_line: line_number,
             reference_candidates: vec![ReferenceCandidate::ExplicitTarget {
