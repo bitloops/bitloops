@@ -139,6 +139,7 @@ fn setup_claude_and_enable(repo: &Path) {
 }
 
 fn hook_command_exists(settings: &Value, hook_type: &str, matcher: &str, command: &str) -> bool {
+    let expected_command = expected_hook_command(command);
     let Some(matchers) = settings
         .get("hooks")
         .and_then(|h| h.get(hook_type))
@@ -158,12 +159,31 @@ fn hook_command_exists(settings: &Value, hook_type: &str, matcher: &str, command
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
-                        .map(|c| c == command)
+                        .map(|c| c == expected_command)
                         .unwrap_or(false)
                 })
             })
             .unwrap_or(false)
     })
+}
+
+fn expected_hook_command(command: &str) -> String {
+    if !command.starts_with("bitloops ") {
+        return command.to_string();
+    }
+
+    match env::var_os("BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE") {
+        Some(path) => format!(
+            "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE={} {}",
+            shell_single_quote(&path.to_string_lossy()),
+            command,
+        ),
+        None => command.to_string(),
+    }
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn read_json(path: &Path) -> Value {
