@@ -673,7 +673,9 @@ fn prepare_sync_item_with_connection(
                     },
                 ) {
                     Ok(extraction) => extraction,
-                    Err(err) if desired.analysis_mode == crate::host::devql::AnalysisMode::Code => {
+                    Err(_err)
+                        if desired.analysis_mode == crate::host::devql::AnalysisMode::Code =>
+                    {
                         Some(
                             crate::host::devql::sync::extraction::degraded_file_only_to_cache_format(
                                 &desired.path,
