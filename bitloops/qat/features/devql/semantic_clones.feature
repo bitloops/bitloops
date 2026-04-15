@@ -21,11 +21,11 @@ Feature: Semantic Clones enrichment and query coverage
     Then semantic clone historical tables are populated in bitloops
 
   @devql @semantic-clones
-  Scenario: Current projection populates semantic-clone current tables without inline embeddings
+  Scenario: Current projection populates semantic-clone current tables
     When I run DevQL ingest in bitloops
     And I run DevQL sync --status in bitloops
     And I wait for semantic clone enrichments to drain in bitloops
-    Then semantic clone current projection tables are populated without inline embeddings in bitloops
+    Then semantic clone current projection tables are populated in bitloops
 
   @devql @semantic-clones
   Scenario: Two workers drive embedding and clone-edge rebuild queues during the same run
@@ -34,11 +34,11 @@ Feature: Semantic Clones enrichment and query coverage
     Then semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in bitloops
 
   @devql @semantic-clones
-  Scenario: Historical embeddings and current artefacts expose separate code and summary channels
+  Scenario: Historical and current embeddings expose separate code and summary channels
     When I run DevQL ingest in bitloops
     And I run DevQL sync --status in bitloops
     And I wait for semantic clone enrichments to drain in bitloops
-    Then semantic clone historical embeddings and current artefacts expose code and summary channels in bitloops
+    Then semantic clone historical and current embeddings expose code and summary channels in bitloops
 
   @devql @semantic-clones
   Scenario: Handler clones rank the cross-file execute peer above the weaker same-file helper

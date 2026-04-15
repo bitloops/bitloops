@@ -95,41 +95,6 @@ fn load_representation_kind_counts_for_repo(
     Ok(counts)
 }
 
-fn load_current_joined_representation_kind_counts_for_repo(
-    conn: &rusqlite::Connection,
-    repo_id: &str,
-) -> Result<RepresentationKindCounts> {
-    let sql = "SELECT e.representation_kind, COUNT(*) \
-               FROM artefacts_current a \
-               JOIN symbol_embeddings e \
-                 ON e.repo_id = a.repo_id \
-                AND e.artefact_id = a.artefact_id \
-               WHERE a.repo_id = ?1 \
-               GROUP BY e.representation_kind";
-    let mut counts = RepresentationKindCounts::default();
-    let mut stmt = match conn.prepare(sql) {
-        Ok(stmt) => stmt,
-        Err(err) if is_missing_table_or_column_error(&err) => return Ok(counts),
-        Err(err) => return Err(err).context("preparing current joined representation query"),
-    };
-    let rows = stmt
-        .query_map(rusqlite::params![repo_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })
-        .context("querying current joined representation kinds")?;
-    for row in rows {
-        let (kind, count) = row.context("reading current joined representation row")?;
-        let count = usize::try_from(count)
-            .context("converting current joined representation count to usize")?;
-        match normalize_representation_kind(kind.trim()) {
-            Some("code") => counts.code += count,
-            Some("summary") => counts.summary += count,
-            _ => {}
-        }
-    }
-    Ok(counts)
-}
-
 fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneTableSnapshot> {
     let conn = open_relational_connection(world)?;
     let repo_id = resolve_repo_id(&conn)?;
@@ -139,6 +104,7 @@ fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneT
             symbol_features: count_rows_for_repo(&conn, "symbol_features", &repo_id)?,
             symbol_semantics: count_rows_for_repo(&conn, "symbol_semantics", &repo_id)?,
             symbol_embeddings: count_rows_for_repo(&conn, "symbol_embeddings", &repo_id)?,
+            symbol_clone_edges: count_rows_for_repo(&conn, "symbol_clone_edges", &repo_id)?,
             commit_ingest_ledger: count_rows_for_repo(&conn, "commit_ingest_ledger", &repo_id)?,
         },
         current: SemanticCloneCurrentTableSnapshot {
@@ -158,7 +124,11 @@ fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneT
                 "symbol_embeddings_current",
                 &repo_id,
             )?,
-            symbol_clone_edges: count_rows_for_repo(&conn, "symbol_clone_edges", &repo_id)?,
+            symbol_clone_edges_current: count_rows_for_repo(
+                &conn,
+                "symbol_clone_edges_current",
+                &repo_id,
+            )?,
         },
         historical_representation_counts: load_representation_kind_counts_for_repo(
             &conn,
@@ -170,10 +140,6 @@ fn load_semantic_clone_table_snapshot(world: &QatWorld) -> Result<SemanticCloneT
             "symbol_embeddings_current",
             &repo_id,
         )?,
-        current_joined_representation_counts: load_current_joined_representation_kind_counts_for_repo(
-            &conn,
-            &repo_id,
-        )?,
     })
 }
 
@@ -183,39 +149,34 @@ fn store_semantic_clone_table_snapshot(world: &mut QatWorld, snapshot: SemanticC
 
 fn describe_semantic_clone_table_snapshot(snapshot: &SemanticCloneTableSnapshot) -> String {
     format!(
-        "historical(artefacts={}, features={}, semantics={}, embeddings={}, ledger={}); current(artefacts={}, features={}, semantics={}, embeddings={}, clone_edges={}); historical_kinds(code={}, summary={}); current_kinds(code={}, summary={}); current_joined_kinds(code={}, summary={})",
+        "historical(artefacts={}, features={}, semantics={}, embeddings={}, clone_edges={}, ledger={}); current(artefacts={}, features={}, semantics={}, embeddings={}, clone_edges={}); historical_kinds(code={}, summary={}); current_kinds(code={}, summary={})",
         snapshot.historical.artefacts_historical,
         snapshot.historical.symbol_features,
         snapshot.historical.symbol_semantics,
         snapshot.historical.symbol_embeddings,
+        snapshot.historical.symbol_clone_edges,
         snapshot.historical.commit_ingest_ledger,
         snapshot.current.artefacts_current,
         snapshot.current.symbol_features_current,
         snapshot.current.symbol_semantics_current,
         snapshot.current.symbol_embeddings_current,
-        snapshot.current.symbol_clone_edges,
+        snapshot.current.symbol_clone_edges_current,
         snapshot.historical_representation_counts.code,
         snapshot.historical_representation_counts.summary,
         snapshot.current_representation_counts.code,
         snapshot.current_representation_counts.summary,
-        snapshot.current_joined_representation_counts.code,
-        snapshot.current_joined_representation_counts.summary,
     )
 }
 
 fn load_semantic_clone_store_snapshot(world: &QatWorld) -> Result<SemanticCloneStoreSnapshot> {
     let path = relational_db_path_for_world(world)?;
     let snapshot = load_semantic_clone_table_snapshot(world)?;
-    let embeddings = snapshot
-        .historical
-        .symbol_embeddings
-        .max(snapshot.current.symbol_embeddings_current);
     Ok(SemanticCloneStoreSnapshot {
         path,
         evidence: SemanticCloneStoreEvidence {
             current_artefacts: snapshot.current.artefacts_current,
-            embeddings,
-            clone_edges: snapshot.current.symbol_clone_edges,
+            embeddings: snapshot.current.symbol_embeddings_current,
+            clone_edges: snapshot.current.symbol_clone_edges_current,
         },
     })
 }
@@ -958,6 +919,14 @@ pub fn assert_semantic_clone_historical_tables_populated(
         "expected historical symbol semantics after ingest, got {message}"
     );
     ensure!(
+        snapshot.historical.symbol_embeddings > 0,
+        "expected historical symbol embeddings after ingest, got {message}"
+    );
+    ensure!(
+        snapshot.historical.symbol_clone_edges > 0,
+        "expected historical symbol clone edges after ingest, got {message}"
+    );
+    ensure!(
         snapshot.historical.commit_ingest_ledger > 0,
         "expected commit_ingest_ledger rows after ingest, got {message}"
     );
@@ -985,12 +954,12 @@ pub fn assert_semantic_clone_current_tables_populated(
         "expected current symbol semantics after sync, got {message}"
     );
     ensure!(
-        snapshot.current.symbol_clone_edges > 0,
-        "expected current symbol clone edges after sync and enrichments, got {message}"
+        snapshot.current.symbol_embeddings_current > 0,
+        "expected current symbol embeddings after sync, got {message}"
     );
     ensure!(
-        snapshot.current.symbol_embeddings_current == 0,
-        "expected current inline symbol embeddings to remain empty after sync, got {message}"
+        snapshot.current.symbol_clone_edges_current > 0,
+        "expected current symbol clone edges after sync and enrichments, got {message}"
     );
     Ok(())
 }
@@ -1012,19 +981,19 @@ pub fn assert_semantic_clone_representation_channels_populated(
         "expected historical `summary` embeddings, got {message}"
     );
     ensure!(
-        snapshot.current_joined_representation_counts.code > 0,
-        "expected current artefacts to resolve `code` embeddings from the historical store, got {message}"
+        snapshot.current_representation_counts.code > 0,
+        "expected current `code` embeddings, got {message}"
     );
     ensure!(
-        snapshot.current_joined_representation_counts.summary > 0,
-        "expected current artefacts to resolve `summary` embeddings from the historical store, got {message}"
+        snapshot.current_representation_counts.summary > 0,
+        "expected current `summary` embeddings, got {message}"
     );
     ensure!(
-        snapshot.current.symbol_embeddings_current == 0,
-        "expected current inline embedding rows to remain empty after sync, got {message}"
+        snapshot.current.symbol_embeddings_current > 0,
+        "expected current inline embedding rows to be populated, got {message}"
     );
     ensure!(
-        snapshot.current.symbol_clone_edges > 0,
+        snapshot.current.symbol_clone_edges_current > 0,
         "expected current clone edges to remain populated, got {message}"
     );
     Ok(())

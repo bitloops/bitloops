@@ -1027,7 +1027,7 @@ async fn sync_removes_deleted_file() {
 }
 
 #[tokio::test]
-async fn sync_populates_current_semantic_tables_without_inline_embeddings() {
+async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clone_edges() {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
@@ -1057,13 +1057,27 @@ async fn sync_populates_current_semantic_tables_without_inline_embeddings() {
             |row| row.get(0),
         )
         .expect("count symbol_features_current rows");
-    let embedding_rows: i64 = db
+    let code_embedding_rows: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'code'",
             [cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
-        .expect("count symbol_embeddings_current rows");
+        .expect("count code symbol_embeddings_current rows");
+    let summary_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'summary'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count summary symbol_embeddings_current rows");
+    let current_clone_edge_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count symbol_clone_edges_current rows");
 
     assert!(
         result.success,
@@ -1074,9 +1088,131 @@ async fn sync_populates_current_semantic_tables_without_inline_embeddings() {
         feature_rows > 0,
         "current semantic features should be populated"
     );
-    assert_eq!(
-        embedding_rows, 0,
-        "current code embeddings should no longer be populated inline during sync"
+    assert!(
+        code_embedding_rows > 0,
+        "current code embeddings should be populated during sync"
+    );
+    assert!(
+        summary_embedding_rows > 0,
+        "current summary embeddings should be populated during sync"
+    );
+    assert!(
+        current_clone_edge_rows > 0,
+        "current clone edges should be rebuilt from current projection during sync"
+    );
+}
+
+#[tokio::test]
+async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
+    let repo = seed_full_sync_repo();
+    write_sync_semantic_clone_config(repo.path());
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    db.execute(
+        "DELETE FROM symbol_embeddings WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete historical embeddings");
+    db.execute(
+        "DELETE FROM symbol_embeddings_current WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete current embeddings");
+    db.execute(
+        "DELETE FROM symbol_clone_edges WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete historical clone edges");
+    db.execute(
+        "DELETE FROM symbol_clone_edges_current WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete current clone edges");
+    db.execute(
+        "DELETE FROM semantic_clone_embedding_setup_state WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete active embedding setup");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute unchanged sync after semantic clone table reset");
+    let db = Connection::open(&sqlite_path).expect("reopen sqlite db after sync");
+
+    let historical_code_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings WHERE repo_id = ?1 AND representation_kind = 'code'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical code embeddings");
+    let historical_summary_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings WHERE repo_id = ?1 AND representation_kind = 'summary'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count historical summary embeddings");
+    let current_code_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'code'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current code embeddings");
+    let current_summary_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND representation_kind = 'summary'",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current summary embeddings");
+    let current_clone_edge_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_clone_edges_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current clone edges");
+
+    assert!(result.success, "unchanged sync should still succeed");
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_changed, 0);
+    assert!(result.paths_unchanged > 0);
+    assert!(
+        historical_code_embedding_rows > 0,
+        "unchanged sync should repopulate historical code embeddings"
+    );
+    assert!(
+        historical_summary_embedding_rows > 0,
+        "unchanged sync should repopulate historical summary embeddings"
+    );
+    assert!(
+        current_code_embedding_rows > 0,
+        "unchanged sync should repopulate current code embeddings"
+    );
+    assert!(
+        current_summary_embedding_rows > 0,
+        "unchanged sync should repopulate current summary embeddings"
+    );
+    assert!(
+        current_clone_edge_rows > 0,
+        "unchanged sync should rebuild current clone edges"
     );
 }
 
@@ -1159,6 +1295,20 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
             |row| row.get(0),
         )
         .expect("count symbol_features_current rows for good.rs");
+    let bad_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/bad.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_embeddings_current rows for bad.rs");
+    let good_embedding_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/good.rs"],
+            |row| row.get(0),
+        )
+        .expect("count symbol_embeddings_current rows for good.rs");
 
     assert!(
         result.success,
@@ -1180,8 +1330,16 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
         bad_feature_rows, 0,
         "bad.rs should not project semantic features"
     );
+    assert_eq!(
+        bad_embedding_rows, 0,
+        "bad.rs should not project current embeddings"
+    );
     assert!(
         good_feature_rows > 0,
         "good.rs should still populate semantic features"
+    );
+    assert!(
+        good_embedding_rows > 0,
+        "good.rs should still populate current embeddings"
     );
 }

@@ -9,7 +9,7 @@ use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE, REPO_POLICY_LOCAL_FILE_NAME,
 };
 use crate::test_support::git_fixtures::init_test_repo;
-use crate::test_support::process_state::{with_env_var, with_env_vars};
+use crate::test_support::process_state::{enter_process_state, with_env_var, with_env_vars};
 use crate::utils::branding::bitloops_wordmark;
 use clap::{Command, CommandFactory, Parser};
 use serde_json::Value;
@@ -464,6 +464,32 @@ fn TestRootCommand_RunWithoutSubcommand_ReturnsOk() {
     assert!(
         result.is_ok(),
         "root invocation should return Ok after printing help"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_EmbeddingsDoctorRunsInsideAsyncCliRuntime() {
+    let repo = TempDir::new().expect("temp repo should be created");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    let parsed = Cli::try_parse_from(["bitloops", "embeddings", "doctor"])
+        .expect("embeddings doctor invocation should parse");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    let result = runtime.block_on(super::run(parsed));
+
+    assert!(
+        result.is_ok(),
+        "embeddings doctor should run through the async root CLI without nested runtime panics"
     );
 }
 

@@ -143,6 +143,13 @@ pub(super) async fn run_dual_init_progress(
         SummaryProgressState::Hidden
     };
     let mut summary_backfill_enqueued = false;
+    let mut embeddings_bootstrap_ready = matches!(
+        &bottom_state,
+        BottomProgressState::Bootstrap(task)
+            if task.is_terminal() && task.status.eq_ignore_ascii_case("completed")
+    );
+    let mut initial_sync_completed = false;
+    let mut enqueue_follow_up_sync_after_embeddings_ready = false;
     let mut checklist = InitChecklistState {
         show_sync: options.show_sync,
         show_ingest: options.show_ingest,
@@ -192,6 +199,14 @@ pub(super) async fn run_dual_init_progress(
                             if refreshed.status.eq_ignore_ascii_case("completed") {
                                 if refreshed.is_sync() {
                                     checklist.sync_complete = true;
+                                    if !initial_sync_completed {
+                                        initial_sync_completed = true;
+                                        if options.queued_embeddings_bootstrap.is_some()
+                                            && !embeddings_bootstrap_ready
+                                        {
+                                            enqueue_follow_up_sync_after_embeddings_ready = true;
+                                        }
+                                    }
                                 } else if refreshed.is_ingest() {
                                     checklist.ingest_complete = true;
                                 }
@@ -221,6 +236,14 @@ pub(super) async fn run_dual_init_progress(
                         Some(refreshed) => top_task = Some(refreshed),
                         None if current.is_sync() && enqueue_ingest_after_sync => {
                             checklist.sync_complete = true;
+                            if !initial_sync_completed {
+                                initial_sync_completed = true;
+                                if options.queued_embeddings_bootstrap.is_some()
+                                    && !embeddings_bootstrap_ready
+                                {
+                                    enqueue_follow_up_sync_after_embeddings_ready = true;
+                                }
+                            }
                             let (ingest_task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
                                 scope,
                                 Some(options.ingest_backfill),
@@ -232,6 +255,14 @@ pub(super) async fn run_dual_init_progress(
                         None => {
                             if current.is_sync() {
                                 checklist.sync_complete = true;
+                                if !initial_sync_completed {
+                                    initial_sync_completed = true;
+                                    if options.queued_embeddings_bootstrap.is_some()
+                                        && !embeddings_bootstrap_ready
+                                    {
+                                        enqueue_follow_up_sync_after_embeddings_ready = true;
+                                    }
+                                }
                             } else if current.is_ingest() {
                                 checklist.ingest_complete = true;
                             }
@@ -320,6 +351,7 @@ pub(super) async fn run_dual_init_progress(
                         match refresh_init_progress_task(bootstrap_scope, &current_task).await? {
                             Some(refreshed) if refreshed.is_terminal() => {
                                 if refreshed.status.eq_ignore_ascii_case("completed") {
+                                    embeddings_bootstrap_ready = true;
                                     let queue_snapshot =
                                         current_embedding_queue_snapshot(&scope.repo_root).await?;
                                     let completed_floor = queue_snapshot
@@ -483,6 +515,29 @@ pub(super) async fn run_dual_init_progress(
                     }
                     other => other,
                 };
+
+                if enqueue_follow_up_sync_after_embeddings_ready
+                    && embeddings_bootstrap_ready
+                    && init_pipeline_complete(
+                        checklist,
+                        top_task.is_none(),
+                        enqueue_ingest_after_sync,
+                    )
+                {
+                    let (follow_up_sync_task, _merged) =
+                        crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
+                            scope,
+                            false,
+                            None,
+                            false,
+                            false,
+                            "init",
+                            false,
+                        )
+                        .await?;
+                    top_task = Some(follow_up_sync_task);
+                    enqueue_follow_up_sync_after_embeddings_ready = false;
+                }
 
                 renderer.render(
                     out,

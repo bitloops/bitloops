@@ -166,9 +166,9 @@ cargo nextest run --features qat-tests --test qat_acceptance --run-ignored only 
 | 11  | Untested artefact is clearly identified                       | `TestHarnessProofMap`      |
 | 12  | Failing test is distinguishable from passing test             | `TestHarnessProofMap`      |
 | 13  | Historical ingest populates semantic-clone historical tables  | `SemanticClones`           |
-| 14  | Current projection populates semantic-clone current tables without inline embeddings | `SemanticClones`           |
+| 14  | Current projection populates semantic-clone current tables | `SemanticClones`           |
 | 15  | Embedding and clone-edge rebuild jobs both make progress      | `SemanticClones`           |
-| 16  | Historical embeddings and current artefacts expose code and summary channels | `SemanticClones`           |
+| 16  | Historical and current embeddings expose code and summary channels | `SemanticClones`           |
 | 17  | Handler clones stay explainable, rankable, and filterable     | `SemanticClones`           |
 | 18  | DevQL clone summary returns grouped counts                    | `SemanticClones`           |
 | 19  | GraphQL clone summary returns grouped counts                  | `SemanticClones`           |
