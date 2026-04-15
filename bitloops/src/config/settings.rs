@@ -1,6 +1,6 @@
 //! Thin-CLI policy settings resolved from repo policy TOML plus global daemon CLI config.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

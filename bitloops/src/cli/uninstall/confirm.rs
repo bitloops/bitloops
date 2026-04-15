@@ -98,7 +98,10 @@ mod tests {
         let confirmed = confirm_uninstall_with_input(
             &mut out,
             &targets(&[UninstallTarget::AgentHooks, UninstallTarget::Data]),
-            &[PathBuf::from("/tmp/project-a"), PathBuf::from("/tmp/project-b")],
+            &[
+                PathBuf::from("/tmp/project-a"),
+                PathBuf::from("/tmp/project-b"),
+            ],
             &[PathBuf::from("/tmp/repo-a"), PathBuf::from("/tmp/repo-b")],
             &[PathBuf::from("/tmp/repo-a")],
             &mut input,

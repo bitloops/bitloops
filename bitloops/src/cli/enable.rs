@@ -195,8 +195,10 @@ pub(crate) async fn run_with_io(
         .context("resolving editable Bitloops project config")?;
     let selected_agents = crate::cli::agent_surfaces::configured_agents_or_bail(&cwd)?;
     let settings = load_settings(&cwd).unwrap_or_default();
-    let git_count =
-        crate::adapters::agents::claude_code::git_hooks::install_git_hooks(&git_root, settings.local_dev)?;
+    let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
+        &git_root,
+        settings.local_dev,
+    )?;
     if git_count > 0 {
         writeln!(out, "Installed {git_count} git hook(s).")?;
     }

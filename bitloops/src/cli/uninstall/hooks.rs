@@ -7,13 +7,17 @@ use crate::adapters::agents::claude_code::git_hooks;
 
 pub(super) fn uninstall_agent_hooks(project_roots: &[PathBuf], out: &mut dyn Write) -> Result<()> {
     if project_roots.is_empty() {
-        writeln!(out, "  No known Bitloops projects found for agent hook removal.")?;
+        writeln!(
+            out,
+            "  No known Bitloops projects found for agent hook removal."
+        )?;
         return Ok(());
     }
 
     let mut removed_projects = 0usize;
     for project_root in project_roots {
-        let configured = crate::config::settings::supported_agents(project_root).unwrap_or_default();
+        let configured =
+            crate::config::settings::supported_agents(project_root).unwrap_or_default();
         let mut project_out = Vec::new();
         let removed = crate::cli::agent_surfaces::uninstall_project_agent_surfaces(
             project_root,

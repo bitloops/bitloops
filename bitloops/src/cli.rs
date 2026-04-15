@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+pub(crate) mod agent_surfaces;
 pub mod checkpoints;
 pub mod clean;
 pub mod daemon;
@@ -22,7 +23,6 @@ pub mod root;
 pub(crate) mod telemetry_consent;
 pub mod uninstall;
 pub mod versioncheck;
-pub(crate) mod agent_surfaces;
 
 /// Bitloops CLI
 #[derive(Parser)]

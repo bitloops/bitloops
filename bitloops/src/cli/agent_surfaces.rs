@@ -38,9 +38,15 @@ pub(crate) fn reconcile_project_agent_surfaces(
         let (label, installed) =
             registry.install_agent_hooks(project_root, agent, local_dev, force)?;
         if installed > 0 {
-            writeln!(out, "Installed {installed} {label} hooks and prompt surfaces.")?;
+            writeln!(
+                out,
+                "Installed {installed} {label} hooks and prompt surfaces."
+            )?;
         } else {
-            writeln!(out, "{label} hooks and prompt surfaces are already initialised.")?;
+            writeln!(
+                out,
+                "{label} hooks and prompt surfaces are already initialised."
+            )?;
         }
     }
 

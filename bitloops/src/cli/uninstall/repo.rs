@@ -94,7 +94,9 @@ fn current_repo_root() -> Result<Option<PathBuf>> {
 fn current_bitloops_project_root() -> Result<Option<PathBuf>> {
     let cwd = env::current_dir().context("getting current directory")?;
     let snapshot = crate::config::discover_repo_policy_optional(&cwd)?;
-    Ok(snapshot.root.map(|root| root.canonicalize().unwrap_or(root)))
+    Ok(snapshot
+        .root
+        .map(|root| root.canonicalize().unwrap_or(root)))
 }
 
 fn discover_bitloops_project_roots() -> Result<Vec<PathBuf>> {
@@ -123,10 +125,13 @@ fn discover_bitloops_project_roots() -> Result<Vec<PathBuf>> {
             if matches!(
                 name.as_ref(),
                 crate::config::REPO_POLICY_FILE_NAME | crate::config::REPO_POLICY_LOCAL_FILE_NAME
-            ) {
-                if let Some(parent) = entry.path().parent() {
-                    roots.insert(parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf()));
-                }
+            ) && let Some(parent) = entry.path().parent()
+            {
+                roots.insert(
+                    parent
+                        .canonicalize()
+                        .unwrap_or_else(|_| parent.to_path_buf()),
+                );
             }
         }
     }

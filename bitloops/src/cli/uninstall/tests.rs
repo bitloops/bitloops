@@ -338,41 +338,49 @@ fn uninstall_agent_hooks_uses_supported_agents_when_detection_is_false() {
     let home = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_platform_dirs(&config, &data, &cache, &state, &home, Some(repo.path()), || {
-        fs::write(
-            repo.path().join(".bitloops.local.toml"),
-            r#"
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            fs::write(
+                repo.path().join(".bitloops.local.toml"),
+                r#"
 [capture]
 enabled = false
 
 [agents]
 supported = ["codex"]
 "#,
-        )
-        .unwrap();
-        let skill_path = repo
-            .path()
-            .join(".agents/skills/bitloops/using-devql/SKILL.md");
-        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
-        fs::write(&skill_path, "managed").unwrap();
+            )
+            .unwrap();
+            let skill_path = repo
+                .path()
+                .join(".agents/skills/bitloops/using-devql/SKILL.md");
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(&skill_path, "managed").unwrap();
 
-        run_uninstall_for_test(
-            UninstallArgs {
-                agent_hooks: true,
-                only_current_project: true,
-                force: true,
-                ..UninstallArgs::default()
-            },
-            None,
-            None,
-            &|| Box::pin(async { Ok(()) }),
-            &|| Ok(()),
-            &|| Ok(Vec::new()),
-        )
-        .unwrap();
+            run_uninstall_for_test(
+                UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                None,
+                None,
+                &|| Box::pin(async { Ok(()) }),
+                &|| Ok(()),
+                &|| Ok(Vec::new()),
+            )
+            .unwrap();
 
-        assert!(!skill_path.exists());
-    });
+            assert!(!skill_path.exists());
+        },
+    );
 }
 
 #[test]
@@ -436,25 +444,33 @@ fn only_current_project_agent_hooks_falls_back_to_repo_root_without_policy() {
     let home = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_platform_dirs(&config, &data, &cache, &state, &home, Some(repo.path()), || {
-        codex_hooks::install_hooks_at(repo.path(), false, false).unwrap();
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            codex_hooks::install_hooks_at(repo.path(), false, false).unwrap();
 
-        let scope = super::repo::resolve_scope(
-            &UninstallArgs {
-                agent_hooks: true,
-                only_current_project: true,
-                force: true,
-                ..UninstallArgs::default()
-            },
-            &BTreeSet::from([UninstallTarget::AgentHooks]),
-        )
-        .unwrap();
+            let scope = super::repo::resolve_scope(
+                &UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                &BTreeSet::from([UninstallTarget::AgentHooks]),
+            )
+            .unwrap();
 
-        assert_eq!(
-            scope.agent_project_roots,
-            vec![repo.path().canonicalize().unwrap()]
-        );
-    });
+            assert_eq!(
+                scope.agent_project_roots,
+                vec![repo.path().canonicalize().unwrap()]
+            );
+        },
+    );
 }
 
 #[test]
