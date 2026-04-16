@@ -77,7 +77,7 @@ if errorlevel 1 (
   goto :fail
 )
 
-call :find_binary "%EXTRACT_DIR%" "bitloops.exe" BIN_PATH
+call :find_extracted_file "%EXTRACT_DIR%" "bitloops.exe" BIN_PATH
 if errorlevel 1 (
   echo Error: extracted archive did not contain bitloops.exe >&2
   goto :fail
@@ -93,6 +93,15 @@ copy /Y "%BIN_PATH%" "%TARGET_PATH%" >nul
 if errorlevel 1 (
   echo Error: failed to copy binary to %TARGET_PATH% >&2
   goto :fail
+)
+
+call :find_extracted_file "%EXTRACT_DIR%" "duckdb.dll" DUCKDB_DLL_PATH
+if not errorlevel 1 (
+  copy /Y "%DUCKDB_DLL_PATH%" "%INSTALL_DIR%\duckdb.dll" >nul
+  if errorlevel 1 (
+    echo Error: failed to copy duckdb.dll to %INSTALL_DIR%\duckdb.dll >&2
+    goto :fail
+  )
 )
 
 call :ensure_user_path "%INSTALL_DIR%"
@@ -194,7 +203,7 @@ if errorlevel 1 (
 )
 exit /b 0
 
-:find_binary
+:find_extracted_file
 set "%~3="
 set "SEARCH_DIR=%~1"
 set "FILE_NAME=%~2"

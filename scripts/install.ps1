@@ -47,7 +47,7 @@ $assetName = "bitloops-$target.zip"
 $checksumsName = "checksums-sha256.txt"
 $releaseApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 
-function Find-ExtractedBinary {
+function Find-ExtractedFile {
   param(
     [Parameter(Mandatory = $true)][string]$ExtractDir,
     [Parameter(Mandatory = $true)][string]$Name
@@ -105,7 +105,7 @@ try {
   $extractDir = Join-Path $tempDir "extract"
   Expand-Archive -Path $assetPath -DestinationPath $extractDir -Force
 
-  $binaryPath = Find-ExtractedBinary -ExtractDir $extractDir -Name "bitloops.exe"
+  $binaryPath = Find-ExtractedFile -ExtractDir $extractDir -Name "bitloops.exe"
   if (-not $binaryPath) {
     throw "Extracted archive did not contain bitloops.exe"
   }
@@ -113,6 +113,11 @@ try {
   New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
   $targetPath = Join-Path $InstallDir "bitloops.exe"
   Copy-Item -Path $binaryPath -Destination $targetPath -Force
+
+  $duckdbDllPath = Find-ExtractedFile -ExtractDir $extractDir -Name "duckdb.dll"
+  if ($duckdbDllPath) {
+    Copy-Item -Path $duckdbDllPath -Destination (Join-Path $InstallDir "duckdb.dll") -Force
+  }
 
   $pathChanged = Add-ToUserPath -PathToAdd $InstallDir
 
