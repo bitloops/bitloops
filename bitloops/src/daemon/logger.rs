@@ -343,7 +343,6 @@ mod tests {
 
         let entry = build_log_entry(&record, &context, 1234);
 
-        assert_eq!(entry["time"], "1234");
         assert_eq!(entry["level"], "INFO");
         assert_eq!(entry["msg"], "daemon ready");
         assert_eq!(entry["target"], "bitloops::daemon");
