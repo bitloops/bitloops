@@ -1295,11 +1295,12 @@ pub fn commit_without_hooks(world: &mut QatWorld) -> Result<()> {
         build_git_command(world, &["diff", "--cached", "--quiet"], &[]),
     )?;
     let diff_code = diff_output.status.code().unwrap_or_default();
-    let mut args = vec!["commit", "-m", "QAT change (no hooks)"];
-    if diff_code == 0 {
-        args.insert(1, "--allow-empty");
-    }
-    run_git_success(world, &args, &[], "git commit (no hooks)")?;
+    let output = run_command_capture(
+        world,
+        "git commit (no hooks)",
+        build_commit_without_hooks_command(world, diff_code == 0),
+    )?;
+    ensure_success(&output, "git commit (no hooks)")?;
     capture_head_sha(world)?;
     Ok(())
 }
@@ -2543,6 +2544,15 @@ fn post_commit_devql_refresh_disabled_env() -> [(&'static str, OsString); 1] {
         "BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH",
         OsString::from("1"),
     )]
+}
+
+fn build_commit_without_hooks_command(world: &QatWorld, allow_empty: bool) -> Command {
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    let mut args = vec!["commit", "-m", "QAT change (no hooks)"];
+    if allow_empty {
+        args.insert(1, "--allow-empty");
+    }
+    build_git_command(world, &args, &disable_refresh_env)
 }
 
 fn write_and_commit_rust_file(
