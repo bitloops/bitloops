@@ -81,7 +81,7 @@ pub fn daemon_log_file_path() -> PathBuf {
         .join(DAEMON_LOG_FILE_NAME)
 }
 
-pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
+pub fn init_process_logger(context: ProcessLogContext, require_log_file: bool) -> Result<()> {
     let resolved_level = resolve_log_level(context.config_path.as_deref());
     if let Some(value) = resolved_level.invalid_value.as_ref() {
         eprintln!(
@@ -90,7 +90,7 @@ pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
         );
     }
 
-    let target = daemon_log_target();
+    let target = daemon_log_target(require_log_file)?;
     let format_context = context.clone();
     let mut logger = env_logger::Builder::new();
     logger.filter_level(resolved_level.level);
@@ -104,16 +104,21 @@ pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
         .context("initializing Bitloops daemon process logger")
 }
 
-fn daemon_log_target() -> Target {
+fn daemon_log_target(require_log_file: bool) -> Result<Target> {
     let log_path = daemon_log_file_path();
     match open_daemon_log_sink(&log_path) {
-        Ok(file) => Target::Pipe(Box::new(file)),
+        Ok(file) => Ok(Target::Pipe(Box::new(file))),
         Err(err) => {
+            if require_log_file {
+                return Err(err).with_context(|| {
+                    format!("opening required daemon log file {}", log_path.display())
+                });
+            }
             eprintln!(
                 "[bitloops] Warning: failed to open daemon log file {}: {err}",
                 log_path.display()
             );
-            Target::Stderr
+            Ok(Target::Stderr)
         }
     }
 }
@@ -379,5 +384,43 @@ mod tests {
             .to_rfc3339_opts(SecondsFormat::Millis, true);
 
         assert_eq!(entry["time"], expected_time);
+    }
+
+    #[test]
+    fn daemon_log_target_falls_back_to_stderr_when_file_logging_is_optional() {
+        let temp = TempDir::new().expect("temp dir");
+        let blocked_state_root = temp.path().join("blocked-state-root");
+        fs::write(&blocked_state_root, "occupied").expect("write blocking state root file");
+        let blocked_state_root_str = blocked_state_root.display().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(blocked_state_root_str.as_str()),
+            )],
+        );
+
+        assert!(matches!(
+            daemon_log_target(false).expect("daemon log target"),
+            Target::Stderr
+        ));
+    }
+
+    #[test]
+    fn daemon_log_target_errors_when_file_logging_is_required() {
+        let temp = TempDir::new().expect("temp dir");
+        let blocked_state_root = temp.path().join("blocked-state-root");
+        fs::write(&blocked_state_root, "occupied").expect("write blocking state root file");
+        let blocked_state_root_str = blocked_state_root.display().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(blocked_state_root_str.as_str()),
+            )],
+        );
+
+        let err = daemon_log_target(true).expect_err("required daemon log target should fail");
+        assert!(err.to_string().contains(&blocked_state_root_str));
     }
 }
