@@ -1,9 +1,195 @@
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result, anyhow};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
+
+pub(crate) const DAEMON_LOG_ROTATION_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const DAEMON_LOG_RETENTION: usize = 5;
+
+pub(crate) fn open_daemon_log_sink(log_path: &Path) -> Result<DaemonLogSink> {
+    DaemonLogSink::open(log_path)
+}
+
+pub(crate) struct DaemonLogSink {
+    log_path: PathBuf,
+    file: Option<File>,
+}
+
+impl DaemonLogSink {
+    fn open(log_path: &Path) -> Result<Self> {
+        ensure_parent_directory(log_path)?;
+        if active_file_len(log_path)? > DAEMON_LOG_ROTATION_BYTES {
+            rotate_daemon_log_file(log_path, DAEMON_LOG_RETENTION)?;
+        }
+
+        let file = open_append_file(log_path)?;
+        Ok(Self {
+            log_path: log_path.to_path_buf(),
+            file: Some(file),
+        })
+    }
+
+    fn rotate_before_append(&mut self, incoming_len: usize) -> io::Result<()> {
+        let current_len = active_file_len(&self.log_path).map_err(to_io_error)?;
+        let incoming_len = u64::try_from(incoming_len).unwrap_or(u64::MAX);
+        let would_exceed_limit =
+            current_len > 0 && current_len.saturating_add(incoming_len) > DAEMON_LOG_ROTATION_BYTES;
+
+        if current_len > DAEMON_LOG_ROTATION_BYTES || would_exceed_limit {
+            self.rotate()?;
+        }
+        Ok(())
+    }
+
+    fn rotate_after_append(&mut self) -> io::Result<()> {
+        if active_file_len(&self.log_path).map_err(to_io_error)? > DAEMON_LOG_ROTATION_BYTES {
+            self.rotate()?;
+        }
+        Ok(())
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        self.file_mut()?.flush()?;
+        let current_file = self
+            .file
+            .take()
+            .ok_or_else(|| io::Error::other("daemon log sink file is not open"))?;
+        drop(current_file);
+
+        if let Err(err) =
+            rotate_daemon_log_file(&self.log_path, DAEMON_LOG_RETENTION).map_err(to_io_error)
+        {
+            self.file = Some(open_append_file(&self.log_path).map_err(to_io_error)?);
+            return Err(err);
+        }
+
+        self.file = Some(open_append_file(&self.log_path).map_err(to_io_error)?);
+        Ok(())
+    }
+
+    fn append(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.rotate_before_append(buf.len())?;
+        self.file_mut()?.write_all(buf)?;
+        self.rotate_after_append()
+    }
+
+    fn file_mut(&mut self) -> io::Result<&mut File> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("daemon log sink file is not open"))
+    }
+}
+
+impl Write for DaemonLogSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.append(buf)?;
+        Ok(buf.len())
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.append(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file_mut()?.flush()
+    }
+}
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn rotate_daemon_log_file(_log_path: &Path, _retention: usize) -> Result<()> {
+pub(crate) fn rotate_daemon_log_file(log_path: &Path, retention: usize) -> Result<()> {
+    ensure_parent_directory(log_path)?;
+
+    if retention == 0 {
+        if log_path.exists() {
+            fs::remove_file(log_path).with_context(|| {
+                format!(
+                    "removing daemon log file before recreating {}",
+                    log_path.display()
+                )
+            })?;
+        }
+        File::create(log_path)
+            .with_context(|| format!("recreating daemon log file {}", log_path.display()))?;
+        return Ok(());
+    }
+
+    let oldest_archive = archive_path(log_path, retention)?;
+    if oldest_archive.exists() {
+        fs::remove_file(&oldest_archive).with_context(|| {
+            format!(
+                "removing oldest daemon log archive {}",
+                oldest_archive.display()
+            )
+        })?;
+    }
+
+    for index in (1..retention).rev() {
+        let source = archive_path(log_path, index)?;
+        if !source.exists() {
+            continue;
+        }
+
+        let destination = archive_path(log_path, index + 1)?;
+        fs::rename(&source, &destination).with_context(|| {
+            format!(
+                "rotating daemon log archive {} to {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+    }
+
+    if log_path.exists() {
+        let archive_1 = archive_path(log_path, 1)?;
+        fs::rename(log_path, &archive_1).with_context(|| {
+            format!(
+                "rotating active daemon log {} to {}",
+                log_path.display(),
+                archive_1.display()
+            )
+        })?;
+    }
+
+    File::create(log_path)
+        .with_context(|| format!("creating daemon log file {}", log_path.display()))?;
     Ok(())
+}
+
+fn ensure_parent_directory(log_path: &Path) -> Result<()> {
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating daemon log directory {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn open_append_file(log_path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .with_context(|| format!("opening daemon log file {}", log_path.display()))
+}
+
+fn active_file_len(log_path: &Path) -> Result<u64> {
+    match fs::metadata(log_path) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(0),
+        Err(err) => {
+            Err(err).with_context(|| format!("reading daemon log file {}", log_path.display()))
+        }
+    }
+}
+
+fn archive_path(log_path: &Path, index: usize) -> Result<PathBuf> {
+    let file_name = log_path
+        .file_name()
+        .ok_or_else(|| anyhow!("daemon log path {} has no file name", log_path.display()))?;
+    Ok(log_path.with_file_name(format!("{}.{index}", file_name.to_string_lossy())))
+}
+
+fn to_io_error(error: anyhow::Error) -> io::Error {
+    io::Error::other(error)
 }
 
 #[cfg(test)]
@@ -70,7 +256,10 @@ mod tests {
 
         write_file(&current_log, "current\n");
         for index in 1..=5 {
-            write_file(&archive_path(temp.path(), index), &format!("archive-{index}\n"));
+            write_file(
+                &archive_path(temp.path(), index),
+                &format!("archive-{index}\n"),
+            );
         }
 
         rotate_daemon_log_file(&current_log, 5).expect("rotate daemon log");

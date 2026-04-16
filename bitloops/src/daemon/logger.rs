@@ -1,15 +1,19 @@
 use anyhow::{Context, Result};
+use chrono::{SecondsFormat, TimeZone, Utc};
 use env_logger::Target;
 use log::{LevelFilter, Record};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::env;
-use std::fs::{self, OpenOptions};
+#[cfg(test)]
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::load_daemon_settings;
+
+use super::log_file::open_daemon_log_sink;
 
 pub const DAEMON_LOG_FILE_NAME: &str = "daemon.log";
 pub const LOG_LEVEL_ENV_VAR: &str = "BITLOOPS_LOG_LEVEL";
@@ -102,17 +106,7 @@ pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
 
 fn daemon_log_target() -> Target {
     let log_path = daemon_log_file_path();
-    if let Some(parent) = log_path.parent()
-        && let Err(err) = fs::create_dir_all(parent)
-    {
-        eprintln!(
-            "[bitloops] Warning: failed to create daemon log directory {}: {err}",
-            parent.display()
-        );
-        return Target::Stderr;
-    }
-
-    match OpenOptions::new().create(true).append(true).open(&log_path) {
+    match open_daemon_log_sink(&log_path) {
         Ok(file) => Target::Pipe(Box::new(file)),
         Err(err) => {
             eprintln!(
@@ -172,7 +166,10 @@ fn parse_log_level(value: &str) -> Option<LevelFilter> {
 
 fn build_log_entry(record: &Record<'_>, context: &ProcessLogContext, timestamp_ms: u128) -> Value {
     let mut object = Map::new();
-    object.insert("time".to_string(), Value::String(timestamp_ms.to_string()));
+    object.insert(
+        "time".to_string(),
+        Value::String(format_timestamp(timestamp_ms)),
+    );
     object.insert(
         "level".to_string(),
         Value::String(record.level().as_str().to_string()),
@@ -222,6 +219,14 @@ fn optional_string_value(value: Option<&str>) -> Value {
         .unwrap_or(Value::Null)
 }
 
+fn format_timestamp(timestamp_ms: u128) -> String {
+    i64::try_from(timestamp_ms)
+        .ok()
+        .and_then(|timestamp_ms| Utc.timestamp_millis_opt(timestamp_ms).single())
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Millis, true))
+        .unwrap_or_else(|| timestamp_ms.to_string())
+}
+
 fn current_time_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -232,7 +237,6 @@ fn current_time_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{SecondsFormat, TimeZone, Utc};
     use crate::test_support::process_state::enter_process_state;
     use log::{Level, Record};
     use tempfile::TempDir;
