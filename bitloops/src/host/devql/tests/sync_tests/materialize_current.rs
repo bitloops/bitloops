@@ -809,6 +809,200 @@ export function caller(): number {
 }
 
 #[tokio::test]
+async fn materialize_resolves_typescript_relative_import_edges_to_file_targets() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-ts@1";
+    let extractor_version = "ts-language-pack@1";
+    let caller_path = "src/caller.ts";
+    let helper_path = "src/utils.ts";
+    let caller_content = r#"import { helper } from "./utils";
+
+export function caller(): number {
+  return helper();
+}
+"#;
+    let helper_content = r#"export function helper(): number {
+  return 1;
+}
+"#;
+
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        helper_path,
+        "typescript",
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        caller_path,
+        "typescript",
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load imported file artefact row");
+    let import_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'imports'",
+            [cfg.repo.repo_id.as_str(), caller_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load file import edge");
+
+    assert_eq!(import_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(import_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(import_edge.2.as_deref(), Some(helper_path));
+}
+
+#[tokio::test]
+async fn materialize_reconciles_previously_unresolved_typescript_edge_when_target_is_added_later() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-ts@1";
+    let extractor_version = "ts-language-pack@1";
+    let caller_path = "src/caller.ts";
+    let helper_path = "src/utils.ts";
+    let caller_content = r#"import { helper } from "./utils";
+
+export function caller(): number {
+  return helper();
+}
+"#;
+    let helper_content = r#"export function helper(): number {
+  return 1;
+}
+"#;
+
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        caller_path,
+        "typescript",
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        helper_path,
+        "typescript",
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_symbol_fqn = format!("{helper_path}::helper");
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load helper artefact row");
+    let call_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'calls'",
+            [cfg.repo.repo_id.as_str(), caller_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load caller call edge after helper materialization");
+
+    assert_eq!(call_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(call_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(call_edge.2.as_deref(), Some(helper_symbol_fqn.as_str()));
+}
+
+#[tokio::test]
+async fn materialize_resolves_python_import_edges_to_module_files() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-python@1";
+    let extractor_version = "python-language-pack@1";
+    let helper_path = "pkg/helpers.py";
+    let caller_path = "pkg/main.py";
+    let helper_content = "def helper():\n    return 1\n";
+    let caller_content = "from pkg.helpers import helper\n\ndef caller():\n    return helper()\n";
+
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        helper_path,
+        "python",
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        caller_path,
+        "python",
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load imported module artefact row");
+    let import_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'imports'",
+            [cfg.repo.repo_id.as_str(), caller_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load module import edge");
+
+    assert_eq!(import_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(import_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(import_edge.2.as_deref(), Some(helper_path));
+}
+
+#[tokio::test]
 async fn materialize_resolves_python_imported_call_targets_across_files() {
     let cfg = sync_test_cfg();
     let temp = tempdir().expect("temp dir");
@@ -869,6 +1063,80 @@ async fn materialize_resolves_python_imported_call_targets_across_files() {
 }
 
 #[tokio::test]
+async fn materialize_resolves_java_import_edges_to_local_types() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-java@1";
+    let extractor_version = "java-language-pack@1";
+    let helper_path = "src/com/acme/Util.java";
+    let caller_path = "src/com/acme/Greeter.java";
+    let helper_content = r#"package com.acme;
+
+class Util {
+    static void helper() {}
+}
+"#;
+    let caller_content = r#"package com.acme;
+
+import com.acme.Util;
+
+class Greeter {
+    void greet() {
+        Util.helper();
+    }
+}
+"#;
+
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        helper_path,
+        "java",
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        caller_path,
+        "java",
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let target_symbol_fqn = format!("{helper_path}::Util");
+    let target_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), target_symbol_fqn.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load imported type artefact row");
+    let import_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'imports'",
+            [cfg.repo.repo_id.as_str(), caller_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load type import edge");
+
+    assert_eq!(import_edge.0.as_deref(), Some(target_row.0.as_str()));
+    assert_eq!(import_edge.1.as_deref(), Some(target_row.1.as_str()));
+    assert_eq!(import_edge.2.as_deref(), Some(target_symbol_fqn.as_str()));
+}
+
+#[tokio::test]
 async fn materialize_resolves_go_same_package_call_targets_across_files() {
     let cfg = sync_test_cfg();
     let temp = tempdir().expect("temp dir");
@@ -926,6 +1194,76 @@ async fn materialize_resolves_go_same_package_call_targets_across_files() {
     assert_eq!(call_edge.0.as_deref(), Some(helper_row.0.as_str()));
     assert_eq!(call_edge.1.as_deref(), Some(helper_row.1.as_str()));
     assert_eq!(call_edge.2.as_deref(), Some(helper_symbol_fqn.as_str()));
+}
+
+#[tokio::test]
+async fn materialize_resolves_csharp_using_edges_to_namespaces() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-csharp@1";
+    let extractor_version = "csharp-language-pack@1";
+    let helper_path = "src/BaseService.cs";
+    let caller_path = "src/UserService.cs";
+    let helper_content = r#"namespace MyApp.Services;
+
+public class BaseService {}
+"#;
+    let caller_content = r#"using MyApp.Services;
+
+namespace MyApp.Features;
+
+public class UserService : BaseService
+{
+}
+"#;
+
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        helper_path,
+        "csharp",
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        caller_path,
+        "csharp",
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let target_symbol_fqn = format!("{helper_path}::ns::MyApp.Services");
+    let target_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id FROM artefacts_current WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), target_symbol_fqn.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load imported namespace artefact row");
+    let import_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref \
+             FROM artefact_edges_current \
+             WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'imports'",
+            [cfg.repo.repo_id.as_str(), caller_path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load namespace import edge");
+
+    assert_eq!(import_edge.0.as_deref(), Some(target_row.0.as_str()));
+    assert_eq!(import_edge.1.as_deref(), Some(target_row.1.as_str()));
+    assert_eq!(import_edge.2.as_deref(), Some(target_symbol_fqn.as_str()));
 }
 
 #[tokio::test]
@@ -1000,6 +1338,76 @@ class Greeter {
     assert_eq!(call_edge.0.as_deref(), Some(helper_row.0.as_str()));
     assert_eq!(call_edge.1.as_deref(), Some(helper_row.1.as_str()));
     assert_eq!(call_edge.2.as_deref(), Some(helper_symbol_fqn.as_str()));
+}
+
+#[tokio::test]
+async fn materialize_expands_grouped_rust_import_edges_into_resolved_local_targets() {
+    let cfg = sync_test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    seed_sync_repository_catalog_row(&relational, &cfg).await;
+
+    let parser_version = "tree-sitter-rust@1";
+    let extractor_version = "rust-language-pack@1";
+    let helper_path = "crates/ruff_linter/src/rules/pyflakes/fixes.rs";
+    let caller_path = "crates/ruff_linter/src/rules/pyflakes/rules/strings.rs";
+    let helper_content = "pub(crate) fn remove_unused_positional_arguments_from_format_call() {}\n";
+    let caller_content = r#"use super::super::fixes::{remove_unused_positional_arguments_from_format_call, self};
+
+pub(crate) fn string_dot_format_extra_positional_arguments() {
+    remove_unused_positional_arguments_from_format_call();
+}
+"#;
+
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        helper_path,
+        "rust",
+        helper_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+    materialize_cached_path(
+        &cfg,
+        &relational,
+        caller_path,
+        "rust",
+        caller_content,
+        parser_version,
+        extractor_version,
+    )
+    .await;
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let refs = {
+        let mut stmt = db
+            .prepare(
+                "SELECT to_symbol_ref \
+                 FROM artefact_edges_current \
+                 WHERE repo_id = ?1 AND path = ?2 AND edge_kind = 'imports' \
+                 ORDER BY to_symbol_ref",
+            )
+            .expect("prepare rust import edge query");
+        stmt.query_map([cfg.repo.repo_id.as_str(), caller_path], |row| {
+            row.get::<_, Option<String>>(0)
+        })
+        .expect("query rust import edges")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect rust import edges")
+    };
+
+    assert_eq!(
+        refs,
+        vec![
+            Some(helper_path.to_string()),
+            Some(format!(
+                "{helper_path}::remove_unused_positional_arguments_from_format_call"
+            )),
+        ]
+    );
 }
 
 #[tokio::test]

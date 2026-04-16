@@ -100,68 +100,102 @@ pub(super) fn build_historical_edge_records(
                 .unwrap_or_default(),
         };
 
-        let resolved_local = edge.to_symbol_ref.as_deref().and_then(|symbol_ref| {
-            crate::host::language_adapter::resolve_local_symbol_ref(
-                language,
-                source_path,
-                edge.edge_kind.as_str(),
-                symbol_ref,
-                &source_facts,
-                &targets,
-            )
-        });
-        let resolved_target = edge
-            .to_target_symbol_fqn
-            .as_ref()
-            .and_then(|fqn| current_by_fqn.get(fqn))
-            .or_else(|| {
-                resolved_local
-                    .as_ref()
-                    .and_then(|resolved| current_by_fqn.get(&resolved.symbol_fqn))
-            });
-        let to_artefact_id = resolved_target.map(|record| record.artefact_id.clone());
-        let to_symbol_ref = if let Some(record) = resolved_target {
-            if edge.to_target_symbol_fqn.is_some() {
-                None
+        let expanded_edges = expand_historical_edge_symbol_refs(language, source_path, &edge);
+        for expanded_edge in expanded_edges {
+            let resolved_local = expanded_edge
+                .to_symbol_ref
+                .as_deref()
+                .and_then(|symbol_ref| {
+                    crate::host::language_adapter::resolve_local_symbol_ref(
+                        language,
+                        source_path,
+                        expanded_edge.edge_kind.as_str(),
+                        symbol_ref,
+                        &source_facts,
+                        &targets,
+                    )
+                });
+            let resolved_target = expanded_edge
+                .to_target_symbol_fqn
+                .as_ref()
+                .and_then(|fqn| current_by_fqn.get(fqn))
+                .or_else(|| {
+                    resolved_local
+                        .as_ref()
+                        .and_then(|resolved| current_by_fqn.get(&resolved.symbol_fqn))
+                });
+            let to_artefact_id = resolved_target.map(|record| record.artefact_id.clone());
+            let to_symbol_ref = if let Some(record) = resolved_target {
+                if expanded_edge.to_target_symbol_fqn.is_some() {
+                    None
+                } else {
+                    Some(record.symbol_fqn.clone())
+                }
             } else {
-                Some(record.symbol_fqn.clone())
+                expanded_edge.to_symbol_ref.clone()
+            };
+            let edge_kind = resolved_local
+                .as_ref()
+                .map(|resolved| resolved.edge_kind.as_str())
+                .unwrap_or(expanded_edge.edge_kind.as_str());
+            if to_artefact_id.is_none() && to_symbol_ref.is_none() {
+                continue;
             }
-        } else {
-            edge.to_symbol_ref.clone()
-        };
-        let edge_kind = resolved_local
-            .as_ref()
-            .map(|resolved| resolved.edge_kind.as_str())
-            .unwrap_or(edge.edge_kind.as_str());
-        if to_artefact_id.is_none() && to_symbol_ref.is_none() {
-            continue;
-        }
 
-        out.push(PersistedEdgeRecord {
-            edge_id: deterministic_uuid(&format!(
-                "{}|{}|{}|{}|{}|{}|{}",
-                provenance.artefact_identity_scope(),
-                from_record.artefact_id,
-                edge_kind,
-                to_artefact_id.clone().unwrap_or_default(),
-                to_symbol_ref.clone().unwrap_or_default(),
-                edge.start_line.unwrap_or(-1),
-                edge.end_line.unwrap_or(-1)
-            )),
-            from_symbol_id: from_record.symbol_id.clone(),
-            from_artefact_id: from_record.artefact_id.clone(),
-            to_symbol_id: resolved_target.map(|record| record.symbol_id.clone()),
-            to_artefact_id,
-            to_symbol_ref,
-            edge_kind: edge_kind.to_string(),
-            language: language.to_string(),
-            start_line: edge.start_line,
-            end_line: edge.end_line,
-            metadata: edge.metadata.to_value(),
-        });
+            out.push(PersistedEdgeRecord {
+                edge_id: deterministic_uuid(&format!(
+                    "{}|{}|{}|{}|{}|{}|{}",
+                    provenance.artefact_identity_scope(),
+                    from_record.artefact_id,
+                    edge_kind,
+                    to_artefact_id.clone().unwrap_or_default(),
+                    to_symbol_ref.clone().unwrap_or_default(),
+                    expanded_edge.start_line.unwrap_or(-1),
+                    expanded_edge.end_line.unwrap_or(-1)
+                )),
+                from_symbol_id: from_record.symbol_id.clone(),
+                from_artefact_id: from_record.artefact_id.clone(),
+                to_symbol_id: resolved_target.map(|record| record.symbol_id.clone()),
+                to_artefact_id,
+                to_symbol_ref,
+                edge_kind: edge_kind.to_string(),
+                language: language.to_string(),
+                start_line: expanded_edge.start_line,
+                end_line: expanded_edge.end_line,
+                metadata: expanded_edge.metadata.to_value(),
+            });
+        }
     }
 
     out
+}
+
+fn expand_historical_edge_symbol_refs(
+    language: &str,
+    source_path: &str,
+    edge: &DependencyEdge,
+) -> Vec<DependencyEdge> {
+    let Some(symbol_ref) = edge.to_symbol_ref.as_deref() else {
+        return vec![edge.clone()];
+    };
+    let normalized_refs = crate::host::language_adapter::normalize_local_edge_symbol_refs(
+        language,
+        source_path,
+        edge.edge_kind.as_str(),
+        symbol_ref,
+    );
+    if normalized_refs.is_empty() {
+        return vec![edge.clone()];
+    }
+
+    normalized_refs
+        .into_iter()
+        .map(|normalized_ref| {
+            let mut expanded = edge.clone();
+            expanded.to_symbol_ref = Some(normalized_ref);
+            expanded
+        })
+        .collect()
 }
 
 #[allow(dead_code)] // Kept for call-site parity during phased migration to batched execution.

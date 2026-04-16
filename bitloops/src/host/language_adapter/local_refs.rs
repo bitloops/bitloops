@@ -72,6 +72,144 @@ fn source_root_and_module_segments(path: &str) -> Option<(String, Vec<String>)> 
     Some((crate_root, module_segments))
 }
 
+pub(crate) fn normalize_local_edge_symbol_refs(
+    language: &str,
+    _source_path: &str,
+    edge_kind: &str,
+    symbol_ref: &str,
+) -> Vec<String> {
+    let trimmed = symbol_ref.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if edge_kind != "imports" {
+        return vec![trimmed.to_string()];
+    }
+
+    match language.trim().to_ascii_lowercase().as_str() {
+        "rust" => normalize_rust_import_symbol_refs(trimmed),
+        _ => vec![trimmed.to_string()],
+    }
+}
+
+fn normalize_rust_import_symbol_refs(symbol_ref: &str) -> Vec<String> {
+    let expanded = expand_rust_import_expression(symbol_ref);
+    if expanded.is_empty() {
+        return vec![symbol_ref.trim().to_string()];
+    }
+    expanded
+}
+
+fn expand_rust_import_expression(expression: &str) -> Vec<String> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(open_idx) = find_top_level_char(expression, '{')
+        && let Some(close_idx) = find_matching_brace(expression, open_idx)
+    {
+        let prefix = expression[..open_idx].trim().trim_end_matches("::");
+        let inside = &expression[open_idx + 1..close_idx];
+        let suffix = expression[close_idx + 1..].trim().trim_start_matches("::");
+        let mut expanded = Vec::new();
+
+        for part in split_top_level_commas(inside) {
+            for nested in expand_rust_import_expression(part) {
+                let nested = strip_rust_import_alias(&nested);
+                if nested.is_empty() {
+                    continue;
+                }
+                let combined = if prefix.is_empty() {
+                    nested
+                } else {
+                    format!("{prefix}::{nested}")
+                };
+                if suffix.is_empty() {
+                    expanded.push(combined);
+                } else {
+                    expanded.push(format!("{combined}::{suffix}"));
+                }
+            }
+        }
+
+        return expanded;
+    }
+
+    vec![strip_rust_import_alias(expression)]
+}
+
+fn strip_rust_import_alias(expression: &str) -> String {
+    expression
+        .split(" as ")
+        .next()
+        .unwrap_or(expression)
+        .trim()
+        .to_string()
+}
+
+fn find_top_level_char(value: &str, target: char) -> Option<usize> {
+    let mut brace_depth = 0i32;
+    for (idx, ch) in value.char_indices() {
+        match ch {
+            '{' => {
+                if ch == target && brace_depth == 0 {
+                    return Some(idx);
+                }
+                brace_depth += 1;
+            }
+            '}' => brace_depth -= 1,
+            _ if ch == target && brace_depth == 0 => return Some(idx),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_matching_brace(value: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for (idx, ch) in value.char_indices().skip_while(|(idx, _)| *idx < open_idx) {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level_commas(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+
+    for (idx, ch) in value.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                let part = value[start..idx].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+
+    let tail = value[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts
+}
+
 pub(crate) fn rust_local_symbol_fqn_candidates(path: &str, symbol_ref: &str) -> Vec<String> {
     let Some(tokens) = split_rust_ref_tokens(symbol_ref) else {
         return Vec::new();
@@ -137,6 +275,66 @@ pub(crate) fn rust_local_symbol_fqn_candidates(path: &str, symbol_ref: &str) -> 
         .collect()
 }
 
+fn rust_local_module_fqn_candidates(path: &str, symbol_ref: &str) -> Vec<String> {
+    let Some(tokens) = split_rust_ref_tokens(symbol_ref) else {
+        return Vec::new();
+    };
+    let Some((crate_root, current_module)) = source_root_and_module_segments(path) else {
+        return Vec::new();
+    };
+
+    let mut idx = 0usize;
+    let mut module_prefix = match tokens.first().copied() {
+        Some("crate") => {
+            idx = 1;
+            Vec::new()
+        }
+        Some("self") => {
+            idx = 1;
+            current_module
+        }
+        Some("super") => {
+            let mut prefix = current_module;
+            while idx < tokens.len() && tokens[idx] == "super" {
+                if prefix.pop().is_none() {
+                    return Vec::new();
+                }
+                idx += 1;
+            }
+            prefix
+        }
+        _ => return Vec::new(),
+    };
+
+    let tail = &tokens[idx..];
+    if tail.is_empty() {
+        return vec![
+            format!("{crate_root}/lib.rs"),
+            format!("{crate_root}/main.rs"),
+        ];
+    }
+
+    let module_tail = if tail.last().copied() == Some("self") {
+        &tail[..tail.len().saturating_sub(1)]
+    } else {
+        tail
+    };
+    module_prefix.extend(module_tail.iter().map(|segment| (*segment).to_string()));
+    let module_path = module_prefix.join("/");
+
+    if module_path.is_empty() {
+        return vec![
+            format!("{crate_root}/lib.rs"),
+            format!("{crate_root}/main.rs"),
+        ];
+    }
+
+    vec![
+        format!("{crate_root}/{module_path}.rs"),
+        format!("{crate_root}/{module_path}/mod.rs"),
+    ]
+}
+
 pub(crate) fn resolve_local_symbol_ref(
     language: &str,
     source_path: &str,
@@ -146,24 +344,63 @@ pub(crate) fn resolve_local_symbol_ref(
     targets: &[LocalTargetInfo],
 ) -> Option<ResolvedLocalTarget> {
     let normalized = language.trim().to_ascii_lowercase();
-    let target = match normalized.as_str() {
-        "rust" => resolve_exact_candidates(
-            targets,
-            rust_local_symbol_fqn_candidates(source_path, symbol_ref),
-        ),
-        "typescript" | "javascript" => resolve_exact_candidates(
-            targets,
-            ts_js_local_symbol_fqn_candidates(source_path, symbol_ref),
-        ),
-        "python" => {
-            resolve_exact_candidates(targets, python_local_symbol_fqn_candidates(symbol_ref))
+    let target = if edge_kind == "imports" {
+        match normalized.as_str() {
+            "rust" => {
+                if symbol_ref
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|token| token.trim() == "self")
+                {
+                    resolve_exact_candidates(
+                        targets,
+                        rust_local_module_fqn_candidates(source_path, symbol_ref),
+                    )
+                } else {
+                    resolve_exact_candidates(
+                        targets,
+                        rust_local_symbol_fqn_candidates(source_path, symbol_ref),
+                    )
+                }
+            }
+            "typescript" | "javascript" => resolve_exact_candidates(
+                targets,
+                ts_js_local_import_fqn_candidates(source_path, symbol_ref),
+            ),
+            "python" => resolve_exact_candidates(
+                targets,
+                python_local_import_fqn_candidates(source_path, symbol_ref),
+            ),
+            "java" => resolve_java_import_ref(symbol_ref, source_facts, targets),
+            "csharp" => resolve_csharp_import_ref(symbol_ref, targets),
+            _ => None,
         }
-        "go" => resolve_go_same_package_symbol_ref(source_path, symbol_ref, targets),
-        "java" => {
-            resolve_java_local_symbol_ref(source_path, edge_kind, symbol_ref, source_facts, targets)
+    } else {
+        match normalized.as_str() {
+            "rust" => resolve_exact_candidates(
+                targets,
+                rust_local_symbol_fqn_candidates(source_path, symbol_ref),
+            ),
+            "typescript" | "javascript" => resolve_exact_candidates(
+                targets,
+                ts_js_local_symbol_fqn_candidates(source_path, symbol_ref),
+            ),
+            "python" => {
+                resolve_exact_candidates(targets, python_local_symbol_fqn_candidates(symbol_ref))
+            }
+            "go" => resolve_go_same_package_symbol_ref(source_path, symbol_ref, targets),
+            "java" => resolve_java_local_symbol_ref(
+                source_path,
+                edge_kind,
+                symbol_ref,
+                source_facts,
+                targets,
+            ),
+            "csharp" => {
+                resolve_csharp_local_symbol_ref(edge_kind, symbol_ref, source_facts, targets)
+            }
+            _ => None,
         }
-        "csharp" => resolve_csharp_local_symbol_ref(edge_kind, symbol_ref, source_facts, targets),
-        _ => None,
     }?;
 
     Some(ResolvedLocalTarget {
@@ -245,6 +482,25 @@ fn ts_js_local_symbol_fqn_candidates(source_path: &str, symbol_ref: &str) -> Vec
         .collect()
 }
 
+fn ts_js_local_import_fqn_candidates(source_path: &str, symbol_ref: &str) -> Vec<String> {
+    if !symbol_ref.starts_with("./") && !symbol_ref.starts_with("../") {
+        return Vec::new();
+    }
+    let base_dir = path_dir(source_path);
+    let Some(module_path) = normalize_relative_path(base_dir, symbol_ref) else {
+        return Vec::new();
+    };
+    let exts = ["ts", "tsx", "js", "jsx"];
+    exts.into_iter()
+        .flat_map(|ext| {
+            [
+                format!("{module_path}.{ext}"),
+                format!("{module_path}/index.{ext}"),
+            ]
+        })
+        .collect()
+}
+
 fn python_local_symbol_fqn_candidates(symbol_ref: &str) -> Vec<String> {
     let (module_ref, symbol_tail) = match symbol_ref.split_once("::") {
         Some(parts) => parts,
@@ -261,6 +517,64 @@ fn python_local_symbol_fqn_candidates(symbol_ref: &str) -> Vec<String> {
     vec![
         format!("{module_path}.py::{symbol_tail}"),
         format!("{module_path}/__init__.py::{symbol_tail}"),
+    ]
+}
+
+fn python_local_import_fqn_candidates(source_path: &str, symbol_ref: &str) -> Vec<String> {
+    python_module_path_candidates(source_path, symbol_ref)
+}
+
+fn python_module_path_candidates(source_path: &str, module_ref: &str) -> Vec<String> {
+    let module_ref = module_ref.trim();
+    if module_ref.is_empty() || module_ref.contains('/') || module_ref.contains(' ') {
+        return Vec::new();
+    }
+
+    if module_ref.starts_with('.') {
+        let leading_dots = module_ref.chars().take_while(|ch| *ch == '.').count();
+        if leading_dots == 0 {
+            return Vec::new();
+        }
+        let mut base_parts = path_dir(source_path)
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        for _ in 1..leading_dots {
+            if base_parts.pop().is_none() {
+                return Vec::new();
+            }
+        }
+        let remainder = module_ref[leading_dots..].trim();
+        if remainder.is_empty() {
+            let base = base_parts.join("/");
+            return if base.is_empty() {
+                vec!["__init__.py".to_string()]
+            } else {
+                vec![format!("{base}/__init__.py")]
+            };
+        }
+        let mut module_parts = base_parts;
+        module_parts.extend(
+            remainder
+                .split('.')
+                .filter(|token| !token.is_empty())
+                .map(str::to_string),
+        );
+        if module_parts.is_empty() {
+            return Vec::new();
+        }
+        let module_path = module_parts.join("/");
+        return vec![
+            format!("{module_path}.py"),
+            format!("{module_path}/__init__.py"),
+        ];
+    }
+
+    let module_path = module_ref.replace('.', "/");
+    vec![
+        format!("{module_path}.py"),
+        format!("{module_path}/__init__.py"),
     ]
 }
 
@@ -283,6 +597,24 @@ fn resolve_go_same_package_symbol_ref(
             .filter(|target| symbol_suffix_matches(&target.symbol_fqn, tail))
             .cloned(),
     )
+}
+
+fn resolve_java_import_ref(
+    symbol_ref: &str,
+    source_facts: &LocalSourceFacts,
+    targets: &[LocalTargetInfo],
+) -> Option<LocalTargetInfo> {
+    if symbol_ref.ends_with(".*") {
+        return None;
+    }
+    if let Some((owner_ref, member_ref)) = symbol_ref.rsplit_once('.')
+        && owner_ref.split('.').count() >= 2
+        && let Some(resolved) =
+            resolve_java_owner_and_tail(owner_ref, &[member_ref], source_facts, targets)
+    {
+        return Some(resolved);
+    }
+    resolve_java_owner_and_tail(symbol_ref, &[], source_facts, targets)
 }
 
 fn resolve_java_local_symbol_ref(
@@ -361,6 +693,52 @@ fn resolve_java_owner_and_tail(
     )
 }
 
+fn resolve_csharp_import_ref(
+    symbol_ref: &str,
+    targets: &[LocalTargetInfo],
+) -> Option<LocalTargetInfo> {
+    let symbol_ref = symbol_ref.trim();
+    if symbol_ref.is_empty() || symbol_ref.contains('=') || symbol_ref.contains("::") {
+        return None;
+    }
+
+    let namespace_match = unique_match(
+        targets
+            .iter()
+            .filter(|target| {
+                matches!(
+                    target.language_kind.as_str(),
+                    "namespace_declaration" | "file_scoped_namespace_declaration"
+                )
+            })
+            .filter(|target| {
+                target
+                    .symbol_fqn
+                    .split_once("::ns::")
+                    .map(|(_, namespace)| namespace == symbol_ref)
+                    .unwrap_or(false)
+            })
+            .cloned(),
+    );
+    if namespace_match.is_some() {
+        return namespace_match;
+    }
+
+    let (namespace_ref, type_name) = symbol_ref.rsplit_once('.')?;
+    unique_match(
+        targets
+            .iter()
+            .filter(|target| path_of_symbol_fqn(&target.symbol_fqn).ends_with(".cs"))
+            .filter(|target| symbol_suffix_matches(&target.symbol_fqn, &[type_name]))
+            .filter(|target| {
+                csharp_namespace_for_target(target, targets)
+                    .as_deref()
+                    .is_some_and(|namespace| namespace == namespace_ref)
+            })
+            .cloned(),
+    )
+}
+
 fn resolve_csharp_local_symbol_ref(
     edge_kind: &str,
     symbol_ref: &str,
@@ -370,12 +748,7 @@ fn resolve_csharp_local_symbol_ref(
     if edge_kind == "calls" || symbol_ref.contains("::") || symbol_ref.contains('.') {
         return None;
     }
-    let namespaces = source_facts
-        .namespace_refs
-        .iter()
-        .chain(source_facts.import_refs.iter())
-        .cloned()
-        .collect::<HashSet<_>>();
+    let namespaces = csharp_source_namespaces(source_facts, targets);
     if namespaces.is_empty() {
         return None;
     }
@@ -397,6 +770,41 @@ fn resolve_csharp_local_symbol_ref(
             })
             .cloned(),
     )
+}
+
+fn csharp_source_namespaces(
+    source_facts: &LocalSourceFacts,
+    targets: &[LocalTargetInfo],
+) -> HashSet<String> {
+    let mut namespaces = source_facts
+        .namespace_refs
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    for import_ref in &source_facts.import_refs {
+        let import_ref = import_ref.trim();
+        if import_ref.is_empty() {
+            continue;
+        }
+        if let Some((_, namespace)) = import_ref.split_once("::ns::") {
+            namespaces.insert(namespace.to_string());
+            continue;
+        }
+        if import_ref.contains("::") {
+            if let Some(target) = targets
+                .iter()
+                .find(|target| target.symbol_fqn == import_ref)
+                && let Some(namespace) = csharp_namespace_for_target(target, targets)
+            {
+                namespaces.insert(namespace);
+            }
+            continue;
+        }
+        if import_ref.contains('.') && !import_ref.contains('=') {
+            namespaces.insert(import_ref.to_string());
+        }
+    }
+    namespaces
 }
 
 fn csharp_namespace_for_target<'a>(
@@ -489,238 +897,4 @@ fn symbol_suffix_matches_owned(symbol_fqn: &str, expected_tail: &[String]) -> bo
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        LocalSourceFacts, LocalTargetInfo, resolve_local_symbol_ref,
-        rust_local_symbol_fqn_candidates,
-    };
-
-    fn target(
-        symbol_fqn: &str,
-        symbol_id: &str,
-        artefact_id: &str,
-        language_kind: &str,
-    ) -> LocalTargetInfo {
-        LocalTargetInfo {
-            symbol_fqn: symbol_fqn.to_string(),
-            symbol_id: symbol_id.to_string(),
-            artefact_id: artefact_id.to_string(),
-            language_kind: language_kind.to_string(),
-        }
-    }
-
-    #[test]
-    fn rust_local_symbol_fqn_candidates_handle_ruff_style_super_paths() {
-        let candidates = rust_local_symbol_fqn_candidates(
-            "crates/ruff_linter/src/rules/pyflakes/rules/strings.rs",
-            "super::super::fixes::remove_unused_positional_arguments_from_format_call",
-        );
-
-        assert_eq!(
-            candidates,
-            vec![
-                "crates/ruff_linter/src/rules/pyflakes/fixes.rs::remove_unused_positional_arguments_from_format_call".to_string(),
-                "crates/ruff_linter/src/rules/pyflakes/fixes/mod.rs::remove_unused_positional_arguments_from_format_call".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_typescript_relative_imports() {
-        let resolved = resolve_local_symbol_ref(
-            "typescript",
-            "src/caller.ts",
-            "calls",
-            "./utils::helper",
-            &LocalSourceFacts::default(),
-            &[target(
-                "src/utils.ts::helper",
-                "helper",
-                "artefact",
-                "function_declaration",
-            )],
-        )
-        .expect("expected relative import to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "src/utils.ts::helper");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_python_module_imports() {
-        let resolved = resolve_local_symbol_ref(
-            "python",
-            "pkg/main.py",
-            "calls",
-            "pkg.helpers::helper",
-            &LocalSourceFacts::default(),
-            &[target(
-                "pkg/helpers.py::helper",
-                "helper",
-                "artefact",
-                "function_definition",
-            )],
-        )
-        .expect("expected python module import to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "pkg/helpers.py::helper");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_go_same_package_refs() {
-        let resolved = resolve_local_symbol_ref(
-            "go",
-            "service/run.go",
-            "calls",
-            "package::service::helper",
-            &LocalSourceFacts::default(),
-            &[target(
-                "service/helper.go::helper",
-                "helper",
-                "artefact",
-                "function_declaration",
-            )],
-        )
-        .expect("expected go package ref to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "service/helper.go::helper");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_java_package_qualified_calls() {
-        let resolved = resolve_local_symbol_ref(
-            "java",
-            "src/com/acme/Greeter.java",
-            "calls",
-            "com.acme.Util::helper",
-            &LocalSourceFacts {
-                package_refs: vec!["com.acme".to_string()],
-                ..LocalSourceFacts::default()
-            },
-            &[target(
-                "src/com/acme/Util.java::Util::helper",
-                "helper",
-                "artefact",
-                "method_declaration",
-            )],
-        )
-        .expect("expected java imported type call to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "src/com/acme/Util.java::Util::helper");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_java_same_package_type_refs() {
-        let resolved = resolve_local_symbol_ref(
-            "java",
-            "src/com/acme/Greeter.java",
-            "extends",
-            "Base",
-            &LocalSourceFacts {
-                package_refs: vec!["com.acme".to_string()],
-                ..LocalSourceFacts::default()
-            },
-            &[target(
-                "src/com/acme/Base.java::Base",
-                "base",
-                "artefact",
-                "class_declaration",
-            )],
-        )
-        .expect("expected java same-package type ref to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "src/com/acme/Base.java::Base");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_csharp_namespace_type_refs() {
-        let targets = [
-            target(
-                "src/BaseService.cs::ns::MyApp.Services",
-                "ns",
-                "ns-artefact",
-                "file_scoped_namespace_declaration",
-            ),
-            target(
-                "src/BaseService.cs::BaseService",
-                "base",
-                "base-artefact",
-                "class_declaration",
-            ),
-        ];
-        let resolved = resolve_local_symbol_ref(
-            "csharp",
-            "src/UserService.cs",
-            "extends",
-            "BaseService",
-            &LocalSourceFacts {
-                namespace_refs: vec!["MyApp.Services".to_string()],
-                ..LocalSourceFacts::default()
-            },
-            &targets,
-        )
-        .expect("expected csharp namespace type ref to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "src/BaseService.cs::BaseService");
-        assert_eq!(resolved.edge_kind, "extends");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_handles_csharp_imported_namespace_type_refs() {
-        let targets = [
-            target(
-                "src/BaseService.cs::ns::MyApp.Services",
-                "ns",
-                "ns-artefact",
-                "file_scoped_namespace_declaration",
-            ),
-            target(
-                "src/BaseService.cs::BaseService",
-                "base",
-                "base-artefact",
-                "class_declaration",
-            ),
-        ];
-        let resolved = resolve_local_symbol_ref(
-            "csharp",
-            "src/UserService.cs",
-            "implements",
-            "BaseService",
-            &LocalSourceFacts {
-                import_refs: vec!["MyApp.Services".to_string()],
-                ..LocalSourceFacts::default()
-            },
-            &targets,
-        )
-        .expect("expected csharp imported namespace type ref to resolve");
-
-        assert_eq!(resolved.symbol_fqn, "src/BaseService.cs::BaseService");
-        assert_eq!(resolved.edge_kind, "extends");
-    }
-
-    #[test]
-    fn resolve_local_symbol_ref_rejects_ambiguous_python_matches() {
-        let resolved = resolve_local_symbol_ref(
-            "python",
-            "pkg/main.py",
-            "calls",
-            "pkg.helpers::helper",
-            &LocalSourceFacts::default(),
-            &[
-                target(
-                    "pkg/helpers.py::helper",
-                    "a",
-                    "artefact-a",
-                    "function_definition",
-                ),
-                target(
-                    "pkg/helpers/__init__.py::helper",
-                    "b",
-                    "artefact-b",
-                    "function_definition",
-                ),
-            ],
-        );
-
-        assert!(resolved.is_none());
-    }
-}
+mod tests;
