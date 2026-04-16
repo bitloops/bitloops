@@ -175,17 +175,36 @@ pub fn extract_summary_from_jsonl(jsonl: &str) -> String {
 
 pub fn transcript_line_role(value: &serde_json::Value) -> Option<&str> {
     value
-        .get("message")
-        .and_then(|message| message.get("role"))
+        .get("payload")
+        .and_then(|payload| payload.get("type"))
+        .and_then(|kind| kind.as_str())
+        .filter(|kind| *kind == "message")
+        .and_then(|_| value.get("payload"))
+        .and_then(|payload| payload.get("role"))
         .and_then(|role| role.as_str())
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("role"))
+                .and_then(|role| role.as_str())
+        })
         .or_else(|| value.get("role").and_then(|role| role.as_str()))
         .or_else(|| value.get("type").and_then(|kind| kind.as_str()))
 }
 
 pub fn transcript_line_content(value: &serde_json::Value) -> Option<&serde_json::Value> {
     let message_content = value
-        .get("message")
-        .and_then(|message| message.get("content"));
+        .get("payload")
+        .and_then(|payload| payload.get("type"))
+        .and_then(|kind| kind.as_str())
+        .filter(|kind| *kind == "message")
+        .and_then(|_| value.get("payload"))
+        .and_then(|payload| payload.get("content"))
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("content"))
+        });
     if message_content.is_some() {
         return message_content;
     }
@@ -210,7 +229,11 @@ pub fn content_to_text(content: &serde_json::Value) -> String {
         serde_json::Value::Array(items) => items
             .iter()
             .filter_map(|item| {
-                if item.get("type").and_then(|kind| kind.as_str()) == Some("text") {
+                let item_type = item.get("type").and_then(|kind| kind.as_str());
+                if matches!(
+                    item_type,
+                    Some("text") | Some("input_text") | Some("output_text")
+                ) {
                     item.get("text")
                         .and_then(|text| text.as_str())
                         .map(str::to_owned)
@@ -326,5 +349,28 @@ mod tests {
         let jsonl = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"first summary"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"final summary"},{"type":"tool_use","name":"Edit","input":{"file_path":"a.txt"}}]}}"#;
         assert_eq!(extract_summary_from_jsonl(jsonl), "final summary");
+    }
+
+    #[test]
+    fn extract_user_prompts_supports_codex_response_item_payloads() {
+        let jsonl = r#"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"ignore developer"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Investigate checkpoint loss"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check the stop hook"}]}}
+"#;
+        assert_eq!(
+            extract_user_prompts_from_jsonl(jsonl),
+            vec![
+                "Investigate checkpoint loss".to_string(),
+                "Check the stop hook".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_summary_supports_codex_response_item_payloads() {
+        let jsonl = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First pass"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Final Codex summary"}]}}
+"#;
+        assert_eq!(extract_summary_from_jsonl(jsonl), "Final Codex summary");
     }
 }

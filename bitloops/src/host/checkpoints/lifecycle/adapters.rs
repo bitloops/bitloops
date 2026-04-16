@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::adapters::agents::AgentAdapterRegistry;
+use crate::adapters::agents::codex::agent::CodexAgent;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
@@ -321,6 +322,7 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
 }
 
 static COPILOT_AGENT_FOR_LIFECYCLE: CopilotCliAgent = CopilotCliAgent;
+static CODEX_AGENT_FOR_LIFECYCLE: CodexAgent = CodexAgent;
 
 #[derive(Default)]
 pub struct CopilotCliLifecycleAdapter;
@@ -431,6 +433,10 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
         } else {
             format!("codex --resume {session_id}")
         }
+    }
+
+    fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
+        Some(&CODEX_AGENT_FOR_LIFECYCLE)
     }
 }
 

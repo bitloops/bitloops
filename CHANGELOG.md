@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Codex interaction and checkpoint persistence now survive missing `Stop.transcriptPath` payloads**: the lifecycle-routed Codex hook path now resolves real Codex rollout transcripts from saved pre-prompt/session state and the date-sharded `~/.codex/sessions` store before failing turn-end capture. This restores persistence of `interaction_sessions`, `interaction_turns`, `interaction_events`, and checkpoint save-step data for Codex sessions, keeps later turns scoped to their new transcript fragment instead of replaying from offset `0`, and teaches transcript metadata extraction to read real Codex `response_item` payloads for prompt and summary capture.
+
 ## [0.0.15] - 2026-04-16
 
 ### Added

@@ -1,5 +1,28 @@
 use super::*;
 use crate::host::checkpoints::lifecycle::LifecycleEventType;
+use crate::test_support::process_state::with_env_var;
+
+fn seed_date_sharded_codex_session(session_id: &str) -> (tempfile::TempDir, String, String) {
+    let root = tempfile::tempdir().expect("tempdir");
+    let sessions_dir = root.path().join("sessions");
+    let day_dir = sessions_dir.join("2026").join("04").join("16");
+    std::fs::create_dir_all(&day_dir).expect("create session dir");
+    let transcript_path = day_dir.join(format!("rollout-2026-04-16T16-03-59-{session_id}.jsonl"));
+    std::fs::write(&transcript_path, "{}\n").expect("write transcript");
+    std::fs::write(
+        root.path().join("session_index.jsonl"),
+        format!(
+            r#"{{"id":"{session_id}","thread_name":"Investigate checkpoint loss","updated_at":"2026-04-16T13:04:37.997446Z"}}"#
+        ),
+    )
+    .expect("write session index");
+
+    (
+        root,
+        sessions_dir.to_string_lossy().to_string(),
+        transcript_path.to_string_lossy().to_string(),
+    )
+}
 
 #[test]
 fn parse_unknown_hook_returns_none() {
@@ -23,6 +46,25 @@ fn parse_session_start_maps_session_start_event() {
 }
 
 #[test]
+fn parse_session_start_resolves_missing_transcript_path_from_date_sharded_store() {
+    let session_id = "019d9664-2636-79c0-9658-f76bfb8af4b4";
+    let (_root, session_dir, transcript_path) = seed_date_sharded_codex_session(session_id);
+
+    with_env_var(
+        "BITLOOPS_TEST_CODEX_SESSION_DIR",
+        Some(&session_dir),
+        || {
+            let mut input =
+                std::io::Cursor::new(format!(r#"{{"sessionId":"{session_id}"}}"#).into_bytes());
+            let parsed = parse_hook_event(HOOK_NAME_SESSION_START, &mut input)
+                .expect("parse")
+                .expect("event");
+            assert_eq!(parsed.session_ref, transcript_path);
+        },
+    );
+}
+
+#[test]
 fn parse_stop_maps_turn_end_event() {
     let mut input = std::io::Cursor::new(
         br#"{"sessionId":"codex-session-2","transcriptPath":"/tmp/codex-2.jsonl"}"#.as_slice(),
@@ -33,6 +75,25 @@ fn parse_stop_maps_turn_end_event() {
     assert_eq!(parsed.event_type, Some(LifecycleEventType::TurnEnd));
     assert_eq!(parsed.session_id, "codex-session-2");
     assert_eq!(parsed.session_ref, "/tmp/codex-2.jsonl");
+}
+
+#[test]
+fn parse_stop_resolves_missing_transcript_path_from_date_sharded_store() {
+    let session_id = "019d9664-2636-79c0-9658-f76bfb8af4b4";
+    let (_root, session_dir, transcript_path) = seed_date_sharded_codex_session(session_id);
+
+    with_env_var(
+        "BITLOOPS_TEST_CODEX_SESSION_DIR",
+        Some(&session_dir),
+        || {
+            let mut input =
+                std::io::Cursor::new(format!(r#"{{"sessionId":"{session_id}"}}"#).into_bytes());
+            let parsed = parse_hook_event(HOOK_NAME_STOP, &mut input)
+                .expect("parse")
+                .expect("event");
+            assert_eq!(parsed.session_ref, transcript_path);
+        },
+    );
 }
 
 #[test]
@@ -59,6 +120,27 @@ fn parse_user_prompt_submit_maps_turn_start_event() {
     assert_eq!(parsed.session_ref, "/tmp/codex-3.jsonl");
     assert_eq!(parsed.prompt, "Refactor tracked file");
     assert_eq!(parsed.model, "gpt-5.4-codex");
+}
+
+#[test]
+fn parse_user_prompt_submit_resolves_missing_transcript_path_from_date_sharded_store() {
+    let session_id = "019d9664-2636-79c0-9658-f76bfb8af4b4";
+    let (_root, session_dir, transcript_path) = seed_date_sharded_codex_session(session_id);
+
+    with_env_var(
+        "BITLOOPS_TEST_CODEX_SESSION_DIR",
+        Some(&session_dir),
+        || {
+            let mut input = std::io::Cursor::new(
+                format!(r#"{{"sessionId":"{session_id}","prompt":"Refactor tracked file"}}"#)
+                    .into_bytes(),
+            );
+            let parsed = parse_hook_event(HOOK_NAME_USER_PROMPT_SUBMIT, &mut input)
+                .expect("parse")
+                .expect("event");
+            assert_eq!(parsed.session_ref, transcript_path);
+        },
+    );
 }
 
 #[test]
