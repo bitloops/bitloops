@@ -12,7 +12,7 @@ Feature: Workspace-aware blast radius and temporal correctness
     And I init bitloops in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
 
   @devql @deps
   Scenario: Dependency query returns outgoing edges for a known caller
@@ -26,18 +26,18 @@ Feature: Workspace-aware blast radius and temporal correctness
   Scenario: Current workspace edit changes the outgoing dependency graph before commit
     Given I add a new caller of "UserService.createUser" in bitloops
     And I committed today in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then DevQL deps query for "callCreateUser" with direction "out" and asOf latest commit returns at least 1 result in bitloops
 
   @devql @deps
   Scenario: Historical query returns the pre-edit outgoing graph after ingest
     Given I add a new caller of "UserService.createUser" in bitloops
     And I committed today in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then DevQL deps query for "callCreateUser" with direction "out" and asOf previous commit returns exactly 0 results in bitloops
     And DevQL deps query for "callCreateUser" with direction "out" and asOf latest commit returns at least 1 result in bitloops
 
   @devql @deps
   Scenario: Repeated ingest does not duplicate artefacts or edges
-    Given I run DevQL ingest in bitloops
+    Given I enqueue DevQL ingest task with status in bitloops
     Then DevQL artefacts query result count is stable across ingests in bitloops

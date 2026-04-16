@@ -601,22 +601,53 @@ pub fn run_devql_init_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> 
     run_bitloops_success(world, &["devql", "init"], "bitloops devql init")
 }
 
-pub fn run_devql_ingest_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevqlTaskEnqueueKind {
+    Sync,
+    Ingest,
+}
+
+fn build_devql_task_enqueue_args(kind: DevqlTaskEnqueueKind, flags: &[&str]) -> Vec<String> {
+    let kind_arg = match kind {
+        DevqlTaskEnqueueKind::Sync => "sync",
+        DevqlTaskEnqueueKind::Ingest => "ingest",
+    };
+    let mut args = vec![
+        "devql".to_string(),
+        "tasks".to_string(),
+        "enqueue".to_string(),
+        "--kind".to_string(),
+        kind_arg.to_string(),
+    ];
+    args.extend(flags.iter().map(|flag| (*flag).to_string()));
+    args
+}
+
+fn run_devql_task_enqueue_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: DevqlTaskEnqueueKind,
+    flags: &[&str],
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
-        world,
-        "bitloops devql tasks enqueue --kind ingest --status",
-        build_bitloops_command(
-            world,
-            &["devql", "tasks", "enqueue", "--kind", "ingest", "--status"],
-        )?,
-    )?;
+    let args = build_devql_task_enqueue_args(kind, flags);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let label = format!("bitloops {}", args.join(" "));
+    let output = run_command_capture(world, &label, build_bitloops_command(world, &arg_refs)?)?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    world.last_command_stdout = Some(stdout);
-    ensure_success(
-        &output,
-        "bitloops devql tasks enqueue --kind ingest --status",
+    world.last_command_stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
+    ensure_success(&output, &label)
+}
+
+pub fn enqueue_devql_ingest_task_with_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    run_devql_task_enqueue_for_repo(
+        world,
+        repo_name,
+        DevqlTaskEnqueueKind::Ingest,
+        &["--status"],
     )
 }
 
@@ -1163,54 +1194,58 @@ const DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV: &str =
 const DEFAULT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS: u64 = 60;
 const DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS: u64 = 250;
 
-pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    run_devql_sync_command(world, repo_name, &[], true)
-}
-
-pub fn run_devql_sync_without_status_for_repo(
+pub fn enqueue_devql_sync_task_with_status_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    run_devql_sync_command(world, repo_name, &[], false)
-}
-
-pub fn run_devql_sync_with_flags(
-    world: &mut QatWorld,
-    repo_name: &str,
-    flags: &[&str],
-) -> Result<()> {
-    run_devql_sync_command(world, repo_name, flags, true)
-}
-
-fn run_devql_sync_command(
-    world: &mut QatWorld,
-    repo_name: &str,
-    flags: &[&str],
-    include_status: bool,
-) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let mut args = vec!["devql", "tasks", "enqueue", "--kind", "sync"];
-    args.extend_from_slice(flags);
-    if include_status && !args.contains(&"--status") {
-        args.push("--status");
-    }
-    let label = format!("bitloops {}", args.join(" "));
-    let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)?;
-    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    world.last_command_stdout = Some(stdout);
-    ensure_success(&output, &label)
-}
-
-pub fn attempt_devql_sync(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
+    run_devql_task_enqueue_for_repo(
         world,
-        "bitloops devql tasks enqueue --kind sync (expect failure)",
-        build_bitloops_command(world, &["devql", "tasks", "enqueue", "--kind", "sync"])?,
-    )?;
+        repo_name,
+        DevqlTaskEnqueueKind::Sync,
+        &["--status"],
+    )
+}
+
+pub fn enqueue_devql_sync_task_without_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    run_devql_task_enqueue_for_repo(world, repo_name, DevqlTaskEnqueueKind::Sync, &[])
+}
+
+pub fn enqueue_devql_sync_validate_task_with_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    run_devql_task_enqueue_for_repo(
+        world,
+        repo_name,
+        DevqlTaskEnqueueKind::Sync,
+        &["--validate", "--status"],
+    )
+}
+
+pub fn enqueue_devql_sync_repair_task_with_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    run_devql_task_enqueue_for_repo(
+        world,
+        repo_name,
+        DevqlTaskEnqueueKind::Sync,
+        &["--repair", "--status"],
+    )
+}
+
+pub fn attempt_to_enqueue_devql_sync_task_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let args = build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Sync, &[]);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let label = "bitloops devql tasks enqueue --kind sync (expect failure)";
+    let output = run_command_capture(world, label, build_bitloops_command(world, &arg_refs)?)?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -1334,11 +1369,6 @@ pub fn create_branch_with_additional_files(world: &mut QatWorld) -> Result<()> {
     )
     .with_context(|| format!("writing {}", file_path.display()))?;
     Ok(())
-}
-
-pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    run_devql_sync_with_flags(world, repo_name, &["--validate"])
 }
 
 pub fn wait_for_test_harness_capability_event_completion_for_repo(

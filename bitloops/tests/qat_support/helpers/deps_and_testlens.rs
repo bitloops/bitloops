@@ -110,7 +110,7 @@ pub fn add_new_caller_of_symbol(world: &mut QatWorld, symbol_alias: &str) -> Res
     };
     fs::write(&file_path, content).with_context(|| format!("writing {}", file_path.display()))?;
 
-    run_devql_ingest_for_repo(world, BITLOOPS_REPO_NAME)
+    enqueue_devql_ingest_task_with_status_for_repo(world, BITLOOPS_REPO_NAME)
 }
 
 pub fn assert_devql_deps_query(
@@ -269,7 +269,7 @@ fn count_deps_for_symbol(
 pub fn assert_devql_artefacts_count_stable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let count_first = count_artefacts_across_source_files(world)?;
-    run_devql_ingest_for_repo(world, repo_name)?;
+    enqueue_devql_ingest_task_with_status_for_repo(world, repo_name)?;
     let count_second = count_artefacts_across_source_files(world)?;
     ensure!(
         count_first == count_second,

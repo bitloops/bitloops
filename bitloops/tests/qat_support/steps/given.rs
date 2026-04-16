@@ -378,15 +378,15 @@ pub(super) fn given_devql_init(
     })
 }
 
-pub(super) fn given_devql_ingest(
+pub(super) fn given_enqueue_devql_ingest_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run DevQL ingest",
-            helpers::run_devql_ingest_for_repo(world, &repo_name),
+            "I enqueue DevQL ingest task with status",
+            helpers::enqueue_devql_ingest_task_with_status_for_repo(world, &repo_name),
         );
     })
 }
@@ -805,28 +805,28 @@ pub(super) fn given_knowledge_refresh(
     })
 }
 
-pub(super) fn given_devql_sync(
+pub(super) fn given_enqueue_devql_sync_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run DevQL sync",
-            helpers::run_devql_sync_for_repo(world, &repo_name),
+            "I enqueue DevQL sync task with status",
+            helpers::enqueue_devql_sync_task_with_status_for_repo(world, &repo_name),
         );
     })
 }
 
-pub(super) fn given_devql_sync_without_status(
+pub(super) fn given_enqueue_devql_sync_task_without_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run DevQL sync without status",
-            helpers::run_devql_sync_without_status_for_repo(world, &repo_name),
+            "I enqueue DevQL sync task without status",
+            helpers::enqueue_devql_sync_task_without_status_for_repo(world, &repo_name),
         );
     })
 }
@@ -844,41 +844,41 @@ pub(super) fn given_create_simple_rust_project(
     })
 }
 
-pub(super) fn given_devql_sync_validate(
+pub(super) fn given_enqueue_devql_sync_validate_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run DevQL sync validate",
-            helpers::run_devql_sync_validate_for_repo(world, &repo_name),
+            "I enqueue DevQL sync validate task with status",
+            helpers::enqueue_devql_sync_validate_task_with_status_for_repo(world, &repo_name),
         );
     })
 }
 
-pub(super) fn given_devql_sync_repair(
+pub(super) fn given_enqueue_devql_sync_repair_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run DevQL sync repair",
-            helpers::run_devql_sync_with_flags(world, &repo_name, &["--repair"]),
+            "I enqueue DevQL sync repair task with status",
+            helpers::enqueue_devql_sync_repair_task_with_status_for_repo(world, &repo_name),
         );
     })
 }
 
-pub(super) fn given_attempt_devql_sync(
+pub(super) fn given_attempt_to_enqueue_devql_sync_task(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I attempt to run DevQL sync",
-            helpers::attempt_devql_sync(world, &repo_name),
+            "I attempt to enqueue DevQL sync task",
+            helpers::attempt_to_enqueue_devql_sync_task_for_repo(world, &repo_name),
         );
     })
 }

@@ -242,6 +242,39 @@ fn parse_ingest_summary_field_reads_key_value_pairs() {
 }
 
 #[test]
+fn build_devql_task_enqueue_args_builds_sync_command_with_flags() {
+    let args = build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Sync, &["--repair", "--status"]);
+    assert_eq!(
+        args,
+        vec![
+            "devql".to_string(),
+            "tasks".to_string(),
+            "enqueue".to_string(),
+            "--kind".to_string(),
+            "sync".to_string(),
+            "--repair".to_string(),
+            "--status".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn build_devql_task_enqueue_args_builds_ingest_command_with_status() {
+    let args = build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Ingest, &["--status"]);
+    assert_eq!(
+        args,
+        vec![
+            "devql".to_string(),
+            "tasks".to_string(),
+            "enqueue".to_string(),
+            "--kind".to_string(),
+            "ingest".to_string(),
+            "--status".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_and_two_workers() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");

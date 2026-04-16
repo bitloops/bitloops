@@ -140,18 +140,18 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run DevQL ingest in (\S+)$"),
-            step_fn(given_devql_ingest),
+            regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL ingest in (\S+)$"),
-            step_fn(given_devql_ingest),
+            regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_status),
         )
         .then(
             None,
-            regex(r"^I run DevQL ingest in (\S+)$"),
-            step_fn(given_devql_ingest),
+            regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_status),
         )
         .given(
             None,
@@ -297,48 +297,48 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync),
+            regex(r"^I enqueue DevQL sync task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync),
+            regex(r"^I enqueue DevQL sync task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_with_status),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync without status in (\S+)$"),
-            step_fn(given_devql_sync_without_status),
+            regex(r"^I enqueue DevQL sync task without status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_without_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync without status in (\S+)$"),
-            step_fn(given_devql_sync_without_status),
+            regex(r"^I enqueue DevQL sync task without status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_without_status),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_validate),
+            regex(r"^I enqueue DevQL sync validate task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_validate_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_validate),
+            regex(r"^I enqueue DevQL sync validate task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_validate_task_with_status),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_repair),
+            regex(r"^I enqueue DevQL sync repair task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_repair_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_repair),
+            regex(r"^I enqueue DevQL sync repair task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_repair_task_with_status),
         )
         .given(
             None,
-            regex(r"^I attempt to run DevQL sync in (\S+)$"),
-            step_fn(given_attempt_devql_sync),
+            regex(r"^I attempt to enqueue DevQL sync task in (\S+)$"),
+            step_fn(given_attempt_to_enqueue_devql_sync_task),
         )
         .given(
             None,

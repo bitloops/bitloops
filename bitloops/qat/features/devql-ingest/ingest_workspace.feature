@@ -14,7 +14,7 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -27,9 +27,9 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then DevQL ingest summary shows 0 commits_processed in bitloops
     And completed ledger count is unchanged since snapshot in bitloops
     And artefacts_current count is unchanged since snapshot in bitloops
@@ -44,10 +44,10 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
     And I create 2 ingest commits in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
@@ -61,12 +61,12 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
     And I stop the daemon in bitloops
     And I create 2 ingest commits in bitloops
     And I start the daemon in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
@@ -80,10 +80,10 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
     And I create a non-FF merge with 2 feature commits in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
@@ -100,10 +100,10 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
     And I create an FF merge with 2 feature commits in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
@@ -120,10 +120,10 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
     And I cherry-pick 2 commits in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
@@ -140,13 +140,13 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I create 2 ingest commits in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I capture top 2 reachable SHAs before rewrite in bitloops
     And I rewrite last 2 commits with rebase edit in bitloops
     And I snapshot ingest DB state in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then rewrite introduces exactly 2 new reachable SHAs in bitloops
     And old rewritten SHAs are absent from post-rewrite reachable segment in bitloops
     And rewritten new SHAs are completed in commit_ingest_ledger in bitloops
@@ -163,13 +163,13 @@ Feature: DevQL ingest workspace history coverage
     And I run bitloops init --agent claude --sync=false in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I create 2 ingest commits in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     And I capture top 2 reachable SHAs before rewrite in bitloops
     And I reset last 2 commits and create replacement commits in bitloops
     And I snapshot ingest DB state in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then rewrite introduces exactly 2 new reachable SHAs in bitloops
     And old rewritten SHAs are absent from post-rewrite reachable segment in bitloops
     And rewritten new SHAs are completed in commit_ingest_ledger in bitloops
@@ -200,7 +200,7 @@ Feature: DevQL ingest workspace history coverage
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest @backfill
@@ -214,5 +214,5 @@ Feature: DevQL ingest workspace history coverage
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     Then only latest 2 reachable SHAs are completed in commit_ingest_ledger in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
     Then all reachable SHAs are completed in commit_ingest_ledger in bitloops

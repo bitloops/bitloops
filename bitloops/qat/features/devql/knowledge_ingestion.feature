@@ -12,7 +12,7 @@ Feature: Knowledge ingestion rejection handling
     And I init bitloops in bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
-    And I run DevQL ingest in bitloops
+    And I enqueue DevQL ingest task with status in bitloops
 
   @devql @knowledge
   Scenario: Unsupported URL fails cleanly without partial persistence

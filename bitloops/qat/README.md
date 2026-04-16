@@ -12,9 +12,10 @@ The explicit `cargo nextest run` forms also work from the `bitloops/` crate dire
 
 ## Implemented test suites
 
-### All bundled QAT suites in parallel (CI bundle)
+### Bundled QAT suites (CI bundle)
 
-Runs onboarding, smoke, DevQL sync, DevQL capabilities, and DevQL ingest in parallel.
+Runs onboarding and smoke in parallel, then runs DevQL sync, DevQL capabilities, and DevQL ingest serially.
+The DevQL-heavy suites are intentionally serialized to avoid contention on SQLite-backed materialization paths.
 
 - PRs targeting `main`: runs automatically in `.github/workflows/ci.yml`
 - For develop-target work: run `.github/workflows/develop-qat.yml` manually from the GitHub Actions UI and select the branch you want to test
@@ -108,9 +109,10 @@ cargo nextest run --features qat-tests --test qat_onboarding --run-ignored only 
 
 ### 3. DevQL Sync (`cargo qat-devql-sync`, 15 scenarios)
 
-Exercises the `devql sync` workspace reconciliation flow: full indexing, incremental
-add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
-sync validation and repair, and `init --sync=true` integration.
+Exercises the queue-backed `devql tasks enqueue --kind sync` workspace reconciliation
+flow: full indexing, incremental add/modify/delete detection, branch checkout,
+daemon downtime catch-up, git pull, sync validation and repair, and
+`init --sync=true` integration.
 
 ```bash
 cargo qat-devql-sync
@@ -235,7 +237,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 ## Environment variables
 
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
-- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from the aggregate all-suite parallel fan-out under `cargo qat`)
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from bundle-level scheduling under `cargo qat`, which runs onboarding + smoke in parallel and the DevQL suites serially)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)
@@ -266,4 +268,5 @@ cat target/qat-runs/.last-run
 head -200 <scenario-run-dir>/terminal.log
 ```
 
-3. For long suites, expect delays around `devql init`, `devql sync`, and workspace indexing.
+3. For long suites, expect delays around `devql init`,
+   `devql tasks enqueue --kind sync --status`, and workspace indexing.

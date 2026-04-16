@@ -49,7 +49,8 @@ The legacy `qat_acceptance` integration target has been split into `qat`, `qat_s
 `cargo dev-test-slow` runs all slow targets only.
 `cargo dev-test-full` runs fast + slow and is used for post-merge verification on `develop` and pull requests into `main`.
 On macOS, `dev-test-*` and `dev-install` automatically sign produced binaries to reduce repeated policy validation overhead (`syspolicyd`).
-`cargo qat` runs onboarding, smoke, DevQL sync, DevQL capabilities, and DevQL ingest in parallel.
+`cargo qat` bundles onboarding, smoke, DevQL sync, DevQL capabilities, and DevQL ingest into one run.
+It runs onboarding and smoke in parallel, then runs the DevQL-heavy suites serially.
 `cargo qat` runs the bundled ignored QAT journey through `cargo-nextest`.
 `cargo qat-devql-capabilities` is the focused DevQL capabilities alias.
 `cargo qat-devql-ingest` is the focused DevQL ingest alias.
