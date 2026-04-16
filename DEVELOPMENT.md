@@ -17,7 +17,8 @@ cargo dev-build
 # Install/update the local `bitloops` binary in Cargo bin dir
 cargo dev-install
 
-# Release build with bundled DuckDB (for offline/exotic targets)
+# Self-contained release-style build
+# macOS release packaging also sets LZMA_API_STATIC=1 in CI to avoid Homebrew liblzma runtime deps
 cargo build --manifest-path bitloops/Cargo.toml --release --features duckdb-bundled
 
 # Run without a separate build step
@@ -33,6 +34,11 @@ clear remediation message.
 
 Local Cargo aliases now default to the fast non-bundled DuckDB path and set
 `DUCKDB_DOWNLOAD_LIB=1` automatically.
+
+Development builds optimise for iteration speed. Published release artefacts
+optimise for self-contained installation: the release workflow builds with
+`duckdb-bundled`, and macOS release packaging also enables static `liblzma`
+linking so shipped binaries do not depend on Homebrew runtime libraries.
 
 For supported hosts (`linux-gnu` amd64/arm64, macOS universal, Windows MSVC),
 this uses official prebuilt `libduckdb` binaries:
