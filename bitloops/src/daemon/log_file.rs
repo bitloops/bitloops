@@ -51,6 +51,19 @@ mod tests {
     }
 
     #[test]
+    fn daemon_log_sink_recreates_active_file_after_rotation() {
+        let temp = TempDir::new().expect("temp dir");
+        let current_log = log_path(temp.path());
+
+        write_file(&current_log, "current\n");
+
+        rotate_daemon_log_file(&current_log, 5).expect("rotate daemon log");
+
+        assert!(current_log.exists());
+        assert_eq!(read_file(&current_log), "");
+    }
+
+    #[test]
     fn daemon_log_sink_drops_oldest_archive_after_retention_limit() {
         let temp = TempDir::new().expect("temp dir");
         let current_log = log_path(temp.path());
