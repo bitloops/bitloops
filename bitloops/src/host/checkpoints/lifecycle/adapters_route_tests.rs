@@ -80,6 +80,32 @@ fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
 }
 
 #[test]
+fn lifecycle_adapters_expose_usage_capabilities_for_supported_agents() {
+    let claude = ClaudeCodeLifecycleAdapter;
+    assert!(claude.as_token_calculator().is_some());
+
+    let gemini = GeminiCliLifecycleAdapter;
+    assert!(gemini.as_transcript_analyzer().is_some());
+    assert!(gemini.as_token_calculator().is_some());
+
+    let opencode = OpenCodeLifecycleAdapter;
+    assert!(opencode.as_transcript_analyzer().is_some());
+    assert!(opencode.as_token_calculator().is_some());
+
+    let copilot = CopilotCliLifecycleAdapter;
+    assert!(copilot.as_transcript_analyzer().is_some());
+    assert!(copilot.as_token_calculator().is_some());
+
+    let codex = CodexLifecycleAdapter;
+    assert!(codex.as_transcript_analyzer().is_some());
+    assert!(codex.as_token_calculator().is_some());
+
+    let cursor = CursorLifecycleAdapter;
+    assert!(cursor.as_transcript_analyzer().is_none());
+    assert!(cursor.as_token_calculator().is_none());
+}
+
+#[test]
 fn route_codex_hooks_persist_interactions_to_event_db_when_relational_store_is_absent() -> Result<()>
 {
     let repo = seed_repo();

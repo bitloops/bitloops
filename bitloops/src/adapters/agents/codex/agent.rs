@@ -1,3 +1,4 @@
+use std::io::{BufRead, BufReader, Cursor};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -8,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::adapters::agents::{
     AGENT_NAME_CODEX, AGENT_TYPE_CODEX, Agent, AgentSession, Event, HookInput, HookSupport,
-    TranscriptAnalyzer, chunk_jsonl, reassemble_jsonl,
+    TokenCalculator, TokenUsage, TranscriptAnalyzer, chunk_jsonl, reassemble_jsonl,
 };
 use crate::host::checkpoints::transcript::metadata::{
     extract_prompts_from_transcript_bytes, extract_summary_from_transcript_bytes,
@@ -27,6 +28,38 @@ pub struct CodexAgent;
 struct CodexSessionIndexEntry {
     id: String,
     updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Default, Clone, Copy)]
+struct CodexTokenUsageCounters {
+    #[serde(default)]
+    input_tokens: i32,
+    #[serde(default)]
+    cached_input_tokens: i32,
+    #[serde(default)]
+    output_tokens: i32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CodexTokenUsageInfo {
+    #[serde(default)]
+    total_token_usage: CodexTokenUsageCounters,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CodexTokenUsagePayload {
+    #[serde(rename = "type", default)]
+    payload_type: String,
+    #[serde(default)]
+    info: CodexTokenUsageInfo,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CodexTokenUsageLine {
+    #[serde(rename = "type", default)]
+    record_type: String,
+    #[serde(default)]
+    payload: CodexTokenUsagePayload,
 }
 
 impl CodexAgent {
@@ -121,6 +154,62 @@ impl CodexAgent {
         }
 
         Ok(transcript_position_from_bytes(&data))
+    }
+
+    fn parse_total_token_usage(raw_line: &str) -> Option<CodexTokenUsageCounters> {
+        let parsed = serde_json::from_str::<CodexTokenUsageLine>(raw_line).ok()?;
+        if parsed.record_type != "event_msg" || parsed.payload.payload_type != "token_count" {
+            return None;
+        }
+        Some(parsed.payload.info.total_token_usage)
+    }
+
+    fn calculate_token_usage_impl(session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
+        if session_ref.is_empty() {
+            return Ok(TokenUsage::default());
+        }
+
+        let data = match std::fs::read(session_ref) {
+            Ok(data) => data,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(TokenUsage::default());
+            }
+            Err(err) => return Err(anyhow!("failed to read transcript: {err}")),
+        };
+
+        let mut before = CodexTokenUsageCounters::default();
+        let mut latest_after = None;
+        let mut api_call_count = 0i32;
+
+        for (idx, line) in BufReader::new(Cursor::new(data)).lines().enumerate() {
+            let line = line.map_err(|err| anyhow!("failed to read transcript line: {err}"))?;
+            let Some(total_usage) = Self::parse_total_token_usage(&line) else {
+                continue;
+            };
+            if idx < from_offset {
+                before = total_usage;
+                continue;
+            }
+            latest_after = Some(total_usage);
+            api_call_count += 1;
+        }
+
+        let Some(after) = latest_after else {
+            return Ok(TokenUsage::default());
+        };
+
+        let total_input_delta = after.input_tokens.saturating_sub(before.input_tokens);
+        let cache_read_delta = after
+            .cached_input_tokens
+            .saturating_sub(before.cached_input_tokens);
+
+        Ok(TokenUsage {
+            input_tokens: total_input_delta.saturating_sub(cache_read_delta),
+            cache_read_tokens: cache_read_delta,
+            output_tokens: after.output_tokens.saturating_sub(before.output_tokens),
+            api_call_count,
+            ..TokenUsage::default()
+        })
     }
 }
 
@@ -309,6 +398,12 @@ impl TranscriptAnalyzer for CodexAgent {
         };
 
         Ok(extract_summary_from_transcript_bytes(&data))
+    }
+}
+
+impl TokenCalculator for CodexAgent {
+    fn calculate_token_usage(&self, session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
+        Self::calculate_token_usage_impl(session_ref, from_offset)
     }
 }
 
