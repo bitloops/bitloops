@@ -177,7 +177,7 @@ install -m 0755 "${EXTRACTED_BINARY}" "${INSTALL_DIR}/bitloops"
 
 for runtime_name in libduckdb.dylib libduckdb.so; do
   if EXTRACTED_RUNTIME="$(find_extracted_file "${runtime_name}")"; then
-    install -m 0755 "${EXTRACTED_RUNTIME}" "${INSTALL_DIR}/${runtime_name}"
+    install -m 0644 "${EXTRACTED_RUNTIME}" "${INSTALL_DIR}/${runtime_name}"
   fi
 done
 
