@@ -6,10 +6,9 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::storage::{
-    build_current_repo_artefacts_sql, build_historical_repo_artefacts_sql,
-    build_semantic_get_artefacts_by_ids_sql, build_semantic_get_artefacts_sql,
-    build_semantic_get_dependencies_sql, parse_semantic_artefact_rows,
-    parse_semantic_dependency_rows,
+    build_current_repo_artefacts_sql, build_semantic_get_artefacts_by_ids_sql,
+    build_semantic_get_artefacts_sql, build_semantic_get_dependencies_sql,
+    parse_semantic_artefact_rows, parse_semantic_dependency_rows,
 };
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
@@ -168,35 +167,6 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
 
     load_semantic_feature_inputs_for_current_repo_from_historical(relational, repo_root, repo_id)
         .await
-}
-
-pub(crate) async fn load_semantic_feature_inputs_for_historical_repo(
-    relational: &RelationalStorage,
-    repo_root: &Path,
-    repo_id: &str,
-) -> Result<Vec<semantic::SemanticFeatureInput>> {
-    let target_rows = relational
-        .query_rows(&build_historical_repo_artefacts_sql(repo_id))
-        .await?;
-    let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
-    let requested_order = target_artefacts
-        .iter()
-        .enumerate()
-        .map(|(index, row)| (row.artefact_id.clone(), index))
-        .collect::<HashMap<_, _>>();
-    let requested_ids = target_artefacts
-        .iter()
-        .map(|row| row.artefact_id.clone())
-        .collect::<BTreeSet<_>>();
-
-    hydrate_semantic_feature_inputs(
-        relational,
-        repo_root,
-        target_artefacts,
-        &requested_ids,
-        &requested_order,
-    )
-    .await
 }
 
 async fn hydrate_semantic_feature_inputs(

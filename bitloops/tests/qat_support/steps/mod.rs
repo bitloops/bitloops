@@ -48,6 +48,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops init with agents (\S+) and (\S+) in (\S+)$"),
+            step_fn(given_init_bitloops_with_agents),
+        )
+        .given(
+            None,
             regex(r"^I run bitloops init --agent (\S+) --sync=false in (\S+)$"),
             step_fn(given_init_bitloops_with_agent_sync_false),
         )
@@ -242,6 +247,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I modify a semantic clone fixture source file in (\S+)$"),
+            step_fn(given_modify_semantic_clone_fixture_source),
+        )
+        .given(
+            None,
             regex(r"^I configure guide-aligned semantic clones with fake embeddings runtime in (\S+)$"),
             step_fn(given_configure_semantic_clones_guide_aligned_fake_runtime),
         )
@@ -294,6 +304,16 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
             step_fn(given_devql_sync),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL sync without status in (\S+)$"),
+            step_fn(given_devql_sync_without_status),
+        )
+        .when(
+            None,
+            regex(r"^I run DevQL sync without status in (\S+)$"),
+            step_fn(given_devql_sync_without_status),
         )
         .given(
             None,
@@ -580,8 +600,18 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^semantic clone ingest does not populate historical semantic tables in (\S+)$"),
+            step_fn(then_semantic_clone_ingest_skips_historical_semantic_tables),
+        )
+        .then(
+            None,
             regex(r"^semantic clone historical and current embeddings expose code and summary channels in (\S+)$"),
             step_fn(then_semantic_clone_representation_channels_populated),
+        )
+        .then(
+            None,
+            regex(r"^semantic clone current embeddings expose code and summary channels in (\S+)$"),
+            step_fn(then_current_semantic_clone_representation_channels_populated),
         )
         .then(
             None,

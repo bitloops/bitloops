@@ -3,7 +3,6 @@ use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -11,9 +10,10 @@ use std::time::Duration;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::cli::embeddings::managed::archive::{
-    ManagedEmbeddingsArchiveKind, extract_managed_embeddings_bundle_entries, sha256_hex,
-    write_file_atomically,
+    ManagedEmbeddingsArchiveKind, ManagedEmbeddingsBundleEntry,
+    extract_managed_embeddings_bundle_entries_from_file, write_file_atomically,
 };
+use crate::cli::embeddings::managed::download::download_release_asset_to_temp_file;
 use crate::config::{
     prepare_daemon_inference_install, resolve_preferred_daemon_config_path_for_repo,
 };
@@ -354,8 +354,13 @@ where
         message: Some(format!("Downloading `{}`", asset.name)),
         ..Default::default()
     })?;
-    let archive_bytes =
-        download_managed_inference_asset(&asset.browser_download_url, |downloaded, total| {
+    let client = managed_inference_http_client()?;
+    let download = download_release_asset_to_temp_file(
+        &client,
+        &asset.browser_download_url,
+        MANAGED_INFERENCE_USER_AGENT,
+        "managed bitloops-inference asset",
+        |downloaded, total| {
             report(ManagedInferenceInstallProgress {
                 phase: ManagedInferenceInstallPhase::DownloadingRuntime,
                 asset_name: Some(asset.name.clone()),
@@ -364,32 +369,30 @@ where
                 version: Some(release.tag_name.clone()),
                 message: Some(format!("Downloading `{}`", asset.name)),
             })
-        })?;
-
-    let actual_digest = sha256_hex(&archive_bytes);
-    if actual_digest != expected_digest {
+        },
+    )?;
+    if download.sha256_hex != expected_digest {
         bail!(
             "managed bitloops-inference asset digest mismatch for `{}`: expected {}, got {}",
             asset.name,
             expected_digest,
-            actual_digest
+            download.sha256_hex
         );
     }
 
     report(ManagedInferenceInstallProgress {
         phase: ManagedInferenceInstallPhase::ExtractingRuntime,
         asset_name: Some(asset.name.clone()),
-        bytes_downloaded: archive_bytes.len() as u64,
-        bytes_total: Some(archive_bytes.len() as u64),
+        bytes_downloaded: download.bytes_downloaded,
+        bytes_total: Some(download.bytes_downloaded),
         version: Some(release.tag_name.clone()),
         message: Some(format!("Extracting `{}`", asset.name)),
     })?;
 
-    let binary_name = managed_inference_binary_name();
-    let bundle_entries = extract_managed_embeddings_bundle_entries(
-        archive_bytes.as_ref(),
+    let bundle_entries = extract_managed_embeddings_bundle_entries_from_file(
+        download.path(),
         asset_spec.archive_kind,
-        binary_name,
+        managed_inference_binary_name(),
     )
     .with_context(|| {
         format!(
@@ -397,23 +400,7 @@ where
             asset.name
         )
     })?;
-    reset_managed_inference_install_dir()?;
-    let binary_path = managed_inference_binary_path()?;
-    let install_dir = managed_inference_binary_dir()?;
-    for entry in bundle_entries {
-        let output_path = install_dir.join(&entry.relative_path);
-        write_file_atomically(&output_path, &entry.bytes, entry.executable)?;
-    }
-    save_managed_inference_install_metadata(&ManagedInferenceInstallMetadata {
-        version: release.tag_name.clone(),
-        binary_path: binary_path.clone(),
-    })?;
-
-    Ok(ManagedInferenceBinaryInstallOutcome {
-        version: release.tag_name.clone(),
-        binary_path,
-        freshly_installed: true,
-    })
+    install_managed_inference_bundle_entries(&release.tag_name, bundle_entries)
 }
 
 fn managed_inference_target_version() -> String {
@@ -519,42 +506,34 @@ fn fetch_managed_inference_release(
         .context("parsing managed bitloops-inference release metadata")
 }
 
-fn download_managed_inference_asset(
-    url: &str,
-    mut progress: impl FnMut(u64, Option<u64>) -> Result<()>,
-) -> Result<Vec<u8>> {
-    let mut response = managed_inference_http_client()?
-        .get(url)
-        .header(ACCEPT, "application/octet-stream")
-        .header(USER_AGENT, MANAGED_INFERENCE_USER_AGENT)
-        .send()
-        .with_context(|| format!("downloading managed bitloops-inference asset from {url}"))?
-        .error_for_status()
-        .with_context(|| format!("downloading managed bitloops-inference asset from {url}"))?;
-    let total = response.content_length();
-    let mut bytes = Vec::new();
-    let mut downloaded = 0_u64;
-    let mut chunk = [0_u8; 64 * 1024];
-    progress(downloaded, total)?;
-    loop {
-        let read = response
-            .read(&mut chunk)
-            .context("reading managed bitloops-inference asset bytes")?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        downloaded += read as u64;
-        progress(downloaded, total)?;
-    }
-    Ok(bytes)
-}
-
 fn managed_inference_http_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(MANAGED_INFERENCE_HTTP_TIMEOUT_SECS))
         .build()
         .context("building managed bitloops-inference HTTP client")
+}
+
+fn install_managed_inference_bundle_entries(
+    version: &str,
+    bundle_entries: Vec<ManagedEmbeddingsBundleEntry>,
+) -> Result<ManagedInferenceBinaryInstallOutcome> {
+    reset_managed_inference_install_dir()?;
+    let binary_path = managed_inference_binary_path()?;
+    let install_dir = managed_inference_binary_dir()?;
+    for entry in bundle_entries {
+        let output_path = install_dir.join(&entry.relative_path);
+        write_file_atomically(&output_path, &entry.bytes, entry.executable)?;
+    }
+    save_managed_inference_install_metadata(&ManagedInferenceInstallMetadata {
+        version: version.to_string(),
+        binary_path: binary_path.clone(),
+    })?;
+
+    Ok(ManagedInferenceBinaryInstallOutcome {
+        version: version.to_string(),
+        binary_path,
+        freshly_installed: true,
+    })
 }
 
 fn parse_sha256_digest(digest: Option<&str>) -> Result<String> {

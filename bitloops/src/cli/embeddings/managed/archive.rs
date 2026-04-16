@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::{Cursor, Read};
+use std::fs::{self, File};
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use xz2::read::XzDecoder;
@@ -22,69 +22,42 @@ pub(crate) struct ManagedEmbeddingsBundleEntry {
     pub(crate) executable: bool,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn extract_managed_embeddings_bundle_entries(
     archive_bytes: &[u8],
     archive_kind: ManagedEmbeddingsArchiveKind,
     binary_name: &str,
 ) -> Result<Vec<ManagedEmbeddingsBundleEntry>> {
-    let mut bundle_entries = Vec::new();
     match archive_kind {
         ManagedEmbeddingsArchiveKind::Zip => {
-            let mut archive = ZipArchive::new(Cursor::new(archive_bytes))
-                .context("opening managed bitloops-embeddings zip archive")?;
-            for index in 0..archive.len() {
-                let mut entry = archive
-                    .by_index(index)
-                    .with_context(|| format!("reading zip entry {index}"))?;
-                if entry.is_dir() {
-                    continue;
-                }
-                let relative_path = sanitise_archive_entry_path(Path::new(entry.name()))?;
-                let executable = zip_entry_is_executable(&entry);
-                let mut bytes = Vec::new();
-                entry
-                    .read_to_end(&mut bytes)
-                    .context("reading managed bitloops-embeddings zip entry")?;
-                bundle_entries.push(ManagedEmbeddingsBundleEntry {
-                    relative_path,
-                    bytes,
-                    executable,
-                });
-            }
+            extract_zip_bundle_entries(Cursor::new(archive_bytes), binary_name)
         }
         ManagedEmbeddingsArchiveKind::TarXz => {
-            let decoder = XzDecoder::new(Cursor::new(archive_bytes));
-            let mut archive = tar::Archive::new(decoder);
-            for entry in archive
-                .entries()
-                .context("reading managed bitloops-embeddings tar archive entries")?
-            {
-                let mut entry = entry.context("reading managed bitloops-embeddings tar entry")?;
-                if !entry.header().entry_type().is_file() {
-                    continue;
-                }
-                let archive_path = entry
-                    .path()
-                    .context("reading managed bitloops-embeddings tar entry path")?
-                    .into_owned();
-                let relative_path = sanitise_archive_entry_path(&archive_path)?;
-                let executable = tar_entry_is_executable(&entry);
-                let mut bytes = Vec::new();
-                entry
-                    .read_to_end(&mut bytes)
-                    .context("reading managed bitloops-embeddings tar entry")?;
-                bundle_entries.push(ManagedEmbeddingsBundleEntry {
-                    relative_path,
-                    bytes,
-                    executable,
-                });
-            }
+            extract_tar_xz_bundle_entries(Cursor::new(archive_bytes), binary_name)
         }
     }
-
-    bundle_entries_for_binary(bundle_entries, binary_name)
 }
 
+pub(crate) fn extract_managed_embeddings_bundle_entries_from_file(
+    archive_path: &Path,
+    archive_kind: ManagedEmbeddingsArchiveKind,
+    binary_name: &str,
+) -> Result<Vec<ManagedEmbeddingsBundleEntry>> {
+    match archive_kind {
+        ManagedEmbeddingsArchiveKind::Zip => {
+            let file = File::open(archive_path)
+                .with_context(|| format!("opening managed archive {}", archive_path.display()))?;
+            extract_zip_bundle_entries(file, binary_name)
+        }
+        ManagedEmbeddingsArchiveKind::TarXz => {
+            let file = File::open(archive_path)
+                .with_context(|| format!("opening managed archive {}", archive_path.display()))?;
+            extract_tar_xz_bundle_entries(file, binary_name)
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -109,6 +82,77 @@ fn archive_entry_matches_binary(path: &Path, binary_name: &str) -> bool {
     path.file_name().and_then(|value| value.to_str()) == Some(binary_name)
 }
 
+fn extract_zip_bundle_entries<R>(
+    reader: R,
+    binary_name: &str,
+) -> Result<Vec<ManagedEmbeddingsBundleEntry>>
+where
+    R: Read + Seek,
+{
+    let mut archive =
+        ZipArchive::new(reader).context("opening managed bitloops-local-embeddings zip archive")?;
+    let mut bundle_entries = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .with_context(|| format!("reading zip entry {index}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let relative_path = sanitise_archive_entry_path(Path::new(entry.name()))?;
+        let executable = zip_entry_is_executable(&entry);
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .context("reading managed bitloops-local-embeddings zip entry")?;
+        bundle_entries.push(ManagedEmbeddingsBundleEntry {
+            relative_path,
+            bytes,
+            executable,
+        });
+    }
+
+    bundle_entries_for_binary(bundle_entries, binary_name)
+}
+
+fn extract_tar_xz_bundle_entries<R>(
+    reader: R,
+    binary_name: &str,
+) -> Result<Vec<ManagedEmbeddingsBundleEntry>>
+where
+    R: Read,
+{
+    let decoder = XzDecoder::new(reader);
+    let mut archive = tar::Archive::new(decoder);
+    let mut bundle_entries = Vec::new();
+    for entry in archive
+        .entries()
+        .context("reading managed bitloops-local-embeddings tar archive entries")?
+    {
+        let mut entry = entry.context("reading managed bitloops-local-embeddings tar entry")?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let archive_path = entry
+            .path()
+            .context("reading managed bitloops-local-embeddings tar entry path")?
+            .into_owned();
+        let relative_path = sanitise_archive_entry_path(&archive_path)?;
+        let executable = tar_entry_is_executable(&entry);
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .context("reading managed bitloops-local-embeddings tar entry")?;
+        bundle_entries.push(ManagedEmbeddingsBundleEntry {
+            relative_path,
+            bytes,
+            executable,
+        });
+    }
+
+    bundle_entries_for_binary(bundle_entries, binary_name)
+}
+
 fn bundle_entries_for_binary(
     entries: Vec<ManagedEmbeddingsBundleEntry>,
     binary_name: &str,
@@ -117,7 +161,7 @@ fn bundle_entries_for_binary(
         .iter()
         .find(|entry| archive_entry_matches_binary(&entry.relative_path, binary_name))
     else {
-        bail!("managed bitloops-embeddings archive did not contain `{binary_name}`");
+        bail!("managed bitloops-local-embeddings archive did not contain `{binary_name}`");
     };
 
     let bundle_root = binary_entry
@@ -160,14 +204,14 @@ fn sanitise_archive_entry_path(path: &Path) -> Result<PathBuf> {
             | std::path::Component::RootDir
             | std::path::Component::Prefix(_) => {
                 bail!(
-                    "managed bitloops-embeddings archive contained unsafe path `{}`",
+                    "managed bitloops-local-embeddings archive contained unsafe path `{}`",
                     path.display()
                 );
             }
         }
     }
     if relative.as_os_str().is_empty() {
-        bail!("managed bitloops-embeddings archive contained an empty path entry");
+        bail!("managed bitloops-local-embeddings archive contained an empty path entry");
     }
     Ok(relative)
 }

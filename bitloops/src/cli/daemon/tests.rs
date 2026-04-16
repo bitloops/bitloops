@@ -678,6 +678,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
                 source: DevqlTaskSource::ManualCli,
                 spec: DevqlTaskSpec::Sync(SyncTaskSpec {
                     mode: SyncTaskMode::Full,
+                    post_commit_snapshot: None,
                 }),
                 status: DevqlTaskStatus::Running,
                 submitted_at_unix: 1,

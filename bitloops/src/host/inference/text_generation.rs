@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::InferenceRuntimeConfig;
 
-use super::TextGenerationService;
+use super::{BITLOOPS_PLATFORM_CHAT_DRIVER, TextGenerationService};
 
 const SHARED_TEXT_GENERATION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const SHARED_TEXT_GENERATION_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
@@ -44,6 +44,7 @@ impl BitloopsInferenceTextGenerationService {
             request_timeout_secs: runtime.request_timeout_secs,
             config_path: config_path.to_path_buf(),
             profile_name: profile_name.to_string(),
+            driver: driver.to_string(),
             launch_artifact_fingerprint: runtime_launch_artifact_fingerprint(
                 &runtime.command,
                 &runtime.args,
@@ -123,6 +124,7 @@ struct BitloopsInferenceSessionConfig {
     request_timeout_secs: u64,
     config_path: PathBuf,
     profile_name: String,
+    driver: String,
     launch_artifact_fingerprint: String,
     process_environment_fingerprint: String,
 }
@@ -342,6 +344,31 @@ fn shared_bitloops_inference_session_registry()
     })
 }
 
+#[cfg(test)]
+type PlatformRuntimeAuthEnvironmentHook = dyn Fn() -> Result<Vec<(String, String)>>;
+#[cfg(test)]
+type PlatformRuntimeAuthEnvironmentHookCell =
+    std::cell::RefCell<Option<std::rc::Rc<PlatformRuntimeAuthEnvironmentHook>>>;
+
+#[cfg(test)]
+thread_local! {
+    static PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK: PlatformRuntimeAuthEnvironmentHookCell =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(super) fn with_platform_runtime_auth_environment_hook<T>(
+    hook: impl Fn() -> Result<Vec<(String, String)>> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK.with(|cell| {
+        let previous = cell.replace(Some(std::rc::Rc::new(hook)));
+        let output = f();
+        cell.replace(previous);
+        output
+    })
+}
+
 fn process_environment_fingerprint() -> String {
     let mut vars = std::env::vars_os()
         .map(|(key, value)| format!("{}={}", key.to_string_lossy(), value.to_string_lossy()))
@@ -386,6 +413,45 @@ fn runtime_launch_artifact_fingerprint(command: &str, args: &[String]) -> String
     sha256_hex(artefacts.join("\n").as_bytes())
 }
 
+fn platform_runtime_auth_environment() -> Vec<(String, String)> {
+    #[cfg(test)]
+    if let Some(result) = PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK
+        .with(|cell| cell.borrow().clone())
+        .map(|hook| hook())
+    {
+        return result.unwrap_or_else(|err| {
+            log::debug!("skipping platform gateway auth injection via test hook: {err:#}");
+            Vec::new()
+        });
+    }
+
+    match crate::daemon::platform_gateway_bearer_token() {
+        Ok(Some(token)) => vec![(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(), token)],
+        Ok(None) => Vec::new(),
+        Err(err) => {
+            log::debug!("skipping platform gateway auth injection: {err:#}");
+            Vec::new()
+        }
+    }
+}
+
+fn ensure_runtime_auth_environment_available(
+    config: &BitloopsInferenceSessionConfig,
+) -> Result<()> {
+    if config.driver != BITLOOPS_PLATFORM_CHAT_DRIVER {
+        return Ok(());
+    }
+
+    if !platform_runtime_auth_environment().is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "platform-backed text-generation profile `{}` requires an authenticated Bitloops session; run `bitloops login`",
+        config.profile_name
+    );
+}
+
 fn runtime_command_uses_script_argument(command: &Path) -> bool {
     command
         .file_name()
@@ -428,12 +494,14 @@ impl BitloopsInferenceSession {
                 config.profile_name
             );
         }
+        ensure_runtime_auth_environment_available(config)?;
 
         let mut command = Command::new(&config.command);
         command.args(&config.args);
         command.arg("run");
         command.arg("--config").arg(&config.config_path);
         command.arg("--profile").arg(&config.profile_name);
+        command.envs(platform_runtime_auth_environment());
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::inherit());

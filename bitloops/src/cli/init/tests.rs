@@ -234,7 +234,7 @@ fn write_runtime_only_daemon_config(config_path: &Path, command: &str, args: &[S
 [runtime]
 local_dev = false
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -413,13 +413,13 @@ fn running_bootstrap_task_json(task_id: &str) -> serde_json::Value {
 }
 
 #[test]
-fn init_args_supports_agent_flag() {
-    let parsed =
-        Cli::try_parse_from(["bitloops", "init", "--agent", "cursor"]).expect("parse init");
+fn init_args_supports_repeated_agent_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--agent", "cursor", "--agent", "codex"])
+        .expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
         panic!("expected init command");
     };
-    assert_eq!(args.agent.as_deref(), Some("cursor"));
+    assert_eq!(args.agent, vec!["cursor".to_string(), "codex".to_string()]);
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: Some(DEFAULT_AGENT.to_string()),
+                agent: vec![DEFAULT_AGENT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -564,6 +564,9 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -597,6 +600,58 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
 }
 
 #[test]
+fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agents() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let select = |_choices: &[String]| -> std::result::Result<Vec<String>, String> {
+            panic!("selector should not run when --agent is provided")
+        };
+
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                agent: vec![
+                    "Cursor".to_string(),
+                    AGENT_CURSOR.to_string(),
+                    "Gemini".to_string(),
+                ],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            Some(&select),
+        )
+        .expect("run init");
+
+        assert_eq!(
+            crate::cli::enable::initialized_agents(repo.path()),
+            vec![AGENT_CURSOR.to_string(), AGENT_GEMINI.to_string()]
+        );
+        assert!(repo.path().join(".cursor/hooks.json").exists());
+        assert!(
+            repo.path()
+                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+    });
+}
+
+#[test]
 fn run_init_persists_scope_exclusions_and_preserves_unrelated_local_settings() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
@@ -616,7 +671,7 @@ keep = true
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -625,6 +680,9 @@ keep = true
                 backfill: None,
                 exclude: vec!["docs/**".to_string(), "**/third_party/**".to_string()],
                 exclude_from: vec![".bitloopsignore".to_string()],
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -665,7 +723,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -674,6 +732,9 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -711,7 +772,7 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -720,6 +781,9 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: vec![outside_path.display().to_string()],
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -756,7 +820,7 @@ fn run_init_rewrites_existing_daemon_binding() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                agent: None,
+                agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: false,
@@ -765,6 +829,9 @@ fn run_init_rewrites_existing_daemon_binding() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -809,7 +876,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_CURSOR.to_string()),
+                agent: vec![AGENT_CURSOR.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -818,6 +885,9 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -858,7 +928,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                     InitArgs {
                         install_default_daemon: false,
                         force: true,
-                        agent: Some(AGENT_CODEX.to_string()),
+                        agent: vec![AGENT_CODEX.to_string()],
                         telemetry: None,
                         no_telemetry: false,
                         skip_baseline: true,
@@ -867,6 +937,9 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
                     repo.path(),
                     &mut out,
@@ -903,7 +976,7 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_GEMINI.to_string()),
+                agent: vec![AGENT_GEMINI.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -912,6 +985,9 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -942,7 +1018,7 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_NAME_COPILOT.to_string()),
+                agent: vec![AGENT_NAME_COPILOT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -951,6 +1027,9 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -979,7 +1058,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                agent: Some(AGENT_NAME_OPEN_CODE.to_string()),
+                agent: vec![AGENT_NAME_OPEN_CODE.to_string()],
                 telemetry: None,
                 no_telemetry: false,
                 skip_baseline: true,
@@ -988,6 +1067,9 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
             repo.path(),
             &mut out,
@@ -1000,6 +1082,44 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
             repo.path()
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
+        );
+    });
+}
+
+#[test]
+fn run_init_with_invalid_explicit_agent_errors() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        let err = run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: false,
+                agent: vec![AGENT_CURSOR.to_string(), "not-a-real-agent".to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect_err("invalid explicit agent should fail");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("unknown agent name: not-a-real-agent"),
+            "unexpected error: {rendered}"
         );
     });
 }
@@ -1214,7 +1334,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
                             skip_baseline: false,
@@ -1223,6 +1343,9 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -1267,7 +1390,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
                             skip_baseline: false,
@@ -1276,6 +1399,9 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -1306,7 +1432,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                 InitArgs {
                     install_default_daemon: true,
                     force: false,
-                    agent: None,
+                    agent: Vec::new(),
                     telemetry: None,
                     no_telemetry: false,
                     skip_baseline: false,
@@ -1315,6 +1441,9 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     backfill: None,
                     exclude: Vec::new(),
                     exclude_from: Vec::new(),
+                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
                 repo.path(),
                 &mut out,
@@ -1357,7 +1486,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
@@ -1366,6 +1495,9 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -1392,7 +1524,7 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
 
     with_temp_app_dirs(&app_dirs, true, true, || {
         let config_path = ensure_daemon_config_exists().expect("create default daemon config");
-        write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+        write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
 
         with_global_graphql_executor_hook(
             |_runtime_root, _query, variables| {
@@ -1423,7 +1555,7 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
                                 InitArgs {
                                     install_default_daemon: false,
                                     force: false,
-                                    agent: None,
+                                    agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
                                     skip_baseline: false,
@@ -1432,6 +1564,11 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
                                     backfill: None,
                                     exclude: Vec::new(),
                                     exclude_from: Vec::new(),
+                                    embeddings_runtime:
+                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
                                 },
                                 repo.path(),
                                 &mut out,
@@ -1483,7 +1620,7 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                     .expect("create default daemon config");
                                 write_runtime_only_daemon_config(
                                     &config_path,
-                                    "bitloops-embeddings",
+                                    "bitloops-local-embeddings",
                                     &[],
                                 );
                                 Ok(())
@@ -1552,7 +1689,7 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                     || {
                                                                         let mut out = Vec::new();
                                                                         let mut input =
-                                                                            Cursor::new("y\n");
+                                                                            Cursor::new("2\n");
                                                                         let select = |_items: &[String]| {
                                                                             Ok(vec![
                                                                                 "claude-code"
@@ -1566,7 +1703,7 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                                 InitArgs {
                                                                                     install_default_daemon: true,
                                                                                     force: false,
-                                                                                    agent: None,
+                                                                                    agent: Vec::new(),
                                                                                     telemetry: Some(false),
                                                                                     no_telemetry: false,
                                                                                     skip_baseline: false,
@@ -1575,6 +1712,9 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                                     backfill: None,
                                                                                     exclude: Vec::new(),
                                                                                     exclude_from: Vec::new(),
+                                                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                                embeddings_gateway_url: None,
+                                                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                                 },
                                                                                 repo.path(),
                                                                                 &mut out,
@@ -1587,10 +1727,16 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                                                             String::from_utf8(out)
                                                                                 .expect("utf8 output");
                                                                         assert!(rendered.contains(
-                                                                            "Configure local semantic summaries as well?"
+                                                                            "How would you like Bitloops to configure semantic summaries?"
                                                                         ));
                                                                         assert!(rendered.contains(
-                                                                            "Configure semantic summaries now? (Y/n)"
+                                                                            "1. Bitloops cloud (recommended)"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "2. Local Ollama"
+                                                                        ));
+                                                                        assert!(rendered.contains(
+                                                                            "3. Skip for now"
                                                                         ));
 
                                                                         let daemon_config_path =
@@ -1649,7 +1795,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                 assert!(install_default_daemon);
                 let config_path =
                     ensure_daemon_config_exists().expect("create default daemon config");
-                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
                 Ok(())
             },
             || {
@@ -1672,7 +1818,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 InitArgs {
                                     install_default_daemon: true,
                                     force: false,
-                                    agent: None,
+                                    agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
                                     skip_baseline: false,
@@ -1681,6 +1827,11 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                     backfill: None,
                                     exclude: Vec::new(),
                                     exclude_from: Vec::new(),
+                                    embeddings_runtime:
+                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
                                 },
                                 repo.path(),
                                 &mut out,
@@ -1691,13 +1842,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
 
                         let rendered = String::from_utf8(out).expect("utf8 output");
                         assert!(
-                            rendered.contains("Queueing embeddings bootstrap in the daemon...")
+                            !rendered.contains("Queueing embeddings bootstrap in the daemon...")
                         );
-                        assert!(
-                            rendered
-                                .contains("Embeddings bootstrap task: embeddings_bootstrap-task-")
-                        );
-                        assert!(rendered.contains("Embeddings bootstrap phase: queued"));
+                        assert!(!rendered.contains("Embeddings bootstrap task:"));
+                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
                         assert!(
                             rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                         );
@@ -1745,7 +1893,7 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                 assert!(install_default_daemon);
                 let config_path =
                     ensure_daemon_config_exists().expect("create default daemon config");
-                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
                 Ok(())
             },
             || {
@@ -1910,7 +2058,7 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    agent: None,
+                                                    agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
                                                     skip_baseline: false,
@@ -1919,6 +2067,9 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                                     backfill: None,
                                                     exclude: Vec::new(),
                                                     exclude_from: Vec::new(),
+                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                embeddings_gateway_url: None,
+                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                 },
                                                 repo.path(),
                                                 &mut out,
@@ -1928,9 +2079,6 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                             .expect("run init");
 
                                         let rendered = String::from_utf8(out).expect("utf8 output");
-                                        let bootstrap_index = rendered
-                                            .find("Queueing embeddings bootstrap in the daemon...")
-                                            .expect("bootstrap output");
                                         let handoff_index = rendered
                                             .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
                                             .expect("handoff output");
@@ -1945,12 +2093,16 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         let embeddings_description_index = rendered
                                             .find("Creating code embeddings for fast search using our local embeddings provider")
                                             .expect("embeddings description output");
-                                        assert!(bootstrap_index < checklist_index);
                                         assert!(handoff_index < checklist_index);
                                         assert!(checklist_index < sync_description_index);
                                         assert!(
                                             sync_description_index < embeddings_description_index
                                         );
+                                        assert!(!rendered.contains(
+                                            "Queueing embeddings bootstrap in the daemon..."
+                                        ));
+                                        assert!(!rendered.contains("Embeddings bootstrap task:"));
+                                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
                                         assert!(
                                             !rendered.contains("Starting initial DevQL sync...")
                                         );
@@ -2107,7 +2259,7 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    agent: None,
+                                                    agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
                                                     skip_baseline: false,
@@ -2116,6 +2268,12 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
                                                     backfill: None,
                                                     exclude: Vec::new(),
                                                     exclude_from: Vec::new(),
+                                                    embeddings_runtime:
+                                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                    embeddings_gateway_url: None,
+                                                    embeddings_api_key_env:
+                                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                            .to_string(),
                                                 },
                                                 repo.path(),
                                                 &mut out,
@@ -2159,7 +2317,7 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                     .expect("create default daemon config");
                                 write_runtime_only_daemon_config(
                                     &config_path,
-                                    "bitloops-embeddings",
+                                    "bitloops-local-embeddings",
                                     &[],
                                 );
                                 Ok(())
@@ -2298,7 +2456,7 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                                                                 InitArgs {
                                                                                     install_default_daemon: true,
                                                                                     force: false,
-                                                                                    agent: None,
+                                                                                    agent: Vec::new(),
                                                                                     telemetry: Some(false),
                                                                                     no_telemetry: false,
                                                                                     skip_baseline: false,
@@ -2307,6 +2465,9 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                                                                     backfill: None,
                                                                                     exclude: Vec::new(),
                                                                                     exclude_from: Vec::new(),
+                                                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                                embeddings_gateway_url: None,
+                                                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                                 },
                                                                                 repo.path(),
                                                                                 &mut out,
@@ -2324,7 +2485,7 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                                                             rendered.contains("Creating code embeddings for fast search using our local embeddings provider")
                                                                         );
                                                                         assert!(
-                                                                            rendered.contains("Configuring local semantic summaries with bitloops-inference")
+                                                                            rendered.contains("Configuring semantic summaries with bitloops-inference")
                                                                         );
                                                                         assert!(
                                                                             !rendered.contains("Starting initial DevQL sync...")
@@ -2391,7 +2552,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            agent: None,
+                            agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
                             skip_baseline: false,
@@ -2400,6 +2561,9 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
+                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_gateway_url: None,
+                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
                         repo.path(),
                         &mut out,
@@ -2430,7 +2594,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                 InitArgs {
                     install_default_daemon: false,
                     force: false,
-                    agent: None,
+                    agent: Vec::new(),
                     telemetry: Some(false),
                     no_telemetry: false,
                     skip_baseline: false,
@@ -2439,6 +2603,9 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     backfill: None,
                     exclude: Vec::new(),
                     exclude_from: Vec::new(),
+                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
                 repo.path(),
                 &mut out,
@@ -2565,7 +2732,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            agent: None,
+                                            agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
                                             skip_baseline: false,
@@ -2574,6 +2741,11 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             backfill: None,
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
+                                            embeddings_runtime:
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                         },
                                         repo.path(),
                                         &mut out,
@@ -2711,7 +2883,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            agent: None,
+                                            agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
                                             skip_baseline: false,
@@ -2720,6 +2892,11 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             backfill: Some(10),
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
+                                            embeddings_runtime:
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                         },
                                         repo.path(),
                                         &mut out,

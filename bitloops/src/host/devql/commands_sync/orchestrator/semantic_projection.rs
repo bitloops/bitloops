@@ -1,17 +1,14 @@
 use anyhow::{Context, Result};
+use serde_json::Value;
 
-use crate::capability_packs::semantic_clones::RepoEmbeddingSyncAction;
-use crate::capability_packs::semantic_clones::embeddings::{
-    ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind, EmbeddingSetup,
-};
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::capability_packs::semantic_clones::ingesters::{
     EmbeddingRefreshMode, SemanticFeaturesRefreshPayload, SemanticFeaturesRefreshScope,
     SemanticSummaryRefreshMode, SymbolEmbeddingsRefreshPayload, SymbolEmbeddingsRefreshScope,
 };
 use crate::capability_packs::semantic_clones::runtime_config::{
-    EmbeddingProviderMode, embeddings_enabled, resolve_embedding_provider,
-    resolve_semantic_clones_config,
+    embeddings_enabled, resolve_semantic_clones_config,
 };
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
@@ -126,143 +123,18 @@ pub(super) async fn finalize_semantic_clone_projection_after_sync(
         return Ok(());
     }
 
-    let semantic_inference = capability_host.inference_for_capability(
-        crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-    );
-    let mut current_inputs: Option<Vec<semantic_features::SemanticFeatureInput>> = None;
-    let mut code_setup = None;
-    let mut rebuilt_current_projection = false;
-    let mut rebuilt_historical_projection = false;
-
-    for representation_kind in [
-        EmbeddingRepresentationKind::Code,
-        EmbeddingRepresentationKind::Summary,
-    ] {
-        let selection = resolve_embedding_provider(
-            &semantic_clones,
-            &semantic_inference,
-            representation_kind,
-            EmbeddingProviderMode::ConfiguredDegrade,
-        )?;
-        if let Some(reason) = selection.degraded_reason.as_deref() {
-            log::warn!(
-                "semantic_clones {} embeddings degraded during sync finalization for repo `{}`: {}",
-                representation_kind,
-                cfg.repo.repo_id,
-                reason
-            );
-        }
-        let Some(provider) = selection.provider.as_ref() else {
-            clear_semantic_clone_embedding_outputs_for_representation(
-                relational,
-                &cfg.repo.repo_id,
-                representation_kind,
-            )
-            .await?;
-            if representation_kind == EmbeddingRepresentationKind::Code {
-                crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
-                    relational,
-                    &cfg.repo.repo_id,
-                )
-                .await?;
-                crate::capability_packs::semantic_clones::pipeline::delete_repo_current_symbol_clone_edges(
-                    relational,
-                    &cfg.repo.repo_id,
-                )
-                .await?;
-            }
-            continue;
-        };
-
-        let setup = crate::capability_packs::semantic_clones::embeddings::resolve_embedding_setup(
-            provider.as_ref(),
-        )?;
-        if representation_kind == EmbeddingRepresentationKind::Code {
-            code_setup = Some(setup.clone());
-        }
-        let sync_action =
-            crate::capability_packs::semantic_clones::determine_repo_embedding_sync_action(
-                relational,
-                &cfg.repo.repo_id,
-                representation_kind,
-                &setup,
-            )
-            .await?;
-        let should_refresh_repo_embeddings =
-            current_projection_changed || sync_action != RepoEmbeddingSyncAction::Incremental;
-        if !should_refresh_repo_embeddings {
-            continue;
-        }
-
-        let inputs = if let Some(inputs) = current_inputs.as_ref() {
-            inputs.clone()
-        } else {
-            let loaded =
-                crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
-                    relational,
-                    &cfg.repo_root,
-                    &cfg.repo.repo_id,
-                )
-                .await?;
-            current_inputs = Some(loaded.clone());
-            loaded
-        };
-        if inputs.is_empty() {
-            continue;
-        }
-
-        let outcome = run_repo_symbol_embeddings_refresh(
-            capability_host,
-            relational,
-            representation_kind,
-            inputs,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "refreshing repo-wide {} embeddings after sync",
-                representation_kind
-            )
-        })?;
-        rebuilt_current_projection |= outcome.symbol_clone_edges_upserted > 0
-            || sync_action == RepoEmbeddingSyncAction::RefreshCurrentRepo;
-        rebuilt_historical_projection |= outcome.clone_rebuild_recommended
-            || outcome.symbol_clone_edges_upserted > 0
-            || sync_action != RepoEmbeddingSyncAction::Incremental;
+    if !current_projection_changed {
+        rehydrate_current_projection_if_needed(cfg, relational, capability_host)
+            .await
+            .context("rehydrating current semantic clone projection after sync")?;
     }
 
-    if let Some(setup) = code_setup.as_ref()
-        && rebuilt_historical_projection
-    {
-        if let Some(active_state) =
-            select_active_code_embedding_state_for_repo(relational, &cfg.repo.repo_id, setup)
-                .await?
-        {
-            crate::capability_packs::semantic_clones::persist_active_embedding_setup(
-                relational,
-                &cfg.repo.repo_id,
-                &active_state,
-            )
-            .await?;
-            rebuild_active_clone_edges(capability_host, relational).await?;
-            rebuilt_current_projection = true;
-        } else {
-            crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
-                relational,
-                &cfg.repo.repo_id,
-            )
-            .await?;
-        }
-    }
-
-    if current_projection_changed || rebuilt_current_projection {
-        crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
-            relational,
-            &cfg.repo.repo_id,
-        )
-        .await
-        .context("rebuilding current semantic clone edges after sync projection changes")?;
-    }
+    crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges(
+        relational,
+        &cfg.repo.repo_id,
+    )
+    .await
+    .context("rebuilding current semantic clone edges after sync")?;
 
     Ok(())
 }
@@ -315,96 +187,162 @@ async fn clear_semantic_clone_embedding_outputs(
     .await
 }
 
-async fn clear_semantic_clone_embedding_outputs_for_representation(
+async fn rehydrate_current_projection_if_needed(
+    cfg: &DevqlConfig,
     relational: &RelationalStorage,
-    repo_id: &str,
-    representation_kind: EmbeddingRepresentationKind,
+    current_projection: &DevqlCapabilityHost,
 ) -> Result<()> {
-    crate::capability_packs::semantic_clones::clear_repo_symbol_embedding_rows_for_representation(
-        relational,
-        repo_id,
-        representation_kind,
-    )
-    .await?;
-    crate::capability_packs::semantic_clones::clear_repo_active_embedding_setup_for_representation(
-        relational,
-        repo_id,
-        representation_kind,
-    )
-    .await
-}
+    if !current_projection_needs_rehydrate(relational, &cfg.repo.repo_id).await? {
+        return Ok(());
+    }
 
-#[derive(Debug, Clone, Default)]
-struct SyncSymbolEmbeddingsRefreshOutcome {
-    clone_rebuild_recommended: bool,
-    symbol_clone_edges_upserted: usize,
-}
+    let path_content_ids =
+        load_current_projection_content_ids(relational, &cfg.repo.repo_id).await?;
+    if path_content_ids.is_empty() {
+        return Ok(());
+    }
 
-async fn run_repo_symbol_embeddings_refresh(
-    capability_host: &DevqlCapabilityHost,
-    relational: &RelationalStorage,
-    representation_kind: EmbeddingRepresentationKind,
-    inputs: Vec<semantic_features::SemanticFeatureInput>,
-) -> Result<SyncSymbolEmbeddingsRefreshOutcome> {
-    let result = capability_host
-        .invoke_ingester_with_relational(
-            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
-            serde_json::to_value(SymbolEmbeddingsRefreshPayload {
-                scope: SymbolEmbeddingsRefreshScope::Historical,
-                path: None,
-                content_id: None,
-                inputs,
-                expected_input_hashes: Default::default(),
-                representation_kind,
-                mode: EmbeddingRefreshMode::ConfiguredDegrade,
-                manage_active_state: true,
-            })?,
-            Some(relational),
+    let current_inputs =
+        crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
+            relational,
+            &cfg.repo_root,
+            &cfg.repo.repo_id,
         )
         .await?;
-    Ok(SyncSymbolEmbeddingsRefreshOutcome {
-        clone_rebuild_recommended: result.payload["clone_rebuild_recommended"]
-            .as_bool()
-            .unwrap_or(false),
-        symbol_clone_edges_upserted: result.payload["symbol_clone_edges_upserted"]
-            .as_u64()
-            .unwrap_or_default() as usize,
-    })
-}
+    if current_inputs.is_empty() {
+        return Ok(());
+    }
 
-async fn select_active_code_embedding_state_for_repo(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    setup: &EmbeddingSetup,
-) -> Result<Option<ActiveEmbeddingRepresentationState>> {
-    let states = crate::capability_packs::semantic_clones::load_current_repo_embedding_states(
-        relational,
-        repo_id,
-        Some(EmbeddingRepresentationKind::Code),
-    )
-    .await?;
-    Ok(states.into_iter().find(|state| state.setup == *setup))
-}
+    let mut inputs_by_path = std::collections::BTreeMap::<String, Vec<_>>::new();
+    for input in current_inputs {
+        if path_content_ids.contains_key(&input.path) {
+            inputs_by_path
+                .entry(input.path.clone())
+                .or_default()
+                .push(input);
+        }
+    }
 
-async fn rebuild_active_clone_edges(
-    capability_host: &DevqlCapabilityHost,
-    relational: &RelationalStorage,
-) -> Result<()> {
-    capability_host
-        .invoke_ingester_with_relational(
-            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
-            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-            serde_json::json!({}),
-            Some(relational),
+    for (path, inputs) in inputs_by_path {
+        let Some(content_id) = path_content_ids.get(&path) else {
+            continue;
+        };
+        current_projection
+            .invoke_ingester_with_relational(
+                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
+                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
+                serde_json::to_value(SemanticFeaturesRefreshPayload {
+                    scope: SemanticFeaturesRefreshScope::CurrentPath,
+                    path: Some(path.clone()),
+                    content_id: Some(content_id.clone()),
+                    inputs: inputs.clone(),
+                    mode: SemanticSummaryRefreshMode::ConfiguredDegrade,
+                })?,
+                Some(relational),
+            )
+            .await
+            .with_context(|| format!("rehydrating current semantic features for `{path}`"))?;
+        refresh_current_path_embeddings(
+            current_projection,
+            relational,
+            &path,
+            content_id,
+            &inputs,
+            EmbeddingRepresentationKind::Code,
         )
         .await
-        .with_context(|| {
-            format!(
-                "running capability ingester `{}` for `{}`",
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID
-            )
-        })?;
+        .with_context(|| format!("rehydrating current code embeddings for `{path}`"))?;
+        refresh_current_path_embeddings(
+            current_projection,
+            relational,
+            &path,
+            content_id,
+            &inputs,
+            EmbeddingRepresentationKind::Summary,
+        )
+        .await
+        .with_context(|| format!("rehydrating current summary embeddings for `{path}`"))?;
+    }
+
     Ok(())
+}
+
+async fn current_projection_needs_rehydrate(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<bool> {
+    let counts = relational
+        .query_rows(&format!(
+            "SELECT
+                (SELECT COUNT(*) FROM current_file_state WHERE repo_id = '{repo_id}' AND analysis_mode = 'code' AND effective_content_id IS NOT NULL) AS current_paths,
+                (SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = '{repo_id}') AS semantic_rows,
+                (SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = '{repo_id}') AS feature_rows,
+                (SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = '{repo_id}' AND representation_kind = 'code') AS code_embedding_rows,
+                (SELECT COUNT(*) FROM symbol_embeddings_current WHERE repo_id = '{repo_id}' AND representation_kind = 'summary') AS summary_embedding_rows",
+            repo_id = crate::host::devql::esc_pg(repo_id),
+        ))
+        .await?;
+    let Some(row) = counts.first() else {
+        return Ok(false);
+    };
+    let current_paths = row
+        .get("current_paths")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    if current_paths == 0 {
+        return Ok(false);
+    }
+
+    Ok(row
+        .get("semantic_rows")
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+        == 0
+        || row
+            .get("feature_rows")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 0
+        || row
+            .get("code_embedding_rows")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 0
+        || row
+            .get("summary_embedding_rows")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 0)
+}
+
+async fn load_current_projection_content_ids(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT path, effective_content_id
+             FROM current_file_state
+             WHERE repo_id = '{repo_id}'
+               AND analysis_mode = 'code'
+               AND effective_content_id IS NOT NULL
+             ORDER BY path",
+            repo_id = crate::host::devql::esc_pg(repo_id),
+        ))
+        .await?;
+
+    let mut content_ids = std::collections::BTreeMap::new();
+    for row in rows {
+        let Some(path) = row.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(content_id) = row.get("effective_content_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if path.trim().is_empty() || content_id.trim().is_empty() {
+            continue;
+        }
+        content_ids.insert(path.to_string(), content_id.to_string());
+    }
+    Ok(content_ids)
 }

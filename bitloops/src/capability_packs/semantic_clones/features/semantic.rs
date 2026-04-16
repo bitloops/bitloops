@@ -25,8 +25,12 @@ pub trait SemanticSummaryProvider: Send + Sync {
 
 pub fn summary_provider_from_service(
     service: std::sync::Arc<dyn TextGenerationService>,
+    require_model_output: bool,
 ) -> std::sync::Arc<dyn SemanticSummaryProvider> {
-    std::sync::Arc::new(TextGenerationServiceAdapter { service })
+    std::sync::Arc::new(TextGenerationServiceAdapter {
+        service,
+        require_model_output,
+    })
 }
 
 pub struct NoopSemanticSummaryProvider;
@@ -123,6 +127,7 @@ fn extract_json_object_from_text(content: &str) -> Option<String> {
 
 struct TextGenerationServiceAdapter {
     service: std::sync::Arc<dyn TextGenerationService>,
+    require_model_output: bool,
 }
 
 impl SemanticSummaryProvider for TextGenerationServiceAdapter {
@@ -131,14 +136,28 @@ impl SemanticSummaryProvider for TextGenerationServiceAdapter {
     }
 
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
-        let content = self
-            .service
-            .complete(
-                "You summarize code symbols. Return only JSON with keys summary and confidence.",
-                &build_semantic_summary_prompt(input),
-            )
-            .ok()?;
-        let parsed = parse_semantic_summary_candidate_json(&content)?;
+        let content = match self.service.complete(
+            "You summarize code symbols. Return only JSON with keys summary and confidence.",
+            &build_semantic_summary_prompt(input),
+        ) {
+            Ok(content) => content,
+            Err(err) => {
+                log::warn!(
+                    "semantic summary generation failed for `{}` (artefact `{}`): {err:#}",
+                    input.path,
+                    input.artefact_id
+                );
+                return None;
+            }
+        };
+        let Some(parsed) = parse_semantic_summary_candidate_json(&content) else {
+            log::warn!(
+                "semantic summary provider returned an unparsable response for `{}` (artefact `{}`)",
+                input.path,
+                input.artefact_id
+            );
+            return None;
+        };
         Some(SemanticSummaryCandidate {
             summary: parsed.summary,
             confidence: parsed.confidence.unwrap_or(0.75),
@@ -147,7 +166,7 @@ impl SemanticSummaryProvider for TextGenerationServiceAdapter {
     }
 
     fn requires_model_output(&self) -> bool {
-        true
+        self.require_model_output
     }
 }
 

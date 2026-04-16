@@ -24,7 +24,6 @@ use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID, clear_repo_active_embedding_setup,
     clear_repo_symbol_embedding_rows, load_semantic_feature_inputs_for_artefacts,
     load_semantic_feature_inputs_for_current_repo,
-    load_semantic_feature_inputs_for_historical_repo,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -141,6 +140,9 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
             if !mailbox_intent.summary_refresh_active {
                 return JobExecutionOutcome::ok();
             }
+            if payload_is_repo_backfill(&job.payload) {
+                return JobExecutionOutcome::ok();
+            }
             let inputs = match load_workplane_job_inputs(&relational, job).await {
                 Ok(inputs) => inputs,
                 Err(err) => return JobExecutionOutcome::failed(err),
@@ -195,6 +197,9 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                     job.mailbox_name
                 ));
             };
+            if payload_is_repo_backfill(&job.payload) {
+                return JobExecutionOutcome::ok();
+            }
             let (scope, path, content_id, inputs) =
                 match load_workplane_embedding_refresh_inputs(&relational, job).await {
                     Ok(inputs) => inputs,
@@ -503,16 +508,7 @@ async fn load_repo_backfill_inputs(
     relational: &RelationalStorage,
     job: &WorkplaneJobRecord,
 ) -> Result<Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>> {
-    let mut inputs =
-        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
-            .await?;
-    inputs.extend(
-        load_semantic_feature_inputs_for_historical_repo(relational, &job.repo_root, &job.repo_id)
-            .await?,
-    );
-    inputs.sort_by(|left, right| left.artefact_id.cmp(&right.artefact_id));
-    inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
-    Ok(inputs)
+    load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id).await
 }
 
 async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {

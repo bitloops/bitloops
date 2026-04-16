@@ -91,7 +91,7 @@ pub(crate) async fn build_relational_clones_query(
         "symbol_clone_edges_current"
     };
     let target_artefacts_table = if use_historical_tables {
-        "artefacts"
+        "artefacts_historical"
     } else {
         "artefacts_current"
     };
@@ -121,7 +121,7 @@ ss.summary AS target_summary \
 FROM {clone_edges_table} ce \
 JOIN filtered src ON src.artefact_id = ce.source_artefact_id \
 JOIN {target_artefacts_table} tgt ON tgt.repo_id = ce.repo_id AND tgt.artefact_id = ce.target_artefact_id \
-LEFT JOIN {target_semantics_table} ss ON ss.artefact_id = tgt.artefact_id \
+LEFT JOIN {target_semantics_table} ss ON ss.repo_id = tgt.repo_id AND ss.artefact_id = tgt.artefact_id \
 WHERE {} \
 	ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn",
         clone_filters.join(" AND "),
@@ -224,7 +224,7 @@ LIMIT 2"
     let target_sql = format!(
         "SELECT a.artefact_id, a.path, a.symbol_fqn, a.canonical_kind, a.language_kind, a.language, ss.summary \
 FROM artefacts_current a \
-LEFT JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
+LEFT JOIN symbol_semantics_current ss ON ss.repo_id = a.repo_id AND ss.artefact_id = a.artefact_id \
 WHERE a.repo_id = '{}' \
   AND a.artefact_id IN ({})",
         esc_pg(repo_id),

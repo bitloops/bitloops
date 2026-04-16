@@ -103,11 +103,11 @@ pub(super) fn format_embedding_waiting_status_line(
 ) -> String {
     let prefix = if completed_jobs > 0 {
         format!(
-            "bitloops-embeddings processed {} artefacts",
+            "bitloops-local-embeddings processed {} artefacts",
             format_count_u64(completed_jobs)
         )
     } else {
-        "bitloops-embeddings is ready".to_string()
+        "bitloops-local-embeddings is ready".to_string()
     };
     let waiting = match remaining_init_dependencies(checklist) {
         Some(dependencies) => format!("waiting for {dependencies} to queue embeddings"),

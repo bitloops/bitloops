@@ -7,7 +7,8 @@ use serde::de::DeserializeOwned;
 
 use crate::daemon::{
     DaemonRuntimeState, DaemonServiceMetadata, PersistedEmbeddingsBootstrapState,
-    PersistedEnrichmentQueueState, SupervisorRuntimeState, SupervisorServiceMetadata,
+    PersistedEnrichmentQueueState, PersistedWorkosAuthSessionState, SupervisorRuntimeState,
+    SupervisorServiceMetadata,
 };
 use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::storage::SqliteConnectionPool;
@@ -170,6 +171,23 @@ impl DaemonSqliteRuntimeStore {
 
     pub fn capability_event_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_capability_event_state())
+    }
+
+    pub(crate) fn load_workos_auth_session_state(
+        &self,
+    ) -> Result<Option<PersistedWorkosAuthSessionState>> {
+        self.load_document(document_key_workos_auth_session_state(), None)
+    }
+
+    pub(crate) fn save_workos_auth_session_state(
+        &self,
+        state: &PersistedWorkosAuthSessionState,
+    ) -> Result<()> {
+        self.save_document(document_key_workos_auth_session_state(), state)
+    }
+
+    pub(crate) fn delete_workos_auth_session_state(&self) -> Result<()> {
+        self.delete_document(document_key_workos_auth_session_state())
     }
 
     pub fn load_runtime_state(&self) -> Result<Option<DaemonRuntimeState>> {
@@ -532,6 +550,10 @@ fn document_key_capability_event_state() -> &'static str {
     "capability_event_queue_state"
 }
 
+fn document_key_workos_auth_session_state() -> &'static str {
+    "workos_auth_session_state"
+}
+
 fn daemon_state_root() -> PathBuf {
     crate::utils::platform_dirs::bitloops_state_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("bitloops").join("state"))
@@ -563,6 +585,7 @@ fn migrate_legacy_sync_queue_state(
                 source: task.source,
                 spec: crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
                     mode: task.mode,
+                    post_commit_snapshot: None,
                 }),
                 status: task.status,
                 submitted_at_unix: task.submitted_at_unix,

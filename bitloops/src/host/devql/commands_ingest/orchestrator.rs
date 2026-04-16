@@ -1,9 +1,4 @@
 use super::progress::{emit_checkpoint_ingested, emit_progress};
-use super::semantic_refresh::{
-    apply_symbol_embedding_refresh_counts, rebuild_active_clone_edges,
-    run_semantic_features_refresh, run_symbol_embeddings_refresh,
-    select_active_code_embedding_state_for_repo,
-};
 use super::shared::{
     active_branch_name, promote_temporary_current_rows_for_head_commit,
     resolve_pack_versions_for_ingest, tracked_paths_at_revision,
@@ -55,7 +50,7 @@ async fn execute_ingest_inner(
     backfill_window: Option<usize>,
     explicit_commits: Option<Vec<String>>,
     observer: Option<&dyn IngestionObserver>,
-    enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
+    _enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
     let mut counters = IngestionCounters {
         init_requested: init,
@@ -79,60 +74,6 @@ async fn execute_ingest_inner(
     let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
-    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
-    let knowledge_context =
-        capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
-            .context("resolving knowledge capability ingester owner")?;
-    let semantic_clones = resolve_semantic_clones_config(
-        &capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID),
-    );
-    let semantic_clones_workplane = if enrichment.is_some() {
-        Some(capability_host.build_workplane_gateway(SEMANTIC_CLONES_CAPABILITY_ID)?)
-    } else {
-        None
-    };
-    let semantic_clones_workplane_intent = match semantic_clones_workplane.as_ref() {
-        Some(workplane) => Some(resolve_effective_mailbox_intent(
-            workplane.as_ref(),
-            &semantic_clones,
-        )?),
-        None => None,
-    };
-    let semantic_inference = capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
-    let preferred_representation_kind =
-        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code;
-    let embedding_outputs_enabled = embeddings_enabled(&semantic_clones);
-    let mut embedding_warning = None;
-    let mut direct_embedding_provider_available = false;
-    let mut resolved_embedding_setup = None;
-    let direct_embedding_sync_action = if enrichment.is_none() && embedding_outputs_enabled {
-        let selection = resolve_embedding_provider(
-            &semantic_clones,
-            &semantic_inference,
-            preferred_representation_kind,
-            EmbeddingProviderMode::ConfiguredDegrade,
-        )?;
-        if selection.degraded_reason.is_some() {
-            embedding_warning = selection.degraded_reason.clone();
-        }
-        if let Some(embedding_provider) = selection.provider.as_ref() {
-            let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
-            let action = determine_repo_embedding_sync_action(
-                &relational,
-                &cfg.repo.repo_id,
-                preferred_representation_kind,
-                &setup,
-            )
-            .await?;
-            resolved_embedding_setup = Some(setup);
-            direct_embedding_provider_available = true;
-            Some(action)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
 
     ensure_repository_row(cfg, &relational).await?;
     let exclusion_matcher = load_repo_exclusion_matcher(&cfg.repo_root)
@@ -359,101 +300,7 @@ async fn execute_ingest_inner(
                         source_content,
                     )
                     .await?;
-
-                    let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
-                        &relational,
-                        &cfg.repo.repo_id,
-                        &blob_sha,
-                        &normalized_path,
-                    )
-                    .await?;
-                    let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
-                        &relational,
-                        &cfg.repo.repo_id,
-                        &blob_sha,
-                        &normalized_path,
-                    )
-                    .await?;
-                    let semantic_feature_inputs =
-                        semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-                            &pre_stage_artefacts,
-                            &pre_stage_dependencies,
-                            source_content,
-                        );
-                    let (semantic_feature_stats, input_hashes, _enriched) =
-                        run_semantic_features_refresh(
-                            &capability_host,
-                            &relational,
-                            SemanticFeaturesRefreshPayload {
-                                scope: SemanticFeaturesRefreshScope::Historical,
-                                path: None,
-                                content_id: None,
-                                inputs: semantic_feature_inputs.clone(),
-                                mode: if enrichment.is_some() {
-                                    SemanticSummaryRefreshMode::DeterministicOnly
-                                } else {
-                                    SemanticSummaryRefreshMode::ConfiguredDegrade
-                                },
-                            },
-                        )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "running capability ingester `{}` owned by `{}`",
-                            knowledge_context.ingester_id, knowledge_context.capability_pack_id
-                        )
-                    })?;
-                    if let Some(workplane) = semantic_clones_workplane.as_ref() {
-                        if let Some(intent) = semantic_clones_workplane_intent.as_ref() {
-                            enqueue_summary_refresh_jobs(
-                                workplane.as_ref(),
-                                &semantic_feature_inputs,
-                                intent,
-                            )?;
-                            enqueue_embedding_jobs(
-                                workplane.as_ref(),
-                                &semantic_feature_inputs,
-                                intent,
-                            )?;
-                        }
-                    } else if direct_embedding_provider_available {
-                        let code_refresh = run_symbol_embeddings_refresh(
-                            &capability_host,
-                            &relational,
-                            SymbolEmbeddingsRefreshPayload {
-                                scope: SymbolEmbeddingsRefreshScope::Historical,
-                                path: None,
-                                content_id: None,
-                                inputs: semantic_feature_inputs.clone(),
-                                expected_input_hashes: input_hashes.clone(),
-                                representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                                mode: EmbeddingRefreshMode::ConfiguredDegrade,
-                                manage_active_state: false,
-                            },
-                        )
-                        .await?;
-                        apply_symbol_embedding_refresh_counts(&mut counters, &code_refresh);
-
-                        let summary_refresh = run_symbol_embeddings_refresh(
-                            &capability_host,
-                            &relational,
-                            SymbolEmbeddingsRefreshPayload {
-                                scope: SymbolEmbeddingsRefreshScope::Historical,
-                                path: None,
-                                content_id: None,
-                                inputs: semantic_feature_inputs.clone(),
-                                expected_input_hashes: input_hashes.clone(),
-                                representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-                                mode: EmbeddingRefreshMode::ConfiguredDegrade,
-                                manage_active_state: false,
-                            },
-                        )
-                        .await?;
-                        apply_symbol_embedding_refresh_counts(&mut counters, &summary_refresh);
-                    }
                     counters.artefacts_upserted += 1;
-                    counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
-                    counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
                 }
 
                 mark_commit_history_completed(
@@ -583,150 +430,8 @@ async fn execute_ingest_inner(
         );
     }
 
-    if let Some(workplane) = semantic_clones_workplane.as_ref()
-        && semantic_clones_workplane_intent
-            .as_ref()
-            .is_some_and(|intent| intent.has_any_embedding_intent())
-        && counters.artefacts_upserted == 0
-        && load_active_embedding_setup(
-            &relational,
-            &cfg.repo.repo_id,
-            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-        )
-            .await?
-            .is_none()
-    {
-        let bootstrap_inputs = load_semantic_feature_inputs_for_current_repo(
-            &relational,
-            &cfg.repo_root,
-            &cfg.repo.repo_id,
-        )
-        .await?;
-        if !bootstrap_inputs.is_empty() {
-            let bootstrap_summary_provider = resolve_summary_provider(
-                &semantic_clones,
-                &semantic_inference,
-                SummaryProviderMode::DeterministicOnly,
-            )?;
-            let _bootstrap_input_hashes = bootstrap_inputs
-                .iter()
-                .map(|input| {
-                    (
-                        input.artefact_id.clone(),
-                        semantic::build_semantic_feature_input_hash(
-                            input,
-                            bootstrap_summary_provider.provider.as_ref(),
-                        ),
-                    )
-                })
-                .collect::<std::collections::BTreeMap<_, _>>();
-            if let Some(intent) = semantic_clones_workplane_intent.as_ref() {
-                enqueue_summary_refresh_jobs(workplane.as_ref(), &bootstrap_inputs, intent)?;
-                enqueue_embedding_jobs(workplane.as_ref(), &bootstrap_inputs, intent)?;
-            }
-        }
-    }
-
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
-    if let Some(warning) = embedding_warning.as_deref() {
-        log::warn!("semantic_clones embeddings degraded; skipping embedding and clone stages: {warning}");
-    }
-
-    if enrichment.is_none() && direct_embedding_provider_available {
-        match direct_embedding_sync_action.unwrap_or(RepoEmbeddingSyncAction::Incremental) {
-            RepoEmbeddingSyncAction::RefreshCurrentRepo => {
-                clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
-                clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
-                crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
-                    &relational,
-                    &cfg.repo.repo_id,
-                )
-                .await?;
-                let current_inputs = load_semantic_feature_inputs_for_current_repo(
-                    &relational,
-                    &cfg.repo_root,
-                    &cfg.repo.repo_id,
-                )
-                .await?;
-                if !current_inputs.is_empty() {
-                    let code_refresh = run_symbol_embeddings_refresh(
-                        &capability_host,
-                        &relational,
-                        SymbolEmbeddingsRefreshPayload {
-                            scope: SymbolEmbeddingsRefreshScope::Historical,
-                            path: None,
-                            content_id: None,
-                            inputs: current_inputs.clone(),
-                            expected_input_hashes: Default::default(),
-                            representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
-                            mode: EmbeddingRefreshMode::ConfiguredDegrade,
-                            manage_active_state: true,
-                        },
-                    )
-                    .await?;
-                    apply_symbol_embedding_refresh_counts(&mut counters, &code_refresh);
-                    if code_refresh.clone_rebuild_recommended {
-                        let clone_ingest =
-                            rebuild_active_clone_edges(&capability_host, &relational).await?;
-                        counters.symbol_clone_edges_upserted += clone_ingest.0;
-                        counters.symbol_clone_sources_scored += clone_ingest.1;
-                    }
-
-                    let summary_refresh = run_symbol_embeddings_refresh(
-                        &capability_host,
-                        &relational,
-                        SymbolEmbeddingsRefreshPayload {
-                            scope: SymbolEmbeddingsRefreshScope::Historical,
-                            path: None,
-                            content_id: None,
-                            inputs: current_inputs,
-                            expected_input_hashes: Default::default(),
-                            representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-                            mode: EmbeddingRefreshMode::ConfiguredDegrade,
-                            manage_active_state: true,
-                        },
-                    )
-                    .await?;
-                    apply_symbol_embedding_refresh_counts(&mut counters, &summary_refresh);
-                }
-            }
-            RepoEmbeddingSyncAction::Incremental | RepoEmbeddingSyncAction::AdoptExisting => {}
-        }
-
-        if let Some(setup) = resolved_embedding_setup.as_ref() {
-            if let Some(active_state) = select_active_code_embedding_state_for_repo(
-                &relational,
-                &cfg.repo.repo_id,
-                setup,
-            )
-            .await?
-            {
-                persist_active_embedding_setup(&relational, &cfg.repo.repo_id, &active_state)
-                    .await?;
-                let clone_ingest =
-                    rebuild_active_clone_edges(&capability_host, &relational).await?;
-                counters.symbol_clone_edges_upserted += clone_ingest.0;
-                counters.symbol_clone_sources_scored += clone_ingest.1;
-            } else {
-                crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
-                    &relational,
-                    &cfg.repo.repo_id,
-                )
-                .await?;
-            }
-        }
-    } else if !embedding_outputs_enabled
-        || (enrichment.is_none() && !direct_embedding_provider_available)
-    {
-        clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
-        clear_repo_active_embedding_setup(&relational, &cfg.repo.repo_id).await?;
-        crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
-            &relational,
-            &cfg.repo.repo_id,
-        )
-        .await?;
-    }
     counters.success = !encountered_commit_failures;
     emit_progress(
         observer,

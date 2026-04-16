@@ -12,9 +12,14 @@ use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
 use crate::cli::embeddings::{
-    EmbeddingsInstallState, enqueue_embeddings_bootstrap_task, inspect_embeddings_install_state,
+    EmbeddingsInstallState, EmbeddingsRuntime, enqueue_embeddings_bootstrap_task,
+    inspect_embeddings_install_state, install_or_configure_platform_embeddings,
 };
-use crate::cli::inference::{configure_local_summary_generation, summary_generation_configured};
+use crate::cli::inference::{
+    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
+    platform_summary_gateway_url_override, prompt_summary_setup_selection,
+    summary_generation_configured,
+};
 use crate::cli::telemetry_consent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
@@ -63,6 +68,18 @@ pub struct EnableArgs {
     /// Configure and bootstrap local embeddings so sync can include them.
     #[arg(long, default_value_t = false)]
     pub install_embeddings: bool,
+
+    /// Select which managed embeddings runtime to configure when `--install-embeddings` is used.
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub embeddings_runtime: EmbeddingsRuntime,
+
+    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
+    #[arg(long)]
+    pub embeddings_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token.
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub embeddings_api_key_env: String,
 }
 
 /// Finds the git repository root by walking up from `start`.
@@ -225,41 +242,75 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
     writeln!(out, "Updated project config: {}", target_path.display())?;
 
     if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
-        activate_embedding_pipeline_mailboxes(&git_root, "enable")
-            .context("activating semantic clones embedding mailboxes for enable")?;
-        let (scope, queued) = enqueue_embeddings_bootstrap_task(
-            &cwd,
-            None,
-            crate::daemon::DevqlTaskSource::ManualCli,
-        )
-        .await?;
-        match crate::cli::devql::graphql::watch_task_id_via_graphql(
-            &scope,
-            &queued.task.task_id,
-            false,
-        )
-        .await
-        {
-            Ok(Some(task)) => {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
+        match args.embeddings_runtime {
+            EmbeddingsRuntime::Local => {
+                activate_embedding_pipeline_mailboxes(&git_root, "enable")
+                    .context("activating semantic clones embedding mailboxes for enable")?;
+                let (scope, queued) = enqueue_embeddings_bootstrap_task(
+                    &cwd,
+                    None,
+                    crate::daemon::DevqlTaskSource::ManualCli,
+                )
+                .await?;
+                match crate::cli::devql::graphql::watch_task_id_via_graphql(
+                    &scope,
+                    &queued.task.task_id,
+                    false,
+                )
+                .await
+                {
+                    Ok(Some(task)) => {
+                        writeln!(
+                            out,
+                            "{}",
+                            crate::cli::devql::format_task_completion_summary(&task)
+                        )?;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        bail!(
+                            "Bitloops capture was enabled, but embeddings installation failed: {err:#}"
+                        );
+                    }
+                }
             }
-            Ok(None) => {}
-            Err(err) => {
-                bail!("Bitloops capture was enabled, but embeddings installation failed: {err:#}");
+            EmbeddingsRuntime::Platform => {
+                let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`bitloops enable --install-embeddings --embeddings-runtime platform` requires `--embeddings-gateway-url`"
+                    )
+                })?;
+                for line in install_or_configure_platform_embeddings(
+                    &cwd,
+                    gateway_url,
+                    &args.embeddings_api_key_env,
+                )? {
+                    writeln!(out, "{line}")?;
+                }
             }
         }
     }
 
-    if should_install_summaries(&cwd, out, input)? {
-        configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
-            anyhow::anyhow!(
-                "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
-            )
-        })?;
+    match choose_summary_setup(&cwd, out, input).await? {
+        SummarySetupSelection::Cloud => {
+            crate::cli::login::ensure_logged_in().await?;
+            let gateway_url_override = platform_summary_gateway_url_override();
+            let message = configure_cloud_summary_generation(&cwd, gateway_url_override.as_deref())
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+            writeln!(out, "{message}")?;
+        }
+        SummarySetupSelection::Local => {
+            configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                )
+            })?;
+        }
+        SummarySetupSelection::Skip => {}
     }
     Ok(())
 }
@@ -311,45 +362,24 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
     }
 }
 
-fn should_install_summaries(
+async fn choose_summary_setup(
     repo_root: &Path,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
+) -> Result<SummarySetupSelection> {
     if !telemetry_consent::can_prompt_interactively() {
-        return Ok(false);
+        return Ok(SummarySetupSelection::Skip);
     }
 
     if summary_generation_configured(repo_root) {
-        return Ok(false);
+        return Ok(SummarySetupSelection::Skip);
     }
 
-    prompt_install_summaries(out, input)
-}
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
 
-fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
-    writeln!(out)?;
-    writeln!(out, "Configure local semantic summaries as well?")?;
-    writeln!(
-        out,
-        "Bitloops will install `bitloops-inference` and try to bind summaries to a local Ollama model."
-    )?;
-
-    loop {
-        writeln!(out, "Configure semantic summaries now? (Y/n)")?;
-        write!(out, "> ")?;
-        out.flush()?;
-
-        let mut line = String::new();
-        input
-            .read_line(&mut line)
-            .context("reading semantic summary install prompt response")?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => writeln!(out, "Please answer yes or no.")?,
-        }
-    }
+    prompt_summary_setup_selection(out, input, true, false, cloud_logged_in)
 }
 
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {

@@ -197,7 +197,7 @@ embedding_mode = "deterministic"
 code_embeddings = "{profile_name}"
 summary_embeddings = "{profile_name}"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -206,7 +206,7 @@ request_timeout_secs = 5
 [inference.profiles.{profile_name}]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = {model:?}
 "#
         ),
@@ -976,6 +976,163 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
     assert_eq!(rows[0].path, "src/invoice.ts");
     assert_eq!(rows[0].model, "mailbox-model");
     assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
+}
+
+#[tokio::test]
+async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
+    use std::collections::BTreeSet;
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::write(
+        repo.path().join("package.json"),
+        "{\n  \"name\": \"daemon-backfill-test\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        repo.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
+    git_ok(repo.path(), &["add", "package.json", "tsconfig.json"]);
+    git_ok(repo.path(), &["commit", "-m", "initial"]);
+
+    let src_dir = repo.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        src_dir.join("legacy.ts"),
+        "export function legacyInvoice(): string { return 'legacy'; }\n",
+    )
+    .expect("write legacy source");
+    git_ok(repo.path(), &["add", "src/legacy.ts"]);
+    git_ok(repo.path(), &["commit", "-m", "add legacy artefact"]);
+
+    fs::remove_file(src_dir.join("legacy.ts")).expect("remove legacy source");
+    fs::write(
+        src_dir.join("current.ts"),
+        "export function currentInvoice(): string { return 'current'; }\n",
+    )
+    .expect("write current source");
+    git_ok(repo.path(), &["add", "-A"]);
+    git_ok(repo.path(), &["commit", "-m", "replace legacy artefact"]);
+
+    write_daemon_embedding_config(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        3,
+    );
+
+    let cfg = daemon_test_cfg_for_repo(repo.path());
+    crate::host::devql::execute_init_schema(&cfg, "repo backfill daemon test")
+        .await
+        .expect("initialise devql schema for repo backfill test");
+    let backends = resolve_store_backend_config_for_repo(repo.path())
+        .expect("resolve backend config for repo backfill test");
+    let relational =
+        RelationalStorage::connect(&cfg, &backends.relational, "repo backfill daemon test")
+            .await
+            .expect("connect relational storage for repo backfill test");
+    execute_ingest_with_observer(&cfg, false, 10, None, None)
+        .await
+        .expect("ingest repo backfill fixture");
+    execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("seed current state for repo backfill test");
+
+    let current_inputs =
+        crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
+            &relational,
+            repo.path(),
+            &cfg.repo.repo_id,
+        )
+        .await
+        .expect("load current semantic inputs");
+    let historical_legacy_rows = relational
+        .query_rows(&format!(
+            "SELECT COUNT(*) AS count FROM file_state WHERE repo_id = '{}' AND path = 'src/legacy.ts'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("count historical legacy file rows");
+    assert!(
+        historical_legacy_rows
+            .first()
+            .and_then(|row| row.get("count"))
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default()
+            > 0,
+        "fixture must include a historical-only artefact"
+    );
+    assert!(
+        current_inputs
+            .iter()
+            .all(|input| input.path != "src/legacy.ts"),
+        "current inputs must exclude the deleted legacy artefact"
+    );
+
+    let job = WorkplaneJobRecord {
+        job_id: "repo-backfill-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let repo_backfill_inputs = load_repo_backfill_inputs(&relational, &job)
+        .await
+        .expect("load repo backfill inputs");
+    let current_artefact_ids = current_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<BTreeSet<_>>();
+    let repo_backfill_artefact_ids = repo_backfill_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        repo_backfill_artefact_ids, current_artefact_ids,
+        "repo backfill should use the current repo artefacts only"
+    );
+    assert!(
+        repo_backfill_inputs
+            .iter()
+            .all(|input| input.path != "src/legacy.ts"),
+        "repo backfill should exclude historical-only artefacts"
+    );
 }
 
 #[tokio::test]

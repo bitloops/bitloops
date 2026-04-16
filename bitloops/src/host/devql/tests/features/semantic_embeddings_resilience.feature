@@ -26,7 +26,7 @@ Feature: Semantic and embeddings resilience BDD scenarios
       [inference.profiles.default]
       task = "embeddings"
       driver = "bitloops_embeddings_ipc"
-      runtime = "bitloops_embeddings"
+      runtime = "bitloops_local_embeddings"
       model = "bge-m3"
       cache_dir = ".bitloops/embeddings/default"
       """
@@ -47,7 +47,7 @@ Feature: Semantic and embeddings resilience BDD scenarios
       [inference.profiles.local]
       task = "embeddings"
       driver = "bitloops_embeddings_ipc"
-      runtime = "bitloops_embeddings"
+      runtime = "bitloops_local_embeddings"
       model = "bge-m3"
       cache_dir = ".bitloops/embeddings/local"
       """
@@ -63,12 +63,12 @@ Feature: Semantic and embeddings resilience BDD scenarios
       [inference.profiles.local]
       task = "embeddings"
       driver = "bitloops_embeddings_ipc"
-      runtime = "bitloops_embeddings"
+      runtime = "bitloops_local_embeddings"
       model = "bge-m3"
       cache_dir = ".bitloops/embeddings/local"
 
-      [inference.runtimes.bitloops_embeddings]
-      command = "bitloops-embeddings"
+      [inference.runtimes.bitloops_local_embeddings]
+      command = "bitloops-local-embeddings"
       args = []
       startup_timeout_secs = 5
       request_timeout_secs = 5
@@ -90,7 +90,7 @@ Feature: Semantic and embeddings resilience BDD scenarios
       [inference.profiles.local]
       task = "embeddings"
       driver = "bitloops_embeddings_ipc"
-      runtime = "bitloops_embeddings"
+      runtime = "bitloops_local_embeddings"
       model = "bge-m3"
       cache_dir = ".bitloops/embeddings/local"
       """
