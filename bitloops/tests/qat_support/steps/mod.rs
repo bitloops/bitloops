@@ -755,6 +755,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^expected paths have file_state rows for expected SHAs in (\S+)$"),
+            step_fn(then_expected_paths_have_file_state_rows_for_expected_shas),
+        )
+        .then(
+            None,
             regex(r"^exact expected SHAs were newly completed since snapshot in (\S+)$"),
             step_fn(then_exact_expected_shas_newly_completed_since_snapshot),
         )

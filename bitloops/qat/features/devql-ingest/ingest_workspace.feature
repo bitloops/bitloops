@@ -1,8 +1,9 @@
 Feature: DevQL ingest workspace history coverage
-  The ingest command replays commit history into relational artefacts tables.
+  The ingest command replays commit history into relational history tables.
   These scenarios validate ingest behavior using DB-first checks on
-  commit_ingest_ledger, artefacts_current, and file_state, including rewritten
-  history SHA guarantees and bounded backfill behavior.
+  commit_ingest_ledger and file_state, including rewritten-history SHA
+  guarantees and bounded backfill behavior without relying on current-state
+  sync side effects.
 
   @devql @ingest
   Scenario: Initial backlog ingest completes all reachable history
@@ -87,8 +88,7 @@ Feature: DevQL ingest workspace history coverage
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
-    And artefacts_current contains path "src/non_ff_feature_one.rs" in bitloops
-    And artefacts_current contains path "src/non_ff_feature_two.rs" in bitloops
+    And expected paths have file_state rows for expected SHAs in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -107,8 +107,7 @@ Feature: DevQL ingest workspace history coverage
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
-    And artefacts_current contains path "src/ff_feature_one.rs" in bitloops
-    And artefacts_current contains path "src/ff_feature_two.rs" in bitloops
+    And expected paths have file_state rows for expected SHAs in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest
@@ -127,8 +126,7 @@ Feature: DevQL ingest workspace history coverage
     Then exact expected SHAs were newly completed since snapshot in bitloops
     And expected SHAs are completed in commit_ingest_ledger in bitloops
     And expected SHAs have file_state rows in bitloops
-    And artefacts_current contains path "src/cherry_source_one.rs" in bitloops
-    And artefacts_current contains path "src/cherry_source_two.rs" in bitloops
+    And expected paths have file_state rows for expected SHAs in bitloops
     And all reachable SHAs are completed in commit_ingest_ledger in bitloops
 
   @devql @ingest

@@ -1040,6 +1040,21 @@ pub(super) fn then_expected_shas_have_file_state_rows(
     })
 }
 
+pub(super) fn then_expected_paths_have_file_state_rows_for_expected_shas(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "expected paths have file_state rows for expected SHAs",
+            helpers::assert_expected_paths_have_file_state_rows_for_expected_shas(
+                world, &repo_name,
+            ),
+        );
+    })
+}
+
 pub(super) fn then_exact_expected_shas_newly_completed_since_snapshot(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

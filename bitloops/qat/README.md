@@ -12,6 +12,22 @@ The explicit `cargo nextest run` forms also work from the `bitloops/` crate dire
 
 ## Implemented test suites
 
+### Active suite overview
+
+Active QAT currently defines 76 scenarios total:
+
+- 75 scenarios in the bundled `cargo qat` lane
+- 1 scenario in the focused `cargo qat-quickstart` lane
+
+| Suite              | Command                        | In `cargo qat` | Active scenarios | Primary purpose                                                                   |
+| ------------------ | ------------------------------ | -------------- | ---------------: | --------------------------------------------------------------------------------- |
+| Onboarding         | `cargo qat-onboarding`         | Yes            |               13 | First-run install, init, enable, disable, and uninstall flows                     |
+| Smoke              | `cargo qat-smoke`              | Yes            |               13 | Deterministic agent/checkpoint golden path across supported agents                |
+| DevQL Sync         | `cargo qat-devql-sync`         | Yes            |               15 | Current-workspace reconciliation via queued sync tasks                            |
+| DevQL Capabilities | `cargo qat-devql-capabilities` | Yes            |               22 | Query surfaces over checkpoints, DevQL state, TestHarness, and semantic clones    |
+| DevQL Ingest       | `cargo qat-devql-ingest`       | Yes            |               12 | Commit-history replay, ledger correctness, rewrite handling, and bounded backfill |
+| Quickstart         | `cargo qat-quickstart`         | No             |                1 | Focused first-value checkpoint capture flow                                       |
+
 ### Bundled QAT suites (CI bundle)
 
 Runs onboarding and smoke in parallel, then runs DevQL sync, DevQL capabilities, and DevQL ingest serially.
@@ -35,18 +51,6 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --tes
 
 The bundled suites are all part of `cargo qat`, and the focused aliases remain available for targeted runs.
 
-### Quickstart
-
-```bash
-cargo qat-quickstart
-```
-
-Or equivalently:
-
-```bash
-cargo nextest run --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact
-```
-
 ### 1. Smoke (13 scenarios across 2 features)
 
 Exercises the deterministic hook-driven agent lifecycle for `claude-code`, `cursor`,
@@ -64,7 +68,7 @@ Or equivalently:
 cargo nextest run --features qat-tests --test qat_smoke --run-ignored only -- qat_smoke --exact
 ```
 
-**Scenarios:**
+**Active coverage:**
 
 - First agent-driven Bitloops session is captured for each supported agent.
 - Follow-up agent edits create progression for each supported agent.
@@ -89,7 +93,7 @@ Or equivalently:
 cargo nextest run --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact
 ```
 
-**Scenarios:**
+**Active scenarios:**
 
 | #   | Scenario                                           | Flow                           |
 | --- | -------------------------------------------------- | ------------------------------ |
@@ -109,10 +113,10 @@ cargo nextest run --features qat-tests --test qat_onboarding --run-ignored only 
 
 ### 3. DevQL Sync (`cargo qat-devql-sync`, 15 scenarios)
 
-Exercises the queue-backed `devql tasks enqueue --kind sync` workspace reconciliation
-flow: full indexing, incremental add/modify/delete detection, branch checkout,
-daemon downtime catch-up, git pull, sync validation and repair, and
-`init --sync=true` integration.
+Exercises the queue-backed `bitloops devql tasks enqueue --kind sync` workspace
+reconciliation flow: full indexing, TestHarness current-state sync, incremental
+add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
+validation and repair, and `init --sync=true` integration.
 
 ```bash
 cargo qat-devql-sync
@@ -124,33 +128,36 @@ Or equivalently:
 cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact
 ```
 
-**Scenarios:**
+**Active scenarios:**
 
-| #   | Scenario                                           | Flow                            |
-| --- | -------------------------------------------------- | ------------------------------- |
-| 1   | Full sync indexes workspace source files           | `SyncFullIndex`                 |
-| 2   | Sync detects newly added source files              | `SyncNewFiles`                  |
-| 3   | Sync detects modified source files                 | `SyncModifiedFiles`             |
-| 4   | Sync removes artefacts for deleted files           | `SyncDeletedFiles`              |
-| 5   | No-op sync reports zero changes                    | `SyncNoop`                      |
-| 6   | Sync after branch checkout reflects new state      | `SyncBranchCheckout`            |
-| 7   | Sync catches up after daemon downtime              | `SyncDaemonDowntime`            |
-| 8   | Sync indexes changes from git pull                 | `SyncGitPull`                   |
-| 9   | Sync validate detects drift (never synced)         | `SyncValidateDrift`             |
-| 10  | Sync validate reports clean after full sync        | `SyncValidateClean`             |
-| 11  | Sync validate detects drift after changes          | `SyncValidateDriftAfterChange`  |
-| 12  | Sync repair restores clean state                   | `SyncRepair`                    |
-| 13  | Init sync=true — follow-up sync reports no changes | `SyncInitSyncTrueNoop`          |
-| 14  | Init sync=true — incremental sync for new files    | `SyncInitSyncTrueIncremental`   |
-| 15  | Init sync=true — validation stays clean            | `SyncInitSyncTrueValidateClean` |
+| #   | Scenario                                                                  | Flow                            |
+| --- | ------------------------------------------------------------------------- | ------------------------------- |
+| 1   | Full sync indexes workspace source files                                  | `SyncFullIndex`                 |
+| 2   | Sync materializes test-harness coverage for discovered tests              | `SyncTestHarnessPopulate`       |
+| 3   | Sync removes test-harness coverage when test files are deleted            | `SyncTestHarnessDeleteTestFile` |
+| 4   | Sync detects newly added source files                                     | `SyncNewFiles`                  |
+| 5   | Sync detects and re-indexes modified source files                         | `SyncModifiedFiles`             |
+| 6   | Sync removes artefacts for deleted source files                           | `SyncDeletedFiles`              |
+| 7   | No-op sync reports zero changes                                           | `SyncNoop`                      |
+| 8   | Sync after branch checkout reflects the new branch state                  | `SyncBranchCheckout`            |
+| 9   | Sync catches up after daemon downtime with accumulated changes            | `SyncDaemonDowntime`            |
+| 10  | Sync indexes changes introduced by git pull                               | `SyncGitPull`                   |
+| 11  | Sync validate reports clean after a full sync                             | `SyncValidateClean`             |
+| 12  | Sync repair restores clean state after drift                              | `SyncRepair`                    |
+| 13  | Init with sync=true makes immediate follow-up sync report no changes      | `SyncInitSyncTrueNoop`          |
+| 14  | Init with sync=true still allows incremental sync for new files           | `SyncInitSyncTrueIncremental`   |
+| 15  | Init with sync=true keeps sync validation clean without workspace changes | `SyncInitSyncTrueValidateClean` |
 
-### 4. DevQL capabilities (`cargo qat-devql-capabilities`, 21 scenarios)
+The helper layer still supports negative drift assertions, but the current active sync
+feature set does not include drift-validation scenarios.
+
+### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 22 scenarios)
 
 Exercises the strict offline DevQL capability surface: agent queryability,
 checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
 artefact-scoped TestHarness proof-map queries, guide-aligned deterministic
 semantic clones, knowledge rejection handling, and one final integrated
-cross-capability smoke. The default semantic-clones lane validates the offline
+cross-capability smoke. The semantic-clones lane validates the offline
 fake-runtime path rather than real local-model warm-cache behavior.
 
 ```bash
@@ -163,31 +170,98 @@ Or equivalently:
 cargo nextest run --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact
 ```
 
-**Scenarios:**
+**Active coverage:**
 
-| #   | Scenario                                                           | Flow                       |
-| --- | ------------------------------------------------------------------ | -------------------------- |
-| 1   | First Claude Code change is queryable through DevQL                | `AgentEnablementQueryable` |
-| 2   | Claude Code chat history is retrievable after edit and commit      | `AgentChatHistory`         |
-| 3   | Dependency query returns outgoing edges for a known caller         | `BlastRadiusTemporal`      |
-| 4   | Dependency query returns incoming edges for a known callee         | `BlastRadiusTemporal`      |
-| 5   | Current workspace edit changes the outgoing dependency graph       | `BlastRadiusTemporal`      |
-| 6   | Historical query returns the pre-edit outgoing graph               | `BlastRadiusTemporal`      |
-| 7   | Repeated ingest does not duplicate artefacts or edges              | `BlastRadiusTemporal`      |
-| 8   | Test summary returns counts for `UserService.createUser`           | `TestHarnessProofMap`      |
-| 9   | Tests query returns individual covering tests                      | `TestHarnessProofMap`      |
-| 10  | Coverage query returns line coverage data                          | `TestHarnessProofMap`      |
-| 11  | Untested artefact is clearly identified                            | `TestHarnessProofMap`      |
-| 12  | Failing test is distinguishable from passing test                  | `TestHarnessProofMap`      |
-| 13  | Historical ingest populates semantic-clone historical tables       | `SemanticClones`           |
-| 14  | Current projection populates semantic-clone current tables         | `SemanticClones`           |
-| 15  | Embedding and clone-edge rebuild jobs both make progress           | `SemanticClones`           |
-| 16  | Historical and current embeddings expose code and summary channels | `SemanticClones`           |
-| 17  | Handler clones stay explainable, rankable, and filterable          | `SemanticClones`           |
-| 18  | DevQL clone summary returns grouped counts                         | `SemanticClones`           |
-| 19  | GraphQL clone summary returns grouped counts                       | `SemanticClones`           |
-| 20  | Unsupported URL fails cleanly without partial persistence          | `KnowledgeIngestion`       |
-| 21  | Hardened DevQL capability surfaces compose in one workflow         | `CrossCapabilitySmoke`     |
+- Agent enablement queryability (2 scenarios)
+  - First Claude Code change is queryable through DevQL
+  - Claude Code chat history is retrievable after edit and commit
+- Blast radius and temporal correctness (5 scenarios)
+  - dependency queries in both directions
+  - current-workspace graph changes after edits
+  - historical `asOf` correctness after ingest
+  - repeated ingest idempotency for artefacts and edges
+- TestHarness proof-map (5 scenarios)
+  - summary, tests, and coverage views
+  - explicitly untested artefacts
+  - failing versus passing test visibility
+- Semantic clones (8 scenarios)
+  - historical ingest preserves core history without backfilling semantic-clone history
+  - current projection populates current tables
+  - current embeddings expose separate code and summary channels
+  - sync drives embeddings before clone-edge rebuild fully drains
+  - commit snapshots current semantic-clone data into historical tables
+  - handler-clone ranking, explanations, and filtering
+  - DevQL clone summary grouped counts
+  - GraphQL clone summary grouped counts
+- Knowledge ingestion rejection handling (1 scenario)
+  - unsupported URL fails cleanly without partial persistence
+- Cross-capability deterministic smoke (1 scenario)
+  - checkpoints, sessions, artefacts, dependency queries, TestHarness queries, and clone queries compose in one repo
+
+Knowledge happy-path coverage is not part of the active QAT lane today; the current
+knowledge scenario is rejection-only by design.
+
+### 5. DevQL Ingest (`cargo qat-devql-ingest`, 12 scenarios)
+
+Exercises the queue-backed `bitloops devql tasks enqueue --kind ingest` commit-history
+replay flow: initial backlog ingest, idempotent replay, batching, merge and rewrite
+handling, and bounded backfill integration through `bitloops init --ingest=true`.
+
+```bash
+cargo qat-devql-ingest
+```
+
+Or equivalently:
+
+```bash
+cargo nextest run --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact
+```
+
+**Active coverage:**
+
+- Initial backlog ingest completes all reachable history.
+- Re-ingest at the same HEAD is idempotent.
+- Two commits are ingested together in one replay.
+- Commits made while the daemon is down are batched on the next ingest.
+- Non-fast-forward merge ingests feature commits and the merge commit.
+- Fast-forward merge ingests feature commits without creating a merge SHA.
+- Cherry-pick ingests the cherry-picked SHAs.
+- Rebase with edit rewrites SHAs and ingests rewritten history.
+- Reset rewrite introduces replacement SHAs and ingests them.
+- `bitloops init --ingest=true --backfill=1` ingests only the latest reachable commit.
+- A later full ingest catches up after `--backfill=1`.
+- `bitloops init --ingest=true --backfill=2` stays bounded and a later full ingest catches up.
+
+### 6. Quickstart (`cargo qat-quickstart`, 1 scenario)
+
+This focused lane is not part of `cargo qat`. It currently validates checkpoint capture,
+not the full DevQL/TestHarness first-value story implied by older quickstart wording.
+
+```bash
+cargo qat-quickstart
+```
+
+Or equivalently:
+
+```bash
+cargo nextest run --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact
+```
+
+**Active coverage:**
+
+- Checkpoint creation through Claude Code edits.
+
+The quickstart feature file still contains commented future scenarios for DevQL ingest,
+TestHarness ingestion, and coverage ingestion. Those are not active QAT coverage today.
+
+## Runtime notes
+
+- Smoke uses deterministic simulated agent behavior for non-Claude agents rather than
+  depending on real external agent CLIs.
+- The semantic-clones lane uses a fake embeddings runtime on purpose; it is validating
+  the deterministic offline path, not real local-model warm-cache behavior.
+- Most DevQL QAT flows now run through `bitloops devql tasks enqueue --kind ...`
+  rather than legacy direct `bitloops devql sync` or `bitloops devql ingest` commands.
 
 ## Daemon prerequisite
 

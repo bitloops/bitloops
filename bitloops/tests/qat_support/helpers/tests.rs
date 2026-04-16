@@ -460,6 +460,42 @@ fn build_init_commit_without_post_commit_refresh_command_disables_post_commit_re
 }
 
 #[test]
+fn expected_commit_path_pairs_pairs_paths_with_matching_sha_prefix() {
+    let pairs = expected_commit_path_pairs(
+        &[
+            "sha-1".to_string(),
+            "sha-2".to_string(),
+            "sha-merge".to_string(),
+        ],
+        &["src/one.rs".to_string(), "src/two.rs".to_string()],
+    )
+    .expect("build expected commit/path pairs");
+
+    assert_eq!(
+        pairs,
+        vec![
+            ("sha-1".to_string(), "src/one.rs".to_string()),
+            ("sha-2".to_string(), "src/two.rs".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn expected_commit_path_pairs_rejects_more_paths_than_shas() {
+    let err = expected_commit_path_pairs(
+        &["sha-1".to_string()],
+        &["src/one.rs".to_string(), "src/two.rs".to_string()],
+    )
+    .expect_err("more paths than SHAs should fail");
+
+    assert!(
+        err.to_string()
+            .contains("expected path count 2 exceeds expected SHA count 1"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn build_bitloops_command_applies_daemon_hardening_env() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");
