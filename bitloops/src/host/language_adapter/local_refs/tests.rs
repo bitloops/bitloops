@@ -247,6 +247,38 @@ fn resolve_local_symbol_ref_handles_java_static_member_import_edges() {
 }
 
 #[test]
+fn resolve_local_symbol_ref_prefers_java_type_import_edges_before_member_like_matches() {
+    let targets = [
+        target(
+            "src/com/acme.java::acme::Util",
+            "nested-type",
+            "nested-artefact",
+            "class_declaration",
+        ),
+        target(
+            "src/com/acme/Util.java::Util",
+            "imported-type",
+            "type-artefact",
+            "class_declaration",
+        ),
+    ];
+    let resolved = resolve_local_symbol_ref(
+        "java",
+        "src/com/example/Greeter.java",
+        "imports",
+        "com.acme.Util",
+        &LocalSourceFacts {
+            package_refs: vec!["com.example".to_string()],
+            ..LocalSourceFacts::default()
+        },
+        &targets,
+    )
+    .expect("expected java type import to resolve to the imported type");
+
+    assert_eq!(resolved.symbol_fqn, "src/com/acme/Util.java::Util");
+}
+
+#[test]
 fn resolve_local_symbol_ref_handles_java_package_qualified_calls() {
     let resolved = resolve_local_symbol_ref(
         "java",
@@ -427,6 +459,39 @@ fn resolve_local_symbol_ref_handles_csharp_imported_namespace_type_refs() {
         &targets,
     )
     .expect("expected csharp imported namespace type ref to resolve");
+
+    assert_eq!(resolved.symbol_fqn, "src/BaseService.cs::BaseService");
+    assert_eq!(resolved.edge_kind, "extends");
+}
+
+#[test]
+fn resolve_local_symbol_ref_handles_csharp_canonical_imported_type_refs() {
+    let targets = [
+        target(
+            "src/BaseService.cs::ns::MyApp.Services",
+            "ns",
+            "ns-artefact",
+            "file_scoped_namespace_declaration",
+        ),
+        target(
+            "src/BaseService.cs::BaseService",
+            "base",
+            "base-artefact",
+            "class_declaration",
+        ),
+    ];
+    let resolved = resolve_local_symbol_ref(
+        "csharp",
+        "src/UserService.cs",
+        "implements",
+        "BaseService",
+        &LocalSourceFacts {
+            import_refs: vec!["src/BaseService.cs::BaseService".to_string()],
+            ..LocalSourceFacts::default()
+        },
+        &targets,
+    )
+    .expect("expected csharp canonical imported type ref to resolve");
 
     assert_eq!(resolved.symbol_fqn, "src/BaseService.cs::BaseService");
     assert_eq!(resolved.edge_kind, "extends");

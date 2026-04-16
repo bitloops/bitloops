@@ -607,14 +607,18 @@ fn resolve_java_import_ref(
     if symbol_ref.ends_with(".*") {
         return None;
     }
-    if let Some((owner_ref, member_ref)) = symbol_ref.rsplit_once('.')
-        && owner_ref.split('.').count() >= 2
-        && let Some(resolved) =
-            resolve_java_owner_and_tail(owner_ref, &[member_ref], source_facts, targets)
-    {
+
+    if let Some(resolved) = resolve_java_owner_and_tail(symbol_ref, &[], source_facts, targets) {
         return Some(resolved);
     }
-    resolve_java_owner_and_tail(symbol_ref, &[], source_facts, targets)
+
+    if let Some((owner_ref, member_ref)) = symbol_ref.rsplit_once('.')
+        && owner_ref.split('.').count() >= 2
+    {
+        return resolve_java_owner_and_tail(owner_ref, &[member_ref], source_facts, targets);
+    }
+
+    None
 }
 
 fn resolve_java_local_symbol_ref(
@@ -701,6 +705,7 @@ fn resolve_csharp_import_ref(
     if symbol_ref.is_empty() || symbol_ref.contains('=') || symbol_ref.contains("::") {
         return None;
     }
+    let namespace_by_path = csharp_namespace_by_path(targets);
 
     let namespace_match = unique_match(
         targets
@@ -731,8 +736,8 @@ fn resolve_csharp_import_ref(
             .filter(|target| path_of_symbol_fqn(&target.symbol_fqn).ends_with(".cs"))
             .filter(|target| symbol_suffix_matches(&target.symbol_fqn, &[type_name]))
             .filter(|target| {
-                csharp_namespace_for_target(target, targets)
-                    .as_deref()
+                namespace_by_path
+                    .get(path_of_symbol_fqn(&target.symbol_fqn))
                     .is_some_and(|namespace| namespace == namespace_ref)
             })
             .cloned(),
@@ -748,14 +753,18 @@ fn resolve_csharp_local_symbol_ref(
     if edge_kind == "calls" || symbol_ref.contains("::") || symbol_ref.contains('.') {
         return None;
     }
-    let namespaces = csharp_source_namespaces(source_facts, targets);
+    let namespace_by_path = csharp_namespace_by_path(targets);
+    let namespaces = csharp_source_namespaces(source_facts, &namespace_by_path);
     if namespaces.is_empty() {
         return None;
     }
     let target_namespaces = targets
         .iter()
         .filter_map(|target| {
-            csharp_namespace_for_target(target, targets).map(|ns| (target.symbol_fqn.clone(), ns))
+            namespace_by_path
+                .get(path_of_symbol_fqn(&target.symbol_fqn))
+                .cloned()
+                .map(|namespace| (target.symbol_fqn.clone(), namespace))
         })
         .collect::<HashMap<_, _>>();
     unique_match(
@@ -774,7 +783,7 @@ fn resolve_csharp_local_symbol_ref(
 
 fn csharp_source_namespaces(
     source_facts: &LocalSourceFacts,
-    targets: &[LocalTargetInfo],
+    namespace_by_path: &HashMap<String, String>,
 ) -> HashSet<String> {
     let mut namespaces = source_facts
         .namespace_refs
@@ -791,10 +800,9 @@ fn csharp_source_namespaces(
             continue;
         }
         if import_ref.contains("::") {
-            if let Some(target) = targets
-                .iter()
-                .find(|target| target.symbol_fqn == import_ref)
-                && let Some(namespace) = csharp_namespace_for_target(target, targets)
+            if let Some(namespace) = namespace_by_path
+                .get(path_of_symbol_fqn(import_ref))
+                .cloned()
             {
                 namespaces.insert(namespace);
             }
@@ -807,22 +815,22 @@ fn csharp_source_namespaces(
     namespaces
 }
 
-fn csharp_namespace_for_target<'a>(
-    target: &'a LocalTargetInfo,
-    targets: &'a [LocalTargetInfo],
-) -> Option<String> {
-    let path = path_of_symbol_fqn(&target.symbol_fqn);
-    targets
-        .iter()
-        .find(|candidate| {
-            path_of_symbol_fqn(&candidate.symbol_fqn) == path
-                && matches!(
-                    candidate.language_kind.as_str(),
-                    "namespace_declaration" | "file_scoped_namespace_declaration"
-                )
-        })
-        .and_then(|namespace| namespace.symbol_fqn.split_once("::ns::"))
-        .map(|(_, namespace)| namespace.to_string())
+fn csharp_namespace_by_path(targets: &[LocalTargetInfo]) -> HashMap<String, String> {
+    let mut namespace_by_path = HashMap::new();
+    for target in targets.iter().filter(|target| {
+        matches!(
+            target.language_kind.as_str(),
+            "namespace_declaration" | "file_scoped_namespace_declaration"
+        )
+    }) {
+        let Some((_, namespace)) = target.symbol_fqn.split_once("::ns::") else {
+            continue;
+        };
+        namespace_by_path
+            .entry(path_of_symbol_fqn(&target.symbol_fqn).to_string())
+            .or_insert_with(|| namespace.to_string());
+    }
+    namespace_by_path
 }
 
 fn normalize_resolved_edge_kind(

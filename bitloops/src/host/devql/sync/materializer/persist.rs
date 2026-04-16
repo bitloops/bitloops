@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 mod reconcile;
+#[cfg(test)]
+mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -376,6 +378,7 @@ pub(crate) fn reconcile_current_local_edges_for_paths_with_connection(
     repo_id: &str,
     touched_paths: &[String],
 ) -> Result<usize> {
+    let touched_paths = touched_paths.iter().cloned().collect::<HashSet<_>>();
     let current_targets =
         load_all_current_targets_for_local_resolution_with_connection(connection, repo_id)?;
     let target_by_symbol_fqn = current_targets
@@ -384,9 +387,11 @@ pub(crate) fn reconcile_current_local_edges_for_paths_with_connection(
         .map(|target| (target.symbol_fqn.clone(), target))
         .collect::<HashMap<_, _>>();
     let source_facts_by_path = load_current_source_facts_with_connection(connection, repo_id)?;
-    let current_edges =
-        load_current_edges_for_local_reconciliation_with_connection(connection, repo_id)?;
-    let touched_paths = touched_paths.iter().cloned().collect::<HashSet<_>>();
+    let current_edges = load_current_edges_for_local_reconciliation_with_connection(
+        connection,
+        repo_id,
+        &touched_paths,
+    )?;
     let replacements = build_current_edge_replacements_for_local_resolution(
         repo_id,
         &touched_paths,
@@ -544,38 +549,88 @@ fn load_current_source_facts_with_connection(
     Ok(facts_by_path)
 }
 
+fn map_current_edge_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CurrentEdgeRecord> {
+    Ok(CurrentEdgeRecord {
+        edge_id: row.get::<_, String>(0)?,
+        path: row.get::<_, String>(1)?,
+        content_id: row.get::<_, String>(2)?,
+        from_symbol_id: row.get::<_, String>(3)?,
+        from_artefact_id: row.get::<_, String>(4)?,
+        to_symbol_id: row.get::<_, Option<String>>(5)?,
+        to_artefact_id: row.get::<_, Option<String>>(6)?,
+        to_symbol_ref: row.get::<_, Option<String>>(7)?,
+        edge_kind: row.get::<_, String>(8)?,
+        language: row.get::<_, String>(9)?,
+        start_line: row.get::<_, Option<i32>>(10)?,
+        end_line: row.get::<_, Option<i32>>(11)?,
+        metadata_json: row.get::<_, String>(12)?,
+    })
+}
+
+fn escape_like_prefix(prefix: &str) -> String {
+    let mut escaped = String::with_capacity(prefix.len() + 1);
+    for ch in prefix.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped.push('%');
+    escaped
+}
+
 fn load_current_edges_for_local_reconciliation_with_connection(
     connection: &Connection,
     repo_id: &str,
+    touched_paths: &HashSet<String>,
 ) -> Result<Vec<CurrentEdgeRecord>> {
-    let mut stmt = connection
-        .prepare(
+    let mut rows = {
+        let mut stmt = connection
+            .prepare(
+                "SELECT edge_id, path, content_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata \
+                 FROM artefact_edges_current \
+                 WHERE repo_id = ?1 AND to_symbol_ref IS NOT NULL AND to_symbol_id IS NULL",
+            )
+            .context("preparing unresolved current edge reconciliation query")?;
+        stmt.query_map([repo_id], map_current_edge_record)
+            .context("querying unresolved current edge reconciliation rows")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("collecting unresolved current edge reconciliation rows")?
+    };
+
+    if !touched_paths.is_empty() {
+        let escaped_prefixes = touched_paths
+            .iter()
+            .map(|path| escape_like_prefix(path))
+            .collect::<Vec<_>>();
+        let path_predicates = escaped_prefixes
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("to_symbol_ref LIKE ?{} ESCAPE '\\'", index + 2))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let sql = format!(
             "SELECT edge_id, path, content_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata \
              FROM artefact_edges_current \
-             WHERE repo_id = ?1 AND to_symbol_ref IS NOT NULL",
-        )
-        .context("preparing current edge reconciliation query")?;
-    let rows = stmt
-        .query_map([repo_id], |row| {
-            Ok(CurrentEdgeRecord {
-                edge_id: row.get::<_, String>(0)?,
-                path: row.get::<_, String>(1)?,
-                content_id: row.get::<_, String>(2)?,
-                from_symbol_id: row.get::<_, String>(3)?,
-                from_artefact_id: row.get::<_, String>(4)?,
-                to_symbol_id: row.get::<_, Option<String>>(5)?,
-                to_artefact_id: row.get::<_, Option<String>>(6)?,
-                to_symbol_ref: row.get::<_, Option<String>>(7)?,
-                edge_kind: row.get::<_, String>(8)?,
-                language: row.get::<_, String>(9)?,
-                start_line: row.get::<_, Option<i32>>(10)?,
-                end_line: row.get::<_, Option<i32>>(11)?,
-                metadata_json: row.get::<_, String>(12)?,
-            })
-        })
-        .context("querying current edge reconciliation rows")?
-        .collect::<Result<Vec<_>, _>>()
-        .context("collecting current edge reconciliation rows")?;
+             WHERE repo_id = ?1 AND to_symbol_ref IS NOT NULL AND to_symbol_id IS NOT NULL AND ({path_predicates})",
+        );
+        let mut params = Vec::with_capacity(escaped_prefixes.len() + 1);
+        params.push(repo_id.to_string());
+        params.extend(escaped_prefixes);
+
+        let mut stmt = connection
+            .prepare(&sql)
+            .context("preparing touched current edge reconciliation query")?;
+        let resolved_rows = stmt
+            .query_map(params_from_iter(params.iter()), map_current_edge_record)
+            .context("querying touched current edge reconciliation rows")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("collecting touched current edge reconciliation rows")?;
+        rows.extend(resolved_rows);
+    }
 
     Ok(rows
         .into_iter()
