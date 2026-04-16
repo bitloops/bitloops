@@ -95,7 +95,7 @@ require_cmd curl
 require_cmd awk
 require_cmd uname
 
-find_extracted_binary() {
+find_extracted_file() {
   local name="$1"
   local direct_path package_path found_path
 
@@ -157,7 +157,7 @@ fi
 
 extract_archive "${TMP_DIR}/${ASSET_NAME}" "${TMP_DIR}"
 
-if ! EXTRACTED_BINARY="$(find_extracted_binary "bitloops")"; then
+if ! EXTRACTED_BINARY="$(find_extracted_file "bitloops")"; then
   echo "Error: extracted archive did not contain 'bitloops' binary" >&2
   exit 1
 fi
@@ -174,6 +174,12 @@ if [[ ! -w "${INSTALL_DIR}" ]]; then
 fi
 
 install -m 0755 "${EXTRACTED_BINARY}" "${INSTALL_DIR}/bitloops"
+
+for runtime_name in libduckdb.dylib libduckdb.so; do
+  if EXTRACTED_RUNTIME="$(find_extracted_file "${runtime_name}")"; then
+    install -m 0644 "${EXTRACTED_RUNTIME}" "${INSTALL_DIR}/${runtime_name}"
+  fi
+done
 
 echo "Installed bitloops ${TAG} to ${INSTALL_DIR}/bitloops"
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
