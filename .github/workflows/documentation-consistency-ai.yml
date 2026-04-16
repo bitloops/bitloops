@@ -1,7 +1,7 @@
 name: Documentation Consistency AI Review
 
 on:
-  pull_request_target:
+  workflow_dispatch: # pull_request_target:
     branches:
       - main
     types:
@@ -49,6 +49,6 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR_REVIEW }}
-          OPENAI_MODEL: gpt-5.4-pro
+          OPENAI_MODEL: gpt-5.4
           OPENAI_REASONING_EFFORT: xhigh
         run: node .github/scripts/documentation-consistency-ai-review.mjs

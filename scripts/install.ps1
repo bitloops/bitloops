@@ -54,11 +54,11 @@ function Find-ExtractedFile {
   )
 
   $direct = Join-Path $ExtractDir $Name
-  if (Test-Path $direct) {
+  if (Test-Path -Path $direct -PathType Leaf) {
     return $direct
   }
 
-  $found = Get-ChildItem -Path $ExtractDir -Filter $Name -Recurse | Select-Object -First 1
+  $found = Get-ChildItem -Path $ExtractDir -Filter $Name -Recurse -File | Select-Object -First 1
   if ($found) {
     return $found.FullName
   }
