@@ -37,13 +37,16 @@ where
     Runner: Fn(PathBuf, Suite) -> SuiteFuture,
     SuiteFuture: Future<Output = Result<()>>,
 {
-    let (onboarding, smoke, devql_sync, devql_capabilities, devql_ingest) = tokio::join!(
+    // Keep the lightweight onboarding/smoke suites parallel for bundle latency, but
+    // serialize the DevQL-heavy suites because they are more likely to contend on
+    // SQLite-backed materialization paths when the bundled run fans out fully.
+    let (onboarding, smoke) = tokio::join!(
         runner(binary.clone(), Suite::Onboarding),
         runner(binary.clone(), Suite::Smoke),
-        runner(binary.clone(), Suite::DevqlSync),
-        runner(binary.clone(), Suite::Devql),
-        runner(binary, Suite::DevqlIngest),
     );
+    let devql_sync = runner(binary.clone(), Suite::DevqlSync).await;
+    let devql_capabilities = runner(binary.clone(), Suite::Devql).await;
+    let devql_ingest = runner(binary, Suite::DevqlIngest).await;
 
     combine_bundle_results(vec![
         BundleResult::from_result(
@@ -90,13 +93,10 @@ where
     DevqlCapabilitiesFuture: Future<Output = Result<()>>,
     DevqlIngestFuture: Future<Output = Result<()>>,
 {
-    let (onboarding, smoke, devql_sync, devql_capabilities, devql_ingest) = tokio::join!(
-        onboarding,
-        smoke,
-        devql_sync,
-        devql_capabilities,
-        devql_ingest,
-    );
+    let (onboarding, smoke) = tokio::join!(onboarding, smoke);
+    let devql_sync = devql_sync.await;
+    let devql_capabilities = devql_capabilities.await;
+    let devql_ingest = devql_ingest.await;
 
     combine_bundle_results(vec![
         BundleResult::from_result(
