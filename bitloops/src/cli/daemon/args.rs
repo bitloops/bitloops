@@ -28,6 +28,25 @@ pub enum DaemonCommand {
     Logs(DaemonLogsArgs),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonLogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl DaemonLogLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct DaemonStartArgs {
     /// Path to the Bitloops daemon config file.
@@ -119,6 +138,10 @@ pub struct DaemonLogsArgs {
     #[arg(long, value_name = "N", value_parser = parse_log_lines)]
     pub tail: Option<usize>,
 
+    /// Only include log lines at the selected levels.
+    #[arg(long = "level", value_name = "LEVEL", value_parser = parse_daemon_log_level)]
+    pub levels: Vec<DaemonLogLevel>,
+
     /// Keep streaming appended daemon log lines.
     #[arg(long, default_value_t = false, conflicts_with = "path")]
     pub follow: bool,
@@ -170,4 +193,14 @@ fn parse_log_lines(value: &str) -> std::result::Result<usize, String> {
         return Err("--tail must be greater than 0".to_string());
     }
     Ok(parsed)
+}
+
+fn parse_daemon_log_level(value: &str) -> std::result::Result<DaemonLogLevel, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "debug" => Ok(DaemonLogLevel::Debug),
+        "info" => Ok(DaemonLogLevel::Info),
+        "warn" | "warning" => Ok(DaemonLogLevel::Warn),
+        "error" => Ok(DaemonLogLevel::Error),
+        _ => Err(format!("invalid value `{value}` for --level")),
+    }
 }
