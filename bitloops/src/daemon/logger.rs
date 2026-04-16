@@ -232,6 +232,7 @@ fn current_time_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{SecondsFormat, TimeZone, Utc};
     use crate::test_support::process_state::enter_process_state;
     use log::{Level, Record};
     use tempfile::TempDir;
@@ -354,5 +355,25 @@ mod tests {
         assert_eq!(entry["config_path"], "/tmp/bitloops/config.toml");
         assert_eq!(entry["service_name"], "com.bitloops.daemon");
         assert!(entry.get("pid").is_some());
+    }
+
+    #[test]
+    fn build_log_entry_formats_time_as_rfc3339_utc() {
+        let context = ProcessLogContext::daemon("service", None, None);
+        let message = format_args!("daemon ready");
+        let record = Record::builder()
+            .args(message)
+            .level(Level::Info)
+            .target("bitloops::daemon")
+            .build();
+
+        let entry = build_log_entry(&record, &context, 1_234);
+        let expected_time = Utc
+            .timestamp_millis_opt(1_234)
+            .single()
+            .expect("valid UTC timestamp")
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        assert_eq!(entry["time"], expected_time);
     }
 }
