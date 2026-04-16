@@ -5,9 +5,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::adapters::agents::AgentAdapterRegistry;
+use crate::adapters::agents::claude_code::agent::ClaudeCodeAgent;
 use crate::adapters::agents::codex::agent::CodexAgent;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
+use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 use crate::host::hooks::augmentation::builder::{
     build_devql_hook_augmentation, build_devql_session_start_augmentation,
@@ -74,6 +76,8 @@ pub struct HookCommandOutcome {
 
 #[derive(Default)]
 pub struct ClaudeCodeLifecycleAdapter;
+
+static CLAUDE_AGENT_FOR_LIFECYCLE: ClaudeCodeAgent = ClaudeCodeAgent;
 
 impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
@@ -184,9 +188,15 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
     fn format_resume_command(&self, _session_id: &str) -> String {
         String::from("claude")
     }
+
+    fn as_token_calculator(&self) -> Option<&dyn TokenCalculator> {
+        Some(&CLAUDE_AGENT_FOR_LIFECYCLE)
+    }
 }
 
 static GEMINI_AGENT_FOR_LIFECYCLE: GeminiCliAgent = GeminiCliAgent;
+static CODEX_AGENT_FOR_LIFECYCLE: CodexAgent = CodexAgent;
+static OPENCODE_AGENT_FOR_LIFECYCLE: OpenCodeAgent = OpenCodeAgent;
 
 #[derive(Default)]
 pub struct GeminiCliLifecycleAdapter;
@@ -319,10 +329,17 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
             format!("opencode -s {session_id}")
         }
     }
+
+    fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
+        Some(&OPENCODE_AGENT_FOR_LIFECYCLE)
+    }
+
+    fn as_token_calculator(&self) -> Option<&dyn TokenCalculator> {
+        Some(&OPENCODE_AGENT_FOR_LIFECYCLE)
+    }
 }
 
 static COPILOT_AGENT_FOR_LIFECYCLE: CopilotCliAgent = CopilotCliAgent;
-static CODEX_AGENT_FOR_LIFECYCLE: CodexAgent = CodexAgent;
 
 #[derive(Default)]
 pub struct CopilotCliLifecycleAdapter;
@@ -436,6 +453,10 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
     }
 
     fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
+        Some(&CODEX_AGENT_FOR_LIFECYCLE)
+    }
+
+    fn as_token_calculator(&self) -> Option<&dyn TokenCalculator> {
         Some(&CODEX_AGENT_FOR_LIFECYCLE)
     }
 }
