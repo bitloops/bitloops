@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), allow(dead_code))]
+#![allow(dead_code)]
 
 mod derive;
 mod persist;
@@ -23,57 +23,15 @@ pub(crate) async fn materialize_path(
     parser_version: &str,
     extractor_version: &str,
 ) -> Result<()> {
-    validate_materialization_inputs(desired, extraction, parser_version, extractor_version)?;
-
-    let materialized_artefacts = derive_materialized_artefacts(cfg, desired, extraction)?;
-    let artefacts_by_key = materialized_artefacts
-        .iter()
-        .map(|artefact| (artefact.artifact_key.clone(), artefact.clone()))
-        .collect::<HashMap<_, _>>();
-    let materialized_artefacts =
-        dedupe_materialized_artefacts_by_artefact_id(materialized_artefacts);
-    let materialized_edges =
-        derive_materialized_edges(cfg, desired, extraction, &artefacts_by_key)?;
-    let materialized_edges = dedupe_materialized_edges_by_edge_id(materialized_edges);
-
-    let now_sql = crate::host::devql::sql_now(relational);
-    let mut statements = vec![
-        delete_edges_sql(&cfg.repo.repo_id, &desired.path),
-        delete_artefacts_sql(&cfg.repo.repo_id, &desired.path),
-    ];
-    statements.extend(materialized_artefacts.iter().map(|artefact| {
-        sql::insert_artefact_sql(
-            relational,
-            &sql::ArtefactInsertSqlInput {
-                repo_id: &cfg.repo.repo_id,
-                path: &desired.path,
-                content_id: &desired.effective_content_id,
-                language: &extraction.language,
-                extraction_fingerprint: &desired.extraction_fingerprint,
-                artefact,
-                now_sql,
-            },
-        )
-    }));
-    statements.extend(materialized_edges.iter().map(|edge| {
-        insert_edge_sql(
-            relational,
-            &cfg.repo.repo_id,
-            &desired.path,
-            &desired.effective_content_id,
-            edge,
-            now_sql,
-        )
-    }));
-    statements.push(upsert_current_file_state_sql(
-        &cfg.repo.repo_id,
+    persist::materialize_path(
+        cfg,
+        relational,
         desired,
+        extraction,
         parser_version,
         extractor_version,
-        now_sql,
-    ));
-
-    relational.exec_batch_transactional(&statements).await
+    )
+    .await
 }
 
 pub(crate) async fn remove_path(
@@ -81,13 +39,7 @@ pub(crate) async fn remove_path(
     relational: &crate::host::devql::RelationalStorage,
     path: &str,
 ) -> Result<()> {
-    relational
-        .exec_batch_transactional(&[
-            delete_edges_sql(&cfg.repo.repo_id, path),
-            delete_artefacts_sql(&cfg.repo.repo_id, path),
-            delete_current_file_state_sql(&cfg.repo.repo_id, path),
-        ])
-        .await
+    persist::remove_path(cfg, relational, path).await
 }
 
 fn validate_materialization_inputs(
@@ -537,4 +489,7 @@ fn non_empty_text(value: &str) -> Option<String> {
 }
 
 pub(crate) use self::derive::prepare_materialization_rows;
-pub(crate) use self::persist::{persist_prepared_materialisation_tx, remove_paths_tx};
+pub(crate) use self::persist::{
+    persist_prepared_materialisation_tx, reconcile_current_local_edges_for_paths, remove_paths_tx,
+    resolve_prepared_local_edges_with_connection,
+};

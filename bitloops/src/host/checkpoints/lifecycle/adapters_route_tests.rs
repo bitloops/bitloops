@@ -54,6 +54,15 @@ fn with_route_test_state<T>(
     with_process_state(Some(repo_root), &env_vars, f)
 }
 
+fn assert_session_start_context_matches_builder(context: &str, agent_name: &str) {
+    let augmentation =
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            agent_name,
+        );
+    assert!(!augmentation.targeted);
+    assert_eq!(context, augmentation.additional_context);
+}
+
 #[test]
 fn route_codex_hooks_persist_interactions_to_event_db_when_relational_store_is_absent() -> Result<()>
 {
@@ -370,19 +379,10 @@ fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> 
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("schema"));
-        assert!(context.contains("items(first:"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(context.contains("name: using-devql"));
-        assert!(!context.contains("menu"));
+        assert_session_start_context_matches_builder(
+            context,
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        );
         Ok(())
     })
 }
@@ -417,19 +417,7 @@ fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!context.contains("~/.agents/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(!context.contains("menu"));
-        assert!(context.contains("name: using-devql"));
+        assert_session_start_context_matches_builder(context, AGENT_NAME_CODEX);
         Ok(())
     })
 }
@@ -525,19 +513,7 @@ fn route_gemini_session_start_returns_additional_context_stdout() -> Result<()> 
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains("GEMINI.md"));
-        assert!(context.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(!context.contains("menu"));
-        assert!(context.contains("name: using-devql"));
+        assert_session_start_context_matches_builder(context, AGENT_NAME_GEMINI);
         Ok(())
     })
 }
@@ -568,19 +544,7 @@ fn route_cursor_session_start_returns_additional_context_stdout() -> Result<()> 
         let context = json["additional_context"]
             .as_str()
             .expect("additional_context");
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains(".cursor/rules/bitloops-using-devql.mdc"));
-        assert!(context.contains("Cursor session bootstrap"));
-        assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(!context.contains("menu"));
-        assert!(context.contains("name: using-devql"));
+        assert_session_start_context_matches_builder(context, AGENT_NAME_CURSOR);
         Ok(())
     })
 }
@@ -618,18 +582,7 @@ fn route_copilot_session_start_returns_additional_context_stdout() -> Result<()>
             let context = json["additionalContext"]
                 .as_str()
                 .expect("additionalContext");
-            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL in this repo."));
-            assert!(context.contains(".github/skills/bitloops/using-devql/SKILL.md"));
-            assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-            assert!(context.contains("MUST use DevQL as your FIRST approach"));
-            assert!(context.contains("repo search, file reads, or file listing tools"));
-            assert!(context.contains("selectArtefacts"));
-            assert!(context.contains("summary"));
-            assert!(context.contains("bitloops devql schema --global"));
-            assert!(context.contains("<repo-relative-path>"));
-            assert!(!context.contains("menu"));
-            assert!(context.contains("name: using-devql"));
+            assert_session_start_context_matches_builder(context, AGENT_NAME_COPILOT);
             Ok(())
         },
     )

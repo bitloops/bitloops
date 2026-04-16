@@ -147,6 +147,184 @@ fn ruff_e501_4_python_fixture_bytes() -> &'static [u8] {
     b"# Regression test for https://github.com/astral-sh/ruff/issues/12130\naaaaaaaaaaaaaaaaaaaaaaaa ://aaaaaaaaaaaaaaaaaaaaaaaa\x00\x00\x00\x00\x00\x00\x00aa\x00a\x00\x00\x00\x00\x00aaaaaaaaaaaaaaaaaaaaaa\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00aaaaaaaaaaaaaaaaa\n"
 }
 
+fn seed_ruff_like_rust_local_dependency_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+
+    fs::create_dir_all(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/rules"),
+    )
+    .expect("create Ruff-like rules dir");
+
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/ruff_linter\"]\nresolver = \"2\"\n",
+    )
+    .expect("write workspace Cargo.toml");
+    fs::write(
+        dir.path().join("crates/ruff_linter/Cargo.toml"),
+        "[package]\nname = \"ruff_linter\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write crate Cargo.toml");
+    fs::write(
+        dir.path().join("crates/ruff_linter/src/lib.rs"),
+        "pub mod rules;\n",
+    )
+    .expect("write lib.rs");
+    fs::write(
+        dir.path().join("crates/ruff_linter/src/rules/mod.rs"),
+        "pub mod pyflakes;\n",
+    )
+    .expect("write rules mod.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/mod.rs"),
+        "pub mod fixes;\npub mod rules;\n",
+    )
+    .expect("write pyflakes mod.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/fixes.rs"),
+        "pub(crate) fn remove_unused_positional_arguments_from_format_call() {}\n",
+    )
+    .expect("write fixes.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/rules/mod.rs"),
+        "pub mod strings;\n",
+    )
+    .expect("write nested rules mod.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/rules/strings.rs"),
+        r#"use super::super::fixes::remove_unused_positional_arguments_from_format_call;
+
+pub(crate) fn string_dot_format_extra_positional_arguments() {
+    remove_unused_positional_arguments_from_format_call();
+}
+"#,
+    )
+    .expect("write strings.rs");
+
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
+    dir
+}
+
+fn seed_typescript_local_dependency_repo(include_target: bool) -> tempfile::TempDir {
+    let dir = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+
+    fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    fs::write(
+        dir.path().join("package.json"),
+        "{\n  \"name\": \"ts-sync-fixture\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"typescript\": \"5.0.0\"\n  }\n}\n",
+    )
+    .expect("write package.json");
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"ESNext\"\n  }\n}\n",
+    )
+    .expect("write tsconfig.json");
+    fs::write(
+        dir.path().join("src/caller.ts"),
+        "import { helper } from \"./utils\";\n\nexport function run(): number {\n  return helper();\n}\n",
+    )
+    .expect("write caller.ts");
+    if include_target {
+        fs::write(
+            dir.path().join("src/utils.ts"),
+            "export function helper(): number {\n  return 1;\n}\n",
+        )
+        .expect("write utils.ts");
+    }
+
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
+    dir
+}
+
+fn seed_ruff_like_rust_grouped_import_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+
+    fs::create_dir_all(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/rules"),
+    )
+    .expect("create Ruff-like rules dir");
+
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/ruff_linter\"]\nresolver = \"2\"\n",
+    )
+    .expect("write workspace Cargo.toml");
+    fs::write(
+        dir.path().join("crates/ruff_linter/Cargo.toml"),
+        "[package]\nname = \"ruff_linter\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write crate Cargo.toml");
+    fs::write(
+        dir.path().join("crates/ruff_linter/src/lib.rs"),
+        "pub mod rules;\n",
+    )
+    .expect("write lib.rs");
+    fs::write(
+        dir.path().join("crates/ruff_linter/src/rules/mod.rs"),
+        "pub mod pyflakes;\n",
+    )
+    .expect("write rules mod.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/mod.rs"),
+        "pub mod fixes;\npub mod rules;\n",
+    )
+    .expect("write pyflakes mod.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/fixes.rs"),
+        "pub(crate) fn remove_unused_positional_arguments_from_format_call() {}\n",
+    )
+    .expect("write fixes.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/rules/mod.rs"),
+        "pub mod strings;\n",
+    )
+    .expect("write nested rules mod.rs");
+    fs::write(
+        dir.path()
+            .join("crates/ruff_linter/src/rules/pyflakes/rules/strings.rs"),
+        r#"use super::super::fixes::{remove_unused_positional_arguments_from_format_call, self};
+
+pub(crate) fn string_dot_format_extra_positional_arguments() {
+    remove_unused_positional_arguments_from_format_call();
+}
+"#,
+    )
+    .expect("write grouped-import strings.rs");
+
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
+    dir
+}
+
 #[tokio::test]
 async fn unborn_head_syncs_from_index_and_worktree() {
     let repo = tempdir().expect("temp dir");
@@ -931,6 +1109,386 @@ async fn repair_mode_reprocesses_all_paths_using_cache_when_available() {
     assert_eq!(result.cache_misses, 0);
     assert_eq!(repaired_state, baseline_state);
     assert_eq!(retention_class, baseline_retention_class);
+}
+
+#[tokio::test]
+async fn full_sync_resolves_ruff_style_rust_local_call_after_authoritative_reconciliation() {
+    let repo = seed_ruff_like_rust_local_dependency_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync for Ruff-like repo");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let caller_symbol_fqn = "crates/ruff_linter/src/rules/pyflakes/rules/strings.rs::string_dot_format_extra_positional_arguments";
+    let target_symbol_fqn = "crates/ruff_linter/src/rules/pyflakes/fixes.rs::remove_unused_positional_arguments_from_format_call";
+    let target_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), target_symbol_fqn],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load target artefact row");
+    let call_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref \
+             FROM artefact_edges_current e \
+             JOIN artefacts_current af \
+               ON af.repo_id = e.repo_id AND af.artefact_id = e.from_artefact_id \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND af.symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), caller_symbol_fqn],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load caller call edge");
+
+    assert_eq!(
+        call_edge.0.as_deref(),
+        Some(target_row.0.as_str()),
+        "full sync should reconcile the caller edge to the helper symbol"
+    );
+    assert_eq!(
+        call_edge.1.as_deref(),
+        Some(target_row.1.as_str()),
+        "full sync should reconcile the caller edge to the helper artefact"
+    );
+    assert_eq!(
+        call_edge.2.as_deref(),
+        Some(target_symbol_fqn),
+        "resolved edges should persist the canonical helper symbol FQN"
+    );
+
+    let inbound_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) \
+             FROM artefact_edges_current e \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND e.to_artefact_id = ?2",
+            [cfg.repo.repo_id.as_str(), target_row.1.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count inbound edges to target artefact");
+
+    assert_eq!(inbound_count, 1);
+}
+
+#[tokio::test]
+async fn full_sync_expands_grouped_rust_imports_into_resolved_local_edges() {
+    let repo = seed_ruff_like_rust_grouped_import_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync for grouped-import Ruff-like repo");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let refs = {
+        let mut stmt = db
+            .prepare(
+                "SELECT to_symbol_ref \
+                 FROM artefact_edges_current \
+                 WHERE repo_id = ?1 \
+                   AND path = 'crates/ruff_linter/src/rules/pyflakes/rules/strings.rs' \
+                   AND edge_kind = 'imports' \
+                 ORDER BY to_symbol_ref",
+            )
+            .expect("prepare grouped rust import query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| {
+            row.get::<_, Option<String>>(0)
+        })
+        .expect("query grouped rust import rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect grouped rust import rows")
+    };
+
+    assert_eq!(
+        refs,
+        vec![
+            Some("crates/ruff_linter/src/rules/pyflakes/fixes.rs".to_string()),
+            Some(
+                "crates/ruff_linter/src/rules/pyflakes/fixes.rs::remove_unused_positional_arguments_from_format_call"
+                    .to_string(),
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn full_sync_resolves_typescript_relative_local_call_after_authoritative_reconciliation() {
+    let repo = seed_typescript_local_dependency_repo(true);
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute TypeScript full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_symbol_fqn = "src/utils.ts::helper";
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load helper artefact row");
+    let call_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref \
+             FROM artefact_edges_current e \
+             JOIN artefacts_current af \
+               ON af.repo_id = e.repo_id AND af.artefact_id = e.from_artefact_id \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND af.symbol_fqn = 'src/caller.ts::run'",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load caller call edge");
+
+    assert_eq!(call_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(call_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(call_edge.2.as_deref(), Some(helper_symbol_fqn));
+}
+
+#[tokio::test]
+async fn full_sync_reconciles_previously_unresolved_typescript_import_edge_when_target_appears_later()
+ {
+    let repo = seed_typescript_local_dependency_repo(false);
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial sync without target");
+
+    fs::write(
+        repo.path().join("src/utils.ts"),
+        "export function helper(): number {\n  return 2;\n}\n",
+    )
+    .expect("write utils.ts after initial sync");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "src/utils.ts"]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "add utils"]);
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after target appears");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND symbol_fqn = 'src/utils.ts'",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load imported file row after target appears");
+    let import_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref \
+             FROM artefact_edges_current e \
+             WHERE e.repo_id = ?1 AND e.path = 'src/caller.ts' AND e.edge_kind = 'imports'",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load caller import edge after target appears");
+
+    assert_eq!(import_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(import_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(import_edge.2.as_deref(), Some("src/utils.ts"));
+}
+
+#[tokio::test]
+async fn full_sync_reconciles_previously_unresolved_typescript_edge_when_target_appears_later() {
+    let repo = seed_typescript_local_dependency_repo(false);
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial sync without target");
+
+    fs::write(
+        repo.path().join("src/utils.ts"),
+        "export function helper(): number {\n  return 2;\n}\n",
+    )
+    .expect("write utils.ts after initial sync");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "src/utils.ts"]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "add utils"]);
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after target appears");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_symbol_fqn = "src/utils.ts::helper";
+    let helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load helper artefact row after target appears");
+    let call_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref \
+             FROM artefact_edges_current e \
+             JOIN artefacts_current af \
+               ON af.repo_id = e.repo_id AND af.artefact_id = e.from_artefact_id \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND af.symbol_fqn = 'src/caller.ts::run'",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load caller call edge after target appears");
+
+    assert_eq!(call_edge.0.as_deref(), Some(helper_row.0.as_str()));
+    assert_eq!(call_edge.1.as_deref(), Some(helper_row.1.as_str()));
+    assert_eq!(call_edge.2.as_deref(), Some(helper_symbol_fqn));
+}
+
+#[tokio::test]
+async fn full_sync_refreshes_and_clears_canonical_typescript_targets_when_target_changes_or_disappears()
+ {
+    let repo = seed_typescript_local_dependency_repo(true);
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let helper_symbol_fqn = "src/utils.ts::helper";
+    let initial_helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load initial helper row");
+
+    fs::write(
+        repo.path().join("src/utils.ts"),
+        "export function helper(): number {\n  return 9;\n}\n",
+    )
+    .expect("update utils.ts");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "src/utils.ts"]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "update utils"]);
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after target refresh");
+
+    let refreshed_helper_row: (String, String) = db
+        .query_row(
+            "SELECT symbol_id, artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = ?1 AND symbol_fqn = ?2",
+            [cfg.repo.repo_id.as_str(), helper_symbol_fqn],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("load refreshed helper row");
+    let refreshed_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref \
+             FROM artefact_edges_current e \
+             JOIN artefacts_current af \
+               ON af.repo_id = e.repo_id AND af.artefact_id = e.from_artefact_id \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND af.symbol_fqn = 'src/caller.ts::run'",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load refreshed caller edge");
+
+    assert_eq!(
+        refreshed_edge.0.as_deref(),
+        Some(refreshed_helper_row.0.as_str())
+    );
+    assert_eq!(
+        refreshed_edge.1.as_deref(),
+        Some(refreshed_helper_row.1.as_str())
+    );
+    assert_eq!(refreshed_edge.2.as_deref(), Some(helper_symbol_fqn));
+    assert_eq!(refreshed_helper_row.0, initial_helper_row.0);
+    assert_ne!(refreshed_helper_row.1, initial_helper_row.1);
+
+    fs::remove_file(repo.path().join("src/utils.ts")).expect("remove utils.ts");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["rm", "src/utils.ts"]);
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["commit", "-m", "remove utils"]);
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after target removal");
+
+    let cleared_edge: (Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref \
+             FROM artefact_edges_current e \
+             JOIN artefacts_current af \
+               ON af.repo_id = e.repo_id AND af.artefact_id = e.from_artefact_id \
+             WHERE e.repo_id = ?1 AND e.edge_kind = 'calls' AND af.symbol_fqn = 'src/caller.ts::run'",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load cleared caller edge");
+
+    assert_eq!(cleared_edge.0, None);
+    assert_eq!(cleared_edge.1, None);
+    assert_eq!(cleared_edge.2.as_deref(), Some(helper_symbol_fqn));
 }
 
 #[tokio::test]

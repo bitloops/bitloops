@@ -88,21 +88,7 @@ mod tests {
                 .additional_context
                 .contains(".claude/skills/bitloops/using-devql/SKILL.md")
         );
-        assert!(
-            augmentation
-                .additional_context
-                .contains("name: using-devql")
-        );
-        assert!(
-            augmentation
-                .additional_context
-                .contains("bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { summary } }'")
-        );
-        assert!(
-            augmentation
-                .additional_context
-                .contains("bitloops devql schema --global")
-        );
+        assert!(augmentation.additional_context.contains(USING_DEVQL_SKILL));
         assert!(!augmentation.additional_context.contains("tracked.txt"));
     }
 

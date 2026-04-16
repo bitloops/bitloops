@@ -99,3 +99,32 @@ class B {
             && edge.to_symbol_ref.as_deref() == Some("java.util.List")
     }));
 }
+
+#[test]
+fn extract_java_dependency_edges_keep_imported_local_type_calls_as_symbol_refs() {
+    let content = r#"package com.acme;
+
+import com.acme.Util;
+
+class Greeter {
+    void greet() {
+        Util.helper();
+    }
+}
+"#;
+
+    let path = "src/com/acme/Greeter.java";
+    let artefacts = extract_java_artefacts(content, path).unwrap();
+    let edges = extract_java_dependency_edges(content, path, &artefacts).unwrap();
+
+    assert!(edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Imports
+            && edge.to_symbol_ref.as_deref() == Some("com.acme.Util")
+    }));
+    assert!(edges.iter().any(|edge| {
+        edge.edge_kind == EdgeKind::Calls
+            && edge.from_symbol_fqn == "src/com/acme/Greeter.java::Greeter::greet"
+            && edge.to_symbol_ref.as_deref() == Some("com.acme.Util::helper")
+            && edge.to_target_symbol_fqn.is_none()
+    }));
+}
