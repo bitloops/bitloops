@@ -417,7 +417,7 @@ mod tests {
             ..Default::default()
         };
         let domain = input.to_domain();
-        assert_eq!(domain.since.as_deref(), Some("2026-04-01T10:00:00Z"));
+        assert_eq!(domain.since.as_deref(), Some("2026-04-01T10:00:00+00:00"));
         assert_eq!(domain.actor_email.as_deref(), Some("alice@example.com"));
         assert_eq!(domain.branch.as_deref(), Some("main"));
     }
